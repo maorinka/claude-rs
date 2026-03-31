@@ -5,7 +5,12 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: PathBuf) -> ToolUseContext {
-    ToolUseContext { working_directory: dir }
+    ToolUseContext {
+        working_directory: dir,
+        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
+    }
 }
 
 fn tmpdir() -> PathBuf {

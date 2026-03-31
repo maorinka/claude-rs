@@ -19,7 +19,13 @@ use claude_core::query::engine::{QueryEngine, ToolUseInfo, TurnResult};
 use claude_core::types::events::{StreamEvent, ToolResultData};
 use claude_tools::{ToolRegistry, ToolUseContext};
 
+use claude_core::commands::builtin::build_default_commands;
+use claude_core::commands::registry::{CommandContext, CommandRegistry, CommandResult};
+use claude_core::plugins::skill;
+use claude_core::plugins::types::Skill;
+
 use crate::theme::{detect_theme, Theme};
+use crate::widgets::command_picker::{CommandPicker, CommandPickerEntry, CommandPickerWidget};
 use crate::widgets::message_list::{MessageEntry, MessageList, MessageListWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
 use crate::widgets::prompt_input::{InputAction, PromptInput, PromptInputWidget};
@@ -45,6 +51,14 @@ struct PendingTool {
     info: ToolUseInfo,
 }
 
+/// Result of executing a slash command.
+enum CommandAction {
+    /// Inject the text as a user prompt message.
+    Prompt(String),
+    /// Display the text as a system/action message (no prompt injection).
+    Display(String),
+}
+
 pub struct App {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     theme: Theme,
@@ -59,12 +73,19 @@ pub struct App {
     model_name: String,
     /// Running total of tokens used in this session
     total_tokens: u64,
+    /// Command picker overlay (shown on `/` at start of input)
+    command_picker: CommandPicker,
+    /// Command registry for slash commands
+    command_registry: CommandRegistry,
+    /// Discovered skills
+    skills: Vec<Skill>,
 }
 
 impl App {
     pub fn new() -> Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
         let terminal = Terminal::new(backend)?;
+        let command_registry = build_default_commands();
         Ok(Self {
             terminal,
             theme: detect_theme(),
@@ -76,12 +97,99 @@ impl App {
             engine_busy: false,
             model_name: "claude-sonnet-4-6".to_string(),
             total_tokens: 0,
+            command_picker: CommandPicker::new(),
+            command_registry,
+            skills: Vec::new(),
         })
     }
 
     /// Set the model name displayed in the header.
     pub fn set_model_name(&mut self, name: &str) {
         self.model_name = name.to_string();
+    }
+
+    /// Set discovered skills for the command picker.
+    pub fn set_skills(&mut self, skills: Vec<Skill>) {
+        self.skills = skills;
+    }
+
+    /// Build command picker entries from the command registry and discovered skills.
+    fn build_picker_entries(&self) -> Vec<CommandPickerEntry> {
+        let mut entries: Vec<CommandPickerEntry> = self
+            .command_registry
+            .all()
+            .iter()
+            .map(|cmd| CommandPickerEntry {
+                name: cmd.name.clone(),
+                description: cmd.description.clone(),
+            })
+            .collect();
+        // Sort commands alphabetically
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+
+        // Add user-invocable skills
+        for skill in &self.skills {
+            if skill.user_invocable {
+                entries.push(CommandPickerEntry {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                });
+            }
+        }
+
+        entries
+    }
+
+    /// Try to execute a slash command or skill from user input.
+    /// Returns Some(text_to_inject) for Prompt-type commands, or handles
+    /// Action-type commands directly. Returns None if the input is not a command.
+    fn try_execute_command(&mut self, input: &str) -> Option<CommandAction> {
+        let trimmed = input.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        let without_slash = &trimmed[1..];
+        let (cmd_name, args) = match without_slash.split_once(' ') {
+            Some((name, rest)) => (name, rest),
+            None => (without_slash, ""),
+        };
+
+        // Check command registry first
+        if let Some(cmd) = self.command_registry.get(cmd_name) {
+            let ctx = CommandContext {
+                working_directory: std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from(".")),
+                model: self.model_name.clone(),
+            };
+            match cmd.handler.execute(args, &ctx) {
+                Ok(CommandResult::Message(text)) => {
+                    return Some(CommandAction::Prompt(text));
+                }
+                Ok(CommandResult::Action(text)) => {
+                    return Some(CommandAction::Display(text));
+                }
+                Ok(CommandResult::Error(text)) => {
+                    return Some(CommandAction::Display(format!("Error: {}", text)));
+                }
+                Err(e) => {
+                    return Some(CommandAction::Display(format!("Error: {}", e)));
+                }
+            }
+        }
+
+        // Check skills
+        for s in &self.skills {
+            if let Some(args) = skill::match_skill(trimmed, s) {
+                let mut content = s.content.clone();
+                if !args.is_empty() {
+                    content.push_str(&format!("\n\nArguments: {}", args));
+                }
+                return Some(CommandAction::Prompt(content));
+            }
+        }
+
+        None
     }
 
     /// Original standalone run loop (no engine). Kept for backwards compatibility.
@@ -214,6 +322,11 @@ impl App {
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+        // Shared read-file state for staleness tracking across tool calls
+        let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        ));
+
         let perm_ctx = ToolPermissionContext {
             mode: permission_mode,
             ..Default::default()
@@ -278,13 +391,62 @@ impl App {
                             }
                             _ => {}
                         }
+                    } else if self.command_picker.visible {
+                        // Route keys to command picker
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.command_picker.close();
+                            }
+                            KeyCode::Up => {
+                                self.command_picker.prev();
+                            }
+                            KeyCode::Down | KeyCode::Tab => {
+                                self.command_picker.next();
+                            }
+                            KeyCode::Enter => {
+                                if let Some(name) = self.command_picker.selected_name() {
+                                    let cmd_text = format!("/{}", name);
+                                    self.command_picker.close();
+                                    let _ = tx.send(AppEvent::SubmitPrompt(cmd_text)).await;
+                                } else {
+                                    self.command_picker.close();
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                self.prompt.handle_key(k);
+                                let new_text = self.prompt.text().to_string();
+                                if !new_text.starts_with('/') {
+                                    self.command_picker.close();
+                                } else {
+                                    let query = new_text.strip_prefix('/').unwrap_or("");
+                                    self.command_picker.set_query(query);
+                                }
+                            }
+                            KeyCode::Char(c)
+                                if k.modifiers.is_empty()
+                                    || k.modifiers == KeyModifiers::SHIFT =>
+                            {
+                                self.prompt.handle_key(k);
+                                let text = self.prompt.text().to_string();
+                                let query = text.strip_prefix('/').unwrap_or("");
+                                self.command_picker.set_query(query);
+                                let _ = c;
+                            }
+                            _ => {}
+                        }
                     } else {
                         // Route keys to prompt input
                         match self.prompt.handle_key(k) {
                             InputAction::Submit(text) => {
                                 let _ = tx.send(AppEvent::SubmitPrompt(text)).await;
                             }
-                            InputAction::None => {}
+                            InputAction::None => {
+                                // Check if user just typed `/` at start of input
+                                if self.prompt.text() == "/" {
+                                    let entries = self.build_picker_entries();
+                                    self.command_picker.open(entries);
+                                }
+                            }
                         }
                     }
                 }
@@ -292,6 +454,82 @@ impl App {
                     if self.engine_busy || text.trim().is_empty() {
                         continue;
                     }
+
+                    // Try to handle as a slash command first
+                    if text.starts_with('/') {
+                        match self.try_execute_command(&text) {
+                            Some(CommandAction::Display(output)) => {
+                                // Action-type command: show output as system message
+                                self.message_list.push(MessageEntry::System {
+                                    text: output,
+                                });
+                                continue;
+                            }
+                            Some(CommandAction::Prompt(prompt_text)) => {
+                                // Prompt-type command: inject as user message
+                                self.message_list.push(MessageEntry::User {
+                                    text: text.clone(),
+                                });
+                                engine.add_user_message(&prompt_text);
+                                self.engine_busy = true;
+                                self.spinner.start(SpinnerMode::Thinking);
+
+                                let (stream_tx, stream_rx) = mpsc::channel::<StreamEvent>(128);
+                                let tx_forward = tx.clone();
+                                tokio::spawn(async move {
+                                    let mut stream_rx = stream_rx;
+                                    while let Some(ev) = stream_rx.recv().await {
+                                        if tx_forward.send(AppEvent::Stream(ev)).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                });
+
+                                match engine.run_turn(&stream_tx).await {
+                                    Ok(TurnResult::Done(_stop_reason)) => {
+                                        self.spinner.stop();
+                                        self.engine_busy = false;
+                                    }
+                                    Ok(TurnResult::ToolUse(tool_uses)) => {
+                                        pending_tools = tool_uses
+                                            .into_iter()
+                                            .map(|info| PendingTool { info })
+                                            .collect();
+                                        pending_tool_index = 0;
+                                        self.check_next_tool_permission(
+                                            &pending_tools,
+                                            &mut pending_tool_index,
+                                            &perm_ctx,
+                                            &tools,
+                                            &tx,
+                                        );
+                                    }
+                                    Ok(TurnResult::ContinueRecovery) => {
+                                        self.message_list.push(MessageEntry::System {
+                                            text: "Continuing (max tokens recovery)...".to_string(),
+                                        });
+                                        let tx2 = tx.clone();
+                                        tokio::spawn(async move {
+                                            let _ = tx2.send(AppEvent::ContinueTurn).await;
+                                        });
+                                    }
+                                    Err(e) => {
+                                        self.spinner.stop();
+                                        self.engine_busy = false;
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!("Error: {}", e),
+                                        });
+                                    }
+                                }
+                                continue;
+                            }
+                            None => {
+                                // Not a known command, treat as regular input
+                            }
+                        }
+                    }
+
+                    // Regular user message
                     // Add user message to display
                     self.message_list
                         .push(MessageEntry::User { text: text.clone() });
@@ -377,6 +615,7 @@ impl App {
                                 &info.input,
                                 &cwd,
                                 cancel.clone(),
+                                read_file_state.clone(),
                             )
                             .await;
                             let (result_text, is_error) = match &tool_result {
@@ -664,6 +903,7 @@ impl App {
         let message_list = &self.message_list;
         let prompt = &self.prompt;
         let permission_dialog = &self.permission_dialog;
+        let command_picker = &self.command_picker;
         let model_name = &self.model_name;
         let total_tokens = self.total_tokens;
 
@@ -739,6 +979,19 @@ impl App {
             let input_widget = PromptInputWidget::new(prompt);
             frame.render_widget(input_widget, chunks[5]);
 
+            // Command picker overlay (positioned above the input area)
+            if command_picker.visible {
+                let picker_height = 12u16.min(area.height / 3);
+                let picker_area = Rect::new(
+                    area.x + 1,
+                    chunks[5].y.saturating_sub(picker_height),
+                    area.width.saturating_sub(2),
+                    picker_height,
+                );
+                let picker_widget = CommandPickerWidget::new(command_picker);
+                frame.render_widget(picker_widget, picker_area);
+            }
+
             // Permission dialog overlay
             if let Some(dialog) = permission_dialog {
                 let dialog_area = centered_rect(60, 10, area);
@@ -763,12 +1016,14 @@ async fn execute_tool(
     input: &serde_json::Value,
     cwd: &std::path::Path,
     cancel: CancellationToken,
+    read_file_state: std::sync::Arc<std::sync::Mutex<claude_tools::registry::ReadFileState>>,
 ) -> Result<ToolResultData> {
     let executor = tools
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
     let ctx = ToolUseContext {
         working_directory: cwd.to_path_buf(),
+        read_file_state,
     };
     executor.call(input, &ctx, cancel, None).await
 }

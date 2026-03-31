@@ -144,11 +144,58 @@ pub fn build_request_body(
         body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
     }
 
-    // Required fields matching real Claude Code request format
-    body["metadata"] = json!({});
+    // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
+    // containing device_id, account_uuid, and session_id.
+    let device_id = get_or_create_device_id();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let user_id_obj = json!({
+        "device_id": device_id,
+        "account_uuid": "",
+        "session_id": session_id,
+    });
+    body["metadata"] = json!({
+        "user_id": user_id_obj.to_string(),
+    });
+
+    // context_management: mirrors TS getAPIContextManagement().
+    // For adaptive thinking, send clear_thinking strategy keeping all turns.
+    if matches!(config.thinking, ThinkingConfig::Adaptive | ThinkingConfig::Enabled { .. }) {
+        body["context_management"] = json!({
+            "edits": [
+                {
+                    "type": "clear_thinking_20251015",
+                    "keep": "all"
+                }
+            ]
+        });
+    }
+
+    // output_config: empty object matches TS behaviour when no effort/budget is set.
     body["output_config"] = json!({});
 
     body
+}
+
+/// Get or create a persistent device ID (matches TS `getOrCreateUserID()`).
+fn get_or_create_device_id() -> String {
+    let config_dir = std::env::var("HOME")
+        .map(|h| format!("{}/.claude", h))
+        .unwrap_or_else(|_| "/tmp/.claude".to_string());
+    let id_path = format!("{}/device_id", config_dir);
+
+    // Try to read existing ID
+    if let Ok(id) = std::fs::read_to_string(&id_path) {
+        let id = id.trim().to_string();
+        if !id.is_empty() {
+            return id;
+        }
+    }
+
+    // Generate and persist a new one
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = std::fs::create_dir_all(&config_dir);
+    let _ = std::fs::write(&id_path, &id);
+    id
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -183,6 +230,14 @@ impl ApiClient {
         let url = format!("{}/v1/messages?beta=true", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools);
 
+        // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
+        if std::env::var("CLAUDE_RS_DEBUG").as_deref() == Ok("1") {
+            if let Ok(pretty) = serde_json::to_string_pretty(&body) {
+                let _ = std::fs::write("/tmp/claude-rs-request.json", &pretty);
+                tracing::debug!("Request body written to /tmp/claude-rs-request.json");
+            }
+        }
+
         let (header_name, header_value) = self.auth.to_header();
 
         let mut request = self
@@ -211,9 +266,9 @@ impl ApiClient {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            tracing::error!("API error {}: {}", status, &body[..body.len().min(500)]);
-            anyhow::bail!("API error {}: {}", status, &body[..body.len().min(500)]);
+            let err_body = response.text().await.unwrap_or_default();
+            tracing::error!("API error {}: {}", status, &err_body[..err_body.len().min(500)]);
+            anyhow::bail!("API error {}: {}", status, &err_body[..err_body.len().min(500)]);
         }
 
         Ok(response)

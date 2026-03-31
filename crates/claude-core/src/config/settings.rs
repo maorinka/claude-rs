@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// A single permission rule referencing a tool, with an optional glob pattern.
@@ -15,6 +16,26 @@ pub struct PermissionRuleConfig {
 pub struct SettingsPermissions {
     pub allow: Vec<PermissionRuleConfig>,
     pub deny: Vec<PermissionRuleConfig>,
+}
+
+/// Configuration for a single MCP server entry in settings.json.
+///
+/// Matches the TS format:
+/// ```json
+/// {
+///   "command": "npx",
+///   "args": ["-y", "@some/mcp-server"],
+///   "env": {}
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpServerSettingsEntry {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 /// Top-level settings structure. All fields are optional so that partial
@@ -37,14 +58,34 @@ pub struct Settings {
     pub api_key: Option<String>,
 
     pub permissions: SettingsPermissions,
+
+    /// MCP server configurations keyed by server name.
+    ///
+    /// Matches the TS `mcpServers` key in `~/.claude/settings.json`.
+    #[serde(default, rename = "mcpServers", skip_serializing_if = "HashMap::is_empty")]
+    pub mcp_servers: HashMap<String, McpServerSettingsEntry>,
 }
 
 impl Settings {
+    /// Load settings from a JSON file, returning `Default` if the file is missing
+    /// or unparseable.
+    pub fn load_from_file(path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
     /// Merge `overlay` on top of `self`. Fields that are `Some` in `overlay`
     /// win; fields that are `None` in `overlay` fall back to `self`.
     /// For `permissions`, the overlay's allow/deny lists replace self's when
     /// they are non-empty, otherwise self's are kept.
+    /// For `mcp_servers`, the overlay's map is merged on top of self's.
     pub fn merge(&self, overlay: &Settings) -> Settings {
+        let mut merged_mcp = self.mcp_servers.clone();
+        for (k, v) in &overlay.mcp_servers {
+            merged_mcp.insert(k.clone(), v.clone());
+        }
         Settings {
             model: overlay.model.clone().or_else(|| self.model.clone()),
             verbose: overlay.verbose.or(self.verbose),
@@ -62,6 +103,7 @@ impl Settings {
                     overlay.permissions.deny.clone()
                 },
             },
+            mcp_servers: merged_mcp,
         }
     }
 }

@@ -9,6 +9,9 @@ use tokio_util::sync::CancellationToken;
 fn make_ctx() -> ToolUseContext {
     ToolUseContext {
         working_directory: PathBuf::from("/tmp"),
+        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
     }
 }
 

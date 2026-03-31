@@ -104,6 +104,10 @@ impl ToolExecutor for WebFetchTool {
         "WebFetch"
     }
 
+    fn description(&self) -> String {
+        "Fetch the contents of a URL and return the text content. Supports HTML pages (converted to text), JSON, and plain text responses.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

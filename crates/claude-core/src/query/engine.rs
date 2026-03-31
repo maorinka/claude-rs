@@ -54,6 +54,22 @@ impl QueryEngine {
         self.max_turns = Some(max);
     }
 
+    /// Load messages from a previous session transcript to resume a conversation.
+    /// Each value should be a JSON message object with "role" and "content" fields.
+    pub fn load_messages(&mut self, messages: Vec<serde_json::Value>) {
+        self.messages = messages;
+    }
+
+    /// Append a text block to the system prompt.
+    pub fn append_system_prompt(&mut self, text: String) {
+        self.system_prompt.push(ContentBlock::Text { text });
+    }
+
+    /// Add additional tool schemas (e.g. from MCP servers discovered at runtime).
+    pub fn extend_tool_schemas(&mut self, extra: Vec<ToolDefinition>) {
+        self.tool_schemas.extend(extra);
+    }
+
     pub fn state(&self) -> &QueryState {
         &self.state
     }

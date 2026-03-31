@@ -34,6 +34,17 @@ impl ToolExecutor for ToolSearchTool {
         "ToolSearch"
     }
 
+    fn description(&self) -> String {
+        r#"Fetches full schema definitions for deferred tools so they can be called.
+
+Deferred tools appear by name in <system-reminder> messages. Until fetched, only the name is known -- there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool list, and returns the matched tools' complete JSONSchema definitions inside a <functions> block. Once a tool's schema appears in that result, it is callable exactly like any tool defined at the top of the prompt.
+
+Query forms:
+- "select:Read,Edit,Grep" -- fetch these exact tools by name
+- "notebook jupyter" -- keyword search, up to max_results best matches
+- "+slack send" -- require "slack" in the name, rank by remaining terms"#.to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

@@ -7,6 +7,9 @@ use tokio_util::sync::CancellationToken;
 fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
     ToolUseContext {
         working_directory: dir.to_path_buf(),
+        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
     }
 }
 
@@ -83,6 +86,9 @@ async fn test_write_overwrites_existing() {
 
     // Create the file first
     std::fs::write(&file_path, original).unwrap();
+
+    // Record a read (required by staleness check before overwriting)
+    ctx.read_file_state.lock().unwrap().record_read(&file_path, false);
 
     let result = call_tool(
         &tool,

@@ -19,6 +19,14 @@ impl ToolExecutor for GlobTool {
         "Glob"
     }
 
+    fn description(&self) -> String {
+        r#"- Fast file pattern matching tool that works with any codebase size
+- Supports glob patterns like "**/*.js" or "src/**/*.ts"
+- Returns matching file paths sorted by modification time
+- Use this tool when you need to find files by name patterns
+- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead"#.to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

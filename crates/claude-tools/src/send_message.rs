@@ -14,6 +14,10 @@ impl ToolExecutor for SendMessageTool {
         "SendMessage"
     }
 
+    fn description(&self) -> String {
+        "Send a message to another agent or channel for inter-agent communication.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

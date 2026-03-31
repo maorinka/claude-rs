@@ -8,6 +8,9 @@ use tokio_util::sync::CancellationToken;
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
     ToolUseContext {
         working_directory: dir.path().to_path_buf(),
+        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
     }
 }
 
@@ -28,6 +31,9 @@ async fn test_edit_replace_string() {
 
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
+
+    // Simulate reading the file first (required by staleness check)
+    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
 
     let result = call_tool(
         &tool,
@@ -61,6 +67,9 @@ async fn test_edit_replace_all() {
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
 
+    // Simulate reading the file first (required by staleness check)
+    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
+
     let result = call_tool(
         &tool,
         json!({
@@ -90,6 +99,9 @@ async fn test_edit_error_on_ambiguous_match() {
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
 
+    // Simulate reading the file first (required by staleness check)
+    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
+
     let result = call_tool(
         &tool,
         json!({
@@ -113,6 +125,9 @@ async fn test_edit_string_not_found() {
 
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
+
+    // Simulate reading the file first (required by staleness check)
+    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
 
     let result = call_tool(
         &tool,

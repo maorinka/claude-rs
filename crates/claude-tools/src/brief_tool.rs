@@ -14,6 +14,10 @@ impl ToolExecutor for BriefTool {
         "Brief"
     }
 
+    fn description(&self) -> String {
+        "Toggle brief mode for more concise responses with less explanation and commentary.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

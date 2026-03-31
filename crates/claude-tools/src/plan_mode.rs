@@ -14,6 +14,10 @@ impl ToolExecutor for EnterPlanModeTool {
         "EnterPlanMode"
     }
 
+    fn description(&self) -> String {
+        "Switch to plan mode for describing actions before executing them. In plan mode, tools are not actually executed.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -53,6 +57,10 @@ pub struct ExitPlanModeTool;
 impl ToolExecutor for ExitPlanModeTool {
     fn name(&self) -> &str {
         "ExitPlanMode"
+    }
+
+    fn description(&self) -> String {
+        "Exit plan mode and return to normal execution mode where tools are actually executed.".to_string()
     }
 
     fn input_schema(&self) -> Value {

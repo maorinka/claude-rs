@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Parser)]
 #[command(name = "claude-rs", about = "Claude Code - AI coding assistant (Rust port)", version)]
@@ -48,6 +50,11 @@ pub enum SubCommand {
     Logout,
     /// Show current configuration
     Config,
+    /// Start the IDE bridge server
+    Server {
+        #[arg(long)]
+        port: Option<u16>,
+    },
 }
 
 #[tokio::main]
@@ -69,7 +76,7 @@ async fn main() -> Result<()> {
     // Handle subcommands
     match &cli.command {
         Some(SubCommand::Login) => {
-            println!("Login not yet implemented");
+            claude_core::auth::login::login().await?;
             return Ok(());
         }
         Some(SubCommand::Logout) => {
@@ -81,6 +88,18 @@ async fn main() -> Result<()> {
             let root = claude_core::config::paths::detect_project_root(&cwd);
             println!("Project root: {}", root.display());
             println!("Config dir: {}", claude_core::config::paths::claude_dir()?.display());
+            return Ok(());
+        }
+        Some(SubCommand::Server { port }) => {
+            // Start the IDE bridge server
+            let config = claude_core::bridge::types::BridgeConfig {
+                port: *port,
+                host: "127.0.0.1".to_string(),
+                ide: claude_core::bridge::types::IdeType::Other("cli".to_string()),
+            };
+            let server = claude_core::bridge::server::BridgeServer::new(config);
+            tracing::info!("Starting IDE bridge server...");
+            server.start().await?;
             return Ok(());
         }
         None => {}
@@ -107,15 +126,83 @@ async fn main() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let project_root = claude_core::config::paths::detect_project_root(&cwd);
 
-    // Build tool registry
-    let tools = claude_tools::build_default_registry();
+    // Load settings from ~/.claude/settings.json
+    let settings = match claude_core::config::paths::user_settings_path() {
+        Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
+        Err(_) => claude_core::config::settings::Settings::default(),
+    };
 
-    let model = cli.model.unwrap_or_else(|| "claude-sonnet-4-6".into());
+    // Build tool registry
+    let mut tools = claude_tools::build_default_registry();
+
+    // --- MCP server wiring ---
+    // Connect to MCP servers configured in settings.mcpServers
+    let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
+    if !settings.mcp_servers.is_empty() {
+        tracing::info!(
+            count = settings.mcp_servers.len(),
+            "Connecting to configured MCP servers"
+        );
+        let mut configs = std::collections::HashMap::new();
+        for (name, entry) in &settings.mcp_servers {
+            let env = if entry.env.is_empty() {
+                None
+            } else {
+                Some(entry.env.clone())
+            };
+            let scoped = claude_core::mcp::types::ScopedMcpServerConfig {
+                config: claude_core::mcp::types::McpServerConfig::Stdio(
+                    claude_core::mcp::types::McpStdioServerConfig {
+                        command: entry.command.clone(),
+                        args: entry.args.clone(),
+                        env,
+                    },
+                ),
+                scope: claude_core::mcp::types::ConfigScope::User,
+            };
+            configs.insert(name.clone(), scoped);
+        }
+        let mgr = mcp_manager.read().await;
+        let connections = mgr.connect_all(configs).await;
+        drop(mgr);
+
+        // Report connection results
+        for conn in &connections {
+            match &conn.status {
+                claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                    tracing::info!(server = %conn.name, "MCP server connected");
+                }
+                claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
+                    tracing::warn!(
+                        server = %conn.name,
+                        error = ?error,
+                        "MCP server failed to connect"
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // Register MCP tools into the tool registry
+        claude_tools::register_mcp_tools(&mut tools, mcp_manager.clone()).await;
+    }
+
+    // --- Skill discovery ---
+    let skills = claude_core::plugins::skill::discover_skills(&project_root);
+    if !skills.is_empty() {
+        tracing::info!(count = skills.len(), "Discovered skills");
+    }
+
+    let model = cli.model
+        .or_else(|| settings.model.clone())
+        .unwrap_or_else(|| "claude-sonnet-4-6".into());
 
     tracing::info!(
-        "claude-rs initialized: model={}, tools={}, project={}",
+        "claude-rs initialized: model={}, tools={}, mcp_servers={}, skills={}, project={}",
         model,
         tools.all().len(),
+        settings.mcp_servers.len(),
+        skills.len(),
         project_root.display(),
     );
 
@@ -162,6 +249,54 @@ async fn main() -> Result<()> {
         query_engine.set_max_turns(max);
     }
 
+    // Handle --resume: load transcript from a previous session
+    if let Some(ref session_id) = cli.resume {
+        let session_mgr = claude_core::session::manager::SessionManager::resume(session_id)?;
+        let transcript = session_mgr.storage().load_transcript()?;
+        if transcript.is_empty() {
+            eprintln!("Warning: session '{}' has no transcript to resume", session_id);
+        } else {
+            tracing::info!("Resuming session '{}' with {} messages", session_id, transcript.len());
+            query_engine.load_messages(transcript);
+        }
+    }
+
+    // Append skill descriptions to the system prompt so the model knows about them
+    if !skills.is_empty() {
+        let mut skills_text = String::from("\n# Available Skills\n\n");
+        skills_text.push_str("The following skills are available for use with the Skill tool:\n\n");
+        for skill in &skills {
+            skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
+            if let Some(ref hint) = skill.when_to_use {
+                skills_text.push_str(&format!(" (use when: {})", hint));
+            }
+            skills_text.push('\n');
+        }
+        query_engine.append_system_prompt(skills_text);
+    }
+
+    // Append MCP server instructions to the system prompt
+    {
+        let mgr = mcp_manager.read().await;
+        let connections = mgr.connections().await;
+        let mut instructions_parts: Vec<String> = Vec::new();
+        for conn in &connections {
+            if let claude_core::mcp::types::McpConnectionStatus::Connected {
+                instructions: Some(ref instr),
+                ..
+            } = conn.status
+            {
+                instructions_parts.push(format!("## {}\n{}", conn.name, instr));
+            }
+        }
+        if !instructions_parts.is_empty() {
+            query_engine.append_system_prompt(format!(
+                "\n# MCP Server Instructions\n\n{}",
+                instructions_parts.join("\n\n")
+            ));
+        }
+    }
+
     // Determine permission mode
     let permission_mode = if cli.dangerously_skip_permissions {
         claude_core::permissions::types::PermissionMode::Bypass
@@ -181,14 +316,30 @@ async fn main() -> Result<()> {
         use claude_tools::ToolUseContext;
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        ));
         let perm_ctx = ToolPermissionContext {
             mode: permission_mode,
             ..Default::default()
         };
 
-        query_engine.add_user_message(&prompt);
+        // Check if prompt is a skill invocation (e.g. "/commit fix typo")
+        let mut effective_prompt = prompt.clone();
+        for skill in &skills {
+            if let Some(args) = claude_core::plugins::skill::match_skill(&prompt, skill) {
+                let mut content = skill.content.clone();
+                if !args.is_empty() {
+                    content.push_str(&format!("\n\nArguments: {}", args));
+                }
+                effective_prompt = content;
+                break;
+            }
+        }
 
-        // Run the agentic loop: prompt → run_turn → ToolUse* → Done
+        query_engine.add_user_message(&effective_prompt);
+
+        // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
         loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
 
@@ -242,6 +393,7 @@ async fn main() -> Result<()> {
                                     Some(exec) => {
                                         let ctx = ToolUseContext {
                                             working_directory: cwd.clone(),
+                                            read_file_state: read_file_state.clone(),
                                         };
                                         match exec.call(&tool_info.input, &ctx, cancel.clone(), None).await {
                                             Ok(data) => {
@@ -269,13 +421,22 @@ async fn main() -> Result<()> {
             }
         }
 
+        // Gracefully disconnect MCP servers
+        let mgr = mcp_manager.read().await;
+        mgr.disconnect_all().await;
+
         return Ok(());
     }
 
     // Interactive TUI mode
     let mut app = claude_tui::app::App::new()?;
     app.set_model_name(&model_display);
-    app.run_with_engine(query_engine, tools, cancel, permission_mode).await?;
+    app.set_skills(skills);
+    app.run_with_engine(query_engine, tools, cancel.clone(), permission_mode).await?;
+
+    // Gracefully disconnect MCP servers
+    let mgr = mcp_manager.read().await;
+    mgr.disconnect_all().await;
 
     Ok(())
 }

@@ -69,6 +69,10 @@ impl ToolExecutor for ConfigTool {
         "Config"
     }
 
+    fn description(&self) -> String {
+        "Get, set, or list Claude configuration settings.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

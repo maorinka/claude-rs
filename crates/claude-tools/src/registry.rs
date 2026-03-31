@@ -10,14 +10,87 @@ use claude_core::types::events::{ToolProgressData, ToolResultData};
 
 pub type ProgressSender = mpsc::Sender<ToolProgressData>;
 
+/// Metadata recorded when a file is read. Used by Write/Edit tools
+/// to detect staleness (file modified externally after we last read it).
+#[derive(Debug, Clone)]
+pub struct ReadFileEntry {
+    /// Milliseconds since UNIX epoch when the read was performed.
+    pub timestamp: u64,
+    /// Whether this was a partial view (offset/limit supplied).
+    pub is_partial_view: bool,
+}
+
+/// Shared state tracking which files have been read and when.
+///
+/// The `FileReadTool` records entries here; `FileWriteTool` and `FileEditTool`
+/// check entries before allowing writes (matching the TS `readFileState`).
+#[derive(Debug, Clone, Default)]
+pub struct ReadFileState {
+    entries: HashMap<String, ReadFileEntry>,
+}
+
+impl ReadFileState {
+    pub fn new() -> Self {
+        Self { entries: HashMap::new() }
+    }
+
+    /// Record that a file was read at the current time.
+    pub fn record_read(&mut self, path: &str, is_partial_view: bool) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.entries.insert(path.to_string(), ReadFileEntry {
+            timestamp: now,
+            is_partial_view,
+        });
+    }
+
+    /// Update the read timestamp for a file after a successful write, so
+    /// subsequent writes do not get rejected as stale.
+    pub fn update_after_write(&mut self, path: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.entries.insert(path.to_string(), ReadFileEntry {
+            timestamp: now,
+            is_partial_view: false,
+        });
+    }
+
+    /// Get the read entry for a file, if it exists.
+    pub fn get(&self, path: &str) -> Option<&ReadFileEntry> {
+        self.entries.get(path)
+    }
+
+    /// Insert a read entry with an explicit timestamp (for testing).
+    #[cfg(test)]
+    pub fn insert_raw(&mut self, path: &str, entry: ReadFileEntry) {
+        self.entries.insert(path.to_string(), entry);
+    }
+
+    /// Insert a read entry with an explicit timestamp.
+    /// This is `pub(crate)` so that sibling modules (e.g. `write` tests) can
+    /// set up fixture state.
+    #[allow(dead_code)]
+    pub(crate) fn insert_entry(&mut self, path: &str, entry: ReadFileEntry) {
+        self.entries.insert(path.to_string(), entry);
+    }
+}
+
 pub struct ToolUseContext {
     pub working_directory: PathBuf,
+    pub read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
 }
 
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     fn name(&self) -> &str;
     fn aliases(&self) -> &[&str] { &[] }
+    /// Full description of what this tool does, sent to the API as the tool's
+    /// `description` field.  Mirrors the TS `tool.prompt()` output.
+    fn description(&self) -> String { format!("Tool: {}", self.name()) }
     fn input_schema(&self) -> Value;
     async fn call(&self, input: &Value, ctx: &ToolUseContext, cancel: CancellationToken, progress: Option<ProgressSender>) -> Result<ToolResultData>;
     fn is_concurrency_safe(&self, _input: &Value) -> bool { false }
@@ -70,7 +143,7 @@ impl ToolRegistry {
             .values()
             .map(|t| claude_core::api::client::ToolDefinition {
                 name: t.name().to_string(),
-                description: format!("Tool: {}", t.name()),
+                description: t.description(),
                 input_schema: t.input_schema(),
             })
             .collect()

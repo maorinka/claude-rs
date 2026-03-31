@@ -14,6 +14,10 @@ impl ToolExecutor for LSPTool {
         "LSP"
     }
 
+    fn description(&self) -> String {
+        "Run Language Server Protocol actions such as diagnostics, hover information, or completions on a file.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

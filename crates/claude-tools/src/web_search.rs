@@ -14,6 +14,10 @@ impl ToolExecutor for WebSearchTool {
         "WebSearch"
     }
 
+    fn description(&self) -> String {
+        "Search the web for information. Returns relevant search results with titles, URLs, and snippets.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

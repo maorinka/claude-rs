@@ -60,6 +60,10 @@ impl ToolExecutor for TaskCreateTool {
         "TaskCreate"
     }
 
+    fn description(&self) -> String {
+        "Create a new background task with a subject and description.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -125,6 +129,10 @@ impl ToolExecutor for TaskListTool {
         "TaskList"
     }
 
+    fn description(&self) -> String {
+        "List all tasks, optionally filtered by status.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -164,6 +172,10 @@ pub struct TaskUpdateTool;
 impl ToolExecutor for TaskUpdateTool {
     fn name(&self) -> &str {
         "TaskUpdate"
+    }
+
+    fn description(&self) -> String {
+        "Update the status or description of an existing task.".to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -240,6 +252,10 @@ impl ToolExecutor for TaskGetTool {
         "TaskGet"
     }
 
+    fn description(&self) -> String {
+        "Get the details of a specific task by its ID.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -287,6 +303,10 @@ pub struct TaskStopTool;
 impl ToolExecutor for TaskStopTool {
     fn name(&self) -> &str {
         "TaskStop"
+    }
+
+    fn description(&self) -> String {
+        "Stop a running task by its ID.".to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -340,6 +360,10 @@ pub struct TaskOutputTool;
 impl ToolExecutor for TaskOutputTool {
     fn name(&self) -> &str {
         "TaskOutput"
+    }
+
+    fn description(&self) -> String {
+        "Get the output of a completed or running task by its ID.".to_string()
     }
 
     fn input_schema(&self) -> Value {

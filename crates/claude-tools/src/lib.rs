@@ -20,7 +20,7 @@ pub mod send_message;
 pub mod lsp_tool;
 pub mod tool_search;
 
-pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender};
+pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender, ReadFileState};
 pub use mcp_tool::register_mcp_tools;
 
 use std::sync::Arc;

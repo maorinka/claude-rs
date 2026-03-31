@@ -7,10 +7,101 @@ use crate::api::sse::{self, SseEvent};
 use crate::api::client::ApiClient;
 use crate::types::content::ContentBlock;
 
-/// Token estimation: ~4 chars per token (rough but matches TS)
-fn estimate_tokens(messages: &[Value]) -> u64 {
-    let json_str = serde_json::to_string(messages).unwrap_or_default();
-    (json_str.len() as u64) / 4
+/// Token estimation: extract actual text content and divide by ~4 chars per token.
+///
+/// The TS `roughTokenCountEstimation` uses `content.length / 4` on the raw text,
+/// **not** JSON serialisation length. JSON overhead (key names, braces, colons,
+/// escaping) inflates the size by ~30-50% and causes over-aggressive compaction.
+///
+/// This implementation walks each message's content blocks and accumulates the
+/// text length of text, tool_use (name + input), tool_result, and thinking blocks,
+/// matching the per-block logic in `roughTokenCountEstimationForBlock`.
+pub fn estimate_tokens(messages: &[Value]) -> u64 {
+    let mut total_chars: u64 = 0;
+
+    for msg in messages {
+        if let Some(content) = msg.get("content") {
+            total_chars += estimate_content_tokens(content);
+        }
+    }
+
+    // ~4 chars per token (default ratio in the TS code)
+    total_chars / 4
+}
+
+/// Estimate token count for a message's content field.
+///
+/// Content can be a plain string or an array of content blocks.
+fn estimate_content_tokens(content: &Value) -> u64 {
+    match content {
+        Value::String(s) => s.len() as u64,
+        Value::Array(blocks) => {
+            let mut total: u64 = 0;
+            for block in blocks {
+                total += estimate_block_tokens(block);
+            }
+            total
+        }
+        _ => 0,
+    }
+}
+
+/// Estimate token count for a single content block.
+///
+/// Matches the TS `roughTokenCountEstimationForBlock`:
+/// - text: `block.text.length`
+/// - tool_use: `(name + JSON(input)).length`
+/// - tool_result: recursively count nested content
+/// - thinking / redacted_thinking: text length
+/// - image / document: flat 2000 tokens
+/// - other: JSON stringify length
+fn estimate_block_tokens(block: &Value) -> u64 {
+    let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match block_type {
+        "text" => {
+            block.get("text")
+                .and_then(|t| t.as_str())
+                .map(|s| s.len() as u64)
+                .unwrap_or(0)
+        }
+        "tool_use" => {
+            let name_len = block.get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+            let input_len = block.get("input")
+                .map(|i| serde_json::to_string(i).unwrap_or_default().len())
+                .unwrap_or(0);
+            (name_len + input_len) as u64
+        }
+        "tool_result" => {
+            // Recursively count nested content
+            block.get("content")
+                .map(|c| estimate_content_tokens(c))
+                .unwrap_or(0)
+        }
+        "thinking" => {
+            block.get("thinking")
+                .and_then(|t| t.as_str())
+                .map(|s| s.len() as u64)
+                .unwrap_or(0)
+        }
+        "redacted_thinking" => {
+            block.get("data")
+                .and_then(|t| t.as_str())
+                .map(|s| s.len() as u64)
+                .unwrap_or(0)
+        }
+        "image" | "document" => {
+            // Fixed estimate for images/documents (matches TS IMAGE_MAX_TOKEN_SIZE * 4)
+            8000 // 2000 tokens * 4 chars/token
+        }
+        _ => {
+            // Fallback: JSON stringify length
+            serde_json::to_string(block).unwrap_or_default().len() as u64
+        }
+    }
 }
 
 /// Constants matching the TypeScript implementation
@@ -187,10 +278,80 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_tokens() {
+    fn test_estimate_tokens_string_content() {
         let messages = vec![json!({"role": "user", "content": "hello world"})];
         let tokens = estimate_tokens(&messages);
-        // Should be roughly json_length / 4
+        // "hello world" = 11 chars, tokens = 11 / 4 = 2
+        assert_eq!(tokens, 2);
+    }
+
+    #[test]
+    fn test_estimate_tokens_text_block() {
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "hello world, this is a longer message"}]
+        })];
+        let tokens = estimate_tokens(&messages);
+        // 37 chars / 4 = 9
+        assert_eq!(tokens, 9);
+    }
+
+    #[test]
+    fn test_estimate_tokens_tool_use_block() {
+        let messages = vec![json!({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "tu_1",
+                "name": "Read",
+                "input": {"file_path": "/some/file.rs"}
+            }]
+        })];
+        let tokens = estimate_tokens(&messages);
+        // "Read" = 4 chars + JSON({"file_path":"/some/file.rs"}) chars
         assert!(tokens > 0);
+        // Should be much less than full JSON serialization of the whole message
+        let json_estimation = serde_json::to_string(&messages).unwrap().len() as u64 / 4;
+        assert!(tokens < json_estimation);
+    }
+
+    #[test]
+    fn test_estimate_tokens_tool_result_block() {
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tu_1",
+                "content": [{"type": "text", "text": "file contents here"}]
+            }]
+        })];
+        let tokens = estimate_tokens(&messages);
+        // "file contents here" = 18 chars / 4 = 4
+        assert_eq!(tokens, 4);
+    }
+
+    #[test]
+    fn test_estimate_tokens_image_block() {
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "image", "source": {"type": "base64", "data": "huge_base64_data"}}]
+        })];
+        let tokens = estimate_tokens(&messages);
+        // Image blocks get fixed estimate of 8000 chars / 4 = 2000 tokens
+        assert_eq!(tokens, 2000);
+    }
+
+    #[test]
+    fn test_estimate_tokens_excludes_json_overhead() {
+        // This test verifies that our improved estimation uses text content length,
+        // not JSON serialization length (which would be ~2x larger due to key names,
+        // braces, colons, etc.)
+        let text = "a".repeat(400); // 400 chars = 100 tokens
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": text}]
+        })];
+        let tokens = estimate_tokens(&messages);
+        assert_eq!(tokens, 100);
     }
 }

@@ -33,6 +33,18 @@ impl ToolExecutor for FileEditTool {
         "Edit"
     }
 
+    fn description(&self) -> String {
+        r#"Performs exact string replacements in files.
+
+Usage:
+- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
+- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
+- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance."#.to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -62,7 +74,7 @@ impl ToolExecutor for FileEditTool {
     async fn call(
         &self,
         input: &Value,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
@@ -82,10 +94,10 @@ impl ToolExecutor for FileEditTool {
 
         let path = std::path::Path::new(file_path);
 
-        // If old_string is non-empty and the file doesn't exist → error
+        // If old_string is non-empty and the file doesn't exist -> error
         if !path.exists() {
             if old_string.is_empty() {
-                // Creating a new file with no old content to replace — write empty→new
+                // Creating a new file with no old content to replace -- write empty->new
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
@@ -105,6 +117,11 @@ impl ToolExecutor for FileEditTool {
                 "File not found: {}",
                 file_path
             )));
+        }
+
+        // Staleness check: ensure the file has been read and not modified since.
+        if let Err(msg) = crate::write::check_file_staleness(file_path, path, &ctx.read_file_state) {
+            return Ok(error_result(msg));
         }
 
         let original = match std::fs::read_to_string(path) {
@@ -139,7 +156,7 @@ impl ToolExecutor for FileEditTool {
             original.replacen(old_string, new_string, 1)
         };
 
-        // Ensure parent directories exist (in case of a new path — defensive)
+        // Ensure parent directories exist (in case of a new path -- defensive)
         if let Some(parent) = path.parent() {
             if !parent.exists() {
                 std::fs::create_dir_all(parent)?;
@@ -148,6 +165,11 @@ impl ToolExecutor for FileEditTool {
 
         if let Err(e) = std::fs::write(path, &new_content) {
             return Ok(error_result(format!("Failed to write file: {}", e)));
+        }
+
+        // Update read state after successful edit
+        if let Ok(mut state) = ctx.read_file_state.lock() {
+            state.update_after_write(file_path);
         }
 
         Ok(ToolResultData {

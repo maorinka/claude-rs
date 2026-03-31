@@ -14,6 +14,10 @@ impl ToolExecutor for AskUserQuestionTool {
         "AskUser"
     }
 
+    fn description(&self) -> String {
+        "Ask the user a question and wait for their response. Use this when you need clarification or a decision from the user before proceeding.".to_string()
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
