@@ -3,4 +3,3 @@ pub mod client;
 pub mod retry;
 pub mod accumulator;
 pub mod normalize;
-pub mod claude_proxy;
