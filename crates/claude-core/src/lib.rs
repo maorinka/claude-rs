@@ -4,6 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod context;
 pub mod permissions;
+pub mod plugins;
 pub mod query;
 pub mod session;
 pub mod compact;
