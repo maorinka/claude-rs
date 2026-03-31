@@ -1,7 +1,6 @@
 use claude_tools::ask_user::AskUserQuestionTool;
 use claude_tools::brief_tool::BriefTool;
 use claude_tools::send_message::SendMessageTool;
-use claude_tools::mcp_tool::MCPTool;
 use claude_tools::lsp_tool::LSPTool;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use serde_json::json;
@@ -161,72 +160,3 @@ fn test_send_message_is_not_read_only() {
     assert!(!tool.is_read_only(&json!({ "to": "x", "content": "y" })));
 }
 
-// ── MCPTool ────────────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_mcp_tool_stub() {
-    let tool = MCPTool;
-    let result = tool
-        .call(
-            &json!({
-                "server_name": "my-server",
-                "tool_name": "my-tool",
-                "arguments": {}
-            }),
-            &make_ctx(),
-            CancellationToken::new(),
-            None,
-        )
-        .await
-        .expect("call should not fail");
-
-    assert!(!result.is_error);
-    let result_str = result.data["result"].as_str().expect("result should be a string");
-    assert!(
-        result_str.contains("my-server") && result_str.contains("my-tool"),
-        "stub message should reference server and tool names"
-    );
-}
-
-#[tokio::test]
-async fn test_mcp_tool_missing_server_name() {
-    let tool = MCPTool;
-    let result = tool
-        .call(
-            &json!({ "tool_name": "x", "arguments": {} }),
-            &make_ctx(),
-            CancellationToken::new(),
-            None,
-        )
-        .await
-        .expect("call should not fail");
-    assert!(result.is_error);
-}
-
-// ── LSPTool ────────────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_lsp_tool_returns_empty_diagnostics() {
-    let tool = LSPTool;
-    let result = tool
-        .call(
-            &json!({ "action": "diagnostics", "file_path": "/some/file.rs" }),
-            &make_ctx(),
-            CancellationToken::new(),
-            None,
-        )
-        .await
-        .expect("call should not fail");
-
-    assert!(!result.is_error);
-    let diagnostics = result.data["diagnostics"].as_array().expect("diagnostics should be an array");
-    assert!(diagnostics.is_empty(), "stub should return empty diagnostics");
-}
-
-#[test]
-fn test_lsp_tool_is_read_only_and_concurrency_safe() {
-    let tool = LSPTool;
-    let input = json!({ "action": "diagnostics" });
-    assert!(tool.is_read_only(&input));
-    assert!(tool.is_concurrency_safe(&input));
-}

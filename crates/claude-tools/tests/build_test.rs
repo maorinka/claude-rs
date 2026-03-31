@@ -31,7 +31,7 @@ fn test_default_registry_schemas() {
     let reg = build_default_registry();
     let schemas = reg.schemas();
     // 6 original + 10 new tools = 16 total
-    assert_eq!(schemas.len(), 16);
+    assert_eq!(schemas.len(), 24);
     for schema in &schemas {
         assert!(schema.get("name").is_some());
         assert!(schema.get("input_schema").is_some());
