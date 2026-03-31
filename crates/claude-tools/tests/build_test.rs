@@ -27,11 +27,18 @@ fn test_default_registry_has_all_new_tools() {
 }
 
 #[test]
+fn test_default_registry_has_team_tools() {
+    let reg = build_default_registry();
+    assert!(reg.get("TeamCreate").is_some());
+    assert!(reg.get("TeamDelete").is_some());
+}
+
+#[test]
 fn test_default_registry_schemas() {
     let reg = build_default_registry();
     let schemas = reg.schemas();
-    // 6 original + 10 new tools = 16 total
-    assert_eq!(schemas.len(), 24);
+    // 24 original tools + 2 team tools = 26 total
+    assert_eq!(schemas.len(), 26);
     for schema in &schemas {
         assert!(schema.get("name").is_some());
         assert!(schema.get("input_schema").is_some());

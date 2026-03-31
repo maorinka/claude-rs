@@ -52,6 +52,18 @@ impl ToolExecutor for AgentTool {
                     "type": "string",
                     "enum": ["worktree"],
                     "description": "If 'worktree', run the agent in a git worktree for isolation"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."
+                },
+                "team_name": {
+                    "type": "string",
+                    "description": "Team name for spawning. Associates this agent with a team for coordination."
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Permission mode for the spawned agent (e.g. \"plan\" to require plan approval)"
                 }
             }
         })
@@ -67,10 +79,17 @@ impl ToolExecutor for AgentTool {
         let prompt = input["prompt"].as_str().unwrap_or("");
         let model = input.get("model").and_then(|v| v.as_str());
         let isolation = input.get("isolation").and_then(|v| v.as_str());
+        let agent_name = input.get("name").and_then(|v| v.as_str());
+        let team_name = input.get("team_name").and_then(|v| v.as_str());
         let run_in_background = input
             .get("run_in_background")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+
+        // Log team association if provided
+        if let Some(team) = team_name {
+            debug!(team = team, agent_name = ?agent_name, "Agent spawned as part of team");
+        }
 
         // Determine working directory (potentially in a worktree)
         let (work_dir, worktree_path) = if isolation == Some("worktree") {
@@ -96,6 +115,15 @@ impl ToolExecutor for AgentTool {
             cmd.arg("--model").arg(m);
         }
         cmd.current_dir(&work_dir);
+
+        // Set team/agent identity environment variables for the sub-process
+        if let Some(team) = team_name {
+            cmd.env("CLAUDE_TEAM_NAME", team);
+        }
+        if let Some(name) = agent_name {
+            cmd.env("CLAUDE_CODE_AGENT_ID", name);
+        }
+
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 

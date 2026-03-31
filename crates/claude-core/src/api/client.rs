@@ -144,6 +144,20 @@ pub fn build_request_body(
         body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
     }
 
+    // Add web_search server tool (matches TS WebSearchTool).
+    // This is handled server-side by the API — not a regular tool_use/tool_result flow.
+    body.as_object_mut()
+        .unwrap()
+        .entry("tools")
+        .or_insert(json!([]));
+    if let Some(tools_arr) = body["tools"].as_array_mut() {
+        tools_arr.push(json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 8
+        }));
+    }
+
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
     // containing device_id, account_uuid, and session_id.
     let device_id = get_or_create_device_id();
@@ -172,6 +186,18 @@ pub fn build_request_body(
 
     // output_config: empty object matches TS behaviour when no effort/budget is set.
     body["output_config"] = json!({});
+
+    // CRITICAL: betas must be in the request BODY (not just the header).
+    // The Anthropic SDK's beta.messages.create() sends betas in both places.
+    // Without this, the API returns 400 "Error" for OAuth tokens.
+    let betas = vec![
+        "claude-code-20250219",
+        "interleaved-thinking-2025-05-14",
+        "context-management-2025-06-27",
+        "effort-2025-11-24",
+        "web-search-2025-03-05",
+    ];
+    body["betas"] = json!(betas);
 
     body
 }
@@ -253,6 +279,7 @@ impl ApiClient {
             "interleaved-thinking-2025-05-14",
             "context-management-2025-06-27",
             "effort-2025-11-24",
+            "web-search-2025-03-05",
         ];
         if self.auth.is_oauth() {
             betas.push("oauth-2025-04-20");

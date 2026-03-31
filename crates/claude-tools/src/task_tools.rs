@@ -11,6 +11,7 @@ use claude_core::types::events::ToolResultData;
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
 
+/// A task entry with optional real process tracking.
 #[derive(Clone, Debug)]
 pub struct TaskEntry {
     pub id: String,
@@ -18,6 +19,10 @@ pub struct TaskEntry {
     pub description: String,
     pub status: String, // "pending", "in_progress", "completed", "stopped"
     pub created_at: String,
+    /// Captured stdout/stderr output from the background process (if any).
+    pub output: Option<String>,
+    /// Process ID for background tasks spawned by the system.
+    pub pid: Option<u32>,
 }
 
 impl TaskEntry {
@@ -28,6 +33,8 @@ impl TaskEntry {
             "description": self.description,
             "status": self.status,
             "createdAt": self.created_at,
+            "output": self.output,
+            "pid": self.pid,
         })
     }
 }
@@ -47,6 +54,27 @@ fn error_result(msg: impl Into<String>) -> ToolResultData {
     ToolResultData {
         data: json!({ "error": msg.into() }),
         is_error: true,
+    }
+}
+
+// ─── Public helpers for process-tracking integration ──────────────────────────
+
+/// Update a task's output and PID.  Called by the agent/background-spawn
+/// infrastructure after it launches a child process.
+pub fn register_process(task_id: &str, pid: u32) {
+    let mut store = TASK_STORE.lock().unwrap();
+    if let Some(entry) = store.get_mut(task_id) {
+        entry.pid = Some(pid);
+        entry.status = "in_progress".to_string();
+    }
+}
+
+/// Append captured output to a task entry.
+pub fn append_output(task_id: &str, text: &str) {
+    let mut store = TASK_STORE.lock().unwrap();
+    if let Some(entry) = store.get_mut(task_id) {
+        let buf = entry.output.get_or_insert_with(String::new);
+        buf.push_str(text);
     }
 }
 
@@ -107,6 +135,8 @@ impl ToolExecutor for TaskCreateTool {
             description,
             status: "pending".to_string(),
             created_at: now_iso(),
+            output: None,
+            pid: None,
         };
 
         let mut store = TASK_STORE.lock().unwrap();
@@ -306,7 +336,8 @@ impl ToolExecutor for TaskStopTool {
     }
 
     fn description(&self) -> String {
-        "Stop a running task by its ID.".to_string()
+        "Stop a running task by its ID. If the task has an associated process, kills it."
+            .to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -337,18 +368,60 @@ impl ToolExecutor for TaskStopTool {
             None => return Ok(error_result("missing required parameter: taskId")),
         };
 
+        // Extract PID before taking the mutable borrow for status update.
+        let pid: Option<u32> = {
+            let store = TASK_STORE.lock().unwrap();
+            store.get(&task_id).and_then(|e| e.pid)
+        };
+
+        // Kill the process if we have a PID.
+        let kill_msg: Option<String> = if let Some(pid) = pid {
+            kill_process(pid)
+        } else {
+            None
+        };
+
         let mut store = TASK_STORE.lock().unwrap();
         match store.get_mut(&task_id) {
             Some(entry) => {
                 entry.status = "stopped".to_string();
-                let updated = entry.to_json();
-                Ok(ToolResultData {
-                    data: updated,
-                    is_error: false,
-                })
+                let mut data = entry.to_json();
+                if let Some(msg) = kill_msg {
+                    data["killMessage"] = json!(msg);
+                }
+                Ok(ToolResultData { data, is_error: false })
             }
             None => Ok(error_result(format!("task not found: {}", task_id))),
         }
+    }
+}
+
+/// Send SIGKILL (Unix) or TerminateProcess (Windows) on the given PID.
+/// Returns a message describing what happened.
+fn kill_process(pid: u32) -> Option<String> {
+    #[cfg(target_family = "unix")]
+    {
+        // Use `kill -9` shell command — avoids an FFI dependency on libc.
+        let output = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                Some(format!("Sent SIGKILL to PID {}", pid))
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                Some(format!("kill -9 {} failed: {}", pid, stderr.trim()))
+            }
+            Err(e) => Some(format!("Failed to invoke kill: {}", e)),
+        }
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output();
+        Some(format!("Attempted to terminate PID {}", pid))
     }
 }
 
@@ -397,12 +470,19 @@ impl ToolExecutor for TaskOutputTool {
         let store = TASK_STORE.lock().unwrap();
         match store.get(&task_id) {
             Some(entry) => {
-                // Stub: return the task description as output
+                // Return real captured output if available, otherwise fall back
+                // to the task description so callers always get some context.
+                let output = entry
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| entry.description.clone());
+
                 Ok(ToolResultData {
                     data: json!({
                         "taskId": entry.id,
                         "status": entry.status,
-                        "output": entry.description,
+                        "output": output,
+                        "pid": entry.pid,
                     }),
                     is_error: false,
                 })

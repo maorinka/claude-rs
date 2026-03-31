@@ -60,3 +60,37 @@ fn test_build_request_body_with_speed() {
     let body = build_request_body(&config, &[], &[], &[]);
     assert_eq!(body["speed"], "fast");
 }
+
+#[test]
+fn test_build_request_body_includes_web_search_server_tool() {
+    let config = ApiConfig::default();
+    let body = build_request_body(&config, &[], &[], &[]);
+
+    // The tools array should contain the web_search server tool definition
+    let tools = body["tools"].as_array().expect("tools should be an array");
+    let web_search = tools.iter().find(|t| t["name"] == "web_search");
+    assert!(web_search.is_some(), "web_search server tool should be present in tools");
+
+    let ws = web_search.unwrap();
+    assert_eq!(ws["type"], "web_search_20250305");
+    assert_eq!(ws["name"], "web_search");
+    assert_eq!(ws["max_uses"], 8);
+}
+
+#[test]
+fn test_build_request_body_web_search_appended_to_existing_tools() {
+    let config = ApiConfig::default();
+    let tools = vec![ToolDefinition {
+        name: "MyTool".to_string(),
+        description: "A tool".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+    }];
+    let body = build_request_body(&config, &[], &[], &tools);
+
+    let tools_arr = body["tools"].as_array().expect("tools should be an array");
+    // Should have the regular tool + web_search server tool
+    assert_eq!(tools_arr.len(), 2);
+    assert_eq!(tools_arr[0]["name"], "MyTool");
+    assert_eq!(tools_arr[1]["name"], "web_search");
+    assert_eq!(tools_arr[1]["type"], "web_search_20250305");
+}

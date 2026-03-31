@@ -1,11 +1,32 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ReadFileState, ToolExecutor, ToolUseContext};
+use claude_core::file_history::FileHistoryTracker;
 use claude_core::types::events::ToolResultData;
+
+// ─── Global file-history tracker ──────────────────────────────────────────────
+//
+// Uses a temp-directory-based session dir by default.  Callers that want a
+// specific session dir should initialise `FILE_HISTORY_SESSION_DIR` before the
+// first write.
+
+pub(crate) static FILE_HISTORY: Lazy<Mutex<FileHistoryTracker>> = Lazy::new(|| {
+    let session_dir = std::env::temp_dir().join("claude_rs_session");
+    Mutex::new(FileHistoryTracker::new(&session_dir))
+});
+
+/// Override the session directory used for file snapshots.
+/// Must be called before the first snapshot is taken to have any effect.
+pub fn set_file_history_session_dir(session_dir: &std::path::Path) {
+    if let Ok(mut tracker) = FILE_HISTORY.lock() {
+        *tracker = FileHistoryTracker::new(session_dir);
+    }
+}
 
 /// Check whether a file has been read and has not been externally modified
 /// since that read. Returns `Err(message)` if the write should be rejected.
@@ -117,6 +138,11 @@ Usage:
                     is_error: true,
                 });
             }
+        }
+
+        // Take a snapshot of the file before overwriting.
+        if let Ok(mut tracker) = FILE_HISTORY.lock() {
+            let _ = tracker.snapshot(path);
         }
 
         // Read existing content before overwriting, if any.

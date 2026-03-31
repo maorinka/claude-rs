@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::write::FILE_HISTORY;
 use claude_core::types::events::ToolResultData;
 
 /// Maximum number of characters shown in error message snippets.
@@ -122,6 +123,11 @@ Usage:
         // Staleness check: ensure the file has been read and not modified since.
         if let Err(msg) = crate::write::check_file_staleness(file_path, path, &ctx.read_file_state) {
             return Ok(error_result(msg));
+        }
+
+        // Take a snapshot before editing.
+        if let Ok(mut tracker) = FILE_HISTORY.lock() {
+            let _ = tracker.snapshot(path);
         }
 
         let original = match std::fs::read_to_string(path) {

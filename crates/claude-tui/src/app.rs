@@ -25,6 +25,7 @@ use claude_core::plugins::skill;
 use claude_core::plugins::types::Skill;
 
 use crate::theme::{detect_theme, Theme};
+use crate::widgets::ask_user_dialog::AskUserDialog;
 use crate::widgets::command_picker::{CommandPicker, CommandPickerEntry, CommandPickerWidget};
 use crate::widgets::message_list::{MessageEntry, MessageList, MessageListWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
@@ -44,6 +45,16 @@ pub enum AppEvent {
     /// call `engine.run_turn()` and handle the next result (which may be
     /// another round of tool use or a final answer).
     ContinueTurn,
+    /// Fired when a tool result signals `awaiting_input: true`.
+    /// Contains the tool-use id (to feed the reply back), the question text,
+    /// and an optional list of preset options.
+    ShowAskUserDialog {
+        tool_use_id: String,
+        question: String,
+        options: Vec<String>,
+    },
+    /// Fired when the user submits their answer in the AskUser dialog.
+    AskUserResponse(String),
 }
 
 /// Pending tool that needs permission before execution.
@@ -67,6 +78,8 @@ pub struct App {
     message_list: MessageList,
     prompt: PromptInput,
     permission_dialog: Option<PermissionDialog>,
+    /// Dialog shown when AskUserQuestionTool is awaiting user input.
+    ask_user_dialog: Option<AskUserDialog>,
     /// True while the engine is processing (prevents double-submit)
     engine_busy: bool,
     /// Model name for display in the header
@@ -94,6 +107,7 @@ impl App {
             message_list: MessageList::new(),
             prompt: PromptInput::new(),
             permission_dialog: None,
+            ask_user_dialog: None,
             engine_busy: false,
             model_name: "claude-sonnet-4-6".to_string(),
             total_tokens: 0,
@@ -368,7 +382,14 @@ impl App {
                         continue;
                     }
 
-                    if self.permission_dialog.is_some() {
+                    if self.ask_user_dialog.is_some() {
+                        // Route keys to ask-user input dialog
+                        if let Some(ref mut dialog) = self.ask_user_dialog {
+                            if let Some(answer) = dialog.handle_key(k) {
+                                let _ = tx.send(AppEvent::AskUserResponse(answer)).await;
+                            }
+                        }
+                    } else if self.permission_dialog.is_some() {
                         // Route keys to permission dialog
                         match k.code {
                             KeyCode::Tab | KeyCode::Right => {
@@ -618,39 +639,78 @@ impl App {
                                 read_file_state.clone(),
                             )
                             .await;
-                            let (result_text, is_error) = match &tool_result {
-                                Ok(data) => (
-                                    data.data
-                                        .as_str()
-                                        .unwrap_or(&data.data.to_string())
-                                        .to_string(),
-                                    data.is_error,
-                                ),
-                                Err(e) => (format!("Error: {}", e), true),
-                            };
-                            engine.add_tool_result(&info.id, &result_text, is_error);
-                            self.message_list.push(MessageEntry::ToolResult {
-                                name: info.name.clone(),
-                                output: truncate_result(&result_text),
-                                is_error,
-                            });
                             self.spinner.stop();
 
-                            // Check next tool or continue turn
-                            if pending_tool_index < pending_tools.len() {
-                                self.check_next_tool_permission(
-                                    &pending_tools,
-                                    &mut pending_tool_index,
-                                    &perm_ctx,
-                                    &tools,
-                                    &tx,
-                                );
-                            } else {
-                                // All tools done — fire ContinueTurn to re-enter the engine
+                            // Detect AskUserQuestionTool awaiting_input signal
+                            let awaiting = tool_result
+                                .as_ref()
+                                .ok()
+                                .and_then(|d| d.data["awaiting_input"].as_bool())
+                                .unwrap_or(false);
+
+                            if awaiting {
+                                // Don't feed result back yet — show dialog instead.
+                                let question = tool_result
+                                    .as_ref()
+                                    .ok()
+                                    .and_then(|d| d.data["question"].as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let opts: Vec<String> = tool_result
+                                    .as_ref()
+                                    .ok()
+                                    .and_then(|d| d.data["options"].as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                let tool_id = info.id.clone();
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
-                                    let _ = tx2.send(AppEvent::ContinueTurn).await;
+                                    let _ = tx2
+                                        .send(AppEvent::ShowAskUserDialog {
+                                            tool_use_id: tool_id,
+                                            question,
+                                            options: opts,
+                                        })
+                                        .await;
                                 });
+                            } else {
+                                let (result_text, is_error) = match &tool_result {
+                                    Ok(data) => (
+                                        data.data
+                                            .as_str()
+                                            .unwrap_or(&data.data.to_string())
+                                            .to_string(),
+                                        data.is_error,
+                                    ),
+                                    Err(e) => (format!("Error: {}", e), true),
+                                };
+                                engine.add_tool_result(&info.id, &result_text, is_error);
+                                self.message_list.push(MessageEntry::ToolResult {
+                                    name: info.name.clone(),
+                                    output: truncate_result(&result_text),
+                                    is_error,
+                                });
+
+                                // Check next tool or continue turn
+                                if pending_tool_index < pending_tools.len() {
+                                    self.check_next_tool_permission(
+                                        &pending_tools,
+                                        &mut pending_tool_index,
+                                        &perm_ctx,
+                                        &tools,
+                                        &tx,
+                                    );
+                                } else {
+                                    // All tools done — fire ContinueTurn to re-enter the engine
+                                    let tx2 = tx.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tx2.send(AppEvent::ContinueTurn).await;
+                                    });
+                                }
                             }
                         }
                         "deny" => {
@@ -740,6 +800,28 @@ impl App {
                             });
                         }
                     }
+                }
+
+                AppEvent::ShowAskUserDialog { tool_use_id: _, question, options } => {
+                    // Show the AskUser input dialog; execution is paused in the tool
+                    // via a oneshot channel until the user submits.
+                    self.ask_user_dialog = Some(AskUserDialog::new(question, options));
+                }
+
+                AppEvent::AskUserResponse(answer) => {
+                    // User submitted an answer — dismiss dialog and unblock the tool.
+                    self.ask_user_dialog = None;
+                    // Send the answer through the shared channel; the tool is waiting on it.
+                    claude_tools::ask_user::send_user_answer(answer.clone());
+
+                    // The tool will now return ToolResultData { answer } synchronously
+                    // via its oneshot rx.  But the tool's future is already being awaited
+                    // as part of the execute_tool call above.  After send_user_answer the
+                    // pending execute_tool will complete and the engine/continuation will
+                    // resume naturally — so we don't need to do anything extra here.
+                    self.message_list.push(MessageEntry::System {
+                        text: format!("Your answer: {}", answer),
+                    });
                 }
             }
         }
@@ -903,6 +985,7 @@ impl App {
         let message_list = &self.message_list;
         let prompt = &self.prompt;
         let permission_dialog = &self.permission_dialog;
+        let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
         let model_name = &self.model_name;
         let total_tokens = self.total_tokens;
@@ -996,6 +1079,12 @@ impl App {
             if let Some(dialog) = permission_dialog {
                 let dialog_area = centered_rect(60, 10, area);
                 frame.render_widget(dialog, dialog_area);
+            }
+
+            // AskUser input dialog overlay
+            if let Some(ref ask_dialog) = ask_user_dialog {
+                let dialog_area = centered_rect(70, 10, area);
+                frame.render_widget(ask_dialog, dialog_area);
             }
         })?;
         Ok(())

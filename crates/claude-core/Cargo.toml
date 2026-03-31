@@ -19,6 +19,7 @@ base64 = "0.22"
 rand = "0.8"
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"
+url = "2"
 dirs = "6"
 glob = "0.3"
 hex = "0.4"

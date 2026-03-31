@@ -659,3 +659,124 @@ fn test_config_transport_type() {
     });
     assert_eq!(http.transport_type(), TransportType::Http);
 }
+
+// --- SSE/HTTP transport config parsing tests ---
+
+#[test]
+fn test_sse_config_with_headers_roundtrip() {
+    let config = McpServerConfig::Sse(McpSseServerConfig {
+        url: "https://mcp.example.com/sse".to_string(),
+        headers: Some({
+            let mut h = HashMap::new();
+            h.insert("Authorization".to_string(), "Bearer tok123".to_string());
+            h.insert("X-Custom".to_string(), "value".to_string());
+            h
+        }),
+    });
+
+    assert_eq!(config.transport_type(), TransportType::Sse);
+    if let McpServerConfig::Sse(ref sse) = config {
+        assert_eq!(sse.url, "https://mcp.example.com/sse");
+        let hdrs = sse.headers.as_ref().unwrap();
+        assert_eq!(hdrs.get("Authorization").unwrap(), "Bearer tok123");
+        assert_eq!(hdrs.get("X-Custom").unwrap(), "value");
+    } else {
+        panic!("Expected SSE config");
+    }
+}
+
+#[test]
+fn test_http_config_with_headers_roundtrip() {
+    let config = McpServerConfig::Http(McpHttpServerConfig {
+        url: "https://api.example.com/mcp".to_string(),
+        headers: Some({
+            let mut h = HashMap::new();
+            h.insert("mcp-session-id".to_string(), "sess-abc".to_string());
+            h
+        }),
+    });
+
+    assert_eq!(config.transport_type(), TransportType::Http);
+    if let McpServerConfig::Http(ref http) = config {
+        assert_eq!(http.url, "https://api.example.com/mcp");
+        let hdrs = http.headers.as_ref().unwrap();
+        assert_eq!(hdrs.get("mcp-session-id").unwrap(), "sess-abc");
+    } else {
+        panic!("Expected HTTP config");
+    }
+}
+
+#[test]
+fn test_sse_transport_type_deserialization_from_json() {
+    let json = r#"{
+        "type": "sse",
+        "url": "https://mcp.example.com/events"
+    }"#;
+    let config: McpServerConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.transport_type(), TransportType::Sse);
+}
+
+#[test]
+fn test_http_transport_type_deserialization_from_json() {
+    let json = r#"{
+        "type": "http",
+        "url": "https://mcp.example.com/rpc"
+    }"#;
+    let config: McpServerConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.transport_type(), TransportType::Http);
+}
+
+#[test]
+fn test_sse_scoped_config() {
+    let json = r#"{
+        "type": "sse",
+        "url": "https://mcp.example.com/sse",
+        "scope": "user"
+    }"#;
+
+    let scoped: ScopedMcpServerConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(scoped.scope, ConfigScope::User);
+    assert_eq!(scoped.config.transport_type(), TransportType::Sse);
+}
+
+#[tokio::test]
+async fn test_manager_connect_sse_fail_no_server() {
+    // Connecting to a non-existent SSE server should produce a Failed status
+    let manager = McpManager::new();
+    let mut configs = HashMap::new();
+    configs.insert(
+        "test-sse".to_string(),
+        ScopedMcpServerConfig {
+            config: McpServerConfig::Sse(McpSseServerConfig {
+                url: "http://127.0.0.1:1/nonexistent".to_string(),
+                headers: None,
+            }),
+            scope: ConfigScope::Local,
+        },
+    );
+
+    let results = manager.connect_all(configs).await;
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_failed());
+}
+
+#[tokio::test]
+async fn test_manager_connect_http_fail_no_server() {
+    // Connecting to a non-existent HTTP server should produce a Failed status
+    let manager = McpManager::new();
+    let mut configs = HashMap::new();
+    configs.insert(
+        "test-http".to_string(),
+        ScopedMcpServerConfig {
+            config: McpServerConfig::Http(McpHttpServerConfig {
+                url: "http://127.0.0.1:1/nonexistent".to_string(),
+                headers: None,
+            }),
+            scope: ConfigScope::Local,
+        },
+    );
+
+    let results = manager.connect_all(configs).await;
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_failed());
+}

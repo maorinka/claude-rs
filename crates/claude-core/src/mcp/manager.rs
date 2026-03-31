@@ -151,22 +151,111 @@ impl McpManager {
                     }
                 }
             }
-            McpServerConfig::Sse(_) | McpServerConfig::Http(_) => {
-                // SSE and HTTP transports not yet implemented
-                let conn = McpServerConnection {
-                    name: name.to_string(),
-                    status: McpConnectionStatus::Failed {
-                        error: Some("SSE and HTTP transports are not yet implemented".to_string()),
-                    },
-                    config: scoped_config,
-                };
+            McpServerConfig::Sse(sse_config) => {
+                match McpClient::connect_sse(name, sse_config).await {
+                    Ok(client) => {
+                        let capabilities = client
+                            .capabilities()
+                            .cloned()
+                            .unwrap_or_default();
+                        let server_info = client.server_info().cloned();
+                        let instructions = client.instructions().map(|s| s.to_string());
 
-                {
-                    let mut connections = self.connections.write().await;
-                    connections.insert(name.to_string(), conn.clone());
+                        let conn = McpServerConnection {
+                            name: name.to_string(),
+                            status: McpConnectionStatus::Connected {
+                                capabilities,
+                                server_info,
+                                instructions,
+                            },
+                            config: scoped_config,
+                        };
+
+                        {
+                            let mut clients = self.clients.write().await;
+                            clients.insert(name.to_string(), client);
+                        }
+                        {
+                            let mut connections = self.connections.write().await;
+                            connections.insert(name.to_string(), conn.clone());
+                        }
+
+                        info!(server = name, "MCP SSE server connected");
+                        conn
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{:#}", e);
+                        error!(server = name, error = %error_msg, "Failed to connect to MCP SSE server");
+
+                        let conn = McpServerConnection {
+                            name: name.to_string(),
+                            status: McpConnectionStatus::Failed {
+                                error: Some(error_msg),
+                            },
+                            config: scoped_config,
+                        };
+
+                        {
+                            let mut connections = self.connections.write().await;
+                            connections.insert(name.to_string(), conn.clone());
+                        }
+
+                        conn
+                    }
                 }
+            }
+            McpServerConfig::Http(http_config) => {
+                match McpClient::connect_http(name, http_config).await {
+                    Ok(client) => {
+                        let capabilities = client
+                            .capabilities()
+                            .cloned()
+                            .unwrap_or_default();
+                        let server_info = client.server_info().cloned();
+                        let instructions = client.instructions().map(|s| s.to_string());
 
-                conn
+                        let conn = McpServerConnection {
+                            name: name.to_string(),
+                            status: McpConnectionStatus::Connected {
+                                capabilities,
+                                server_info,
+                                instructions,
+                            },
+                            config: scoped_config,
+                        };
+
+                        {
+                            let mut clients = self.clients.write().await;
+                            clients.insert(name.to_string(), client);
+                        }
+                        {
+                            let mut connections = self.connections.write().await;
+                            connections.insert(name.to_string(), conn.clone());
+                        }
+
+                        info!(server = name, "MCP HTTP server connected");
+                        conn
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{:#}", e);
+                        error!(server = name, error = %error_msg, "Failed to connect to MCP HTTP server");
+
+                        let conn = McpServerConnection {
+                            name: name.to_string(),
+                            status: McpConnectionStatus::Failed {
+                                error: Some(error_msg),
+                            },
+                            config: scoped_config,
+                        };
+
+                        {
+                            let mut connections = self.connections.write().await;
+                            connections.insert(name.to_string(), conn.clone());
+                        }
+
+                        conn
+                    }
+                }
             }
         }
     }

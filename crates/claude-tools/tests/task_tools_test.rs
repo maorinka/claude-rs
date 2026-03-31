@@ -1,5 +1,6 @@
 use claude_tools::task_tools::{
-    TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool, TaskStopTool, TaskUpdateTool,
+    append_output, register_process, TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool,
+    TaskStopTool, TaskUpdateTool,
 };
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use serde_json::json;
@@ -162,6 +163,99 @@ async fn test_task_output_returns_description() {
         output.contains("output description"),
         "output should contain description text"
     );
+}
+
+// ─── Process-tracking tests ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_task_output_returns_real_output_when_set() {
+    let created = create_task("Real output subject", "fallback description").await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    // Simulate a background process appending output
+    append_output(&id, "hello ");
+    append_output(&id, "world");
+
+    let tool = TaskOutputTool;
+    let result = tool
+        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let output = result.data["output"].as_str().unwrap_or("");
+    assert_eq!(output, "hello world", "output should be the appended text");
+}
+
+#[tokio::test]
+async fn test_task_output_falls_back_to_description() {
+    let created = create_task("Fallback subject", "This is the description fallback").await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    // No output appended — should fall back to description
+    let tool = TaskOutputTool;
+    let result = tool
+        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let output = result.data["output"].as_str().unwrap_or("");
+    assert!(output.contains("description fallback"), "should fall back to description");
+}
+
+#[tokio::test]
+async fn test_register_process_sets_pid_and_status() {
+    let created = create_task("PID test subject", "PID test desc").await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    // Simulate process launch
+    register_process(&id, 12345);
+
+    let tool = TaskGetTool;
+    let result = tool
+        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["pid"], 12345, "pid should be set to 12345");
+    assert_eq!(result.data["status"], "in_progress", "status should be in_progress");
+}
+
+#[tokio::test]
+async fn test_task_output_includes_pid() {
+    let created = create_task("PID output subject", "PID output desc").await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    register_process(&id, 99999);
+    append_output(&id, "some process output");
+
+    let tool = TaskOutputTool;
+    let result = tool
+        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["pid"], 99999);
+    assert_eq!(result.data["output"].as_str().unwrap_or(""), "some process output");
+}
+
+#[tokio::test]
+async fn test_task_stop_with_no_pid() {
+    let created = create_task("No PID stop subject", "No PID stop desc").await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    // No PID registered — stop should still succeed and set status
+    let tool = TaskStopTool;
+    let result = tool
+        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .await
+        .unwrap();
+
+    assert!(!result.is_error, "stop should succeed even without a PID");
+    assert_eq!(result.data["status"], "stopped");
 }
 
 #[test]
