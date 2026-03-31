@@ -10,8 +10,18 @@ pub mod web_search;
 pub mod task_tools;
 pub mod notebook_edit;
 pub mod agent_tool;
+pub mod agents;
+pub mod mcp_tool;
+pub mod config_tool;
+pub mod plan_mode;
+pub mod ask_user;
+pub mod brief_tool;
+pub mod send_message;
+pub mod lsp_tool;
+pub mod tool_search;
 
 pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender};
+pub use mcp_tool::register_mcp_tools;
 
 use std::sync::Arc;
 
@@ -33,5 +43,14 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(task_tools::TaskOutputTool));
     reg.register(Arc::new(notebook_edit::NotebookEditTool));
     reg.register(Arc::new(agent_tool::AgentTool));
+    reg.register(Arc::new(config_tool::ConfigTool::default()));
+    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
+    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
+    reg.register(Arc::new(ask_user::AskUserQuestionTool));
+    reg.register(Arc::new(brief_tool::BriefTool));
+    reg.register(Arc::new(send_message::SendMessageTool));
+    reg.register(Arc::new(mcp_tool::McpTool));
+    reg.register(Arc::new(lsp_tool::LspTool));
+    reg.register(Arc::new(tool_search::ToolSearchTool));
     reg
 }

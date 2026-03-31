@@ -4,6 +4,7 @@ pub mod auth;
 pub mod bridge;
 pub mod config;
 pub mod context;
+pub mod mcp;
 pub mod permissions;
 pub mod plugins;
 pub mod query;
