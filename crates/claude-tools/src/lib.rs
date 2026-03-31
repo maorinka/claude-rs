@@ -5,8 +5,10 @@ pub mod write;
 pub mod edit;
 pub mod grep;
 pub mod glob_tool;
+pub mod mcp_tool;
 
 pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender};
+pub use mcp_tool::register_mcp_tools;
 
 use std::sync::Arc;
 
