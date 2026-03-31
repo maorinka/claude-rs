@@ -1,0 +1,16 @@
+[package]
+name = "claude-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+claude-tools = { path = "../claude-tools" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+ratatui = "0.29"
+crossterm = "0.28"
+tokio-util = { version = "0.7", features = ["rt"] }
