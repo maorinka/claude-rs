@@ -12,10 +12,26 @@ fn test_default_registry_has_all_phase1_tools() {
 }
 
 #[test]
+fn test_default_registry_has_all_new_tools() {
+    let reg = build_default_registry();
+    assert!(reg.get("WebFetch").is_some());
+    assert!(reg.get("WebSearch").is_some());
+    assert!(reg.get("TaskCreate").is_some());
+    assert!(reg.get("TaskList").is_some());
+    assert!(reg.get("TaskUpdate").is_some());
+    assert!(reg.get("TaskGet").is_some());
+    assert!(reg.get("TaskStop").is_some());
+    assert!(reg.get("TaskOutput").is_some());
+    assert!(reg.get("NotebookEdit").is_some());
+    assert!(reg.get("Agent").is_some());
+}
+
+#[test]
 fn test_default_registry_schemas() {
     let reg = build_default_registry();
     let schemas = reg.schemas();
-    assert_eq!(schemas.len(), 6);
+    // 6 original + 10 new tools = 16 total
+    assert_eq!(schemas.len(), 16);
     for schema in &schemas {
         assert!(schema.get("name").is_some());
         assert!(schema.get("input_schema").is_some());
