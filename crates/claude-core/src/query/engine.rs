@@ -291,6 +291,33 @@ impl QueryEngine {
             self.add_assistant_message(assistant_content);
         }
 
+        // Check if compaction is needed
+        if crate::compact::compactor::should_compact(
+            &self.messages,
+            crate::compact::compactor::default_context_window(),
+        ) {
+            let _ = event_tx
+                .send(StreamEvent::Compacted {
+                    summary: "Compacting conversation...".into(),
+                })
+                .await;
+            match crate::compact::compactor::compact_conversation(
+                &self.api_client,
+                &self.messages,
+                &self.system_prompt,
+            )
+            .await
+            {
+                Ok(compacted) => {
+                    self.messages = compacted;
+                }
+                Err(e) => {
+                    tracing::warn!("Compaction failed: {}", e);
+                    // Continue without compaction — will eventually hit context limit
+                }
+            }
+        }
+
         // Handle stop reason
         match stop_reason {
             StopReason::ToolUse if !tool_use_blocks.is_empty() => {

@@ -28,6 +28,8 @@ pub async fn stream_via_claude(
     model: Option<&str>,
     cancel: CancellationToken,
     mut on_text: impl FnMut(&str),
+    dangerously_skip_permissions: bool,
+    max_turns: Option<u32>,
 ) -> Result<()> {
     let mut cmd = Command::new("claude");
     cmd.arg("-p").arg(prompt);
@@ -35,6 +37,14 @@ pub async fn stream_via_claude(
 
     if let Some(m) = model {
         cmd.arg("--model").arg(m);
+    }
+
+    if dangerously_skip_permissions {
+        cmd.arg("--dangerously-skip-permissions");
+    }
+
+    if let Some(turns) = max_turns {
+        cmd.arg("--max-turns").arg(turns.to_string());
     }
 
     cmd.stdout(Stdio::piped());

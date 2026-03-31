@@ -86,32 +86,18 @@ async fn main() -> Result<()> {
         None => {}
     }
 
-    // Resolve authentication (matches real Claude Code priority)
-    use claude_core::auth::resolve::AuthResolution;
-    let auth_resolution = claude_core::auth::resolve::resolve_auth().await
-        .unwrap_or(AuthResolution::None);
-
-    let use_proxy = matches!(auth_resolution, AuthResolution::OAuthProxy);
-
-    let auth = match auth_resolution {
-        AuthResolution::ApiKey(auth) => auth,
-        AuthResolution::OAuthProxy => {
-            // Dummy auth — actual calls go through claude proxy
-            claude_core::api::client::AuthMethod::ApiKey("proxy".into())
-        }
-        AuthResolution::None => {
-            // Match the original Claude Code behavior: prompt to login
+    // Resolve authentication (reads keychain, refreshes OAuth tokens)
+    let auth = match claude_core::auth::resolve::resolve_auth().await {
+        Ok(auth) => auth,
+        Err(e) => {
             eprintln!();
             eprintln!("  \x1b[1mWelcome to Claude Code!\x1b[0m");
             eprintln!();
-            if claude_core::api::claude_proxy::is_claude_available() {
-                eprintln!("  Please run \x1b[1mclaude login\x1b[0m first, then try again.");
-            } else {
-                eprintln!("  To get started, either:");
-                eprintln!("  1. Install Claude Code: \x1b[1mnpm install -g @anthropic-ai/claude-code\x1b[0m");
-                eprintln!("     Then run: \x1b[1mclaude login\x1b[0m");
-                eprintln!("  2. Or set: \x1b[1mexport ANTHROPIC_API_KEY=sk-ant-...\x1b[0m");
-            }
+            eprintln!("  {}", e);
+            eprintln!();
+            eprintln!("  To get started:");
+            eprintln!("  1. Run \x1b[1mclaude login\x1b[0m (if Claude Code is installed)");
+            eprintln!("  2. Or set: \x1b[1mexport ANTHROPIC_API_KEY=sk-ant-...\x1b[0m");
             eprintln!();
             std::process::exit(1);
         }
@@ -186,17 +172,6 @@ async fn main() -> Result<()> {
     // Handle non-interactive prompt mode
     if let Some(prompt) = cli.prompt {
         // If using OAuth proxy, delegate to real claude binary
-        if use_proxy {
-            let model_opt = Some(model_display.as_str());
-            claude_core::api::claude_proxy::stream_via_claude(
-                &prompt,
-                model_opt,
-                cancel.clone(),
-                |text| print!("{}", text),
-            ).await?;
-            println!();
-            return Ok(());
-        }
         use std::path::PathBuf;
         use tokio::sync::mpsc;
         use claude_core::permissions::evaluator::evaluate_permission_sync;
@@ -298,14 +273,6 @@ async fn main() -> Result<()> {
     }
 
     // Interactive TUI mode
-    if use_proxy {
-        // For OAuth users, launch the real claude binary in interactive mode
-        // since we can't call the API directly
-        let status = std::process::Command::new("claude")
-            .status()
-            .map_err(|e| anyhow::anyhow!("Failed to launch claude: {}", e))?;
-        std::process::exit(status.code().unwrap_or(1));
-    }
     let mut app = claude_tui::app::App::new()?;
     app.set_model_name(&model_display);
     app.run_with_engine(query_engine, tools, cancel, permission_mode).await?;

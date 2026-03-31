@@ -73,8 +73,8 @@ impl Default for ApiConfig {
         Self {
             base_url: "https://api.anthropic.com".into(),
             model: "claude-sonnet-4-6".into(),
-            max_tokens: 8000,
-            thinking: ThinkingConfig::Disabled,
+            max_tokens: 64000,
+            thinking: ThinkingConfig::Adaptive,
             speed: None,
             api_version: "2023-06-01".into(),
         }
@@ -144,6 +144,10 @@ pub fn build_request_body(
         body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
     }
 
+    // Required fields matching real Claude Code request format
+    body["metadata"] = json!({});
+    body["output_config"] = json!({});
+
     body
 }
 
@@ -188,15 +192,20 @@ impl ApiClient {
             .header("content-type", "application/json")
             .header(header_name, header_value);
 
-        // Build anthropic-beta header (comma-separated list matching real Claude Code)
+        // Build anthropic-beta header (matches real Claude Code's request exactly)
         let mut betas = vec![
             "claude-code-20250219",
             "interleaved-thinking-2025-05-14",
+            "context-management-2025-06-27",
+            "effort-2025-11-24",
         ];
         if self.auth.is_oauth() {
             betas.push("oauth-2025-04-20");
         }
-        request = request.header("anthropic-beta", betas.join(","));
+        request = request
+            .header("anthropic-beta", betas.join(","))
+            .header("anthropic-dangerous-direct-browser-access", "true")
+            .header("x-app", "cli");
 
         let response = request.json(&body).send().await?;
 
