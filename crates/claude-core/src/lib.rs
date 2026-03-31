@@ -7,3 +7,6 @@ pub mod permissions;
 pub mod query;
 pub mod session;
 pub mod compact;
+pub mod commands;
+pub mod hooks;
+pub mod cost;
