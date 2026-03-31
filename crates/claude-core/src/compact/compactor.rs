@@ -107,8 +107,9 @@ pub async fn compact_conversation(
         anyhow::bail!("Compaction failed: no summary generated");
     }
 
-    // Strip <analysis> block if present (matches TS behavior)
-    let summary = strip_analysis_block(&summary);
+    // Format summary: strip <analysis> scratchpad and extract <summary> content
+    // (matches TS formatCompactSummary behavior)
+    let summary = format_compact_summary(&summary);
 
     // Build compacted messages: just the summary as a user message
     let compact_user_msg = super::prompt::format_compact_user_message(&summary);
@@ -119,18 +120,38 @@ pub async fn compact_conversation(
     })])
 }
 
-/// Strip the `<analysis>...</analysis>` block from the summary.
-/// The TS code uses this as a scratchpad that improves summary quality
-/// but adds no value to the saved context.
-fn strip_analysis_block(text: &str) -> String {
-    if let Some(start) = text.find("<analysis>") {
-        if let Some(end) = text.find("</analysis>") {
-            let before = &text[..start];
-            let after = &text[end + "</analysis>".len()..];
-            return format!("{}{}", before.trim(), after.trim());
+/// Format the compact summary by stripping the `<analysis>` drafting scratchpad
+/// and replacing `<summary>` XML tags with readable section headers.
+/// Matches the TS `formatCompactSummary()` in prompt.ts.
+fn format_compact_summary(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Strip analysis section -- it's a drafting scratchpad that improves summary
+    // quality but has no informational value once the summary is written.
+    if let Some(start) = result.find("<analysis>") {
+        if let Some(end) = result.find("</analysis>") {
+            let before = &result[..start];
+            let after = &result[end + "</analysis>".len()..];
+            result = format!("{}{}", before, after);
         }
     }
-    text.to_string()
+
+    // Extract and format summary section
+    if let Some(start) = result.find("<summary>") {
+        if let Some(end) = result.find("</summary>") {
+            let content = &result[start + "<summary>".len()..end];
+            let before = &result[..start];
+            let after = &result[end + "</summary>".len()..];
+            result = format!("{}Summary:\n{}{}", before, content.trim(), after);
+        }
+    }
+
+    // Clean up extra whitespace between sections
+    while result.contains("\n\n\n") {
+        result = result.replace("\n\n\n", "\n\n");
+    }
+
+    result.trim().to_string()
 }
 
 #[cfg(test)]
@@ -138,24 +159,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_strip_analysis_block_present() {
-        let input = "before <analysis>scratchpad stuff</analysis> after";
-        let result = strip_analysis_block(input);
-        assert_eq!(result, "beforeafter");
+    fn test_format_compact_summary_strips_analysis() {
+        let input = "<analysis>scratchpad stuff</analysis>\n\n<summary>\nThe actual summary\n</summary>";
+        let result = format_compact_summary(input);
+        assert_eq!(result, "Summary:\nThe actual summary");
     }
 
     #[test]
-    fn test_strip_analysis_block_absent() {
-        let input = "no analysis block here";
-        let result = strip_analysis_block(input);
-        assert_eq!(result, "no analysis block here");
+    fn test_format_compact_summary_no_tags() {
+        let input = "no analysis or summary tags here";
+        let result = format_compact_summary(input);
+        assert_eq!(result, "no analysis or summary tags here");
     }
 
     #[test]
-    fn test_strip_analysis_block_unclosed() {
+    fn test_format_compact_summary_unclosed_analysis() {
         let input = "before <analysis>no closing tag";
-        let result = strip_analysis_block(input);
+        let result = format_compact_summary(input);
         assert_eq!(result, "before <analysis>no closing tag");
+    }
+
+    #[test]
+    fn test_format_compact_summary_summary_only() {
+        let input = "<summary>\n1. Primary Request\n2. Key Concepts\n</summary>";
+        let result = format_compact_summary(input);
+        assert_eq!(result, "Summary:\n1. Primary Request\n2. Key Concepts");
     }
 
     #[test]

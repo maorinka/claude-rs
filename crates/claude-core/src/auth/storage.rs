@@ -2,10 +2,21 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-// Keychain service name used by the real Claude Code (production).
-// Format: "Claude Code{OAUTH_FILE_SUFFIX}{serviceSuffix}{dirHash}"
-// Production: OAUTH_FILE_SUFFIX="" , serviceSuffix="-credentials", dirHash="" (default dir)
-const KEYCHAIN_SERVICE_NAME: &str = "Claude Code-credentials";
+/// Compute the keychain service name, matching the TS
+/// `getMacOsKeychainStorageServiceName` in macOsKeychainHelpers.ts.
+/// Format: "Claude Code{serviceSuffix}{dirHash}"
+/// When CLAUDE_CONFIG_DIR is set, appends a sha256-hash suffix for uniqueness.
+fn keychain_service_name() -> String {
+    let suffix = match std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(dir) if !dir.is_empty() => {
+            use sha2::{Sha256, Digest};
+            let hash = Sha256::digest(dir.as_bytes());
+            format!("-{}", &hex::encode(hash)[..8])
+        }
+        _ => String::new(),
+    };
+    format!("Claude Code-credentials{}", suffix)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,7 +62,7 @@ async fn load_from_keychain() -> Result<Option<OAuthStoredTokens>> {
             "find-generic-password",
             "-a", &username,
             "-w",
-            "-s", KEYCHAIN_SERVICE_NAME,
+            "-s", &keychain_service_name(),
         ])
         .output()
         .await

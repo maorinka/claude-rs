@@ -59,7 +59,8 @@ async fn refresh_oauth_token(refresh_token: &str) -> Result<String> {
     // Store refreshed tokens back to keychain
     let new_tokens = super::storage::OAuthStoredTokens {
         access_token: access_token.clone(),
-        refresh_token: data["refresh_token"].as_str().map(|s| s.to_string()),
+        refresh_token: data["refresh_token"].as_str().map(|s| s.to_string())
+            .or_else(|| Some(refresh_token.to_string())),  // Keep original if not returned
         expires_at: data["expires_in"]
             .as_u64()
             .map(|secs| {

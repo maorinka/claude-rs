@@ -25,6 +25,10 @@ fn test_compact_prompt_not_empty() {
     let prompt = compact_prompt();
     assert!(prompt.contains("summary"));
     assert!(prompt.contains("Do NOT call any tools"));
+    // Verify the <analysis>/<summary> XML structure instructions
+    assert!(prompt.contains("<analysis>"));
+    assert!(prompt.contains("<summary>"));
+    assert!(prompt.contains("REMINDER: Do NOT call any tools"));
 }
 
 #[test]
@@ -35,9 +39,11 @@ fn test_format_compact_user_message() {
 }
 
 #[test]
-fn test_strip_analysis_block() {
-    // Test via compact_prompt — just verify the prompt is substantial
+fn test_compact_prompt_structure() {
+    // Verify the prompt starts with NO_TOOLS_PREAMBLE and ends with NO_TOOLS_TRAILER
     let prompt = compact_prompt();
+    assert!(prompt.starts_with("CRITICAL: Respond with TEXT ONLY."));
+    assert!(prompt.ends_with("Tool calls will be rejected and you will fail the task."));
     assert!(prompt.len() > 100);
 }
 

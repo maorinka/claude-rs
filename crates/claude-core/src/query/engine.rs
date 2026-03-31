@@ -119,6 +119,34 @@ impl QueryEngine {
         self.turn_count += 1;
         self.state = QueryState::Querying;
 
+        // Check if compaction is needed before next API request (matches TS behavior:
+        // autocompact runs BEFORE the API call, not after the response)
+        if crate::compact::compactor::should_compact(
+            &self.messages,
+            crate::compact::compactor::default_context_window(),
+        ) {
+            let _ = event_tx
+                .send(StreamEvent::Compacted {
+                    summary: "Compacting conversation...".into(),
+                })
+                .await;
+            match crate::compact::compactor::compact_conversation(
+                &self.api_client,
+                &self.messages,
+                &self.system_prompt,
+            )
+            .await
+            {
+                Ok(compacted) => {
+                    self.messages = compacted;
+                }
+                Err(e) => {
+                    tracing::warn!("Compaction failed: {}", e);
+                    // Continue without compaction — will eventually hit context limit
+                }
+            }
+        }
+
         // Apply max_output_tokens override if set
         if let Some(override_tokens) = self.max_output_tokens_override {
             self.api_client.config.max_tokens = override_tokens as u64;
@@ -291,33 +319,6 @@ impl QueryEngine {
             self.add_assistant_message(assistant_content);
         }
 
-        // Check if compaction is needed
-        if crate::compact::compactor::should_compact(
-            &self.messages,
-            crate::compact::compactor::default_context_window(),
-        ) {
-            let _ = event_tx
-                .send(StreamEvent::Compacted {
-                    summary: "Compacting conversation...".into(),
-                })
-                .await;
-            match crate::compact::compactor::compact_conversation(
-                &self.api_client,
-                &self.messages,
-                &self.system_prompt,
-            )
-            .await
-            {
-                Ok(compacted) => {
-                    self.messages = compacted;
-                }
-                Err(e) => {
-                    tracing::warn!("Compaction failed: {}", e);
-                    // Continue without compaction — will eventually hit context limit
-                }
-            }
-        }
-
         // Handle stop reason
         match stop_reason {
             StopReason::ToolUse if !tool_use_blocks.is_empty() => {
@@ -355,7 +356,10 @@ impl QueryEngine {
         }
 
         // Stage 2: Recovery loop (up to 3)
+        // Clear the escalated override — go back to default max_tokens (matches TS:
+        // maxOutputTokensOverride: undefined in the stage-2 state transition)
         if self.recovery_count < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT {
+            self.max_output_tokens_override = None;
             self.recovery_count += 1;
             self.messages.push(serde_json::json!({
                 "role": "user",
