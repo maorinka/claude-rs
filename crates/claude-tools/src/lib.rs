@@ -49,8 +49,7 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(ask_user::AskUserQuestionTool));
     reg.register(Arc::new(brief_tool::BriefTool));
     reg.register(Arc::new(send_message::SendMessageTool));
-    reg.register(Arc::new(mcp_tool::McpTool));
-    reg.register(Arc::new(lsp_tool::LspTool));
+    reg.register(Arc::new(lsp_tool::LSPTool));
     reg.register(Arc::new(tool_search::ToolSearchTool));
     reg
 }
