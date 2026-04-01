@@ -218,8 +218,9 @@ impl ToolExecutor for GrepTool {
                 // The Claude binary acts as rg when argv[0] == "rg"
                 // arg0() is Unix-only; on Windows, just pass the path directly
                 #[cfg(unix)]
+                #[allow(unused_imports)]
                 {
-                    use std::os::unix::process::CommandExt;
+                    use std::os::unix::process::CommandExt as _;
                     c.arg0("rg");
                 }
                 c

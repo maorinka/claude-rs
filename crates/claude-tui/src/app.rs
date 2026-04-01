@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
+    self, DisableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
     KeyModifiers, MouseEvent, MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -107,7 +107,7 @@ pub struct App {
     /// Shared mutable state for slash commands (persistent across calls)
     shared_state: Arc<Mutex<SharedCommandState>>,
     /// Session start time for duration display
-    session_start: std::time::Instant,
+    _session_start: std::time::Instant,
     /// Context window size for token budget warnings
     context_window: u64,
     /// Viewport height (updated on render, used for page-up/down)
@@ -136,7 +136,7 @@ impl App {
             command_registry,
             skills: Vec::new(),
             shared_state: Arc::new(Mutex::new(SharedCommandState::default())),
-            session_start: std::time::Instant::now(),
+            _session_start: std::time::Instant::now(),
             context_window: 200_000,
             viewport_height: 24,
         })
@@ -1139,6 +1139,7 @@ impl App {
     }
 
     /// Handle mouse events (scroll wheel).
+    #[allow(dead_code)]
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
@@ -1160,6 +1161,7 @@ impl App {
     }
 
     /// Format a duration into a human-readable string (e.g. "2m 15s" or "1h 3m").
+    #[allow(dead_code)]
     fn format_duration(dur: Duration) -> String {
         let secs = dur.as_secs();
         if secs < 60 {

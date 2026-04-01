@@ -279,9 +279,12 @@ fn find_bracket_object(text: &str, offset: usize, open: char, close: char, is_in
 }
 
 // Motions
+#[allow(dead_code)]
 fn is_inclusive_motion(key: &str) -> bool { matches!(key, "e" | "E" | "$") }
+#[allow(dead_code)]
 fn is_linewise_motion(key: &str) -> bool { matches!(key, "j" | "k" | "G" | "gg") }
 
+#[allow(dead_code)]
 fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
     let mut pos = buf.cursor; let text = &buf.text; let bytes = text.as_bytes(); let len = bytes.len();
     for _ in 0..count {
@@ -323,6 +326,7 @@ fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
 // Operators
 pub enum OperatorEffect { None, EnterInsert { offset: usize } }
 
+#[allow(dead_code)]
 fn apply_operator(buf: &mut VimBuffer, op: Operator, from: usize, to: usize, persistent: &mut PersistentState, linewise: bool) -> OperatorEffect {
     let (from, to) = (from.min(to), from.max(to).min(buf.text.len()));
     let mut content = buf.text[from..to].to_string();
