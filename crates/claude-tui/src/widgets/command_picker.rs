@@ -146,12 +146,20 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
         let max_visible = inner.height as usize;
 
-        for (row, &entry_idx) in self.picker.filtered.iter().enumerate() {
-            if row >= max_visible {
-                break;
-            }
+        // Scroll so the selected item is always visible
+        let scroll_offset = if self.picker.selected >= max_visible {
+            self.picker.selected - max_visible + 1
+        } else {
+            0
+        };
+
+        let visible_entries = self.picker.filtered.iter()
+            .skip(scroll_offset)
+            .take(max_visible);
+
+        for (row, &entry_idx) in visible_entries.enumerate() {
             let entry = &self.picker.entries[entry_idx];
-            let is_selected = row == self.picker.selected;
+            let is_selected = (row + scroll_offset) == self.picker.selected;
 
             let style = if is_selected {
                 Style::default()

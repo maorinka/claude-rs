@@ -1322,7 +1322,7 @@ impl App {
 
             // Command picker overlay (positioned above the input area)
             if command_picker.visible {
-                let picker_height = 12u16.min(area.height / 3);
+                let picker_height = 20u16.min(area.height * 2 / 3);
                 let picker_area = Rect::new(
                     area.x + 1,
                     chunks[2].y.saturating_sub(picker_height),
