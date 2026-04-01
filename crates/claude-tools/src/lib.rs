@@ -32,6 +32,18 @@ pub mod synthetic_output;
 pub mod todo_write;
 pub mod mcp_auth_tool;
 pub mod repl_tool;
+pub mod monitor_tool;
+pub mod push_notification_tool;
+pub mod send_user_file_tool;
+pub mod terminal_capture_tool;
+pub mod ctx_inspect_tool;
+pub mod snip_tool;
+pub mod web_browser_tool;
+pub mod verify_plan_tool;
+pub mod subscribe_pr_tool;
+pub mod suggest_background_pr_tool;
+pub mod list_peers_tool;
+pub mod workflow_tool;
 
 pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender, ReadFileState};
 pub use mcp_tool::register_mcp_tools;
@@ -80,5 +92,19 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(todo_write::TodoWriteTool));
     reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
     reg.register(Arc::new(repl_tool::REPLTool));
+    reg.register(Arc::new(monitor_tool::MonitorTool));
+    reg.register(Arc::new(push_notification_tool::PushNotificationTool));
+    reg.register(Arc::new(send_user_file_tool::SendUserFileTool));
+    reg.register(Arc::new(terminal_capture_tool::TerminalCaptureTool));
+    reg.register(Arc::new(ctx_inspect_tool::CtxInspectTool));
+    reg.register(Arc::new(snip_tool::SnipTool));
+    reg.register(Arc::new(web_browser_tool::WebBrowserTool));
+    reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
+    reg.register(Arc::new(subscribe_pr_tool::SubscribePRTool));
+    reg.register(Arc::new(suggest_background_pr_tool::SuggestBackgroundPRTool));
+    reg.register(Arc::new(list_peers_tool::ListPeersTool));
+    reg.register(Arc::new(workflow_tool::WorkflowTool));
+    reg.register(Arc::new(cron_tool::CronDeleteTool));
+    reg.register(Arc::new(cron_tool::CronListTool));
     reg
 }

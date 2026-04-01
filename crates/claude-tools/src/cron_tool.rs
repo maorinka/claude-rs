@@ -270,6 +270,189 @@ fn cron_to_human(expr: &str) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// CronDeleteTool — cancel a scheduled cron job by id
+// ---------------------------------------------------------------------------
+
+pub struct CronDeleteTool;
+
+#[async_trait]
+impl ToolExecutor for CronDeleteTool {
+    fn name(&self) -> &str { "CronDelete" }
+
+    fn description(&self) -> String {
+        "Cancel a scheduled cron job by its ID. The job's JSON configuration file \
+         is removed from ~/.claude/cron/."
+            .to_string()
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Job ID returned by ScheduleCron."
+                }
+            },
+            "required": ["id"]
+        })
+    }
+
+    async fn call(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData> {
+        let id = match input.get("id").and_then(|v| v.as_str()) {
+            Some(i) => i,
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": "missing required field: id" }),
+                    is_error: true,
+                });
+            }
+        };
+
+        // Reject path traversal
+        if id.contains("..") || id.contains('/') || id.contains('\\') {
+            return Ok(ToolResultData {
+                data: json!({ "error": "Invalid job id: must not contain path separators or '..'" }),
+                is_error: true,
+            });
+        }
+
+        let home = match dirs_home() {
+            Some(h) => h,
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": "Could not determine home directory" }),
+                    is_error: true,
+                });
+            }
+        };
+
+        let file_path = home.join(".claude").join("cron").join(format!("{}.json", id));
+        if !file_path.exists() {
+            return Ok(ToolResultData {
+                data: json!({ "error": format!("No scheduled job with id '{}'", id) }),
+                is_error: true,
+            });
+        }
+
+        if let Err(e) = tokio::fs::remove_file(&file_path).await {
+            return Ok(ToolResultData {
+                data: json!({ "error": format!("Failed to remove cron config: {}", e) }),
+                is_error: true,
+            });
+        }
+
+        Ok(ToolResultData {
+            data: json!({ "id": id, "message": format!("Cancelled job {}.", id) }),
+            is_error: false,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CronListTool — list all active cron jobs
+// ---------------------------------------------------------------------------
+
+pub struct CronListTool;
+
+#[async_trait]
+impl ToolExecutor for CronListTool {
+    fn name(&self) -> &str { "CronList" }
+
+    fn description(&self) -> String {
+        "List all active scheduled cron jobs. Returns each job's id, cron expression, \
+         human-readable schedule, prompt, and whether it is recurring."
+            .to_string()
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
+    fn is_read_only(&self, _input: &Value) -> bool { true }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
+
+    async fn call(
+        &self,
+        _input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData> {
+        let home = match dirs_home() {
+            Some(h) => h,
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "jobs": [], "count": 0, "message": "Could not determine home directory." }),
+                    is_error: false,
+                });
+            }
+        };
+
+        let cron_dir = home.join(".claude").join("cron");
+        let mut jobs: Vec<Value> = Vec::new();
+
+        let mut entries = match tokio::fs::read_dir(&cron_dir).await {
+            Ok(e) => e,
+            Err(_) => {
+                return Ok(ToolResultData {
+                    data: json!({ "jobs": [], "count": 0, "message": "No scheduled jobs." }),
+                    is_error: false,
+                });
+            }
+        };
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().map_or(true, |ext| ext != "json") {
+                continue;
+            }
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                if let Ok(data) = serde_json::from_str::<Value>(&content) {
+                    let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                    let cron_expr = data.get("cron").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let prompt = data.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let recurring = data.get("recurring").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let human_schedule = cron_to_human(&cron_expr);
+                    jobs.push(json!({
+                        "id": id,
+                        "cron": cron_expr,
+                        "humanSchedule": human_schedule,
+                        "prompt": prompt,
+                        "recurring": recurring,
+                    }));
+                }
+            }
+        }
+
+        jobs.sort_by(|a, b| {
+            a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or(""))
+        });
+        let count = jobs.len();
+
+        Ok(ToolResultData {
+            data: json!({
+                "jobs": jobs,
+                "count": count,
+                "message": if count == 0 { "No scheduled jobs.".to_string() }
+                    else { format!("{} scheduled job(s).", count) },
+            }),
+            is_error: false,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +566,56 @@ mod tests {
         assert_eq!(cron_to_human("* * * * *"), "every minute");
         assert_eq!(cron_to_human("*/5 * * * *"), "every 5 minutes");
         assert_eq!(cron_to_human("30 14 * * *"), "daily at 14:30");
+    }
+
+    // --- CronDeleteTool tests ---
+
+    #[tokio::test]
+    async fn cron_delete_missing_id() {
+        let tool = CronDeleteTool;
+        let result = tool.call(&json!({}), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        assert!(result.is_error);
+        assert!(result.data["error"].as_str().unwrap().contains("id"));
+    }
+
+    #[tokio::test]
+    async fn cron_delete_path_traversal_rejected() {
+        let tool = CronDeleteTool;
+        let result = tool.call(&json!({ "id": "../etc/passwd" }), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        assert!(result.is_error);
+        assert!(result.data["error"].as_str().unwrap().contains("Invalid"));
+    }
+
+    #[tokio::test]
+    async fn cron_delete_nonexistent_job() {
+        let tool = CronDeleteTool;
+        let result = tool.call(&json!({ "id": "nonexistent-job-12345" }), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        assert!(result.is_error);
+        assert!(result.data["error"].as_str().unwrap().contains("No scheduled job"));
+    }
+
+    #[tokio::test]
+    async fn cron_delete_properties() {
+        let tool = CronDeleteTool;
+        assert_eq!(tool.name(), "CronDelete");
+    }
+
+    // --- CronListTool tests ---
+
+    #[tokio::test]
+    async fn cron_list_empty() {
+        // When no cron dir exists, should return empty list
+        let tool = CronListTool;
+        let result = tool.call(&json!({}), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["count"].as_u64().unwrap_or(0), result.data["jobs"].as_array().map(|a| a.len() as u64).unwrap_or(0));
+    }
+
+    #[tokio::test]
+    async fn cron_list_properties() {
+        let tool = CronListTool;
+        assert_eq!(tool.name(), "CronList");
+        assert!(tool.is_read_only(&json!({})));
+        assert!(tool.is_concurrency_safe(&json!({})));
     }
 }
