@@ -252,8 +252,7 @@ impl ApiClient {
         system: &[ContentBlock],
         tools: &[ToolDefinition],
     ) -> Result<Response> {
-        // The Anthropic SDK sends to /v1/messages?beta=true for beta.messages.create()
-        let url = format!("{}/v1/messages?beta=true", self.config.base_url);
+        let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools);
 
         // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
@@ -279,13 +278,15 @@ impl ApiClient {
             .header("x-stainless-retry-count", "0")
             .header(header_name, header_value);
 
-        // Build anthropic-beta header (matches real Claude Code's request exactly)
+        // Build anthropic-beta header (matches TS betas.ts constants)
         let mut betas = vec![
             "claude-code-20250219",
             "interleaved-thinking-2025-05-14",
             "context-management-2025-06-27",
+            "prompt-caching-scope-2026-01-05",
             "effort-2025-11-24",
             "web-search-2025-03-05",
+            "token-efficient-tools-2026-03-28",
         ];
         if self.auth.is_oauth() {
             betas.push("oauth-2025-04-20");
