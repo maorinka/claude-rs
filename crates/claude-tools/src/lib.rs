@@ -21,6 +21,16 @@ pub mod lsp_tool;
 pub mod tool_search;
 pub mod team_tools;
 pub mod remote_trigger;
+pub mod worktree_tools;
+pub mod mcp_resource_tools;
+pub mod powershell;
+pub mod cron_tool;
+pub mod skill_tool;
+pub mod sleep_tool;
+pub mod synthetic_output;
+pub mod todo_write;
+pub mod mcp_auth_tool;
+pub mod repl_tool;
 
 pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender, ReadFileState};
 pub use mcp_tool::register_mcp_tools;
@@ -56,5 +66,17 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(team_tools::TeamCreateTool));
     reg.register(Arc::new(team_tools::TeamDeleteTool));
     reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
+    reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
+    reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
+    reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool));
+    reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool));
+    reg.register(Arc::new(powershell::PowerShellTool));
+    reg.register(Arc::new(cron_tool::ScheduleCronTool));
+    reg.register(Arc::new(skill_tool::SkillTool));
+    reg.register(Arc::new(sleep_tool::SleepTool));
+    reg.register(Arc::new(synthetic_output::SyntheticOutputTool));
+    reg.register(Arc::new(todo_write::TodoWriteTool));
+    reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
+    reg.register(Arc::new(repl_tool::REPLTool));
     reg
 }
