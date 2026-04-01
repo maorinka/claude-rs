@@ -5,7 +5,19 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use std::time::Instant;
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Spinner glyph frames matching the original Claude Code.
+/// On macOS: ['·', '✢', '✳', '✶', '✻', '✽']
+/// The animation plays forward then reverse (bounce).
+const SPINNER_CHARS: &[&str] = &["·", "✢", "✳", "✶", "✻", "✽"];
+
+/// Build the bounce sequence: forward + reverse.
+fn spinner_frames() -> Vec<&'static str> {
+    let mut frames: Vec<&str> = SPINNER_CHARS.to_vec();
+    let mut rev: Vec<&str> = SPINNER_CHARS.to_vec();
+    rev.reverse();
+    frames.extend(rev);
+    frames
+}
 
 #[derive(Clone, Debug)]
 pub enum SpinnerMode {
@@ -64,13 +76,43 @@ impl SpinnerState {
 
     pub fn advance(&mut self) {
         if self.active {
-            self.frame = (self.frame + 1) % SPINNER_FRAMES.len();
+            let frames = spinner_frames();
+            self.frame = (self.frame + 1) % frames.len();
         }
     }
 
+    /// Format elapsed time like the original: "Ns" for <60s, "Nm Ns" for >=60s.
     pub fn elapsed_str(&self) -> String {
-        let elapsed = self.start_time.elapsed().as_secs_f64();
-        format!("{:.1}s", elapsed)
+        let ms = self.start_time.elapsed().as_millis() as u64;
+        format_duration(ms)
+    }
+}
+
+/// Format milliseconds to a human-readable duration string matching the original.
+fn format_duration(ms: u64) -> String {
+    if ms < 60_000 {
+        let secs = ms / 1000;
+        format!("{}s", secs)
+    } else {
+        let minutes = ms / 60_000;
+        let secs = (ms % 60_000) / 1000;
+        if secs == 0 {
+            format!("{}m", minutes)
+        } else {
+            format!("{}m {}s", minutes, secs)
+        }
+    }
+}
+
+/// Format a token count like the original: compact notation (e.g., "1.3k").
+fn format_tokens(count: u64) -> String {
+    if count >= 1_000 {
+        let val = count as f64 / 1000.0;
+        let formatted = format!("{:.1}k", val);
+        // Remove ".0" like the original does
+        formatted.replace(".0k", "k")
+    } else {
+        count.to_string()
     }
 }
 
@@ -79,23 +121,92 @@ impl Widget for &SpinnerState {
         if !self.active || area.height == 0 {
             return;
         }
-        let frame_char = SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()];
+        let frames = spinner_frames();
+        let frame_char = frames[self.frame % frames.len()];
         let elapsed = self.elapsed_str();
 
+        // The original renders: {spinner_glyph} {verb}... ({elapsed})
+        // Color: spinner glyph in claude orange, verb text in claude orange,
+        // parenthetical info in dim
+        let verb = self.mode.label();
+        let claude_color = Color::Rgb(215, 119, 87); // Claude orange
+
         let mut spans = vec![
-            Span::styled(format!("{} ", frame_char), Style::default().fg(Color::Cyan)),
-            Span::raw(format!("{} ", self.mode.label())),
-            Span::styled(format!("({})", elapsed), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ", frame_char),
+                Style::default().fg(claude_color),
+            ),
+            Span::styled(
+                format!("{}…", verb),
+                Style::default().fg(claude_color),
+            ),
         ];
 
+        // Duration and token info in parentheses, dim
+        let mut info_parts = vec![elapsed];
         if self.tokens > 0 {
-            spans.push(Span::styled(
-                format!(" · {} tokens", self.tokens),
-                Style::default().fg(Color::DarkGray),
-            ));
+            info_parts.push(format!("{} tokens", format_tokens(self.tokens)));
         }
+        spans.push(Span::styled(
+            format!(" ({})", info_parts.join(" · ")),
+            Style::default().fg(Color::Rgb(153, 153, 153)),
+        ));
 
         let line = Line::from(spans);
         buf.set_line(area.x, area.y, &line, area.width);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinner_frames_bounce() {
+        let frames = spinner_frames();
+        // 6 forward + 6 reverse = 12
+        assert_eq!(frames.len(), 12);
+        assert_eq!(frames[0], "·");
+        assert_eq!(frames[5], "✽");
+        assert_eq!(frames[6], "✽");
+        assert_eq!(frames[11], "·");
+    }
+
+    #[test]
+    fn format_duration_seconds() {
+        assert_eq!(format_duration(0), "0s");
+        assert_eq!(format_duration(3500), "3s");
+        assert_eq!(format_duration(59999), "59s");
+    }
+
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(format_duration(60000), "1m");
+        assert_eq!(format_duration(65000), "1m 5s");
+        assert_eq!(format_duration(125000), "2m 5s");
+    }
+
+    #[test]
+    fn format_tokens_compact() {
+        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_tokens(1000), "1k");
+        assert_eq!(format_tokens(1300), "1.3k");
+        assert_eq!(format_tokens(12500), "12.5k");
+    }
+
+    #[test]
+    fn spinner_state_lifecycle() {
+        let mut s = SpinnerState::new();
+        assert!(!s.active);
+
+        s.start(SpinnerMode::Thinking);
+        assert!(s.active);
+        assert_eq!(s.mode.label(), "Thinking");
+
+        s.advance();
+        assert_eq!(s.frame, 1);
+
+        s.stop();
+        assert!(!s.active);
     }
 }

@@ -1,9 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Widget};
+use ratatui::widgets::Widget;
+
+/// The prompt character matching the original Claude Code: ❯ (figures.pointer).
+const PROMPT_CHAR: &str = "\u{276F}";
 
 pub enum InputAction {
     Submit(String),
@@ -196,6 +199,8 @@ impl Default for PromptInput {
 pub struct PromptInputWidget<'a> {
     input: &'a PromptInput,
     style: Style,
+    is_loading: bool,
+    border_color: Color,
 }
 
 impl<'a> PromptInputWidget<'a> {
@@ -203,11 +208,23 @@ impl<'a> PromptInputWidget<'a> {
         Self {
             input,
             style: Style::default(),
+            is_loading: false,
+            border_color: Color::Rgb(136, 136, 136), // promptBorder default
         }
     }
 
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
+        self
+    }
+
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.is_loading = loading;
+        self
+    }
+
+    pub fn border_color(mut self, color: Color) -> Self {
+        self.border_color = color;
         self
     }
 }
@@ -217,18 +234,102 @@ impl<'a> Widget for PromptInputWidget<'a> {
         if area.height == 0 {
             return;
         }
-        let text = &self.input.text;
-        let prompt = "> ";
-        let line = Line::from(vec![
-            Span::styled(
-                prompt,
-                Style::default().fg(ratatui::style::Color::Cyan),
-            ),
-            Span::raw(text),
-        ]);
-        let block = Block::default().borders(Borders::TOP);
-        let inner = block.inner(area);
-        block.render(area, buf);
-        buf.set_line(inner.x, inner.y, &line, inner.width);
+
+        // The original uses borderStyle="round" with borderLeft=false, borderRight=false,
+        // borderBottom, borderTop. This creates a rounded top border spanning the width,
+        // then the prompt character and input text, then a rounded bottom border.
+        //
+        // Render: top rounded border, then prompt line, then bottom rounded border.
+        let border_style = Style::default().fg(self.border_color);
+
+        if area.height >= 3 {
+            // Top border: ╭─────╮ but left/right borders are removed,
+            // so it's just ─────── across the full width
+            let top_border = format!("{}", "─".repeat(area.width as usize));
+            buf.set_string(area.x, area.y, &top_border, border_style);
+
+            // Prompt line: ❯ {text}
+            let prompt_style = if self.is_loading {
+                Style::default()
+                    .fg(self.border_color)
+                    .add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", PROMPT_CHAR),
+                    prompt_style,
+                ),
+                Span::raw(&self.input.text),
+            ]);
+            buf.set_line(area.x, area.y + 1, &line, area.width);
+
+            // Bottom border
+            let bottom_border = "─".repeat(area.width as usize);
+            buf.set_string(area.x, area.y + 2, &bottom_border, border_style);
+        } else if area.height >= 2 {
+            // Compact: top border + prompt
+            let top_border = "─".repeat(area.width as usize);
+            buf.set_string(area.x, area.y, &top_border, border_style);
+
+            let prompt_style = if self.is_loading {
+                Style::default()
+                    .fg(self.border_color)
+                    .add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", PROMPT_CHAR),
+                    prompt_style,
+                ),
+                Span::raw(&self.input.text),
+            ]);
+            buf.set_line(area.x, area.y + 1, &line, area.width);
+        } else {
+            // Minimal: just the prompt line
+            let prompt_style = if self.is_loading {
+                Style::default()
+                    .fg(self.border_color)
+                    .add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", PROMPT_CHAR),
+                    prompt_style,
+                ),
+                Span::raw(&self.input.text),
+            ]);
+            buf.set_line(area.x, area.y, &line, area.width);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_char_is_pointer() {
+        // The original uses figures.pointer which is ❯
+        assert_eq!(PROMPT_CHAR, "\u{276F}");
+        assert_eq!(PROMPT_CHAR, "❯");
+    }
+
+    #[test]
+    fn prompt_input_basic() {
+        let mut input = PromptInput::new();
+        assert!(input.is_empty());
+
+        input.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()));
+        input.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::empty()));
+        assert_eq!(input.text(), "hi");
     }
 }

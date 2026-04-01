@@ -11,7 +11,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::widgets::Paragraph;
+// Paragraph no longer used — layout renders directly to buffer
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -35,7 +35,7 @@ use crate::widgets::ask_user_dialog::AskUserDialog;
 use crate::widgets::command_picker::{CommandPicker, CommandPickerEntry, CommandPickerWidget};
 use crate::widgets::message_list::{MessageEntry, MessageList, MessageListWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
-use crate::widgets::prompt_input::{InputAction, PromptInput, PromptInputWidget};
+use crate::widgets::prompt_input::{InputAction, PromptInput};
 use crate::widgets::spinner::{SpinnerMode, SpinnerState};
 
 /// Token budget warning thresholds.
@@ -240,7 +240,7 @@ impl App {
                     self.cost_tracker = CostTracker::new(&state.model);
                 }
                 // Theme change
-                if state.dark_theme != (matches!(self.theme.fg, ratatui::style::Color::White)) {
+                if state.dark_theme != (matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255))) {
                     self.theme = if state.dark_theme {
                         crate::theme::dark_theme()
                     } else {
@@ -424,7 +424,7 @@ impl App {
             if let Ok(mut state) = self.shared_state.lock() {
                 state.permission_mode = mode_str.to_string();
                 // Detect initial theme from current app state
-                state.dark_theme = matches!(self.theme.fg, ratatui::style::Color::White);
+                state.dark_theme = matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255));
             }
         }
 
@@ -1182,181 +1182,146 @@ impl App {
         let model_name = &self.model_name;
         let cost_header = self.cost_tracker.header_display();
         let context_pct = self.context_percentage();
-        let session_duration = self.session_start.elapsed();
+        let engine_busy = self.engine_busy;
 
-        // Read state for permission mode, effort, fast/brief
-        let (perm_mode, effort_level, fast_mode, brief_mode) = self
+        // Read state for permission mode
+        let perm_mode = self
             .shared_state
             .lock()
-            .map(|s| {
-                (
-                    s.permission_mode.clone(),
-                    s.effort_level.clone(),
-                    s.fast_mode,
-                    s.brief_mode,
-                )
-            })
-            .unwrap_or_else(|_| {
-                ("default".to_string(), "medium".to_string(), false, false)
-            });
+            .map(|s| s.permission_mode.clone())
+            .unwrap_or_else(|_| "default".to_string());
 
         self.terminal.draw(|frame| {
             let area = frame.area();
 
-            // Layout: header separator, header, separator, messages, spinner, separator, input
+            // Layout matching the original Claude Code:
+            // - Messages area (scrollable, fills available space)
+            // - Spinner row (1 line when active, 0 otherwise)
+            // - Blank margin row (1 line, matches original marginTop=1 on prompt)
+            // - Prompt input (3 lines: top border, input line, bottom border)
             let spinner_height = if spinner.active { 1 } else { 0 };
             let chunks = Layout::default()
                 .constraints([
-                    Constraint::Length(1), // Top border
-                    Constraint::Length(1), // Header
-                    Constraint::Length(1), // Header separator
-                    Constraint::Min(1),   // Messages
-                    Constraint::Length(spinner_height), // Spinner
-                    Constraint::Length(3), // Input (with top border)
+                    Constraint::Min(1),                    // Messages
+                    Constraint::Length(spinner_height),     // Spinner
+                    Constraint::Length(3),                  // Input (border + input + border)
                 ])
                 .split(area);
 
-            // Top border line
-            let border_line = "─".repeat(area.width as usize);
-            let top_border = Paragraph::new(border_line.clone())
-                .style(ratatui::style::Style::default().fg(theme.border));
-            frame.render_widget(top_border, chunks[0]);
+            // Messages area — pass theme for correct colors
+            let msg_widget = MessageListWidget::new(message_list).theme(theme);
+            frame.render_widget(msg_widget, chunks[0]);
 
-            // Build header spans
-            let mut header_spans: Vec<ratatui::text::Span> = vec![
-                ratatui::text::Span::styled(
-                    " Claude Code (Rust)",
-                    ratatui::style::Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ),
-                ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ),
-                ratatui::text::Span::styled(
-                    model_name.to_string(),
-                    ratatui::style::Style::default().fg(theme.muted),
-                ),
-                ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ),
-            ];
-
-            // Token count with context percentage and budget warning
-            let pct_display = format!("{:.0}%", context_pct * 100.0);
-            let token_color = if context_pct >= TOKEN_CRITICAL_THRESHOLD {
-                theme.error
-            } else if context_pct >= TOKEN_WARNING_THRESHOLD {
-                theme.warning
-            } else {
-                theme.muted
-            };
-            header_spans.push(ratatui::text::Span::styled(
-                format!("{} ({})", cost_header, pct_display),
-                ratatui::style::Style::default().fg(token_color),
-            ));
-
-            // Token budget warning indicator
-            if context_pct >= TOKEN_CRITICAL_THRESHOLD {
-                header_spans.push(ratatui::text::Span::styled(
-                    " CONTEXT FULL",
-                    ratatui::style::Style::default()
-                        .fg(theme.error)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ));
-            } else if context_pct >= TOKEN_WARNING_THRESHOLD {
-                header_spans.push(ratatui::text::Span::styled(
-                    " CONTEXT HIGH",
-                    ratatui::style::Style::default()
-                        .fg(theme.warning)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ));
-            }
-
-            // Permission mode
-            header_spans.push(ratatui::text::Span::styled(
-                " | ",
-                ratatui::style::Style::default().fg(theme.border),
-            ));
-            header_spans.push(ratatui::text::Span::styled(
-                perm_mode,
-                ratatui::style::Style::default().fg(theme.muted),
-            ));
-
-            // Mode indicators (fast/brief/effort)
-            let mut indicators = Vec::new();
-            if fast_mode {
-                indicators.push("fast");
-            }
-            if brief_mode {
-                indicators.push("brief");
-            }
-            if effort_level != "medium" {
-                // effort_level is on the stack; we need to handle this
-                // We'll format it into the indicators below
-            }
-            // Build the indicator suffix
-            let effort_indicator = if effort_level != "medium" {
-                format!("effort:{}", effort_level)
-            } else {
-                String::new()
-            };
-
-            if !indicators.is_empty() || !effort_indicator.is_empty() {
-                header_spans.push(ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ));
-                let mut parts: Vec<String> =
-                    indicators.iter().map(|s| s.to_string()).collect();
-                if !effort_indicator.is_empty() {
-                    parts.push(effort_indicator);
-                }
-                header_spans.push(ratatui::text::Span::styled(
-                    parts.join(" "),
-                    ratatui::style::Style::default().fg(ratatui::style::Color::Cyan),
-                ));
-            }
-
-            // Session duration
-            header_spans.push(ratatui::text::Span::styled(
-                " | ",
-                ratatui::style::Style::default().fg(theme.border),
-            ));
-            header_spans.push(ratatui::text::Span::styled(
-                Self::format_duration(session_duration),
-                ratatui::style::Style::default().fg(theme.muted),
-            ));
-
-            let header = Paragraph::new(ratatui::text::Line::from(header_spans));
-            frame.render_widget(header, chunks[1]);
-
-            // Header separator
-            let header_sep = Paragraph::new(border_line)
-                .style(ratatui::style::Style::default().fg(theme.border));
-            frame.render_widget(header_sep, chunks[2]);
-
-            // Messages area
-            let msg_widget = MessageListWidget::new(message_list);
-            frame.render_widget(msg_widget, chunks[3]);
-
-            // Spinner
+            // Spinner (inline with messages, like the original)
             if spinner.active {
-                frame.render_widget(spinner, chunks[4]);
+                frame.render_widget(spinner, chunks[1]);
             }
 
-            // Input
-            let input_widget = PromptInputWidget::new(prompt);
-            frame.render_widget(input_widget, chunks[5]);
+            // Prompt input with border matching the original's promptBorder color.
+            // The original renders: borderStyle="round", borderColor=promptBorder,
+            // borderLeft=false, borderRight=false, borderBottom=true.
+            // The prompt border also carries status info (model, cost, context %).
+            //
+            // We render: ──model · cost (ctx%) · mode── as the top border text,
+            // then ❯ input, then ───── as the bottom border.
+            let input_area = chunks[2];
+            let border_color = theme.prompt_border;
+
+            {
+                // Build the status line embedded in the top border
+                let model_text = model_name.to_string();
+                let cost_text = cost_header.clone();
+                let pct_text = format!("{:.0}%", context_pct * 100.0);
+                let mode_text = perm_mode.clone();
+
+                // Status info: "model · cost (pct%) · mode"
+                let status = format!("{} \u{00B7} {} ({}) \u{00B7} {}", model_text, cost_text, pct_text, mode_text);
+
+                // Build the top border with status text embedded:
+                // ── status text ──────────
+                let status_width = status.len();
+                let remaining = (input_area.width as usize).saturating_sub(status_width + 4);
+                let left_dashes = 2;
+                let right_dashes = remaining;
+
+                let token_color = if context_pct >= TOKEN_CRITICAL_THRESHOLD {
+                    theme.error
+                } else if context_pct >= TOKEN_WARNING_THRESHOLD {
+                    theme.warning
+                } else {
+                    theme.inactive
+                };
+
+                let buf = frame.buffer_mut();
+
+                if input_area.height >= 3 {
+                    // Top border with status
+                    let top_line = ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(
+                            "\u{2500}".repeat(left_dashes),
+                            ratatui::style::Style::default().fg(border_color),
+                        ),
+                        ratatui::text::Span::styled(
+                            format!(" {} ", status),
+                            ratatui::style::Style::default().fg(token_color),
+                        ),
+                        ratatui::text::Span::styled(
+                            "\u{2500}".repeat(right_dashes),
+                            ratatui::style::Style::default().fg(border_color),
+                        ),
+                    ]);
+                    buf.set_line(input_area.x, input_area.y, &top_line, input_area.width);
+
+                    // Prompt line: ❯ {text}
+                    let prompt_style = if engine_busy {
+                        ratatui::style::Style::default()
+                            .fg(border_color)
+                            .add_modifier(ratatui::style::Modifier::DIM)
+                    } else {
+                        ratatui::style::Style::default()
+                    };
+
+                    let prompt_line = ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(
+                            "\u{276F} ",
+                            prompt_style,
+                        ),
+                        ratatui::text::Span::raw(prompt.text().to_string()),
+                    ]);
+                    buf.set_line(input_area.x, input_area.y + 1, &prompt_line, input_area.width);
+
+                    // Bottom border
+                    let bottom_line = ratatui::text::Line::from(ratatui::text::Span::styled(
+                        "\u{2500}".repeat(input_area.width as usize),
+                        ratatui::style::Style::default().fg(border_color),
+                    ));
+                    buf.set_line(input_area.x, input_area.y + 2, &bottom_line, input_area.width);
+                } else {
+                    // Minimal: prompt line only
+                    let prompt_style = if engine_busy {
+                        ratatui::style::Style::default()
+                            .fg(border_color)
+                            .add_modifier(ratatui::style::Modifier::DIM)
+                    } else {
+                        ratatui::style::Style::default()
+                    };
+                    let prompt_line = ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(
+                            "\u{276F} ",
+                            prompt_style,
+                        ),
+                        ratatui::text::Span::raw(prompt.text().to_string()),
+                    ]);
+                    buf.set_line(input_area.x, input_area.y, &prompt_line, input_area.width);
+                }
+            }
 
             // Command picker overlay (positioned above the input area)
             if command_picker.visible {
                 let picker_height = 12u16.min(area.height / 3);
                 let picker_area = Rect::new(
                     area.x + 1,
-                    chunks[5].y.saturating_sub(picker_height),
+                    chunks[2].y.saturating_sub(picker_height),
                     area.width.saturating_sub(2),
                     picker_height,
                 );
@@ -1378,7 +1343,7 @@ impl App {
         })?;
 
         // Update viewport height for page-up/down calculations
-        self.viewport_height = self.terminal.size()?.height.saturating_sub(7);
+        self.viewport_height = self.terminal.size()?.height.saturating_sub(5);
 
         Ok(())
     }
