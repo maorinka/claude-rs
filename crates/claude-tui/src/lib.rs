@@ -4,3 +4,4 @@ pub mod widgets;
 pub mod input;
 pub mod theme;
 pub mod markdown;
+pub mod syntax;

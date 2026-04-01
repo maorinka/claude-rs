@@ -1,27 +1,60 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::syntax;
+
 /// Convert a markdown string to styled ratatui Lines.
-/// Supports: **bold**, *italic*, `inline code`, ```code blocks```, # headers, - lists
+/// Supports: **bold**, *italic*, `inline code`, ```code blocks``` with syntax
+/// highlighting, # headers, - lists
 pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code_block = false;
+    let mut code_language: Option<String> = None;
+    let mut code_buffer: Vec<String> = Vec::new();
 
     for line in text.lines() {
         if line.starts_with("```") {
-            in_code_block = !in_code_block;
-            lines.push(Line::from(Span::styled(
-                "─".repeat(40),
-                Style::default().fg(Color::DarkGray),
-            )));
+            if in_code_block {
+                // End of code block -- flush with syntax highlighting
+                let code = code_buffer.join("\n");
+                let lang = code_language.as_deref().unwrap_or("");
+
+                // Top separator
+                lines.push(Line::from(Span::styled(
+                    "─".repeat(40),
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                if !code.is_empty() {
+                    let highlighted = syntax::highlight_code(&code, lang);
+                    // Indent highlighted lines
+                    for hl_line in highlighted {
+                        let mut spans = vec![Span::raw("  ")];
+                        spans.extend(hl_line.spans);
+                        lines.push(Line::from(spans));
+                    }
+                }
+
+                // Bottom separator
+                lines.push(Line::from(Span::styled(
+                    "─".repeat(40),
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                in_code_block = false;
+                code_language = None;
+                code_buffer.clear();
+            } else {
+                // Start of code block -- detect language
+                in_code_block = true;
+                code_language = syntax::detect_language(line);
+                code_buffer.clear();
+            }
             continue;
         }
 
         if in_code_block {
-            lines.push(Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::Green),
-            )));
+            code_buffer.push(line.to_string());
             continue;
         }
 
@@ -52,6 +85,22 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
         // Regular text with inline formatting
         else {
             lines.push(render_inline_line(line));
+        }
+    }
+
+    // Handle unterminated code block
+    if in_code_block && !code_buffer.is_empty() {
+        let code = code_buffer.join("\n");
+        let lang = code_language.as_deref().unwrap_or("");
+        lines.push(Line::from(Span::styled(
+            "─".repeat(40),
+            Style::default().fg(Color::DarkGray),
+        )));
+        let highlighted = syntax::highlight_code(&code, lang);
+        for hl_line in highlighted {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(hl_line.spans);
+            lines.push(Line::from(spans));
         }
     }
 

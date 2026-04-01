@@ -35,6 +35,10 @@ use crate::widgets::permission_dialog::PermissionDialog;
 use crate::widgets::prompt_input::{InputAction, PromptInput, PromptInputWidget};
 use crate::widgets::spinner::{SpinnerMode, SpinnerState};
 
+/// Token budget warning thresholds.
+const TOKEN_WARNING_THRESHOLD: f64 = 0.80; // Yellow warning at 80%
+const TOKEN_CRITICAL_THRESHOLD: f64 = 0.95; // Red warning at 95%
+
 pub enum AppEvent {
     Key(KeyEvent),
     Resize(u16, u16),
@@ -99,6 +103,12 @@ pub struct App {
     skills: Vec<Skill>,
     /// Shared mutable state for slash commands (persistent across calls)
     shared_state: Arc<Mutex<SharedCommandState>>,
+    /// Session start time for duration display
+    session_start: std::time::Instant,
+    /// Context window size for token budget warnings
+    context_window: u64,
+    /// Viewport height (updated on render, used for page-up/down)
+    viewport_height: u16,
 }
 
 impl App {
@@ -123,6 +133,9 @@ impl App {
             command_registry,
             skills: Vec::new(),
             shared_state: Arc::new(Mutex::new(SharedCommandState::default())),
+            session_start: std::time::Instant::now(),
+            context_window: 200_000,
+            viewport_height: 24,
         })
     }
 
@@ -527,6 +540,35 @@ impl App {
                             _ => {}
                         }
                     } else {
+                        // Scroll keyboard shortcuts (take priority over prompt)
+                        match (k.modifiers, k.code) {
+                            (KeyModifiers::NONE, KeyCode::PageUp) => {
+                                self.message_list.page_up(self.viewport_height as usize);
+                                continue;
+                            }
+                            (KeyModifiers::NONE, KeyCode::PageDown) => {
+                                self.message_list.page_down(self.viewport_height as usize);
+                                continue;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Home) => {
+                                self.message_list.scroll_to_top();
+                                continue;
+                            }
+                            (KeyModifiers::NONE, KeyCode::End) => {
+                                self.message_list.scroll_to_bottom();
+                                continue;
+                            }
+                            (KeyModifiers::CONTROL, KeyCode::Up) => {
+                                self.message_list.scroll_up(1);
+                                continue;
+                            }
+                            (KeyModifiers::CONTROL, KeyCode::Down) => {
+                                self.message_list.scroll_down(1);
+                                continue;
+                            }
+                            _ => {}
+                        }
+
                         // Route keys to prompt input
                         match self.prompt.handle_key(k) {
                             InputAction::Submit(text) => {
@@ -1080,6 +1122,26 @@ impl App {
         }
     }
 
+    /// Compute the context window usage percentage.
+    fn context_percentage(&self) -> f64 {
+        if self.context_window == 0 {
+            return 0.0;
+        }
+        self.total_tokens as f64 / self.context_window as f64
+    }
+
+    /// Format a duration into a human-readable string (e.g. "2m 15s" or "1h 3m").
+    fn format_duration(dur: Duration) -> String {
+        let secs = dur.as_secs();
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m {}s", secs / 60, secs % 60)
+        } else {
+            format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+        }
+    }
+
     fn render(&mut self) -> Result<()> {
         let theme = &self.theme;
         let spinner = &self.spinner;
@@ -1090,6 +1152,24 @@ impl App {
         let command_picker = &self.command_picker;
         let model_name = &self.model_name;
         let cost_header = self.cost_tracker.header_display();
+        let context_pct = self.context_percentage();
+        let session_duration = self.session_start.elapsed();
+
+        // Read state for permission mode, effort, fast/brief
+        let (perm_mode, effort_level, fast_mode, brief_mode) = self
+            .shared_state
+            .lock()
+            .map(|s| {
+                (
+                    s.permission_mode.clone(),
+                    s.effort_level.clone(),
+                    s.fast_mode,
+                    s.brief_mode,
+                )
+            })
+            .unwrap_or_else(|_| {
+                ("default".to_string(), "medium".to_string(), false, false)
+            });
 
         self.terminal.draw(|frame| {
             let area = frame.area();
@@ -1113,9 +1193,8 @@ impl App {
                 .style(ratatui::style::Style::default().fg(theme.border));
             frame.render_widget(top_border, chunks[0]);
 
-            // Header: "Claude Code (Rust) | model: ... | 42.1k tokens | $0.0312"
-            let token_str = cost_header.clone();
-            let header = Paragraph::new(ratatui::text::Line::from(vec![
+            // Build header spans
+            let mut header_spans: Vec<ratatui::text::Span> = vec![
                 ratatui::text::Span::styled(
                     " Claude Code (Rust)",
                     ratatui::style::Style::default()
@@ -1127,18 +1206,102 @@ impl App {
                     ratatui::style::Style::default().fg(theme.border),
                 ),
                 ratatui::text::Span::styled(
-                    format!("model: {}", model_name),
+                    model_name.to_string(),
                     ratatui::style::Style::default().fg(theme.muted),
                 ),
                 ratatui::text::Span::styled(
                     " | ",
                     ratatui::style::Style::default().fg(theme.border),
                 ),
-                ratatui::text::Span::styled(
-                    token_str,
-                    ratatui::style::Style::default().fg(theme.muted),
-                ),
-            ]));
+            ];
+
+            // Token count with context percentage and budget warning
+            let pct_display = format!("{:.0}%", context_pct * 100.0);
+            let token_color = if context_pct >= TOKEN_CRITICAL_THRESHOLD {
+                theme.error
+            } else if context_pct >= TOKEN_WARNING_THRESHOLD {
+                theme.warning
+            } else {
+                theme.muted
+            };
+            header_spans.push(ratatui::text::Span::styled(
+                format!("{} ({})", cost_header, pct_display),
+                ratatui::style::Style::default().fg(token_color),
+            ));
+
+            // Token budget warning indicator
+            if context_pct >= TOKEN_CRITICAL_THRESHOLD {
+                header_spans.push(ratatui::text::Span::styled(
+                    " CONTEXT FULL",
+                    ratatui::style::Style::default()
+                        .fg(theme.error)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ));
+            } else if context_pct >= TOKEN_WARNING_THRESHOLD {
+                header_spans.push(ratatui::text::Span::styled(
+                    " CONTEXT HIGH",
+                    ratatui::style::Style::default()
+                        .fg(theme.warning)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ));
+            }
+
+            // Permission mode
+            header_spans.push(ratatui::text::Span::styled(
+                " | ",
+                ratatui::style::Style::default().fg(theme.border),
+            ));
+            header_spans.push(ratatui::text::Span::styled(
+                perm_mode,
+                ratatui::style::Style::default().fg(theme.muted),
+            ));
+
+            // Mode indicators (fast/brief/effort)
+            let mut indicators = Vec::new();
+            if fast_mode {
+                indicators.push("fast");
+            }
+            if brief_mode {
+                indicators.push("brief");
+            }
+            if effort_level != "medium" {
+                // effort_level is on the stack; we need to handle this
+                // We'll format it into the indicators below
+            }
+            // Build the indicator suffix
+            let effort_indicator = if effort_level != "medium" {
+                format!("effort:{}", effort_level)
+            } else {
+                String::new()
+            };
+
+            if !indicators.is_empty() || !effort_indicator.is_empty() {
+                header_spans.push(ratatui::text::Span::styled(
+                    " | ",
+                    ratatui::style::Style::default().fg(theme.border),
+                ));
+                let mut parts: Vec<String> =
+                    indicators.iter().map(|s| s.to_string()).collect();
+                if !effort_indicator.is_empty() {
+                    parts.push(effort_indicator);
+                }
+                header_spans.push(ratatui::text::Span::styled(
+                    parts.join(" "),
+                    ratatui::style::Style::default().fg(ratatui::style::Color::Cyan),
+                ));
+            }
+
+            // Session duration
+            header_spans.push(ratatui::text::Span::styled(
+                " | ",
+                ratatui::style::Style::default().fg(theme.border),
+            ));
+            header_spans.push(ratatui::text::Span::styled(
+                Self::format_duration(session_duration),
+                ratatui::style::Style::default().fg(theme.muted),
+            ));
+
+            let header = Paragraph::new(ratatui::text::Line::from(header_spans));
             frame.render_widget(header, chunks[1]);
 
             // Header separator
@@ -1184,6 +1347,10 @@ impl App {
                 frame.render_widget(ask_dialog, dialog_area);
             }
         })?;
+
+        // Update viewport height for page-up/down calculations
+        self.viewport_height = self.terminal.size()?.height.saturating_sub(7);
+
         Ok(())
     }
 }
