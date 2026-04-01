@@ -1,5 +1,6 @@
 pub mod registry;
 pub mod bash;
+pub mod bash_security;
 pub mod read;
 pub mod write;
 pub mod edit;
