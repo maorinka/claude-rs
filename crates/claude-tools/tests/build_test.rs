@@ -9,13 +9,14 @@ fn test_default_registry_has_all_phase1_tools() {
     assert!(reg.get("Edit").is_some());
     assert!(reg.get("Grep").is_some());
     assert!(reg.get("Glob").is_some());
+    assert!(reg.get("LSP").is_some());
 }
 
 #[test]
 fn test_default_registry_schemas() {
     let reg = build_default_registry();
     let schemas = reg.schemas();
-    assert_eq!(schemas.len(), 6);
+    assert_eq!(schemas.len(), 7);
     for schema in &schemas {
         assert!(schema.get("name").is_some());
         assert!(schema.get("input_schema").is_some());

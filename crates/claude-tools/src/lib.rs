@@ -5,6 +5,7 @@ pub mod write;
 pub mod edit;
 pub mod grep;
 pub mod glob_tool;
+pub mod lsp_tool;
 
 pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender};
 
@@ -18,5 +19,6 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(edit::FileEditTool));
     reg.register(Arc::new(grep::GrepTool));
     reg.register(Arc::new(glob_tool::GlobTool));
+    reg.register(Arc::new(lsp_tool::LSPTool));
     reg
 }
