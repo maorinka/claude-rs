@@ -45,7 +45,20 @@ pub struct Cli {
 #[derive(clap::Subcommand)]
 pub enum SubCommand {
     /// Authenticate with Anthropic
-    Login,
+    Login {
+        /// Pre-populate email on the login form
+        #[arg(long)]
+        email: Option<String>,
+        /// Force SSO login method
+        #[arg(long)]
+        sso: bool,
+        /// Use Console auth flow (API key creation)
+        #[arg(long)]
+        console: bool,
+        /// Use Claude.ai auth flow (default)
+        #[arg(long)]
+        claudeai: bool,
+    },
     /// Remove stored credentials
     Logout,
     /// Show current configuration
@@ -75,22 +88,26 @@ async fn main() -> Result<()> {
 
     // Handle subcommands
     match &cli.command {
-        Some(SubCommand::Login) => {
-            claude_core::auth::login::login().await?;
+        Some(SubCommand::Login { email, sso, console, claudeai }) => {
+            let opts = claude_core::auth::login::LoginOptions {
+                email: email.clone(),
+                sso: *sso,
+                use_console: *console,
+                use_claude_ai: *claudeai || !*console, // Default to Claude.ai if neither flag
+            };
+            claude_core::auth::login::login_with_options(opts).await?;
             return Ok(());
         }
         Some(SubCommand::Logout) => {
-            if let Ok(dir) = claude_core::config::paths::claude_dir() {
-                let cred = dir.join(".credentials.json");
-                if cred.exists() { let _ = std::fs::remove_file(&cred); }
-            }
-            if cfg!(target_os = "macos") {
-                let user = std::env::var("USER").unwrap_or_default();
-                let _ = std::process::Command::new("security")
-                    .args(["delete-generic-password", "-a", &user, "-s", "Claude Code-credentials"])
-                    .output();
-            }
-            println!("Logged out successfully.");
+            // Delete tokens from secure storage (keychain + file)
+            claude_core::auth::storage::delete_tokens().await.ok();
+            // Clear account info from global config
+            claude_core::config::global::save_global_config(|mut config| {
+                config.oauth_account = None;
+                config.primary_api_key = None;
+                config
+            }).ok();
+            println!("Successfully logged out from your Anthropic account.");
             return Ok(());
         }
         Some(SubCommand::Config) => {

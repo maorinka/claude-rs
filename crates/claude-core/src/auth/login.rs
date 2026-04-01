@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
 use super::pkce::*;
-use super::storage::{OAuthStoredTokens, store_tokens};
+use super::storage::{OAuthStoredTokens, store_tokens, delete_tokens};
+use super::profile::{
+    fetch_profile_info, fetch_and_store_user_roles, store_oauth_account_info,
+    OAuthProfileResponse,
+};
+use crate::config::global::{AccountInfo, save_global_config};
 
 // ── OAuth constants matching the real Claude Code (src/constants/oauth.ts) ────
 
@@ -66,6 +71,21 @@ pub fn all_oauth_scopes() -> Vec<&'static str> {
 /// Check if the given scopes indicate a Claude.ai subscriber (has user:inference).
 pub fn is_claude_ai_auth(scopes: &[String]) -> bool {
     scopes.iter().any(|s| s == SCOPE_USER_INFERENCE)
+}
+
+// ── Login options ────────────────────────────────────────────────────────────
+
+/// CLI login options, matching TS `authLogin()` params in `src/cli/handlers/auth.ts`.
+#[derive(Debug, Default)]
+pub struct LoginOptions {
+    /// Pre-populate email on the login form (--email).
+    pub email: Option<String>,
+    /// Force SSO login method (--sso).
+    pub sso: bool,
+    /// Use Console auth flow (--console).
+    pub use_console: bool,
+    /// Use Claude.ai auth flow (--claudeai). Default when no flags given.
+    pub use_claude_ai: bool,
 }
 
 // ── Auth URL builder ─────────────────────────────────────────────────────────
@@ -199,13 +219,15 @@ pub fn parse_callback_params(request_line: &str) -> Result<(String, String)> {
     Ok((code, state))
 }
 
+// ── Token exchange ───────────────────────────────────────────────────────────
+
 /// Exchange an authorization code for OAuth tokens via POST to the token endpoint.
 async fn exchange_code_for_tokens(
     code: &str,
     redirect_uri: &str,
     code_verifier: &str,
     state: &str,
-) -> Result<OAuthStoredTokens> {
+) -> Result<(OAuthStoredTokens, Option<TokenAccountInfo>)> {
     let body = build_token_exchange_body(code, redirect_uri, code_verifier, state);
 
     let client = reqwest::Client::new();
@@ -247,32 +269,243 @@ async fn exchange_code_for_tokens(
         .map(|s| s.to_string())
         .collect();
 
-    Ok(OAuthStoredTokens {
+    // Extract account info from token response (fallback when profile fetch fails)
+    let token_account = data["account"].as_object().map(|acc| {
+        TokenAccountInfo {
+            uuid: acc.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            email_address: acc.get("email_address").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            organization_uuid: data["organization"]["uuid"].as_str().map(|s| s.to_string()),
+        }
+    });
+
+    let tokens = OAuthStoredTokens {
         access_token,
         refresh_token,
         expires_at: Some(expires_at),
         scopes,
         subscription_type: None,
         rate_limit_tier: None,
-    })
+    };
+
+    Ok((tokens, token_account))
 }
 
-/// Run the full OAuth login flow:
-/// 1. Start an HTTP server on a random localhost port
-/// 2. Build the auth URL with PKCE params
-/// 3. Open the browser
-/// 4. Wait for the callback and extract `code` + `state`
-/// 5. Exchange code for tokens
-/// 6. Store tokens
+/// Account info from the token exchange response (fallback for profile fetch).
+struct TokenAccountInfo {
+    uuid: String,
+    email_address: String,
+    organization_uuid: Option<String>,
+}
+
+// ── Refresh token exchange (for env var fast-path) ───────────────────────────
+
+/// Refresh an OAuth token and return full OAuthTokens with profile info.
 ///
-/// By default, opens the Console authorize URL (platform.claude.com).
-/// Pass `login_with_claude_ai = true` to use the Claude.ai authorize URL.
-pub async fn login() -> Result<()> {
-    login_with_options(true).await
+/// Matches the TS `refreshOAuthToken()` in `src/services/oauth/client.ts`.
+async fn refresh_for_login(
+    refresh_token: &str,
+    scopes: &[String],
+) -> Result<(OAuthStoredTokens, Option<OAuthProfileResponse>, Option<TokenAccountInfo>)> {
+    let body = build_token_refresh_body(refresh_token, Some(scopes));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .context("token refresh request failed")?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Token refresh failed: {}", text);
+    }
+
+    let data: serde_json::Value = resp.json().await?;
+    let access_token = data["access_token"]
+        .as_str()
+        .context("No access_token in refresh response")?
+        .to_string();
+    let new_refresh = data["refresh_token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| refresh_token.to_string());
+    let expires_in = data["expires_in"].as_u64().unwrap_or(3600);
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+        + expires_in * 1000;
+    let new_scopes: Vec<String> = data["scope"]
+        .as_str()
+        .map(|s| s.split(' ').map(|x| x.to_string()).collect())
+        .unwrap_or_default();
+
+    // Fetch profile info
+    let profile_info = fetch_profile_info(&access_token).await;
+
+    let token_account = data["account"].as_object().map(|acc| {
+        TokenAccountInfo {
+            uuid: acc.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            email_address: acc.get("email_address").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            organization_uuid: data["organization"]["uuid"].as_str().map(|s| s.to_string()),
+        }
+    });
+
+    let tokens = OAuthStoredTokens {
+        access_token,
+        refresh_token: Some(new_refresh),
+        expires_at: Some(expires_at),
+        scopes: new_scopes,
+        subscription_type: profile_info.subscription_type,
+        rate_limit_tier: profile_info.rate_limit_tier,
+    };
+
+    Ok((tokens, profile_info.raw_profile, token_account))
 }
 
-/// Login with explicit Claude.ai vs Console selection.
-pub async fn login_with_options(login_with_claude_ai: bool) -> Result<()> {
+// ── Post-login setup (installOAuthTokens) ────────────────────────────────────
+
+/// Shared post-token-acquisition logic. Saves tokens, fetches profile/roles,
+/// and sets up the local auth state.
+///
+/// Matches TS `installOAuthTokens()` in `src/cli/handlers/auth.ts`.
+async fn install_oauth_tokens(
+    tokens: &OAuthStoredTokens,
+    profile: Option<&OAuthProfileResponse>,
+    token_account: Option<&TokenAccountInfo>,
+) -> Result<()> {
+    // 1. Clear old state (matching TS performLogout with clearOnboarding=false)
+    perform_logout().await;
+
+    // 2. Store account info in global config
+    if let Some(p) = profile {
+        store_oauth_account_info(AccountInfo {
+            account_uuid: p.account.uuid.clone(),
+            email_address: p.account.email.clone(),
+            organization_uuid: Some(p.organization.uuid.clone()),
+            display_name: p.account.display_name.clone(),
+            has_extra_usage_enabled: p.organization.has_extra_usage_enabled,
+            billing_type: p.organization.billing_type.clone(),
+            account_created_at: p.account.created_at.clone(),
+            subscription_created_at: p.organization.subscription_created_at.clone(),
+            ..Default::default()
+        })?;
+    } else if let Some(ta) = token_account {
+        // Fallback to token exchange account data when profile endpoint fails
+        store_oauth_account_info(AccountInfo {
+            account_uuid: ta.uuid.clone(),
+            email_address: ta.email_address.clone(),
+            organization_uuid: ta.organization_uuid.clone(),
+            ..Default::default()
+        })?;
+    }
+
+    // 3. Save OAuth tokens to secure storage
+    store_tokens(tokens).await?;
+
+    // 4. Fetch and store user roles (non-critical, log errors)
+    if let Err(e) = fetch_and_store_user_roles(&tokens.access_token).await {
+        tracing::debug!("Failed to fetch user roles: {}", e);
+    }
+
+    // 5. For Console users (no user:inference scope), create an API key
+    if !is_claude_ai_auth(&tokens.scopes) {
+        tracing::info!("Console login detected — creating API key");
+        match create_and_store_api_key(&tokens.access_token).await {
+            Ok(Some(key)) => {
+                // Store the API key in global config
+                save_global_config(|mut config| {
+                    config.primary_api_key = Some(key);
+                    config
+                }).ok();
+            }
+            Ok(None) => {
+                anyhow::bail!(
+                    "Unable to create API key. The server accepted the request but did not return a key."
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create API key: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Clear existing auth state before login.
+///
+/// Matches TS `performLogout({ clearOnboarding: false })`.
+async fn perform_logout() {
+    // Delete stored tokens (keychain + file)
+    if let Err(e) = delete_tokens().await {
+        tracing::debug!("Failed to delete tokens during logout: {}", e);
+    }
+
+    // Clear oauthAccount from global config (but preserve onboarding state)
+    save_global_config(|mut config| {
+        config.oauth_account = None;
+        config.primary_api_key = None;
+        config
+    }).ok();
+}
+
+/// Create an API key via the Console OAuth endpoint (for Console users).
+///
+/// Matches the TS `createAndStoreApiKey()` in `src/services/oauth/client.ts`.
+async fn create_and_store_api_key(access_token: &str) -> Result<Option<String>> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(API_KEY_URL)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .context("API key creation request failed")?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("API key creation failed: {}", text);
+    }
+
+    let data: serde_json::Value = resp.json().await?;
+    Ok(data["raw_key"].as_str().map(|s| s.to_string()))
+}
+
+// ── Main login flow ──────────────────────────────────────────────────────────
+
+/// Default login: Claude.ai flow.
+pub async fn login() -> Result<()> {
+    login_with_options(LoginOptions {
+        use_claude_ai: true,
+        ..Default::default()
+    }).await
+}
+
+/// Full login flow with all options.
+///
+/// Matches TS `authLogin()` in `src/cli/handlers/auth.ts`.
+pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
+    if opts.use_console && opts.use_claude_ai {
+        anyhow::bail!("--console and --claudeai cannot be used together.");
+    }
+
+    // Resolve login_with_claude_ai: --console=false means Claude.ai, default is Claude.ai
+    let login_with_claude_ai = !opts.use_console;
+
+    // ── Fast path: env var refresh token (CI/CD) ──────────────────────────
+    if let Ok(env_refresh_token) = std::env::var("CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
+        if !env_refresh_token.is_empty() {
+            return login_from_refresh_token(&env_refresh_token, login_with_claude_ai).await;
+        }
+    }
+
+    // ── Browser OAuth flow ────────────────────────────────────────────────
+    let login_method = if opts.sso { Some("sso") } else { None };
+
     let verifier = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
     let state = generate_state();
@@ -282,19 +515,18 @@ pub async fn login_with_options(login_with_claude_ai: bool) -> Result<()> {
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://localhost:{}/callback", port);
 
-    // Build auth URL — the automatic flow uses localhost redirect
-    let auth_url = build_auth_url(&AuthUrlOptions {
+    // Build auth URLs — automatic (localhost redirect) and manual (copy-paste)
+    let auto_url = build_auth_url(&AuthUrlOptions {
         code_challenge: &challenge,
         state: &state,
         port,
         is_manual: false,
         login_with_claude_ai,
         org_uuid: None,
-        login_hint: None,
-        login_method: None,
+        login_hint: opts.email.as_deref(),
+        login_method,
     });
 
-    // Also build the manual flow URL for display
     let manual_url = build_auth_url(&AuthUrlOptions {
         code_challenge: &challenge,
         state: &state,
@@ -302,13 +534,13 @@ pub async fn login_with_options(login_with_claude_ai: bool) -> Result<()> {
         is_manual: true,
         login_with_claude_ai,
         org_uuid: None,
-        login_hint: None,
-        login_method: None,
+        login_hint: opts.email.as_deref(),
+        login_method,
     });
 
     println!("Opening browser to sign in...");
     println!("If the browser didn't open, visit: {}", manual_url);
-    let _ = open::that(&auth_url);
+    let _ = open::that(&auto_url);
 
     // Wait for the callback request
     let (stream, _) = listener.accept().await?;
@@ -331,15 +563,25 @@ pub async fn login_with_options(login_with_claude_ai: bool) -> Result<()> {
 
     // Validate state parameter (CSRF protection)
     if received_state != state {
-        // Send error response to browser
         let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nInvalid state parameter";
         let _ = stream.try_write(response.as_bytes());
         anyhow::bail!("OAuth state mismatch: possible CSRF attack");
     }
 
-    // Determine success redirect URL based on granted scopes (will be updated after exchange)
-    // For now, redirect to the Claude.ai success page (same as TS handleSuccessRedirect)
-    let success_url = CLAUDEAI_SUCCESS_URL;
+    // Exchange authorization code for tokens
+    let (mut tokens, token_account) = exchange_code_for_tokens(&code, &redirect_uri, &verifier, &state).await?;
+
+    // Fetch profile info (subscription type, rate limit tier, etc.)
+    let profile_info = fetch_profile_info(&tokens.access_token).await;
+    tokens.subscription_type = profile_info.subscription_type;
+    tokens.rate_limit_tier = profile_info.rate_limit_tier;
+
+    // Determine success redirect based on scopes (matching TS handleSuccessRedirect)
+    let success_url = if is_claude_ai_auth(&tokens.scopes) {
+        CLAUDEAI_SUCCESS_URL
+    } else {
+        CONSOLE_SUCCESS_URL
+    };
     let response = format!(
         "HTTP/1.1 302 Found\r\nLocation: {}\r\n\r\n",
         success_url
@@ -347,49 +589,51 @@ pub async fn login_with_options(login_with_claude_ai: bool) -> Result<()> {
     let _ = stream.try_write(response.as_bytes());
     drop(stream);
 
-    // Exchange authorization code for tokens
-    let tokens = exchange_code_for_tokens(&code, &redirect_uri, &verifier, &state).await?;
+    // Post-login setup: store account info, roles, API key
+    install_oauth_tokens(&tokens, profile_info.raw_profile.as_ref(), token_account.as_ref()).await?;
 
-    // Store tokens
-    store_tokens(&tokens).await?;
-
-    // For Console users (no user:inference scope), create an API key
-    if !is_claude_ai_auth(&tokens.scopes) {
-        tracing::info!("Console login detected — creating API key");
-        if let Err(e) = create_and_store_api_key(&tokens.access_token).await {
-            tracing::warn!("Failed to create API key: {}", e);
+    // Mark onboarding complete
+    save_global_config(|mut config| {
+        if config.has_completed_onboarding != Some(true) {
+            config.has_completed_onboarding = Some(true);
         }
-    }
+        config
+    }).ok();
 
     println!("Login successful!");
     Ok(())
 }
 
-/// Create an API key via the Console OAuth endpoint (for Console users).
+/// Fast-path login from a refresh token env var (CI/CD).
 ///
-/// Matches the TS `createAndStoreApiKey()` in `src/services/oauth/client.ts`.
-async fn create_and_store_api_key(access_token: &str) -> Result<String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(API_KEY_URL)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .context("API key creation request failed")?;
+/// Matches the TS env var check in `authLogin()` lines 140-186.
+async fn login_from_refresh_token(refresh_token: &str, _login_with_claude_ai: bool) -> Result<()> {
+    let env_scopes = std::env::var("CLAUDE_CODE_OAUTH_SCOPES")
+        .map_err(|_| anyhow::anyhow!(
+            "CLAUDE_CODE_OAUTH_SCOPES is required when using CLAUDE_CODE_OAUTH_REFRESH_TOKEN.\n\
+             Set it to the space-separated scopes the refresh token was issued with\n\
+             (e.g. \"user:inference\" or \"user:profile user:inference user:sessions:claude_code user:mcp_servers\")."
+        ))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("API key creation failed: {}", text);
-    }
+    let scopes: Vec<String> = env_scopes.split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
 
-    let data: serde_json::Value = resp.json().await?;
-    let raw_key = data["raw_key"]
-        .as_str()
-        .context("No raw_key in API key response")?
-        .to_string();
+    let (tokens, profile, token_account) = refresh_for_login(refresh_token, &scopes).await?;
 
-    Ok(raw_key)
+    install_oauth_tokens(&tokens, profile.as_ref(), token_account.as_ref()).await?;
+
+    // Mark onboarding complete (env var path skips interactive onboarding)
+    save_global_config(|mut config| {
+        if config.has_completed_onboarding != Some(true) {
+            config.has_completed_onboarding = Some(true);
+        }
+        config
+    }).ok();
+
+    println!("Login successful.");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -473,9 +717,6 @@ mod tests {
             login_method: None,
         });
 
-        // ALL_OAUTH_SCOPES in TS: union of CONSOLE + CLAUDE_AI scopes
-        // The URL-encoded scope parameter uses `+` or `%20` for spaces and `%3A` for `:`.
-        // Parse the URL and check the decoded scope parameter.
         let parsed = url::Url::parse(&url).unwrap();
         let scope_param = parsed.query_pairs()
             .find(|(k, _)| k == "scope")
@@ -486,7 +727,6 @@ mod tests {
         for scope in &expected_scopes {
             assert!(url_scopes.contains(scope), "URL must contain scope '{}', got scopes: {:?}", scope, url_scopes);
         }
-        // Specifically check that org:create_api_key is present (NOT org:service_key_inference)
         assert!(url_scopes.contains(&"org:create_api_key"), "Must contain org:create_api_key");
         assert!(!url_scopes.contains(&"org:service_key_inference"), "Must NOT contain org:service_key_inference");
     }
@@ -514,11 +754,6 @@ mod tests {
     #[test]
     fn test_all_oauth_scopes_matches_ts() {
         let scopes = all_oauth_scopes();
-        // TS ALL_OAUTH_SCOPES = Set([...CONSOLE_OAUTH_SCOPES, ...CLAUDE_AI_OAUTH_SCOPES])
-        // CONSOLE: org:create_api_key, user:profile
-        // CLAUDE_AI: user:profile, user:inference, user:sessions:claude_code, user:mcp_servers, user:file_upload
-        // Deduped union (preserving insertion order of Set):
-        //   org:create_api_key, user:profile, user:inference, user:sessions:claude_code, user:mcp_servers, user:file_upload
         assert!(scopes.contains(&"org:create_api_key"));
         assert!(scopes.contains(&"user:profile"));
         assert!(scopes.contains(&"user:inference"));
@@ -567,7 +802,6 @@ mod tests {
         assert_eq!(body["grant_type"], "refresh_token");
         assert_eq!(body["refresh_token"], "rt_abc");
         assert_eq!(body["client_id"], CLIENT_ID);
-        // Default scopes should be CLAUDE_AI_OAUTH_SCOPES
         let scope = body["scope"].as_str().unwrap();
         assert!(scope.contains("user:inference"), "Default refresh should use Claude AI scopes");
         assert!(scope.contains("user:profile"));
@@ -629,5 +863,16 @@ mod tests {
         assert_eq!(API_KEY_URL, "https://api.anthropic.com/api/oauth/claude_cli/create_api_key");
         assert_eq!(MANUAL_REDIRECT_URL, "https://platform.claude.com/oauth/code/callback");
         assert_eq!(OAUTH_BETA_HEADER, "oauth-2025-04-20");
+    }
+
+    // ── LoginOptions tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_login_options_default_is_claude_ai() {
+        let opts = LoginOptions::default();
+        assert!(!opts.use_console);
+        assert!(!opts.use_claude_ai); // Default struct has false, login() sets it
+        assert!(!opts.sso);
+        assert!(opts.email.is_none());
     }
 }

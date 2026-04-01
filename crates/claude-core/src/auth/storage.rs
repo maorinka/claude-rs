@@ -212,6 +212,30 @@ async fn store_to_keychain(json: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete stored OAuth tokens (both keychain and file).
+///
+/// Used during logout and before re-login to clear old state.
+/// Matches TS `performLogout()` → `secureStorage.delete()`.
+pub async fn delete_tokens() -> Result<()> {
+    // Delete the credentials file
+    let path = credentials_path()?;
+    if path.exists() {
+        tokio::fs::remove_file(&path).await.ok();
+    }
+
+    // On macOS, also delete from keychain
+    if cfg!(target_os = "macos") {
+        let username = get_username();
+        let service = keychain_service_name();
+        let _ = tokio::process::Command::new("security")
+            .args(["delete-generic-password", "-a", &username, "-s", &service])
+            .output()
+            .await;
+    }
+
+    Ok(())
+}
+
 fn credentials_path() -> Result<PathBuf> {
     let dir = crate::config::paths::claude_dir()?;
     Ok(dir.join(".credentials.json"))
