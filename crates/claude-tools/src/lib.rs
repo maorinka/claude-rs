@@ -20,6 +20,7 @@ pub mod send_message;
 pub mod lsp_tool;
 pub mod tool_search;
 pub mod team_tools;
+pub mod remote_trigger;
 
 pub use registry::{ToolExecutor, ToolRegistry, ToolUseContext, ProgressSender, ReadFileState};
 pub use mcp_tool::register_mcp_tools;
@@ -54,5 +55,6 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(tool_search::ToolSearchTool));
     reg.register(Arc::new(team_tools::TeamCreateTool));
     reg.register(Arc::new(team_tools::TeamDeleteTool));
+    reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
     reg
 }
