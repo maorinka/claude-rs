@@ -199,18 +199,6 @@ pub fn build_request_body(
     // output_config: empty object matches TS behaviour when no effort/budget is set.
     body["output_config"] = json!({});
 
-    // CRITICAL: betas must be in the request BODY (not just the header).
-    // The Anthropic SDK's beta.messages.create() sends betas in both places.
-    // Without this, the API returns 400 "Error" for OAuth tokens.
-    let betas = vec![
-        "claude-code-20250219",
-        "interleaved-thinking-2025-05-14",
-        "context-management-2025-06-27",
-        "effort-2025-11-24",
-        "web-search-2025-03-05",
-    ];
-    body["betas"] = json!(betas);
-
     body
 }
 
