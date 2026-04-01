@@ -283,6 +283,12 @@ impl ApiClient {
             .post(&url)
             .header("anthropic-version", &self.config.api_version)
             .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .header("user-agent", "claude-cli/2.1.88 (external, cli)")
+            .header("x-stainless-lang", "js")
+            .header("x-stainless-package-version", "2.2.0")
+            .header("x-stainless-runtime", "node")
+            .header("x-stainless-retry-count", "0")
             .header(header_name, header_value);
 
         // Build anthropic-beta header (matches real Claude Code's request exactly)
