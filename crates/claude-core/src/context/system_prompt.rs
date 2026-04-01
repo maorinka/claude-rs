@@ -5,6 +5,40 @@ use serde_json::{json, Value};
 use super::git::get_git_context;
 use super::environment::build_environment_context;
 
+/// External hook for adding mode-specific sections to the system prompt.
+/// Populated by claude-tools::brief_tool and claude-tools::plan_mode.
+pub type SystemPromptSection = fn() -> Option<String>;
+
+/// Registered system prompt section providers.
+/// These are called during system prompt assembly to inject mode-specific
+/// instructions (e.g. brief mode, plan mode).
+static SECTION_PROVIDERS: std::sync::Mutex<Vec<SystemPromptSection>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Register a system prompt section provider.
+///
+/// Called during startup to wire in brief mode, plan mode, etc.
+pub fn register_system_prompt_section(provider: SystemPromptSection) {
+    let mut providers = SECTION_PROVIDERS.lock().unwrap();
+    providers.push(provider);
+}
+
+/// Clear all registered providers (for testing).
+#[cfg(test)]
+pub fn clear_system_prompt_sections() {
+    let mut providers = SECTION_PROVIDERS.lock().unwrap();
+    providers.clear();
+}
+
+/// Collect all active system prompt sections from registered providers.
+fn collect_dynamic_sections() -> Vec<String> {
+    let providers = SECTION_PROVIDERS.lock().unwrap();
+    providers
+        .iter()
+        .filter_map(|provider| provider())
+        .collect()
+}
+
 /// Instruction prefix added before CLAUDE.md contents in the system prompt.
 const MEMORY_INSTRUCTION_PROMPT: &str =
     "Codebase and user instructions are shown below. Be sure to adhere to these instructions. \
@@ -43,6 +77,11 @@ pub async fn build_system_prompt(
         for (source, content) in &claude_md_contents {
             parts.push(format!("# Instructions from {}\n\n{}", source, content));
         }
+    }
+
+    // 6. Dynamic sections (brief mode, plan mode, etc.)
+    for section in collect_dynamic_sections() {
+        parts.push(section);
     }
 
     // Assemble into content blocks

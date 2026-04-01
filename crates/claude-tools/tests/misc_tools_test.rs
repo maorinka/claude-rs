@@ -1,5 +1,5 @@
 use claude_tools::ask_user::{send_user_answer, AskUserQuestionTool};
-use claude_tools::brief_tool::BriefTool;
+use claude_tools::brief_tool::{is_brief_enabled, set_brief_mode, get_brief_system_prompt_section, BriefTool};
 use claude_tools::lsp_tool::LSPTool;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use claude_tools::send_message::SendMessageTool;
@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 // Serialise channel-flow tests so they don't steal each other's global sender.
 static MISC_TEST_LOCK: Mutex<()> = Mutex::new(());
+// Serialise brief-mode tests so they don't race on the global BRIEF_MODE flag.
+static BRIEF_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_ctx() -> ToolUseContext {
     ToolUseContext {
@@ -20,10 +22,7 @@ fn make_ctx() -> ToolUseContext {
     }
 }
 
-// ── AskUserQuestionTool ────────────────────────────────────────────────────
-//
-// The tool now blocks on a oneshot channel until the TUI sends an answer.
-// Tests must spawn the call in a background task and then call send_user_answer.
+// -- AskUserQuestionTool -------------------------------------------------------
 
 #[tokio::test]
 async fn test_ask_user_basic() {
@@ -48,6 +47,8 @@ async fn test_ask_user_basic() {
     assert!(!result.is_error, "result should not be an error: {:?}", result.data);
     let answer = result.data["answer"].as_str().expect("answer should be a string");
     assert_eq!(answer, "Alice", "answer should match what was sent");
+    // Check answers map
+    assert_eq!(result.data["answers"]["What is your name?"], "Alice");
 }
 
 #[tokio::test]
@@ -94,10 +95,11 @@ fn test_ask_user_is_read_only() {
     assert!(tool.is_read_only(&json!({})));
 }
 
-// ── BriefTool ──────────────────────────────────────────────────────────────
+// -- BriefTool -----------------------------------------------------------------
 
 #[tokio::test]
 async fn test_brief_enable() {
+    let _guard = BRIEF_TEST_LOCK.lock().unwrap();
     let tool = BriefTool;
     let result = tool
         .call(&json!({ "enabled": true }), &make_ctx(), CancellationToken::new(), None)
@@ -106,10 +108,20 @@ async fn test_brief_enable() {
 
     assert!(!result.is_error);
     assert_eq!(result.data["brief_mode"], true);
+    assert!(is_brief_enabled());
+
+    // System prompt section should be active
+    let section = get_brief_system_prompt_section();
+    assert!(section.is_some(), "should have brief system prompt section when enabled");
+    assert!(section.unwrap().contains("Brief Mode"));
+
+    set_brief_mode(false);
 }
 
 #[tokio::test]
 async fn test_brief_disable() {
+    let _guard = BRIEF_TEST_LOCK.lock().unwrap();
+    set_brief_mode(true);
     let tool = BriefTool;
     let result = tool
         .call(&json!({ "enabled": false }), &make_ctx(), CancellationToken::new(), None)
@@ -118,6 +130,11 @@ async fn test_brief_disable() {
 
     assert!(!result.is_error);
     assert_eq!(result.data["brief_mode"], false);
+    assert!(!is_brief_enabled());
+
+    // System prompt section should be inactive
+    let section = get_brief_system_prompt_section();
+    assert!(section.is_none(), "should not have brief system prompt section when disabled");
 }
 
 #[tokio::test]
@@ -136,7 +153,7 @@ fn test_brief_is_not_read_only() {
     assert!(!tool.is_read_only(&json!({ "enabled": true })));
 }
 
-// ── SendMessageTool ────────────────────────────────────────────────────────
+// -- SendMessageTool -----------------------------------------------------------
 
 #[tokio::test]
 async fn test_send_message_basic() {
@@ -152,7 +169,7 @@ async fn test_send_message_basic() {
         .expect("call should not fail");
 
     assert!(!result.is_error);
-    assert_eq!(result.data["sent"], true);
+    assert_eq!(result.data["success"], true);
     assert_eq!(result.data["to"], "agent-2");
 }
 
@@ -182,3 +199,46 @@ fn test_send_message_is_not_read_only() {
     assert!(!tool.is_read_only(&json!({ "to": "x", "content": "y" })));
 }
 
+// -- LSPTool -------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_lsp_diagnostics_returns_from_manager() {
+    let tool = LSPTool;
+    let result = tool
+        .call(
+            &json!({ "operation": "diagnostics", "filePath": "/nonexistent/file.rs" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["operation"], "diagnostics");
+    assert_eq!(result.data["resultCount"], 0);
+}
+
+#[tokio::test]
+async fn test_lsp_unknown_operation() {
+    let tool = LSPTool;
+    let result = tool
+        .call(
+            &json!({ "operation": "badOp", "filePath": "/test.rs" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(result.is_error);
+    assert!(result.data["error"].as_str().unwrap().contains("Unknown LSP operation"));
+}
+
+#[test]
+fn test_lsp_is_read_only() {
+    let tool = LSPTool;
+    assert!(tool.is_read_only(&json!({})));
+    assert!(tool.is_concurrency_safe(&json!({})));
+}
