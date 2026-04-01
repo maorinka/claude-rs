@@ -68,8 +68,23 @@ impl CommandHandler for HelpHandler {
 pub struct StatusHandler;
 impl CommandHandler for StatusHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(state) = shared.lock() {
+                return Ok(CommandResult::Action(format!(
+                    "Model: {}\nWorking directory: {}\nSession active\n\
+                     Messages: {}\nTotal tokens: {}\nSession ID: {}\n\
+                     API requests: {}",
+                    ctx.model,
+                    ctx.working_directory.display(),
+                    state.message_count,
+                    state.total_tokens,
+                    state.session_id,
+                    state.request_count,
+                )));
+            }
+        }
         Ok(CommandResult::Action(format!(
-            "Model: {}\nWorking directory: {}\nSession active",
+            "Model: {}\nWorking directory: {}\nno live session data available",
             ctx.model,
             ctx.working_directory.display()
         )))
@@ -78,7 +93,15 @@ impl CommandHandler for StatusHandler {
 
 pub struct ClearHandler;
 impl CommandHandler for ClearHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                state.clear_requested = true;
+                state.message_count = 0;
+                state.total_tokens = 0;
+                state.request_count = 0;
+            }
+        }
         Ok(CommandResult::Action(
             "Conversation history cleared.".to_string(),
         ))
@@ -94,9 +117,15 @@ impl CommandHandler for ModelHandler {
                 ctx.model
             )))
         } else {
+            let new_model = args.trim().to_string();
+            if let Some(ref shared) = ctx.shared {
+                if let Ok(mut state) = shared.lock() {
+                    state.model = new_model.clone();
+                }
+            }
             Ok(CommandResult::Action(format!(
                 "Model changed to: {}",
-                args.trim()
+                new_model
             )))
         }
     }
@@ -128,7 +157,7 @@ impl CommandHandler for CostHandler {
             }
         }
         Ok(CommandResult::Action(format!(
-            "Model: {}\nNo usage recorded yet.",
+            "Model: {}\nno live session data available",
             ctx.model
         )))
     }
@@ -136,27 +165,70 @@ impl CommandHandler for CostHandler {
 
 pub struct PermissionsHandler;
 impl CommandHandler for PermissionsHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
-        Ok(CommandResult::Action(
-            "Permission mode: default (ask before executing tools)".to_string(),
-        ))
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let mode = ctx
+            .shared
+            .as_ref()
+            .and_then(|s| s.lock().ok().map(|st| st.permission_mode.clone()))
+            .unwrap_or_else(|| "default".to_string());
+
+        let desc = match mode.as_str() {
+            "default" => "All tool calls require approval before execution.",
+            "plan" => "Read-only tools are auto-approved; write tools require approval.",
+            "auto-edit" => "File edits are auto-approved; shell commands require approval.",
+            "yolo" | "dangerously-skip-permissions" => {
+                "All tools auto-approved (dangerous)."
+            }
+            _ => "All tool calls require approval before execution.",
+        };
+
+        Ok(CommandResult::Action(format!(
+            "Permission mode: {}\n{}",
+            mode, desc
+        )))
     }
 }
 
 pub struct VerboseHandler;
 impl CommandHandler for VerboseHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                state.verbose_mode = !state.verbose_mode;
+                return Ok(CommandResult::Action(format!(
+                    "Verbose mode {}.",
+                    if state.verbose_mode { "enabled" } else { "disabled" }
+                )));
+            }
+        }
         Ok(CommandResult::Action("Verbose mode toggled.".to_string()))
     }
 }
 
 pub struct MemoryHandler;
 impl CommandHandler for MemoryHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
-        Ok(CommandResult::Action(
-            "Auto-memory files:\n  ~/.claude/CLAUDE.md (global)\n  ./CLAUDE.md (project)"
-                .to_string(),
-        ))
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let mut report = String::from("=== Memory files ===\n\n");
+
+        // Global memory
+        if let Ok(claude_home) = crate::config::paths::claude_dir() {
+            let global_md = claude_home.join("CLAUDE.md");
+            if global_md.exists() {
+                report.push_str(&format!("  {} (global)\n", global_md.display()));
+            } else {
+                report.push_str("  ~/.claude/CLAUDE.md (global) - not found\n");
+            }
+        }
+
+        // Project memory
+        let project_md = ctx.working_directory.join("CLAUDE.md");
+        if project_md.exists() {
+            report.push_str(&format!("  {} (project)\n", project_md.display()));
+        } else {
+            report.push_str("  ./CLAUDE.md (project) - not found\n");
+        }
+
+        Ok(CommandResult::Action(report))
     }
 }
 
@@ -178,58 +250,126 @@ impl CommandHandler for ResumeHandler {
 
 pub struct ForkHandler;
 impl CommandHandler for ForkHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
-        Ok(CommandResult::Action(
-            "Session forked. A new independent session has been created from this point."
-                .to_string(),
-        ))
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let new_id = uuid::Uuid::new_v4().to_string();
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                state.fork_requested = true;
+                state.session_id = new_id.clone();
+            }
+        }
+        Ok(CommandResult::Action(format!(
+            "Session forked. A new independent session has been created from this point.\n\
+             New session ID: {}",
+            new_id
+        )))
     }
 }
 
 pub struct ContextHandler;
 impl CommandHandler for ContextHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(state) = shared.lock() {
+                let used = state.total_tokens;
+                let window = state.context_window;
+                let pct = if window > 0 {
+                    (used as f64 / window as f64 * 100.0) as u64
+                } else {
+                    0
+                };
+                return Ok(CommandResult::Action(format!(
+                    "Context window usage:\n  Used:      {} tokens\n  Available: {} tokens\n  Utilization: {}%",
+                    used, window, pct
+                )));
+            }
+        }
         Ok(CommandResult::Action(
-            "Context window usage:\n  Used:      0 tokens\n  Available: 200000 tokens\n  Utilization: 0%"
-                .to_string(),
+            "Context window usage:\nno live session data available".to_string(),
         ))
     }
 }
 
 pub struct ThemeHandler;
 impl CommandHandler for ThemeHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                state.dark_theme = !state.dark_theme;
+                return Ok(CommandResult::Action(format!(
+                    "Theme switched to {}.",
+                    if state.dark_theme { "dark" } else { "light" }
+                )));
+            }
+        }
         Ok(CommandResult::Action("Theme toggled.".to_string()))
     }
 }
 
 pub struct FastHandler;
 impl CommandHandler for FastHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                state.fast_mode = !state.fast_mode;
+                return Ok(CommandResult::Action(format!(
+                    "Fast mode {}.",
+                    if state.fast_mode { "enabled" } else { "disabled" }
+                )));
+            }
+        }
         Ok(CommandResult::Action("Fast mode toggled.".to_string()))
     }
 }
 
 pub struct BriefHandler;
 impl CommandHandler for BriefHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        if let Some(ref shared) = ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                state.brief_mode = !state.brief_mode;
+                return Ok(CommandResult::Action(format!(
+                    "Brief mode {}.",
+                    if state.brief_mode { "enabled" } else { "disabled" }
+                )));
+            }
+        }
         Ok(CommandResult::Action("Brief mode toggled.".to_string()))
     }
 }
 
 pub struct EffortHandler;
 impl CommandHandler for EffortHandler {
-    fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
         let level = args.trim();
         if level.is_empty() {
-            Ok(CommandResult::Action(
-                "Usage: /effort <low|medium|high>. Current effort level: medium".to_string(),
-            ))
-        } else {
+            let current = ctx
+                .shared
+                .as_ref()
+                .and_then(|s| s.lock().ok().map(|st| st.effort_level.clone()))
+                .unwrap_or_else(|| "medium".to_string());
             Ok(CommandResult::Action(format!(
-                "Effort level set to: {}",
-                level
+                "Usage: /effort <low|medium|high>. Current effort level: {}",
+                current
             )))
+        } else {
+            match level {
+                "low" | "medium" | "high" => {
+                    if let Some(ref shared) = ctx.shared {
+                        if let Ok(mut state) = shared.lock() {
+                            state.effort_level = level.to_string();
+                        }
+                    }
+                    Ok(CommandResult::Action(format!(
+                        "Effort level set to: {}",
+                        level
+                    )))
+                }
+                _ => Ok(CommandResult::Error(format!(
+                    "Invalid effort level: '{}'. Use low, medium, or high.",
+                    level
+                ))),
+            }
         }
     }
 }
@@ -1295,7 +1435,8 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("/tmp/test-project"));
                 assert!(text.contains(&ctx.model));
-                assert!(text.contains("Session active"));
+                // Without shared state, shows fallback
+                assert!(text.contains("no live session"));
             }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
