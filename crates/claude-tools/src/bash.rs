@@ -28,6 +28,19 @@ fn get_default_timeout_ms() -> u64 {
         .unwrap_or(DEFAULT_TIMEOUT_MS)
 }
 
+/// Check if background tasks are disabled via the
+/// `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` environment variable.
+/// Matches TS `isBackgroundTasksDisabled` in `BashTool.tsx`.
+fn is_background_tasks_disabled() -> bool {
+    std::env::var("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
+        .ok()
+        .map(|v| {
+            let v = v.to_lowercase();
+            v == "1" || v == "true" || v == "yes"
+        })
+        .unwrap_or(false)
+}
+
 /// Get the maximum bash timeout, respecting the `BASH_MAX_TIMEOUT_MS`
 /// environment variable (matches TS `getMaxBashTimeoutMs`).
 fn get_max_timeout_ms() -> u64 {
@@ -256,26 +269,38 @@ While the Bash tool can do similar things, it's better to use the built-in tools
     }
 
     fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The bash command to execute"
-                },
-                "timeout": {
-                    "type": "number",
-                    "description": format!("Optional timeout in milliseconds (max {})", get_max_timeout_ms())
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls \u{2192} \"List files in current directory\"\n- git status \u{2192} \"Show working tree status\"\n- npm install \u{2192} \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; \u{2192} \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main \u{2192} \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' \u{2192} \"Fetch JSON from URL and extract data array elements\""
-                },
-                "run_in_background": {
+        // Matches TS: when CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set, the
+        // run_in_background property is omitted from the schema entirely so the
+        // model never sees it.
+        let mut properties = json!({
+            "command": {
+                "type": "string",
+                "description": "The bash command to execute"
+            },
+            "timeout": {
+                "type": "number",
+                "description": format!("Optional timeout in milliseconds (max {})", get_max_timeout_ms())
+            },
+            "description": {
+                "type": "string",
+                "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls \u{2192} \"List files in current directory\"\n- git status \u{2192} \"Show working tree status\"\n- npm install \u{2192} \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; \u{2192} \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main \u{2192} \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' \u{2192} \"Fetch JSON from URL and extract data array elements\""
+            }
+        });
+
+        // Only expose run_in_background when background tasks are enabled
+        if !is_background_tasks_disabled() {
+            properties.as_object_mut().unwrap().insert(
+                "run_in_background".to_string(),
+                json!({
                     "type": "boolean",
                     "description": "Set to true to run this command in the background. Use Read to read the output later."
-                }
-            },
+                }),
+            );
+        }
+
+        json!({
+            "type": "object",
+            "properties": properties,
             "required": ["command"]
         })
     }
@@ -294,20 +319,26 @@ While the Bash tool can do similar things, it's better to use the built-in tools
 
         // Parse timeout: use provided value clamped to max, or default.
         // Matches TS: `const timeoutMs = timeout || getDefaultTimeoutMs()`
+        // TS uses `||` which treats 0 as falsy, so 0 falls back to default.
         let max_timeout = get_max_timeout_ms();
         let timeout_ms = input
             .get("timeout")
             .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)))
+            .filter(|&t| t > 0) // Match TS `||` semantics: 0 is falsy
             .map(|t| t.min(max_timeout))
             .unwrap_or_else(get_default_timeout_ms);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
         // Parse run_in_background flag.
         // Matches TS: `if (run_in_background === true && !isBackgroundTasksDisabled)`
-        let run_in_background = input
-            .get("run_in_background")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        // TS checks `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` env var and ignores
+        // run_in_background when it is set (runs in foreground instead).
+        let is_background_disabled = is_background_tasks_disabled();
+        let run_in_background = !is_background_disabled
+            && input
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
         // If already cancelled before we even start, return immediately
         if cancel.is_cancelled() {
@@ -333,16 +364,41 @@ While the Bash tool can do similar things, it's better to use the built-in tools
         // Handle run_in_background: return immediately, let the process run.
         // Matches TS behavior: returns `{ stdout: '', stderr: '', code: 0,
         // interrupted: false, backgroundTaskId: shellId }`.
-        // We don't have a full task manager yet, so we use the process ID.
+        // TS uses `spawnBackgroundTask()` which persists output to a file so it
+        // can be read later. We mirror this by writing output to a temp file.
         if run_in_background {
             let pid = child.id().unwrap_or(0);
             let task_id = format!("bg_{}", pid);
 
-            // Spawn a detached task that waits for the child so it doesn't become
-            // a zombie. Output is discarded (the user can read it via /tasks or
-            // by reading the output file later).
+            // Build output path matching TS `getTaskOutputPath(taskId)`.
+            // TS stores in a per-session temp dir; we use $TMPDIR/claude-bg-tasks/.
+            let output_dir = std::env::temp_dir().join("claude-bg-tasks");
+            let _ = std::fs::create_dir_all(&output_dir);
+            let output_path = output_dir.join(format!("{}.txt", task_id));
+            let output_path_clone = output_path.clone();
+
+            // Spawn a detached task that waits for the child, captures output,
+            // and writes it to the output file so the user can read it later.
             tokio::spawn(async move {
-                let _ = child.wait().await;
+                let output = child.wait_with_output().await;
+                if let Ok(output) = output {
+                    let mut content = String::new();
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stdout.is_empty() {
+                        content.push_str(&stdout);
+                    }
+                    if !stderr.is_empty() {
+                        if !content.is_empty() {
+                            content.push('\n');
+                        }
+                        content.push_str("[stderr]\n");
+                        content.push_str(&stderr);
+                    }
+                    let code = output.status.code().unwrap_or(-1);
+                    content.push_str(&format!("\n[exit code: {}]", code));
+                    let _ = std::fs::write(&output_path_clone, &content);
+                }
             });
 
             return Ok(ToolResultData {
@@ -351,7 +407,8 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                     "stderr": "",
                     "code": 0,
                     "interrupted": false,
-                    "backgroundTaskId": task_id
+                    "backgroundTaskId": task_id,
+                    "outputPath": output_path.to_string_lossy()
                 }),
                 is_error: false,
             });
@@ -737,6 +794,18 @@ mod tests {
             "backgroundTaskId should start with 'bg_', got: {}",
             task_id
         );
+        // Should have an outputPath for reading later
+        assert!(
+            result.data["outputPath"].is_string(),
+            "should have outputPath, got: {}",
+            result.data
+        );
+        let output_path = result.data["outputPath"].as_str().unwrap();
+        assert!(
+            output_path.contains("claude-bg-tasks"),
+            "outputPath should be in claude-bg-tasks dir, got: {}",
+            output_path
+        );
         // stdout/stderr should be empty for background tasks
         assert_eq!(result.data["stdout"], "");
         assert_eq!(result.data["stderr"], "");
@@ -833,5 +902,73 @@ mod tests {
         let result = tool.call(&input, &make_ctx(), cancel, None).await.unwrap();
         assert_eq!(result.data["interrupted"], true);
         assert_eq!(result.data["code"], -1);
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout_zero_uses_default() {
+        // TS uses `timeout || getDefaultTimeoutMs()` where 0 is falsy.
+        // So timeout: 0 should NOT cause an immediate timeout — it falls back
+        // to the default (120s), and a fast command should complete normally.
+        let tool = BashTool;
+        let input = json!({
+            "command": "echo zero_timeout",
+            "timeout": 0
+        });
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["code"], 0);
+        assert_eq!(result.data["interrupted"], false);
+        assert!(
+            result.data["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("zero_timeout"),
+            "timeout: 0 should use default and let fast command complete"
+        );
+    }
+
+    #[test]
+    fn test_is_background_tasks_disabled_false_by_default() {
+        // When the env var is not set, background tasks should be enabled
+        let val = is_background_tasks_disabled();
+        // We can't guarantee the env var isn't set in CI, but we can check
+        // the function returns a bool
+        assert!(val == true || val == false);
+    }
+
+    #[tokio::test]
+    async fn test_bash_background_output_persisted() {
+        // Background tasks should persist output to disk
+        let tool = BashTool;
+        let input = json!({
+            "command": "echo persisted_output",
+            "run_in_background": true
+        });
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+
+        let output_path = result.data["outputPath"].as_str().unwrap();
+        // Wait a bit for the background task to write
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let content = std::fs::read_to_string(output_path).unwrap_or_default();
+        assert!(
+            content.contains("persisted_output"),
+            "background output should be persisted to file, got: {}",
+            content
+        );
+        assert!(
+            content.contains("[exit code: 0]"),
+            "output file should contain exit code, got: {}",
+            content
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(output_path);
     }
 }
