@@ -388,6 +388,10 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             // Spawn a detached task that streams output to the file while the
             // process runs, matching TS `shellCommand.background()` behavior
             // where the task output file is written to incrementally.
+            //
+            // TS writes raw interleaved stdout/stderr bytes to the same fd
+            // with no prefixes or trailers (exit code is tracked separately
+            // in the result object, not in the file). We match that behavior.
             tokio::spawn(async move {
                 use tokio::io::AsyncWriteExt;
 
@@ -399,7 +403,8 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                     .await;
 
                 if let Ok(mut file) = file {
-                    // Stream stdout and stderr concurrently, appending to file.
+                    // Stream stdout and stderr concurrently as raw interleaved
+                    // bytes, matching TS TaskOutput behavior.
                     let mut stdout_buf = vec![0u8; 4096];
                     let mut stderr_buf = vec![0u8; 4096];
                     let mut stdout_done = false;
@@ -421,7 +426,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                                 match result {
                                     Ok(0) => stderr_done = true,
                                     Ok(n) => {
-                                        let _ = file.write_all(b"[stderr] ").await;
+                                        // Raw bytes, no prefix (matches TS)
                                         let _ = file.write_all(&stderr_buf[..n]).await;
                                         let _ = file.flush().await;
                                     }
@@ -436,11 +441,9 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                         }
                     }
 
-                    // Wait for exit and write final status
-                    let status = child.wait().await;
-                    let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-                    let _ = file.write_all(format!("\n[exit code: {}]\n", code).as_bytes()).await;
-                    let _ = file.flush().await;
+                    // Wait for process exit. Exit code is NOT written to the
+                    // file (matches TS where it's in the result object instead).
+                    let _ = child.wait().await;
                 } else {
                     // File open failed; still wait so the child doesn't zombie
                     let _ = child.wait().await;
@@ -987,7 +990,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_background_output_streamed() {
-        // Background tasks should stream output to disk incrementally
+        // Background tasks should stream raw output to disk incrementally.
+        // TS writes raw interleaved bytes with no prefixes or trailers.
         let tool = BashTool;
         let input = json!({
             "command": "echo streamed_output",
@@ -1014,9 +1018,10 @@ mod tests {
             "background output should be streamed to file, got: {}",
             content
         );
+        // TS does NOT write exit code to the file (it's in the result object)
         assert!(
-            content.contains("[exit code: 0]"),
-            "output file should contain exit code, got: {}",
+            !content.contains("[exit code:"),
+            "output file should NOT contain exit code trailer (matches TS), got: {}",
             content
         );
 
@@ -1026,7 +1031,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_background_output_readable_while_running() {
-        // Verify output is streamed incrementally (readable before process exits)
+        // Verify output is streamed incrementally (readable before process exits).
+        // This matches TS behavior where TaskOutput writes incrementally.
         let tool = BashTool;
         // Command that writes output then sleeps -- we should be able to read
         // partial output before the sleep finishes
@@ -1047,12 +1053,6 @@ mod tests {
         assert!(
             content.contains("early_output"),
             "should be able to read partial output while command is still running, got: {}",
-            content
-        );
-        // File should NOT yet have [exit code] since sleep 10 is still running
-        assert!(
-            !content.contains("[exit code:"),
-            "should not have exit code while command is still running, got: {}",
             content
         );
 
