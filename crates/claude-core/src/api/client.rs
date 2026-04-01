@@ -7,16 +7,27 @@ use crate::types::content::ContentBlock;
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Authentication method for the Anthropic API.
+///
+/// Matches the TS `getAnthropicClient()` in `src/services/api/client.ts`:
+/// - Console users: `apiKey` param (sent as `x-api-key` header)
+/// - Claude.ai subscribers: `authToken` param (sent as `Authorization: Bearer` header)
+///   and requires `anthropic-beta: oauth-2025-04-20` header
 #[derive(Clone, Debug)]
 pub enum AuthMethod {
     /// A standard API key (x-api-key header).
+    /// Used by Console users and ANTHROPIC_API_KEY env var.
     ApiKey(String),
     /// An OAuth bearer token (Authorization: Bearer header).
+    /// Used by Claude.ai subscribers (Pro/Max/Team/Enterprise).
+    /// Corresponds to the Anthropic SDK's `authToken` parameter.
     OAuthToken(String),
 }
 
 impl AuthMethod {
     /// Return the `(header_name, header_value)` pair for this auth method.
+    ///
+    /// - ApiKey -> `x-api-key: <key>` (matches TS SDK's apiKey param)
+    /// - OAuthToken -> `Authorization: Bearer <token>` (matches TS SDK's authToken param)
     pub fn to_header(&self) -> (&'static str, String) {
         match self {
             AuthMethod::ApiKey(key) => ("x-api-key", key.clone()),
@@ -25,6 +36,7 @@ impl AuthMethod {
     }
 
     /// Whether this auth method requires the OAuth beta header.
+    /// The TS code adds `oauth-2025-04-20` to anthropic-beta when `isClaudeAISubscriber()`.
     pub fn is_oauth(&self) -> bool {
         matches!(self, AuthMethod::OAuthToken(_))
     }

@@ -2,31 +2,132 @@ use anyhow::{Context, Result};
 use super::pkce::*;
 use super::storage::{OAuthStoredTokens, store_tokens};
 
-const AUTHORIZE_URL: &str = "https://platform.claude.com/oauth/authorize";
-const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload org:create_api_key";
+// ── OAuth constants matching the real Claude Code (src/constants/oauth.ts) ────
+
+/// Console (API) authorization URL.
+pub const CONSOLE_AUTHORIZE_URL: &str = "https://platform.claude.com/oauth/authorize";
+
+/// Claude.ai authorization URL — bounces through claude.com/cai/* for attribution.
+pub const CLAUDE_AI_AUTHORIZE_URL: &str = "https://claude.com/cai/oauth/authorize";
+
+/// Token exchange URL.
+pub const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+
+/// API key creation endpoint (for Console users).
+pub const API_KEY_URL: &str = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key";
+
+/// Success redirect for Console users.
+pub const CONSOLE_SUCCESS_URL: &str =
+    "https://platform.claude.com/buy_credits?returnUrl=/oauth/code/success%3Fapp%3Dclaude-code";
+
+/// Success redirect for Claude.ai subscribers.
+pub const CLAUDEAI_SUCCESS_URL: &str =
+    "https://platform.claude.com/oauth/code/success?app=claude-code";
+
+/// Manual redirect URL (for copy-paste auth code flow).
+pub const MANUAL_REDIRECT_URL: &str = "https://platform.claude.com/oauth/code/callback";
+
+/// OAuth Client ID.
+pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+
+/// OAuth beta header value — required for Bearer OAuth on API routes.
+pub const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+
+// ── OAuth scope constants matching TS (src/constants/oauth.ts) ───────────────
+
+pub const SCOPE_USER_INFERENCE: &str = "user:inference";
+pub const SCOPE_USER_PROFILE: &str = "user:profile";
+pub const SCOPE_ORG_CREATE_API_KEY: &str = "org:create_api_key";
+
+/// Console OAuth scopes (for API key creation via Console).
+pub const CONSOLE_OAUTH_SCOPES: &[&str] = &[SCOPE_ORG_CREATE_API_KEY, SCOPE_USER_PROFILE];
+
+/// Claude.ai OAuth scopes (for Claude.ai subscribers: Pro/Max/Team/Enterprise).
+pub const CLAUDE_AI_OAUTH_SCOPES: &[&str] = &[
+    SCOPE_USER_PROFILE,
+    SCOPE_USER_INFERENCE,
+    "user:sessions:claude_code",
+    "user:mcp_servers",
+    "user:file_upload",
+];
+
+/// Build the deduplicated union of all scopes (matching TS ALL_OAUTH_SCOPES).
+pub fn all_oauth_scopes() -> Vec<&'static str> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for &scope in CONSOLE_OAUTH_SCOPES.iter().chain(CLAUDE_AI_OAUTH_SCOPES.iter()) {
+        if seen.insert(scope) {
+            result.push(scope);
+        }
+    }
+    result
+}
+
+/// Check if the given scopes indicate a Claude.ai subscriber (has user:inference).
+pub fn is_claude_ai_auth(scopes: &[String]) -> bool {
+    scopes.iter().any(|s| s == SCOPE_USER_INFERENCE)
+}
+
+// ── Auth URL builder ─────────────────────────────────────────────────────────
+
+/// Options for building the authorization URL.
+pub struct AuthUrlOptions<'a> {
+    pub code_challenge: &'a str,
+    pub state: &'a str,
+    pub port: u16,
+    pub is_manual: bool,
+    pub login_with_claude_ai: bool,
+    pub org_uuid: Option<&'a str>,
+    pub login_hint: Option<&'a str>,
+    pub login_method: Option<&'a str>,
+}
 
 /// Build the OAuth authorization URL with PKCE parameters.
-pub fn build_auth_url(
-    client_id: &str,
-    redirect_uri: &str,
-    scopes: &str,
-    code_challenge: &str,
-    state: &str,
-) -> String {
-    format!(
-        "{}?client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-        AUTHORIZE_URL,
-        urlencoding::encode(client_id),
-        urlencoding::encode(redirect_uri),
-        urlencoding::encode(scopes),
-        code_challenge,
-        state,
-    )
+///
+/// Matches the TS `buildAuthUrl()` in `src/services/oauth/client.ts`.
+pub fn build_auth_url(opts: &AuthUrlOptions) -> String {
+    let base = if opts.login_with_claude_ai {
+        CLAUDE_AI_AUTHORIZE_URL
+    } else {
+        CONSOLE_AUTHORIZE_URL
+    };
+
+    let redirect_uri = if opts.is_manual {
+        MANUAL_REDIRECT_URL.to_string()
+    } else {
+        format!("http://localhost:{}/callback", opts.port)
+    };
+
+    let scopes = all_oauth_scopes().join(" ");
+
+    let mut url = url::Url::parse(base).expect("invalid base authorize URL");
+    // code=true tells the login page to show Claude Max upsell
+    url.query_pairs_mut()
+        .append_pair("code", "true")
+        .append_pair("client_id", CLIENT_ID)
+        .append_pair("response_type", "code")
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("scope", &scopes)
+        .append_pair("code_challenge", opts.code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", opts.state);
+
+    if let Some(org) = opts.org_uuid {
+        url.query_pairs_mut().append_pair("orgUUID", org);
+    }
+    if let Some(hint) = opts.login_hint {
+        url.query_pairs_mut().append_pair("login_hint", hint);
+    }
+    if let Some(method) = opts.login_method {
+        url.query_pairs_mut().append_pair("login_method", method);
+    }
+
+    url.to_string()
 }
 
 /// Build the JSON request body for the token exchange POST.
+///
+/// Matches the TS `exchangeCodeForTokens()` in `src/services/oauth/client.ts`.
 pub fn build_token_exchange_body(
     code: &str,
     redirect_uri: &str,
@@ -40,6 +141,24 @@ pub fn build_token_exchange_body(
         "client_id": CLIENT_ID,
         "code_verifier": code_verifier,
         "state": state,
+    })
+}
+
+/// Build the JSON body for a token refresh.
+///
+/// For Claude.ai subscribers, uses CLAUDE_AI_OAUTH_SCOPES (allows scope expansion).
+/// For Console users, uses the original scopes.
+pub fn build_token_refresh_body(refresh_token: &str, scopes: Option<&[String]>) -> serde_json::Value {
+    let scope_str = match scopes {
+        Some(s) if !s.is_empty() => s.join(" "),
+        _ => CLAUDE_AI_OAUTH_SCOPES.join(" "),
+    };
+
+    serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "scope": scope_str,
     })
 }
 
@@ -121,7 +240,7 @@ async fn exchange_code_for_tokens(
         .unwrap_or_default()
         .as_millis() as u64
         + expires_in * 1000;
-    let scopes = data["scope"]
+    let scopes: Vec<String> = data["scope"]
         .as_str()
         .unwrap_or("")
         .split_whitespace()
@@ -145,7 +264,15 @@ async fn exchange_code_for_tokens(
 /// 4. Wait for the callback and extract `code` + `state`
 /// 5. Exchange code for tokens
 /// 6. Store tokens
+///
+/// By default, opens the Console authorize URL (platform.claude.com).
+/// Pass `login_with_claude_ai = true` to use the Claude.ai authorize URL.
 pub async fn login() -> Result<()> {
+    login_with_options(true).await
+}
+
+/// Login with explicit Claude.ai vs Console selection.
+pub async fn login_with_options(login_with_claude_ai: bool) -> Result<()> {
     let verifier = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
     let state = generate_state();
@@ -155,11 +282,32 @@ pub async fn login() -> Result<()> {
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://localhost:{}/callback", port);
 
-    // Build auth URL
-    let auth_url = build_auth_url(CLIENT_ID, &redirect_uri, SCOPES, &challenge, &state);
+    // Build auth URL — the automatic flow uses localhost redirect
+    let auth_url = build_auth_url(&AuthUrlOptions {
+        code_challenge: &challenge,
+        state: &state,
+        port,
+        is_manual: false,
+        login_with_claude_ai,
+        org_uuid: None,
+        login_hint: None,
+        login_method: None,
+    });
 
-    println!("Opening browser for authentication...");
-    println!("If the browser doesn't open, visit: {}", auth_url);
+    // Also build the manual flow URL for display
+    let manual_url = build_auth_url(&AuthUrlOptions {
+        code_challenge: &challenge,
+        state: &state,
+        port,
+        is_manual: true,
+        login_with_claude_ai,
+        org_uuid: None,
+        login_hint: None,
+        login_method: None,
+    });
+
+    println!("Opening browser to sign in...");
+    println!("If the browser didn't open, visit: {}", manual_url);
     let _ = open::that(&auth_url);
 
     // Wait for the callback request
@@ -189,46 +337,211 @@ pub async fn login() -> Result<()> {
         anyhow::bail!("OAuth state mismatch: possible CSRF attack");
     }
 
-    // Send success response to browser before exchanging tokens
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h2>Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>";
+    // Determine success redirect URL based on granted scopes (will be updated after exchange)
+    // For now, redirect to the Claude.ai success page (same as TS handleSuccessRedirect)
+    let success_url = CLAUDEAI_SUCCESS_URL;
+    let response = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {}\r\n\r\n",
+        success_url
+    );
     let _ = stream.try_write(response.as_bytes());
     drop(stream);
 
     // Exchange authorization code for tokens
-    println!("Exchanging authorization code for tokens...");
     let tokens = exchange_code_for_tokens(&code, &redirect_uri, &verifier, &state).await?;
 
     // Store tokens
     store_tokens(&tokens).await?;
 
+    // For Console users (no user:inference scope), create an API key
+    if !is_claude_ai_auth(&tokens.scopes) {
+        tracing::info!("Console login detected — creating API key");
+        if let Err(e) = create_and_store_api_key(&tokens.access_token).await {
+            tracing::warn!("Failed to create API key: {}", e);
+        }
+    }
+
     println!("Login successful!");
     Ok(())
+}
+
+/// Create an API key via the Console OAuth endpoint (for Console users).
+///
+/// Matches the TS `createAndStoreApiKey()` in `src/services/oauth/client.ts`.
+async fn create_and_store_api_key(access_token: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(API_KEY_URL)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .context("API key creation request failed")?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("API key creation failed: {}", text);
+    }
+
+    let data: serde_json::Value = resp.json().await?;
+    let raw_key = data["raw_key"]
+        .as_str()
+        .context("No raw_key in API key response")?
+        .to_string();
+
+    Ok(raw_key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_build_auth_url_contains_required_params() {
-        let url = build_auth_url(
-            "test-client-id",
-            "http://localhost:12345/callback",
-            "scope1 scope2",
-            "test-challenge",
-            "test-state",
-        );
+    // ── Auth URL tests ───────────────────────────────────────────────────
 
-        assert!(url.starts_with(AUTHORIZE_URL));
-        assert!(url.contains("client_id=test-client-id"));
-        assert!(url.contains("response_type=code"));
-        assert!(url.contains("redirect_uri="));
-        assert!(url.contains("localhost%3A12345"));
-        assert!(url.contains("scope=scope1%20scope2"));
+    #[test]
+    fn test_build_auth_url_console_flow() {
+        let url = build_auth_url(&AuthUrlOptions {
+            code_challenge: "test-challenge",
+            state: "test-state",
+            port: 12345,
+            is_manual: false,
+            login_with_claude_ai: false,
+            org_uuid: None,
+            login_hint: None,
+            login_method: None,
+        });
+
+        // Console flow uses platform.claude.com
+        assert!(url.starts_with(CONSOLE_AUTHORIZE_URL), "URL should start with Console URL, got: {}", url);
+        assert!(url.contains("code=true"), "URL must include code=true param");
+        assert!(url.contains(&format!("client_id={}", CLIENT_ID)), "URL must include client_id");
+        assert!(url.contains("response_type=code"), "URL must include response_type=code");
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback"),
+            "URL must include localhost redirect_uri, got: {}", url);
         assert!(url.contains("code_challenge=test-challenge"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("state=test-state"));
     }
+
+    #[test]
+    fn test_build_auth_url_claudeai_flow() {
+        let url = build_auth_url(&AuthUrlOptions {
+            code_challenge: "test-challenge",
+            state: "test-state",
+            port: 12345,
+            is_manual: false,
+            login_with_claude_ai: true,
+            org_uuid: None,
+            login_hint: None,
+            login_method: None,
+        });
+
+        // Claude.ai flow uses claude.com/cai
+        assert!(url.starts_with(CLAUDE_AI_AUTHORIZE_URL), "URL should start with Claude.ai URL, got: {}", url);
+        assert!(url.contains("code=true"));
+    }
+
+    #[test]
+    fn test_build_auth_url_manual_flow_uses_manual_redirect() {
+        let url = build_auth_url(&AuthUrlOptions {
+            code_challenge: "ch",
+            state: "st",
+            port: 9999,
+            is_manual: true,
+            login_with_claude_ai: false,
+            org_uuid: None,
+            login_hint: None,
+            login_method: None,
+        });
+
+        // Manual flow redirect URI should be the platform callback URL, not localhost
+        let encoded_manual = urlencoding::encode(MANUAL_REDIRECT_URL);
+        assert!(url.contains(&format!("redirect_uri={}", encoded_manual)),
+            "Manual flow must use MANUAL_REDIRECT_URL, got: {}", url);
+    }
+
+    #[test]
+    fn test_build_auth_url_scopes_match_ts() {
+        let url = build_auth_url(&AuthUrlOptions {
+            code_challenge: "ch",
+            state: "st",
+            port: 8080,
+            is_manual: false,
+            login_with_claude_ai: false,
+            org_uuid: None,
+            login_hint: None,
+            login_method: None,
+        });
+
+        // ALL_OAUTH_SCOPES in TS: union of CONSOLE + CLAUDE_AI scopes
+        // The URL-encoded scope parameter uses `+` or `%20` for spaces and `%3A` for `:`.
+        // Parse the URL and check the decoded scope parameter.
+        let parsed = url::Url::parse(&url).unwrap();
+        let scope_param = parsed.query_pairs()
+            .find(|(k, _)| k == "scope")
+            .map(|(_, v)| v.to_string())
+            .unwrap();
+        let url_scopes: Vec<&str> = scope_param.split(' ').collect();
+        let expected_scopes = all_oauth_scopes();
+        for scope in &expected_scopes {
+            assert!(url_scopes.contains(scope), "URL must contain scope '{}', got scopes: {:?}", scope, url_scopes);
+        }
+        // Specifically check that org:create_api_key is present (NOT org:service_key_inference)
+        assert!(url_scopes.contains(&"org:create_api_key"), "Must contain org:create_api_key");
+        assert!(!url_scopes.contains(&"org:service_key_inference"), "Must NOT contain org:service_key_inference");
+    }
+
+    #[test]
+    fn test_build_auth_url_optional_params() {
+        let url = build_auth_url(&AuthUrlOptions {
+            code_challenge: "ch",
+            state: "st",
+            port: 8080,
+            is_manual: false,
+            login_with_claude_ai: false,
+            org_uuid: Some("org-123"),
+            login_hint: Some("user@example.com"),
+            login_method: Some("sso"),
+        });
+
+        assert!(url.contains("orgUUID=org-123"), "URL must contain orgUUID");
+        assert!(url.contains("login_hint=user%40example.com"), "URL must contain login_hint");
+        assert!(url.contains("login_method=sso"), "URL must contain login_method");
+    }
+
+    // ── Scope helpers ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_all_oauth_scopes_matches_ts() {
+        let scopes = all_oauth_scopes();
+        // TS ALL_OAUTH_SCOPES = Set([...CONSOLE_OAUTH_SCOPES, ...CLAUDE_AI_OAUTH_SCOPES])
+        // CONSOLE: org:create_api_key, user:profile
+        // CLAUDE_AI: user:profile, user:inference, user:sessions:claude_code, user:mcp_servers, user:file_upload
+        // Deduped union (preserving insertion order of Set):
+        //   org:create_api_key, user:profile, user:inference, user:sessions:claude_code, user:mcp_servers, user:file_upload
+        assert!(scopes.contains(&"org:create_api_key"));
+        assert!(scopes.contains(&"user:profile"));
+        assert!(scopes.contains(&"user:inference"));
+        assert!(scopes.contains(&"user:sessions:claude_code"));
+        assert!(scopes.contains(&"user:mcp_servers"));
+        assert!(scopes.contains(&"user:file_upload"));
+        assert_eq!(scopes.len(), 6, "Should have exactly 6 deduplicated scopes");
+    }
+
+    #[test]
+    fn test_is_claude_ai_auth() {
+        assert!(is_claude_ai_auth(&[
+            "user:profile".to_string(),
+            "user:inference".to_string(),
+        ]));
+        assert!(!is_claude_ai_auth(&[
+            "org:create_api_key".to_string(),
+            "user:profile".to_string(),
+        ]));
+        assert!(!is_claude_ai_auth(&[]));
+    }
+
+    // ── Token exchange body tests ────────────────────────────────────────
 
     #[test]
     fn test_build_token_exchange_body() {
@@ -246,6 +559,30 @@ mod tests {
         assert_eq!(body["code_verifier"], "verifier-xyz");
         assert_eq!(body["state"], "state-abc");
     }
+
+    #[test]
+    fn test_build_token_refresh_body_default_scopes() {
+        let body = build_token_refresh_body("rt_abc", None);
+
+        assert_eq!(body["grant_type"], "refresh_token");
+        assert_eq!(body["refresh_token"], "rt_abc");
+        assert_eq!(body["client_id"], CLIENT_ID);
+        // Default scopes should be CLAUDE_AI_OAUTH_SCOPES
+        let scope = body["scope"].as_str().unwrap();
+        assert!(scope.contains("user:inference"), "Default refresh should use Claude AI scopes");
+        assert!(scope.contains("user:profile"));
+    }
+
+    #[test]
+    fn test_build_token_refresh_body_custom_scopes() {
+        let scopes = vec!["org:create_api_key".to_string(), "user:profile".to_string()];
+        let body = build_token_refresh_body("rt_abc", Some(&scopes));
+
+        let scope = body["scope"].as_str().unwrap();
+        assert_eq!(scope, "org:create_api_key user:profile");
+    }
+
+    // ── Callback parsing tests ───────────────────────────────────────────
 
     #[test]
     fn test_parse_callback_params_valid() {
@@ -279,5 +616,18 @@ mod tests {
     fn test_parse_callback_params_invalid_request() {
         let line = "INVALID";
         assert!(parse_callback_params(line).is_err());
+    }
+
+    // ── Constants tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_constants_match_ts() {
+        assert_eq!(CLIENT_ID, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
+        assert_eq!(CONSOLE_AUTHORIZE_URL, "https://platform.claude.com/oauth/authorize");
+        assert_eq!(CLAUDE_AI_AUTHORIZE_URL, "https://claude.com/cai/oauth/authorize");
+        assert_eq!(TOKEN_URL, "https://platform.claude.com/v1/oauth/token");
+        assert_eq!(API_KEY_URL, "https://api.anthropic.com/api/oauth/claude_cli/create_api_key");
+        assert_eq!(MANUAL_REDIRECT_URL, "https://platform.claude.com/oauth/code/callback");
+        assert_eq!(OAUTH_BETA_HEADER, "oauth-2025-04-20");
     }
 }
