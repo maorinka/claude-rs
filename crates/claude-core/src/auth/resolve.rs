@@ -39,7 +39,7 @@ async fn refresh_oauth_token(refresh_token: &str) -> Result<String> {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": CLIENT_ID,
-            "scope": "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+            "scope": "user:profile user:inference user:cc_inference user:voice user:sessions:claude_code user:mcp_servers user:file_upload org:create_api_key org:service_key_inference",
         }))
         .timeout(std::time::Duration::from_secs(15))
         .send()

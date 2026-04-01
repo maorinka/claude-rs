@@ -5,7 +5,7 @@ use super::storage::{OAuthStoredTokens, store_tokens};
 const AUTHORIZE_URL: &str = "https://platform.claude.com/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+const SCOPES: &str = "user:profile user:inference user:cc_inference user:voice user:sessions:claude_code user:mcp_servers user:file_upload org:create_api_key org:service_key_inference";
 
 /// Build the OAuth authorization URL with PKCE parameters.
 pub fn build_auth_url(
