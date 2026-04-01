@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 pub fn build_default_registry() -> ToolRegistry {
     let mut reg = ToolRegistry::new();
-    reg.register(Arc::new(bash::BashTool));
+    reg.register(Arc::new(bash::BashTool::new()));
     reg.register(Arc::new(read::FileReadTool));
     reg.register(Arc::new(write::FileWriteTool));
     reg.register(Arc::new(edit::FileEditTool));

@@ -229,6 +229,156 @@ fn validate_incomplete_commands(ctx: &ValidationContext) -> SecurityBehavior {
     SecurityBehavior::Passthrough
 }
 
+/// Detect safe `git commit -m "message"` pattern and allow it early.
+/// Matches TS `validateGitCommit` from bashSecurity.ts.
+fn validate_git_commit(ctx: &ValidationContext) -> SecurityBehavior {
+    let cmd = &ctx.original_command;
+    if ctx.base_command != "git"
+        || !regex_lite::Regex::new(r"^git\s+commit\s+")
+            .unwrap()
+            .is_match(cmd)
+    {
+        return SecurityBehavior::Passthrough;
+    }
+    // Bail on backslashes (can desync quote detection)
+    if cmd.contains('\\') {
+        return SecurityBehavior::Passthrough;
+    }
+    // Find -m flag followed by quoted message. regex_lite does not support
+    // backreferences, so we manually find the quote char and its match.
+    let before_m = regex_lite::Regex::new(r"^git[ \t]+commit[ \t]+[^;&|`$<>()\n\r]*?-m[ \t]+")
+        .unwrap();
+    let m = match before_m.find(cmd) {
+        Some(m) => m,
+        None => return SecurityBehavior::Passthrough,
+    };
+    let after = &cmd[m.end()..];
+    if after.is_empty() {
+        return SecurityBehavior::Passthrough;
+    }
+    let quote_char = after.chars().next().unwrap();
+    if quote_char != '\'' && quote_char != '"' {
+        return SecurityBehavior::Passthrough;
+    }
+    // Find the matching closing quote
+    let inner = &after[1..];
+    let close_pos = match inner.find(quote_char) {
+        Some(p) => p,
+        None => return SecurityBehavior::Passthrough,
+    };
+    let msg_content = &inner[..close_pos];
+    let remainder = &inner[close_pos + 1..]; // after closing quote
+
+    // Double-quoted message with command substitution => ask
+    if quote_char == '"'
+        && regex_lite::Regex::new(r"\$\(|`|\$\{")
+            .unwrap()
+            .is_match(msg_content)
+    {
+        return SecurityBehavior::Ask(
+            "Git commit message contains command substitution patterns".into(),
+        );
+    }
+    // Shell metacharacters in remainder => passthrough for full validation
+    if !remainder.is_empty()
+        && regex_lite::Regex::new(r"[;|&()`]|\$\(|\$\{")
+            .unwrap()
+            .is_match(remainder)
+    {
+        return SecurityBehavior::Passthrough;
+    }
+    // Unquoted redirect operators in remainder => passthrough
+    if !remainder.is_empty() {
+        let mut unquoted = String::new();
+        let mut in_sq = false;
+        let mut in_dq = false;
+        for c in remainder.chars() {
+            if c == '\'' && !in_dq {
+                in_sq = !in_sq;
+                continue;
+            }
+            if c == '"' && !in_sq {
+                in_dq = !in_dq;
+                continue;
+            }
+            if !in_sq && !in_dq {
+                unquoted.push(c);
+            }
+        }
+        if unquoted.contains('<') || unquoted.contains('>') {
+            return SecurityBehavior::Passthrough;
+        }
+    }
+    // Message starting with dash => obfuscation
+    if msg_content.starts_with('-') {
+        return SecurityBehavior::Ask("Command contains quoted characters in flag names".into());
+    }
+    SecurityBehavior::Allow
+}
+
+/// Detect safe heredoc-in-substitution patterns: $(cat <<'EOF'...EOF)
+/// Matches TS `validateSafeCommandSubstitution` from bashSecurity.ts.
+fn validate_safe_command_substitution(ctx: &ValidationContext) -> SecurityBehavior {
+    let cmd = &ctx.original_command;
+    // Only applies to commands containing heredoc-in-substitution
+    if !regex_lite::Regex::new(r"\$\(.*<<").unwrap().is_match(cmd) {
+        return SecurityBehavior::Passthrough;
+    }
+    // Check for quoted/escaped delimiter pattern: $(cat <<'DELIM' or <<\DELIM
+    let re = regex_lite::Regex::new(r"\$\(cat[ \t]*<<-?[ \t]*(?:'+([A-Za-z_]\w*)'+|\\([A-Za-z_]\w*))").unwrap();
+    if !re.is_match(cmd) {
+        return SecurityBehavior::Passthrough;
+    }
+    // We found a safe heredoc pattern. For safety, just let it pass through
+    // to the full validator chain (fail-closed approach). The TS does more
+    // sophisticated line-based heredoc body stripping, which requires the
+    // tree-sitter parser. Without that, we conservatively passthrough.
+    SecurityBehavior::Passthrough
+}
+
+/// Detect malformed tokens (unbalanced delimiters) with command separators.
+/// Matches TS `validateMalformedTokenInjection` from bashSecurity.ts.
+fn validate_malformed_token_injection(ctx: &ValidationContext) -> SecurityBehavior {
+    let cmd = &ctx.original_command;
+    // Quick check: does the command contain separators?
+    let has_separator = cmd.contains(';') || cmd.contains("&&") || cmd.contains("||");
+    if !has_separator {
+        return SecurityBehavior::Passthrough;
+    }
+    // Check for unbalanced delimiters: count quotes, parens, braces, brackets
+    let mut sq_count = 0u32;
+    let mut dq_count = 0u32;
+    let mut paren_depth: i32 = 0;
+    let mut brace_depth: i32 = 0;
+    let mut bracket_depth: i32 = 0;
+    let mut escaped = false;
+    for ch in cmd.chars() {
+        if escaped { escaped = false; continue; }
+        if ch == '\\' { escaped = true; continue; }
+        match ch {
+            '\'' => sq_count += 1,
+            '"' => dq_count += 1,
+            '(' => paren_depth += 1,
+            ')' => paren_depth -= 1,
+            '{' => brace_depth += 1,
+            '}' => brace_depth -= 1,
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth -= 1,
+            _ => {}
+        }
+    }
+    // Odd quote counts or unbalanced delimiters with separators is suspicious
+    if (sq_count % 2 != 0 || dq_count % 2 != 0 || paren_depth != 0
+        || brace_depth != 0 || bracket_depth != 0)
+        && has_separator
+    {
+        return SecurityBehavior::Ask(
+            "Command contains ambiguous syntax with command separators".into(),
+        );
+    }
+    SecurityBehavior::Passthrough
+}
+
 fn validate_jq_command(ctx: &ValidationContext) -> SecurityBehavior {
     if ctx.base_command != "jq" { return SecurityBehavior::Passthrough; }
     if ctx.original_command.contains("system") && ctx.original_command.contains('(') {
@@ -601,10 +751,26 @@ pub fn validate_command_security(command: &str) -> SecurityBehavior {
         return SecurityBehavior::Ask("Command contains non-printable control characters".into());
     }
     let ctx = ValidationContext::new(command);
-    let early = validate_empty(&ctx);
-    if early != SecurityBehavior::Passthrough { return early; }
-    let early = validate_incomplete_commands(&ctx);
-    if early != SecurityBehavior::Passthrough { return early; }
+
+    // Early validators (can short-circuit with Allow)
+    let early_validators: Vec<fn(&ValidationContext) -> SecurityBehavior> = vec![
+        validate_empty,
+        validate_incomplete_commands,
+        validate_safe_command_substitution,
+        validate_git_commit,
+    ];
+    for v in &early_validators {
+        let r = v(&ctx);
+        match &r {
+            SecurityBehavior::Allow => {
+                // TS returns passthrough for early-allow to let the command
+                // proceed without further checks
+                return SecurityBehavior::Passthrough;
+            }
+            SecurityBehavior::Ask(_) => return r,
+            _ => {}
+        }
+    }
 
     // Misparsing validators (high priority)
     let misparsing: Vec<fn(&ValidationContext) -> SecurityBehavior> = vec![
@@ -614,6 +780,7 @@ pub fn validate_command_security(command: &str) -> SecurityBehavior {
         validate_dangerous_patterns, validate_backslash_escaped_whitespace,
         validate_backslash_escaped_operators, validate_unicode_whitespace,
         validate_mid_word_hash, validate_brace_expansion, validate_zsh_dangerous_commands,
+        validate_malformed_token_injection,
     ];
     for v in &misparsing {
         let r = v(&ctx);
@@ -820,11 +987,94 @@ mod tests {
     #[test] fn test_prefix() { assert_eq!(get_command_prefix("git commit -m 'x'"), Some("git commit".into())); assert_eq!(get_command_prefix("ls -la"), None); }
 
     #[test] fn test_sec_safe() { assert_eq!(validate_command_security("ls -la"), SecurityBehavior::Passthrough); }
-    #[test] fn test_sec_empty() { assert_eq!(validate_command_security(""), SecurityBehavior::Allow); }
+    // Empty commands get Allow from validate_empty, which the chain maps to Passthrough
+    #[test] fn test_sec_empty() { assert_eq!(validate_command_security(""), SecurityBehavior::Passthrough); }
     #[test] fn test_sec_control() { assert!(matches!(validate_command_security("echo \x01w"), SecurityBehavior::Ask(_))); }
     #[test] fn test_sec_backtick() { assert!(matches!(validate_command_security("echo `id`"), SecurityBehavior::Ask(_))); }
     #[test] fn test_sec_dollar() { assert!(matches!(validate_command_security("echo $(whoami)"), SecurityBehavior::Ask(_))); }
 
     #[test] fn test_unescaped_bt() { assert!(has_unescaped_char("test `d`", '`')); assert!(!has_unescaped_char("test \\`s\\`", '`')); }
     #[test] fn test_escaped_pos() { assert!(is_escaped_at_position(b"x\\{y", 2)); assert!(!is_escaped_at_position(b"x\\\\{y", 4)); }
+
+    // -- Git commit early-allow --
+    #[test] fn test_git_commit_simple_allow() {
+        // Simple git commit should be allowed early
+        assert_eq!(
+            validate_git_commit(&ValidationContext::new("git commit -m 'fix typo'")),
+            SecurityBehavior::Allow
+        );
+    }
+    #[test] fn test_git_commit_dq_allow() {
+        assert_eq!(
+            validate_git_commit(&ValidationContext::new("git commit -m \"fix bug\"")),
+            SecurityBehavior::Allow
+        );
+    }
+    #[test] fn test_git_commit_cmd_sub_ask() {
+        assert!(matches!(
+            validate_git_commit(&ValidationContext::new("git commit -m \"$(evil)\"")),
+            SecurityBehavior::Ask(_)
+        ));
+    }
+    #[test] fn test_git_commit_backslash_passthrough() {
+        // Backslashes in git commit should passthrough for full validation
+        assert_eq!(
+            validate_git_commit(&ValidationContext::new("git commit -m 'test\\msg'")),
+            SecurityBehavior::Passthrough
+        );
+    }
+    #[test] fn test_git_commit_semicolon_passthrough() {
+        // Remainder with metacharacters should passthrough
+        assert_eq!(
+            validate_git_commit(&ValidationContext::new("git commit -m 'x'; evil")),
+            SecurityBehavior::Passthrough
+        );
+    }
+    #[test] fn test_git_commit_not_git() {
+        assert_eq!(
+            validate_git_commit(&ValidationContext::new("echo hello")),
+            SecurityBehavior::Passthrough
+        );
+    }
+
+    // -- Malformed token injection --
+    #[test] fn test_malformed_balanced() {
+        assert_eq!(
+            validate_malformed_token_injection(&ValidationContext::new("echo 'hello'; echo 'world'")),
+            SecurityBehavior::Passthrough
+        );
+    }
+    #[test] fn test_malformed_unbalanced() {
+        // Unbalanced parens with separator
+        assert!(matches!(
+            validate_malformed_token_injection(&ValidationContext::new("echo (hi; evil")),
+            SecurityBehavior::Ask(_)
+        ));
+    }
+    #[test] fn test_malformed_unbalanced_quotes() {
+        // Odd number of quotes with separator
+        assert!(matches!(
+            validate_malformed_token_injection(&ValidationContext::new("echo 'hi; evil")),
+            SecurityBehavior::Ask(_)
+        ));
+    }
+    #[test] fn test_malformed_no_separator() {
+        // Without separator, even unbalanced is OK (no injection vector)
+        assert_eq!(
+            validate_malformed_token_injection(&ValidationContext::new("echo (hi")),
+            SecurityBehavior::Passthrough
+        );
+    }
+
+    // -- Full chain includes new validators --
+    #[test] fn test_sec_git_commit_allowed() {
+        // git commit -m 'msg' should pass all security checks
+        assert_eq!(validate_command_security("git commit -m 'fix typo'"), SecurityBehavior::Passthrough);
+    }
+    #[test] fn test_sec_malformed_caught() {
+        assert!(matches!(
+            validate_command_security("echo (hi; evil"),
+            SecurityBehavior::Ask(_)
+        ));
+    }
 }
