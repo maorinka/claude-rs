@@ -1,20 +1,21 @@
 pub mod types;
+pub mod vcr;
+pub mod analytics;
 pub mod api;
 pub mod auth;
 pub mod bridge;
 pub mod config;
 pub mod context;
-<<<<<<< HEAD
 pub mod file_history;
-pub mod mcp;
-=======
 pub mod lsp;
->>>>>>> worktree-agent-ab49e999
+pub mod mcp;
 pub mod permissions;
 pub mod plugins;
 pub mod query;
+pub mod remote;
 pub mod session;
 pub mod compact;
 pub mod commands;
 pub mod hooks;
 pub mod cost;
+pub mod teams;
