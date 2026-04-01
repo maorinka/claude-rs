@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use crate::sandbox::types::SandboxSettings;
 
 /// A single permission rule referencing a tool, with an optional glob pattern.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -64,6 +65,10 @@ pub struct Settings {
     /// Matches the TS `mcpServers` key in `~/.claude/settings.json`.
     #[serde(default, rename = "mcpServers", skip_serializing_if = "HashMap::is_empty")]
     pub mcp_servers: HashMap<String, McpServerSettingsEntry>,
+
+    /// Sandbox configuration for isolated bash command execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxSettings>,
 }
 
 impl Settings {
@@ -104,6 +109,7 @@ impl Settings {
                 },
             },
             mcp_servers: merged_mcp,
+            sandbox: overlay.sandbox.clone().or_else(|| self.sandbox.clone()),
         }
     }
 }

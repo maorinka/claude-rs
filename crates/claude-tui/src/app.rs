@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
+    KeyModifiers, MouseEvent, MouseEventKind,
+};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
@@ -566,6 +569,11 @@ impl App {
                                 self.message_list.scroll_down(1);
                                 continue;
                             }
+                            // Ctrl+O: toggle thinking block visibility (matches TS)
+                            (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
+                                self.message_list.toggle_thinking();
+                                continue;
+                            }
                             _ => {}
                         }
 
@@ -964,7 +972,12 @@ impl App {
 
         // Cleanup
         terminal::disable_raw_mode()?;
-        execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
+        execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            cursor::Show
+        )?;
         Ok(())
     }
 
@@ -1116,9 +1129,25 @@ impl App {
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => self.should_quit = true,
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => self.should_quit = true,
+            (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
+                self.message_list.toggle_thinking();
+            }
             _ => {
                 self.prompt.handle_key(key);
             }
+        }
+    }
+
+    /// Handle mouse events (scroll wheel).
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.message_list.scroll_up(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.message_list.scroll_down(3);
+            }
+            _ => {}
         }
     }
 
@@ -1358,7 +1387,12 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            cursor::Show
+        );
     }
 }
 

@@ -5,3 +5,5 @@ pub mod input;
 pub mod theme;
 pub mod markdown;
 pub mod syntax;
+pub mod ansi;
+pub mod links;

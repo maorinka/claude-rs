@@ -19,7 +19,7 @@ fn tmpdir() -> PathBuf {
 
 #[tokio::test]
 async fn test_bash_echo() {
-    let tool = BashTool;
+    let tool = BashTool::new();
     let ctx = make_ctx(tmpdir());
     let cancel = CancellationToken::new();
     let input = json!({ "command": "echo hello" });
@@ -33,7 +33,7 @@ async fn test_bash_echo() {
 
 #[tokio::test]
 async fn test_bash_exit_code() {
-    let tool = BashTool;
+    let tool = BashTool::new();
     let ctx = make_ctx(tmpdir());
     let cancel = CancellationToken::new();
     let input = json!({ "command": "exit 42" });
@@ -45,7 +45,7 @@ async fn test_bash_exit_code() {
 
 #[tokio::test]
 async fn test_bash_stderr() {
-    let tool = BashTool;
+    let tool = BashTool::new();
     let ctx = make_ctx(tmpdir());
     let cancel = CancellationToken::new();
     let input = json!({ "command": "echo oops >&2" });
@@ -57,7 +57,7 @@ async fn test_bash_stderr() {
 
 #[tokio::test]
 async fn test_bash_cwd() {
-    let tool = BashTool;
+    let tool = BashTool::new();
     let working_dir = tmpdir();
     let ctx = make_ctx(working_dir.clone());
     let cancel = CancellationToken::new();
@@ -73,7 +73,7 @@ async fn test_bash_cwd() {
 
 #[tokio::test]
 async fn test_bash_cancellation() {
-    let tool = BashTool;
+    let tool = BashTool::new();
     let ctx = make_ctx(tmpdir());
     let cancel = CancellationToken::new();
     // Cancel before running

@@ -59,7 +59,22 @@ impl CommandHandler for HelpHandler {
              /copy          - Copy last response to clipboard\n\
              /pr-comments   - Analyze PR comments\n\
              /proactive     - Enable proactive mode\n\
-             /ultrareview   - Deep code review"
+             /ultrareview   - Deep code review\n\
+             /share         - Share conversation as markdown\n\
+             /usage         - Detailed token usage breakdown\n\
+             /rename        - Rename current session\n\
+             /add-dir       - Add working directories\n\
+             /keybindings   - Show keyboard shortcuts\n\
+             /reload-plugins - Reload plugin directory\n\
+             /release-notes - Show release notes\n\
+             /color         - Set session color\n\
+             /sandbox       - Toggle sandbox mode\n\
+             /output-style  - (deprecated) Use /config\n\
+             /commit-push-pr - Commit, push, and create PR\n\
+             /security-review - Security review of branch\n\
+             /ultraplan     - Ultra-detailed planning mode\n\
+             /thinkback     - Replay reasoning process\n\
+             /insights      - Usage insights report"
                 .to_string(),
         ))
     }

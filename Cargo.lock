@@ -310,9 +310,11 @@ name = "claude-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "claude-core",
  "claude-tools",
  "crossterm",
+ "dirs",
  "ratatui",
  "serde",
  "serde_json",

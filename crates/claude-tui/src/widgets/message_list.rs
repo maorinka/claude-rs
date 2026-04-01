@@ -4,6 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::ansi::parse_ansi;
+use crate::links;
 use crate::markdown::render_markdown;
 use crate::widgets::diff_view;
 
@@ -21,8 +23,9 @@ pub struct MessageList {
     messages: Vec<MessageEntry>,
     scroll_offset: usize,
     sticky_bottom: bool,
+    /// Whether thinking blocks are visible (toggled with Ctrl+O).
+    show_thinking: bool,
     /// Cached rendered heights per message (invalidated on push/clear).
-    /// Each entry is the number of rendered lines for that message.
     height_cache: Vec<Option<usize>>,
 }
 
@@ -32,13 +35,14 @@ impl MessageList {
             messages: Vec::new(),
             scroll_offset: 0,
             sticky_bottom: true,
+            show_thinking: false,
             height_cache: Vec::new(),
         }
     }
 
     pub fn push(&mut self, msg: MessageEntry) {
         self.messages.push(msg);
-        self.height_cache.push(None); // Invalidate for new message
+        self.height_cache.push(None);
         if self.sticky_bottom {
             // Auto-scroll will be handled in render
         }
@@ -46,42 +50,34 @@ impl MessageList {
 
     pub fn messages(&self) -> &[MessageEntry] { &self.messages }
     pub fn messages_mut(&mut self) -> &mut Vec<MessageEntry> {
-        // Invalidate all cached heights when messages are mutated
         self.height_cache.iter_mut().for_each(|h| *h = None);
         &mut self.messages
     }
     pub fn len(&self) -> usize { self.messages.len() }
     pub fn is_empty(&self) -> bool { self.messages.is_empty() }
 
-    /// Scroll up by N lines (smooth line-level scrolling).
     pub fn scroll_up(&mut self, lines: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
         self.sticky_bottom = false;
     }
 
-    /// Scroll down by N lines (smooth line-level scrolling).
     pub fn scroll_down(&mut self, lines: usize) {
         self.scroll_offset += lines;
-        // sticky_bottom re-enabled in render if at bottom
     }
 
-    /// Scroll up by a full page (viewport height).
     pub fn page_up(&mut self, viewport_height: usize) {
-        self.scroll_up(viewport_height.saturating_sub(2)); // Keep 2 lines overlap
+        self.scroll_up(viewport_height.saturating_sub(2));
     }
 
-    /// Scroll down by a full page (viewport height).
     pub fn page_down(&mut self, viewport_height: usize) {
         self.scroll_down(viewport_height.saturating_sub(2));
     }
 
-    /// Jump to the very top of the message list.
     pub fn scroll_to_top(&mut self) {
         self.scroll_offset = 0;
         self.sticky_bottom = false;
     }
 
-    /// Jump to the very bottom (re-enable sticky bottom).
     pub fn scroll_to_bottom(&mut self) {
         self.sticky_bottom = true;
     }
@@ -93,29 +89,87 @@ impl MessageList {
         self.sticky_bottom = true;
     }
 
-    /// Whether the view is currently pinned to the bottom.
     pub fn is_at_bottom(&self) -> bool {
         self.sticky_bottom
+    }
+
+    /// Toggle visibility of thinking blocks (Ctrl+O).
+    pub fn toggle_thinking(&mut self) {
+        self.show_thinking = !self.show_thinking;
+        self.height_cache.iter_mut().for_each(|h| *h = None);
+    }
+
+    /// Whether thinking blocks are currently visible.
+    pub fn show_thinking(&self) -> bool {
+        self.show_thinking
     }
 }
 
 pub struct MessageListWidget<'a> {
     list: &'a MessageList,
+    show_thinking: bool,
 }
 
 impl<'a> MessageListWidget<'a> {
-    pub fn new(list: &'a MessageList) -> Self { Self { list } }
+    pub fn new(list: &'a MessageList) -> Self {
+        Self {
+            show_thinking: list.show_thinking,
+            list,
+        }
+    }
 }
 
-/// Detect if text looks like a unified diff (starts with common diff markers).
 fn looks_like_diff(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("--- ") || trimmed.starts_with("diff --git")
 }
 
-/// Render a single message into lines. This is the function used both for
-/// display and for height estimation, ensuring consistency.
-fn render_message(msg: &MessageEntry, width: u16) -> Vec<Line<'static>> {
+fn contains_ansi(text: &str) -> bool {
+    text.contains('\x1b')
+}
+
+fn render_tool_output_line(line_text: &str) -> Line<'static> {
+    if contains_ansi(line_text) {
+        let mut spans = vec![Span::raw("    ".to_string())];
+        spans.extend(parse_ansi(line_text));
+        Line::from(spans)
+    } else {
+        let paths = links::find_file_paths(line_text);
+        if paths.is_empty() {
+            Line::from(Span::styled(
+                format!("    {}", line_text),
+                Style::default().fg(Color::DarkGray),
+            ))
+        } else {
+            let mut spans: Vec<Span<'static>> = vec![Span::raw("    ".to_string())];
+            let mut last_end = 0;
+            for (start, end) in &paths {
+                if *start > last_end {
+                    spans.push(Span::styled(
+                        line_text[last_end..*start].to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                spans.push(Span::styled(
+                    line_text[*start..*end].to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+                last_end = *end;
+            }
+            if last_end < line_text.len() {
+                spans.push(Span::styled(
+                    line_text[last_end..].to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        }
+    }
+}
+
+fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     match msg {
@@ -148,7 +202,6 @@ fn render_message(msg: &MessageEntry, width: u16) -> Vec<Line<'static>> {
                         .add_modifier(Modifier::BOLD),
                 ),
             ]));
-            // Use markdown rendering with syntax highlighting
             let md_lines = render_markdown(text);
             for md_line in md_lines {
                 let mut spans = vec![Span::raw(" ")];
@@ -184,7 +237,6 @@ fn render_message(msg: &MessageEntry, width: u16) -> Vec<Line<'static>> {
                 ),
             ]));
 
-            // If the output looks like a diff, render it with diff styling
             if looks_like_diff(output) {
                 let diff_lines = diff_view::diff_to_lines(output, width.saturating_sub(4));
                 for dl in diff_lines {
@@ -193,13 +245,9 @@ fn render_message(msg: &MessageEntry, width: u16) -> Vec<Line<'static>> {
                     lines.push(Line::from(spans));
                 }
             } else {
-                // Show a few lines of output in muted style
                 let max_preview_lines = 6;
                 for line in output.lines().take(max_preview_lines) {
-                    lines.push(Line::from(Span::styled(
-                        format!("    {}", line),
-                        Style::default().fg(Color::DarkGray),
-                    )));
+                    lines.push(render_tool_output_line(line));
                 }
                 let output_line_count = output.lines().count();
                 if output_line_count > max_preview_lines {
@@ -211,24 +259,40 @@ fn render_message(msg: &MessageEntry, width: u16) -> Vec<Line<'static>> {
             }
         }
         MessageEntry::Thinking { text } => {
-            let preview = if text.len() > 100 {
-                format!("{}...", &text[..97])
+            if show_thinking {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "\u{2234} Thinking\u{2026}".to_string(),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+                for line in text.lines() {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
             } else {
-                text.clone()
-            };
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    "thinking",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Span::styled(
-                    format!(" {}", preview),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "\u{2234} Thinking".to_string(),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                    Span::styled(
+                        " (ctrl+o to expand)".to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
         }
         MessageEntry::System { text } => {
             lines.push(Line::from(vec![
@@ -249,14 +313,11 @@ impl<'a> Widget for MessageListWidget<'a> {
         if area.height == 0 { return; }
 
         let visible_height = area.height as usize;
+        let show_thinking = self.show_thinking;
 
-        // Virtual scrolling: render all messages into lines.
-        // For truly large histories we could do lazy rendering, but
-        // the line rendering is fast enough for typical sessions.
-        // The key improvement is smooth line-level scrolling + page/home/end.
         let mut all_lines: Vec<Line> = Vec::new();
         for msg in &self.list.messages {
-            let msg_lines = render_message(msg, area.width);
+            let msg_lines = render_message(msg, area.width, show_thinking);
             all_lines.extend(msg_lines);
         }
 
