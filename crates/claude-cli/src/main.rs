@@ -259,14 +259,33 @@ async fn main() -> Result<()> {
         query_engine.set_max_turns(max);
     }
 
-    // Handle --resume: load transcript from a previous session
-    if let Some(ref session_id) = cli.resume {
-        let session_mgr = claude_core::session::manager::SessionManager::resume(session_id)?;
+    // Handle --resume: load transcript from a previous session.
+    // Supports `--resume <session-id>` or `--resume last` to pick the most recent.
+    if let Some(ref session_id_raw) = cli.resume {
+        let resolved_id = if session_id_raw.eq_ignore_ascii_case("last") {
+            // Find the most recent session by modification time
+            let sessions = claude_core::session::manager::SessionManager::list_sessions()?;
+            match sessions.first() {
+                Some(info) => {
+                    tracing::info!("Resolved --resume last to session '{}'", info.id);
+                    info.id.clone()
+                }
+                None => {
+                    eprintln!("No previous sessions found to resume.");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            session_id_raw.clone()
+        };
+
+        let session_mgr = claude_core::session::manager::SessionManager::resume(&resolved_id)?;
         let transcript = session_mgr.storage().load_transcript()?;
         if transcript.is_empty() {
-            eprintln!("Warning: session '{}' has no transcript to resume", session_id);
+            eprintln!("Warning: session '{}' has no transcript to resume", resolved_id);
         } else {
-            tracing::info!("Resuming session '{}' with {} messages", session_id, transcript.len());
+            tracing::info!("Resuming session '{}' with {} messages", resolved_id, transcript.len());
+            eprintln!("Resuming session {} ({} messages)", resolved_id, transcript.len());
             query_engine.load_messages(transcript);
         }
     }

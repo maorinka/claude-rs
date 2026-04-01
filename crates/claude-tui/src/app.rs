@@ -20,9 +20,12 @@ use claude_core::types::events::{StreamEvent, ToolResultData};
 use claude_tools::{ToolRegistry, ToolUseContext};
 
 use claude_core::commands::builtin::build_default_commands;
-use claude_core::commands::registry::{CommandContext, CommandRegistry, CommandResult};
+use claude_core::commands::registry::{CommandContext, CommandRegistry, CommandResult, SharedCommandState};
+use claude_core::cost::tracker::CostTracker;
 use claude_core::plugins::skill;
 use claude_core::plugins::types::Skill;
+
+use std::sync::{Arc, Mutex};
 
 use crate::theme::{detect_theme, Theme};
 use crate::widgets::ask_user_dialog::AskUserDialog;
@@ -86,12 +89,16 @@ pub struct App {
     model_name: String,
     /// Running total of tokens used in this session
     total_tokens: u64,
+    /// Cost tracker for the session -- accumulates usage from StreamEvent::UsageUpdate
+    cost_tracker: CostTracker,
     /// Command picker overlay (shown on `/` at start of input)
     command_picker: CommandPicker,
     /// Command registry for slash commands
     command_registry: CommandRegistry,
     /// Discovered skills
     skills: Vec<Skill>,
+    /// Shared mutable state for slash commands (persistent across calls)
+    shared_state: Arc<Mutex<SharedCommandState>>,
 }
 
 impl App {
@@ -111,15 +118,35 @@ impl App {
             engine_busy: false,
             model_name: "claude-sonnet-4-6".to_string(),
             total_tokens: 0,
+            cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
             command_registry,
             skills: Vec::new(),
+            shared_state: Arc::new(Mutex::new(SharedCommandState::default())),
         })
     }
 
-    /// Set the model name displayed in the header.
+    /// Set the model name displayed in the header and cost tracker.
     pub fn set_model_name(&mut self, name: &str) {
         self.model_name = name.to_string();
+        self.cost_tracker = CostTracker::new(name);
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.model = name.to_string();
+        }
+    }
+
+    /// Set the permission mode name for slash command display.
+    pub fn set_permission_mode(&mut self, mode: &str) {
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.permission_mode = mode.to_string();
+        }
+    }
+
+    /// Set the session ID for slash command display.
+    pub fn set_session_id(&mut self, id: &str) {
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.session_id = id.to_string();
+        }
     }
 
     /// Set discovered skills for the command picker.
@@ -171,12 +198,42 @@ impl App {
 
         // Check command registry first
         if let Some(cmd) = self.command_registry.get(cmd_name) {
+            // Sync shared state with current app state before executing
+            if let Ok(mut state) = self.shared_state.lock() {
+                state.cost_summary = self.cost_tracker.detailed_summary();
+                state.model = self.model_name.clone();
+                state.total_tokens = self.total_tokens;
+                state.request_count = self.cost_tracker.request_count();
+                state.total_cost_usd = self.cost_tracker.total_cost_usd();
+                state.message_count = self.message_list.messages().len();
+            }
+
             let ctx = CommandContext {
                 working_directory: std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::from(".")),
                 model: self.model_name.clone(),
+                shared: Some(self.shared_state.clone()),
             };
-            match cmd.handler.execute(args, &ctx) {
+            let result = cmd.handler.execute(args, &ctx);
+
+            // React to state mutations made by the command
+            if let Ok(state) = self.shared_state.lock() {
+                // Model change
+                if state.model != self.model_name {
+                    self.model_name = state.model.clone();
+                    self.cost_tracker = CostTracker::new(&state.model);
+                }
+                // Theme change
+                if state.dark_theme != (matches!(self.theme.fg, ratatui::style::Color::White)) {
+                    self.theme = if state.dark_theme {
+                        crate::theme::dark_theme()
+                    } else {
+                        crate::theme::light_theme()
+                    };
+                }
+            }
+
+            match result {
                 Ok(CommandResult::Message(text)) => {
                     return Some(CommandAction::Prompt(text));
                 }
@@ -341,6 +398,20 @@ impl App {
             claude_tools::registry::ReadFileState::new(),
         ));
 
+        // Set permission mode in shared state
+        {
+            let mode_str = match &permission_mode {
+                PermissionMode::Bypass => "bypass",
+                PermissionMode::InteractiveOnly => "interactive-only",
+                PermissionMode::Default => "default",
+            };
+            if let Ok(mut state) = self.shared_state.lock() {
+                state.permission_mode = mode_str.to_string();
+                // Detect initial theme from current app state
+                state.dark_theme = matches!(self.theme.fg, ratatui::style::Color::White);
+            }
+        }
+
         let perm_ctx = ToolPermissionContext {
             mode: permission_mode,
             ..Default::default()
@@ -484,6 +555,29 @@ impl App {
                                 self.message_list.push(MessageEntry::System {
                                     text: output,
                                 });
+
+                                // Handle side effects from stateful commands
+                                if let Ok(mut state) = self.shared_state.lock() {
+                                    if state.clear_requested {
+                                        state.clear_requested = false;
+                                        engine.load_messages(Vec::new());
+                                        self.message_list = MessageList::new();
+                                        self.total_tokens = 0;
+                                        self.cost_tracker = CostTracker::new(&self.model_name);
+                                        self.message_list.push(MessageEntry::System {
+                                            text: "Conversation history cleared.".to_string(),
+                                        });
+                                    }
+                                    if state.fork_requested {
+                                        state.fork_requested = false;
+                                        // Fork: create a new session storage with a copy
+                                        // of current messages. The engine continues with
+                                        // its existing message history.
+                                    }
+                                    // Sync brief mode with the tool global state
+                                    claude_tools::brief_tool::set_brief_mode(state.brief_mode);
+                                }
+
                                 continue;
                             }
                             Some(CommandAction::Prompt(prompt_text)) => {
@@ -953,9 +1047,16 @@ impl App {
             StreamEvent::Done { stop_reason: _ } => {
                 self.spinner.stop();
             }
-            StreamEvent::UsageUpdate(usage) => {
+            StreamEvent::UsageUpdate(ref usage) => {
                 self.spinner.tokens = usage.output_tokens;
                 self.total_tokens = self.total_tokens.saturating_add(usage.output_tokens);
+                self.cost_tracker.add_usage(usage);
+                // Sync shared state for slash commands
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.total_tokens = self.total_tokens;
+                    state.request_count = self.cost_tracker.request_count();
+                    state.total_cost_usd = self.cost_tracker.total_cost_usd();
+                }
             }
             StreamEvent::RequestStart { request_id: _ } => {
                 self.spinner.start(SpinnerMode::Thinking);
@@ -988,7 +1089,7 @@ impl App {
         let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
         let model_name = &self.model_name;
-        let total_tokens = self.total_tokens;
+        let cost_header = self.cost_tracker.header_display();
 
         self.terminal.draw(|frame| {
             let area = frame.area();
@@ -1012,12 +1113,8 @@ impl App {
                 .style(ratatui::style::Style::default().fg(theme.border));
             frame.render_widget(top_border, chunks[0]);
 
-            // Header: "Claude Code (Rust) | model: ... | N tokens"
-            let token_str = if total_tokens > 0 {
-                format!("{} tokens", total_tokens)
-            } else {
-                "0 tokens".to_string()
-            };
+            // Header: "Claude Code (Rust) | model: ... | 42.1k tokens | $0.0312"
+            let token_str = cost_header.clone();
             let header = Paragraph::new(ratatui::text::Line::from(vec![
                 ratatui::text::Span::styled(
                     " Claude Code (Rust)",

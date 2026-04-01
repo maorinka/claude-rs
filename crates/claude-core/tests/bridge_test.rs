@@ -1,5 +1,5 @@
 use claude_core::bridge::protocol::{BridgeError, BridgeRequest, BridgeResponse};
-use claude_core::bridge::server::{BridgeServer, dispatch_request};
+use claude_core::bridge::server::{BridgeServer, BridgeState, dispatch_request, dispatch_request_stateless};
 use claude_core::bridge::types::{
     BridgeConfig, BridgeMessage, IdeType, SessionInfo, SessionState,
 };
@@ -244,7 +244,7 @@ fn dispatch_ping() {
         method: "ping".into(),
         params: serde_json::Value::Null,
     };
-    let resp = dispatch_request(&req);
+    let resp = dispatch_request_stateless(&req);
     assert_eq!(resp.id, "1");
     let result = resp.result.unwrap();
     assert_eq!(result["pong"], true);
@@ -258,7 +258,7 @@ fn dispatch_status() {
         method: "status".into(),
         params: serde_json::Value::Null,
     };
-    let resp = dispatch_request(&req);
+    let resp = dispatch_request_stateless(&req);
     assert_eq!(resp.id, "2");
     let result = resp.result.unwrap();
     assert_eq!(result["state"], "ready");
@@ -271,7 +271,7 @@ fn dispatch_unknown_method() {
         method: "nonexistent".into(),
         params: serde_json::Value::Null,
     };
-    let resp = dispatch_request(&req);
+    let resp = dispatch_request_stateless(&req);
     assert_eq!(resp.id, "3");
     assert!(resp.result.is_none());
     let err = resp.error.unwrap();

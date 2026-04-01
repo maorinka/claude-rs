@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 pub enum CommandType {
@@ -17,9 +18,77 @@ pub trait CommandHandler: Send + Sync {
     fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult>;
 }
 
+/// Shared mutable state that slash commands can read and write.
+/// Wrapped in `Arc<Mutex<...>>` so multiple subsystems (TUI, engine, commands)
+/// can share it.
+#[derive(Clone, Debug)]
+pub struct SharedCommandState {
+    /// Current model name (read/write by /model)
+    pub model: String,
+    /// Running total of tokens used in this session
+    pub total_tokens: u64,
+    /// Number of messages in the conversation
+    pub message_count: usize,
+    /// Session start time
+    pub session_start: std::time::Instant,
+    /// Current session ID
+    pub session_id: String,
+    /// Permission mode name
+    pub permission_mode: String,
+    /// Cost tracker summary (refreshed by the TUI after each turn)
+    pub cost_summary: String,
+    /// Total API requests made
+    pub request_count: u32,
+    /// Total cost in USD
+    pub total_cost_usd: f64,
+    /// Whether fast mode is enabled
+    pub fast_mode: bool,
+    /// Whether verbose mode is enabled
+    pub verbose_mode: bool,
+    /// Whether brief mode is enabled
+    pub brief_mode: bool,
+    /// Effort level: "low", "medium", or "high"
+    pub effort_level: String,
+    /// Whether the current theme is dark (true) or light (false)
+    pub dark_theme: bool,
+    /// Context window size in tokens
+    pub context_window: u64,
+    /// Whether conversation was cleared (signal to the TUI)
+    pub clear_requested: bool,
+    /// Whether a fork was requested (signal to the TUI)
+    pub fork_requested: bool,
+}
+
+impl Default for SharedCommandState {
+    fn default() -> Self {
+        Self {
+            model: "claude-sonnet-4-6".to_string(),
+            total_tokens: 0,
+            message_count: 0,
+            session_start: std::time::Instant::now(),
+            session_id: String::new(),
+            permission_mode: "default".to_string(),
+            cost_summary: String::new(),
+            request_count: 0,
+            total_cost_usd: 0.0,
+            fast_mode: false,
+            verbose_mode: false,
+            brief_mode: false,
+            effort_level: "medium".to_string(),
+            dark_theme: true,
+            context_window: 200_000,
+            clear_requested: false,
+            fork_requested: false,
+        }
+    }
+}
+
 pub struct CommandContext {
     pub working_directory: std::path::PathBuf,
     pub model: String,
+    /// Shared mutable state accessible to all commands.
+    /// `None` in legacy / test contexts; `Some(...)` when wired to a live session.
+    pub shared: Option<Arc<Mutex<SharedCommandState>>>,
 }
 
 pub enum CommandResult {

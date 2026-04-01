@@ -892,16 +892,36 @@ impl McpClient {
         debug!(server = self.name, "MCP server disconnected");
     }
 
-    /// Check if the MCP server process is still running.
+    /// Check if the MCP server connection is still active.
+    ///
+    /// For stdio transport, checks if the child process is running.
+    /// For SSE/HTTP transports, checks if the reader task is still alive.
     pub fn is_alive(&mut self) -> bool {
-        if let Some(ref mut child) = self.process {
-            match child.try_wait() {
-                Ok(Some(_)) => false, // Process has exited
-                Ok(None) => true,     // Still running
-                Err(_) => false,      // Error checking status
+        match &self.transport {
+            McpTransport::Stdio => {
+                if let Some(ref mut child) = self.process {
+                    match child.try_wait() {
+                        Ok(Some(_)) => false, // Process has exited
+                        Ok(None) => true,     // Still running
+                        Err(_) => false,      // Error checking status
+                    }
+                } else {
+                    false
+                }
             }
-        } else {
-            false
+            McpTransport::Sse { .. } => {
+                // SSE is alive if the reader task hasn't finished
+                if let Some(ref handle) = self.reader_handle {
+                    !handle.is_finished()
+                } else {
+                    false
+                }
+            }
+            McpTransport::Http { .. } => {
+                // HTTP transport is stateless -- always "alive" as long as
+                // we have the URL configured
+                true
+            }
         }
     }
 }

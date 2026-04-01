@@ -264,6 +264,7 @@ fn test_help_command_flow() {
     let ctx = CommandContext {
         working_directory: std::path::PathBuf::from("/tmp"),
         model: "claude-sonnet-4-6".to_string(),
+        shared: None,
     };
 
     let result = cmd.handler.execute("", &ctx).unwrap();
@@ -284,6 +285,7 @@ fn test_slash_command_search_and_execute() {
     let ctx = CommandContext {
         working_directory: std::path::PathBuf::from("/tmp"),
         model: "test-model".to_string(),
+        shared: None,
     };
 
     // Search should find "model"
@@ -308,6 +310,7 @@ fn test_prompt_type_command_returns_message() {
     let ctx = CommandContext {
         working_directory: std::path::PathBuf::from("/tmp"),
         model: "test".to_string(),
+        shared: None,
     };
 
     // /commit should return a Message (Prompt type)
