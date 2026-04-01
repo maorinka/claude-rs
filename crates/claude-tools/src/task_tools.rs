@@ -69,6 +69,31 @@ pub fn register_process(task_id: &str, pid: u32) {
     }
 }
 
+/// Create a new task entry in the store and return its ID.
+/// Used by background agent spawning to register tasks that can be
+/// queried via TaskGet / TaskStop / TaskOutput.
+pub fn create_task_entry(subject: &str, description: &str) -> String {
+    let id = new_task_id();
+    let entry = TaskEntry {
+        id: id.clone(),
+        subject: subject.to_string(),
+        description: description.to_string(),
+        status: "pending".to_string(),
+        created_at: now_iso(),
+        output: None,
+        pid: None,
+    };
+    let mut store = TASK_STORE.lock().unwrap();
+    store.insert(id.clone(), entry);
+    id
+}
+
+/// Look up a task entry by ID.
+pub fn get_task_entry(task_id: &str) -> Option<TaskEntry> {
+    let store = TASK_STORE.lock().unwrap();
+    store.get(task_id).cloned()
+}
+
 /// Append captured output to a task entry.
 pub fn append_output(task_id: &str, text: &str) {
     let mut store = TASK_STORE.lock().unwrap();

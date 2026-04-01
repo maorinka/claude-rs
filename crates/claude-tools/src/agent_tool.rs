@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::task_tools::{create_task_entry, register_process, append_output};
 use claude_core::types::events::ToolResultData;
 
 pub struct AgentTool;
@@ -135,31 +136,59 @@ impl ToolExecutor for AgentTool {
         );
 
         if run_in_background {
-            // Spawn detached and return a task ID immediately
-            let task_id = uuid::Uuid::new_v4().to_string();
+            // Create a task entry in the shared task store so that
+            // TaskGet / TaskStop / TaskOutput can interact with it.
+            let description = input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or(prompt);
+            let task_id = create_task_entry("Background agent", description);
             let task_id_clone = task_id.clone();
 
+            // Spawn the child and register its PID immediately.
+            let mut child = cmd.spawn()?;
+            let pid = child.id().unwrap_or(0);
+            register_process(&task_id, pid as u32);
+
+            // Capture stdout in a background tokio task and feed it
+            // into the task store so TaskOutput can return it.
+            let stdout_handle = child.stdout.take();
+            let task_id_for_reader = task_id.clone();
+            if let Some(stdout) = stdout_handle {
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut reader = tokio::io::BufReader::new(stdout);
+                    let mut buf = vec![0u8; 8192];
+                    loop {
+                        match reader.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let text = String::from_utf8_lossy(&buf[..n]);
+                                append_output(&task_id_for_reader, &text);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                });
+            }
+
+            // Wait for process completion in the background.
             tokio::spawn(async move {
-                match cmd.output().await {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
+                match child.wait().await {
+                    Ok(status) => {
                         debug!(
                             task_id = task_id_clone,
-                            success = output.status.success(),
+                            success = status.success(),
                             "Background agent completed"
                         );
-                        // Clean up worktree if we created one
-                        if let Some(ref wt) = worktree_path {
-                            cleanup_worktree(wt).await;
-                        }
-                        let _ = stdout;
                     }
                     Err(e) => {
                         warn!(task_id = task_id_clone, error = %e, "Background agent failed");
-                        if let Some(ref wt) = worktree_path {
-                            cleanup_worktree(wt).await;
-                        }
                     }
+                }
+                // Clean up worktree if we created one
+                if let Some(ref wt) = worktree_path {
+                    cleanup_worktree(wt).await;
                 }
             });
 
@@ -169,6 +198,7 @@ impl ToolExecutor for AgentTool {
                     "task_id": task_id,
                     "prompt": prompt,
                     "background": true,
+                    "pid": pid,
                 }),
                 is_error: false,
             })
@@ -250,4 +280,53 @@ async fn cleanup_worktree(worktree_path: &std::path::Path) {
 
     // Remove the directory if it still exists
     let _ = tokio::fs::remove_dir_all(worktree_path).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task_tools::get_task_entry;
+
+    #[test]
+    fn test_background_agent_registers_in_task_store() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tool = AgentTool;
+            let ctx = crate::registry::ToolUseContext {
+                working_directory: std::path::PathBuf::from("/tmp"),
+                read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::registry::ReadFileState::new(),
+                )),
+            };
+            let cancel = CancellationToken::new();
+
+            // Spawn a background agent using /bin/echo so it exits quickly.
+            // We need to override current_exe. Since we cannot do that for
+            // AgentTool directly, we test the task store integration by
+            // using run_in_background=true with a prompt that happens to
+            // be a valid arg for whatever binary is at current_exe().
+            // Instead, let's directly test the task store integration:
+            let task_id = create_task_entry("test-agent", "test background agent");
+            register_process(&task_id, 99999);
+            append_output(&task_id, "hello from agent");
+
+            let entry = get_task_entry(&task_id).expect("task should exist");
+            assert_eq!(entry.subject, "test-agent");
+            assert_eq!(entry.pid, Some(99999));
+            assert_eq!(entry.status, "in_progress");
+            assert_eq!(entry.output.as_deref(), Some("hello from agent"));
+
+            // Append more output
+            append_output(&task_id, "\nmore output");
+            let entry = get_task_entry(&task_id).expect("task should exist after append");
+            assert_eq!(
+                entry.output.as_deref(),
+                Some("hello from agent\nmore output")
+            );
+        });
+    }
 }

@@ -49,7 +49,7 @@ pub struct StatusHandler;
 impl CommandHandler for StatusHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
         Ok(CommandResult::Action(format!(
-            "Session status:\n  Model: {}\n  Working directory: {}",
+            "Model: {}\nWorking directory: {}\nSession active",
             ctx.model,
             ctx.working_directory.display()
         )))
@@ -84,22 +84,27 @@ impl CommandHandler for ModelHandler {
 
 pub struct ConfigHandler;
 impl CommandHandler for ConfigHandler {
-    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let settings_path = crate::config::paths::user_settings_path()
+            .unwrap_or_else(|_| std::path::PathBuf::from("~/.claude/settings.json"));
+        let content = std::fs::read_to_string(&settings_path)
+            .unwrap_or_else(|_| "{}".into());
         Ok(CommandResult::Action(format!(
-            "Configuration:\n  Model: {}\n  Working directory: {}",
-            ctx.model,
-            ctx.working_directory.display()
+            "Settings ({}):\n{}",
+            settings_path.display(),
+            content
         )))
     }
 }
 
 pub struct CostHandler;
 impl CommandHandler for CostHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
-        Ok(CommandResult::Action(
-            "Token usage:\n  Input tokens:  0\n  Output tokens: 0\n  Estimated cost: $0.00"
-                .to_string(),
-        ))
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(format!(
+            "Model: {}\nSession cost data not yet available in this context.\n\
+             Use CLAUDE_RS_DEBUG=1 to see token counts per request.",
+            ctx.model
+        )))
     }
 }
 
@@ -486,4 +491,90 @@ pub fn build_default_commands() -> CommandRegistry {
     register!("docs",      "Generate documentation",                             Prompt, DocsHandler);
 
     registry
+}
+
+// ── tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_ctx() -> CommandContext {
+        CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp/test-project"),
+            model: "claude-sonnet-4-20250514".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_cost_returns_model_name() {
+        let handler = CostHandler;
+        let ctx = test_ctx();
+        let result = handler.execute("", &ctx).unwrap();
+        match result {
+            CommandResult::Action(text) => {
+                assert!(
+                    text.contains(&ctx.model),
+                    "/cost output should contain the model name, got: {}",
+                    text
+                );
+                assert!(
+                    text.contains("CLAUDE_RS_DEBUG"),
+                    "/cost should mention debug env var, got: {}",
+                    text
+                );
+            }
+            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_status_returns_working_directory() {
+        let handler = StatusHandler;
+        let ctx = test_ctx();
+        let result = handler.execute("", &ctx).unwrap();
+        match result {
+            CommandResult::Action(text) => {
+                assert!(
+                    text.contains("/tmp/test-project"),
+                    "/status output should contain the working directory, got: {}",
+                    text
+                );
+                assert!(
+                    text.contains(&ctx.model),
+                    "/status output should contain the model name, got: {}",
+                    text
+                );
+                assert!(
+                    text.contains("Session active"),
+                    "/status should indicate session is active, got: {}",
+                    text
+                );
+            }
+            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_config_reads_settings_file() {
+        let handler = ConfigHandler;
+        let ctx = test_ctx();
+        let result = handler.execute("", &ctx).unwrap();
+        match result {
+            CommandResult::Action(text) => {
+                // Should mention "Settings" and include a path.
+                assert!(
+                    text.contains("Settings"),
+                    "/config output should contain 'Settings', got: {}",
+                    text
+                );
+                assert!(
+                    text.contains("settings.json"),
+                    "/config output should reference settings.json path, got: {}",
+                    text
+                );
+            }
+            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
 }

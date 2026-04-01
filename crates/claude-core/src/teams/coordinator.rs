@@ -106,6 +106,10 @@ fn kill_process(pid: u32) {
 pub struct TeamCoordinator {
     /// team_id → Team
     teams: Mutex<HashMap<String, Team>>,
+    /// Optional executable override for spawning agents.
+    /// When `None`, `std::env::current_exe()` is used (production).
+    /// Tests can set this to e.g. `/bin/sleep` or `/bin/echo`.
+    exe_override: Option<PathBuf>,
 }
 
 impl TeamCoordinator {
@@ -113,13 +117,23 @@ impl TeamCoordinator {
         Self::default()
     }
 
+    /// Create a coordinator that spawns agents using the given executable
+    /// instead of `std::env::current_exe()`.  Intended for tests.
+    #[cfg(test)]
+    pub fn with_exe(exe: impl Into<PathBuf>) -> Self {
+        Self {
+            teams: Mutex::new(HashMap::new()),
+            exe_override: Some(exe.into()),
+        }
+    }
+
     /// Create a new team, spawn each agent as a child process, and persist
     /// the team state to `~/.claude/teams/<team_id>/state.json`.
     ///
     /// `agent_specs` is a list of `(name, prompt, model)` tuples; each entry
-    /// becomes one `TeamAgent`.  The agent's "process" is a placeholder `sleep`
-    /// command — real callers should replace the command with their actual
-    /// agent binary.
+    /// becomes one `TeamAgent`.  Each agent is spawned as the current
+    /// executable (`claude-rs`) with `-p <prompt>` and the agent's
+    /// configuration.
     pub async fn create_team(
         &self,
         name: impl Into<String>,
@@ -141,8 +155,9 @@ impl TeamCoordinator {
             .collect();
 
         // Spawn each agent as a child process.
+        let exe_ref = self.exe_override.as_deref();
         for agent in &mut agents {
-            match spawn_agent_process(agent) {
+            match spawn_agent_process_with_exe(agent, exe_ref) {
                 Ok(pid) => {
                     agent.pid = Some(pid);
                     agent.status = AgentStatus::Running;
@@ -314,22 +329,45 @@ impl AgentSpec {
     }
 }
 
-/// Spawn an agent as a child OS process.
-///
-/// In production this would exec the `claude` binary with the agent's
-/// prompt.  Here we spawn `sleep 3600` as a stand-in so the process is
-/// real, observable, and killable without requiring the full CLI.
-fn spawn_agent_process(agent: &TeamAgent) -> Result<u32> {
-    // Build the command.  In a real integration you'd do something like:
-    //   Command::new("claude").args(["--prompt", &agent.prompt, ...])
-    // For now we use `sleep` so the process is real but harmless.
-    let mut cmd = std::process::Command::new("sleep");
-    cmd.arg("3600");
+/// Inner implementation that accepts an optional executable override.
+/// When `exe_override` is `None` the current executable is used and
+/// the full CLI argument protocol is followed (`-p <prompt>`, `--model`, env vars).
+/// When an override is provided (tests), the prompt is passed as a bare
+/// positional argument so callers can use simple utilities like `sleep` or `echo`.
+fn spawn_agent_process_with_exe(
+    agent: &TeamAgent,
+    exe_override: Option<&std::path::Path>,
+) -> Result<u32> {
+    let (exe, is_real) = match exe_override {
+        Some(p) => (p.to_path_buf(), false),
+        None => (
+            std::env::current_exe()
+                .context("could not determine current executable path")?,
+            true,
+        ),
+    };
+
+    let mut cmd = std::process::Command::new(&exe);
+
+    if is_real {
+        // Production: pass prompt via `-p` flag with full CLI protocol.
+        cmd.arg("-p").arg(&agent.prompt);
+        if let Some(ref model) = agent.model {
+            cmd.arg("--model").arg(model);
+        }
+    } else {
+        // Test mode: pass prompt as a bare positional arg so simple
+        // utilities like `sleep 3600` or `echo hello` work.
+        cmd.arg(&agent.prompt);
+    }
+
+    cmd.env("CLAUDE_TEAM_NAME", &agent.name);
+    cmd.env("CLAUDE_CODE_AGENT_ID", &agent.id);
 
     // Redirect stdio so the child doesn't inherit the parent's terminal.
     cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
     let child = cmd
         .spawn()
@@ -366,8 +404,9 @@ mod tests {
     #[test]
     fn test_create_team_writes_state_file() {
         rt().block_on(async {
-            let coordinator = TeamCoordinator::new();
-            let specs = vec![AgentSpec::new("worker-1", "summarise the codebase")];
+            // Use `sleep` as stand-in so the process stays alive for inspection.
+            let coordinator = TeamCoordinator::with_exe("sleep");
+            let specs = vec![AgentSpec::new("worker-1", "3600")];
 
             let team = coordinator
                 .create_team("test-create-writes-state", specs)
@@ -386,6 +425,7 @@ mod tests {
             assert_eq!(reloaded.agents[0].name, "worker-1");
 
             // Cleanup.
+            let _ = coordinator.stop_team(&team.id).await;
             let dir = teams_base_dir().join(&team.id);
             let _ = std::fs::remove_dir_all(dir);
         });
@@ -394,10 +434,10 @@ mod tests {
     #[test]
     fn test_team_status_tracking() {
         rt().block_on(async {
-            let coordinator = TeamCoordinator::new();
+            let coordinator = TeamCoordinator::with_exe("sleep");
             let specs = vec![
-                AgentSpec::new("agent-a", "do task A"),
-                AgentSpec::new("agent-b", "do task B"),
+                AgentSpec::new("agent-a", "3600"),
+                AgentSpec::new("agent-b", "3600"),
             ];
 
             let team = coordinator
@@ -432,8 +472,8 @@ mod tests {
     #[test]
     fn test_stop_team_kills_processes() {
         rt().block_on(async {
-            let coordinator = TeamCoordinator::new();
-            let specs = vec![AgentSpec::new("sleeper", "sleep forever")];
+            let coordinator = TeamCoordinator::with_exe("sleep");
+            let specs = vec![AgentSpec::new("sleeper", "3600")];
 
             let team = coordinator
                 .create_team("test-stop-kills", specs)
@@ -474,7 +514,7 @@ mod tests {
     #[test]
     fn test_list_teams() {
         rt().block_on(async {
-            let coordinator = TeamCoordinator::new();
+            let coordinator = TeamCoordinator::with_exe("sleep");
 
             assert_eq!(
                 coordinator.list_teams().len(),
@@ -483,11 +523,11 @@ mod tests {
             );
 
             let t1 = coordinator
-                .create_team("list-team-alpha", vec![AgentSpec::new("a1", "prompt")])
+                .create_team("list-team-alpha", vec![AgentSpec::new("a1", "3600")])
                 .await
                 .unwrap();
             let t2 = coordinator
-                .create_team("list-team-beta", vec![AgentSpec::new("b1", "prompt")])
+                .create_team("list-team-beta", vec![AgentSpec::new("b1", "3600")])
                 .await
                 .unwrap();
 
@@ -502,6 +542,49 @@ mod tests {
             let _ = coordinator.stop_team(&t2.id).await;
             let _ = std::fs::remove_dir_all(teams_base_dir().join(&t1.id));
             let _ = std::fs::remove_dir_all(teams_base_dir().join(&t2.id));
+        });
+    }
+
+    /// Verify that spawning agents uses a real executable (not `sleep`).
+    /// Uses `/bin/echo` as the stand-in — it exits immediately after
+    /// printing its args, proving the agent prompt is passed via `-p`.
+    #[test]
+    fn test_spawn_agent_uses_real_executable() {
+        rt().block_on(async {
+            let coordinator = TeamCoordinator::with_exe("/bin/echo");
+            let specs = vec![
+                AgentSpec::new("echo-agent", "hello world")
+                    .with_model("test-model"),
+            ];
+
+            let team = coordinator
+                .create_team("test-real-exe-spawn", specs)
+                .await
+                .expect("create_team with /bin/echo");
+
+            // The echo process exits immediately, but it should have
+            // been assigned a PID and started as Running.
+            let agent = &team.agents[0];
+            assert!(agent.pid.is_some(), "agent should have been assigned a PID");
+            // Initial status is Running (set at spawn time).
+            assert_eq!(agent.status, AgentStatus::Running);
+
+            // After a brief wait the process will have exited; refresh
+            // should detect it as completed.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let refreshed = coordinator
+                .get_team_status(&team.id)
+                .await
+                .expect("get_team_status");
+            assert_eq!(
+                refreshed.agents[0].status,
+                AgentStatus::Completed,
+                "echo process should complete quickly"
+            );
+
+            // Cleanup.
+            let dir = teams_base_dir().join(&team.id);
+            let _ = std::fs::remove_dir_all(dir);
         });
     }
 }
