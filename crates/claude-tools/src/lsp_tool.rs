@@ -14,29 +14,16 @@ impl ToolExecutor for LSPTool {
         "LSP"
     }
 
-<<<<<<< HEAD
     fn description(&self) -> String {
         "Run Language Server Protocol actions such as diagnostics, hover information, or completions on a file.".to_string()
     }
 
-=======
->>>>>>> worktree-agent-ab49e999
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-<<<<<<< HEAD
-                    "description": "The LSP action to perform (e.g. 'diagnostics', 'hover', 'completion')."
-                },
-                "file_path": {
-                    "type": "string",
-                    "description": "The file path to run the LSP action on."
-                }
-            },
-            "required": ["action"]
-=======
                     "enum": ["diagnostics", "hover", "definition", "references"],
                     "description": "The LSP action to perform."
                 },
@@ -54,7 +41,6 @@ impl ToolExecutor for LSPTool {
                 }
             },
             "required": ["action", "file_path"]
->>>>>>> worktree-agent-ab49e999
         })
     }
 
@@ -68,22 +54,11 @@ impl ToolExecutor for LSPTool {
 
     async fn call(
         &self,
-<<<<<<< HEAD
-        _input: &Value,
-=======
         input: &Value,
->>>>>>> worktree-agent-ab49e999
         _ctx: &ToolUseContext,
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
-<<<<<<< HEAD
-        // Stub: LSP integration is not yet implemented; return empty diagnostics.
-        Ok(ToolResultData {
-            data: json!({ "diagnostics": [] }),
-            is_error: false,
-        })
-=======
         let action = input
             .get("action")
             .and_then(|v| v.as_str())
@@ -95,9 +70,6 @@ impl ToolExecutor for LSPTool {
 
         match action {
             "diagnostics" => {
-                // Use the LSP manager to get diagnostics for the file.
-                // For now, create a manager, attempt to get diagnostics.
-                // In a full integration the manager would be shared via context.
                 let manager = claude_core::lsp::manager::LspManager::new();
                 let diagnostics = manager.get_diagnostics(file_path).await?;
 
@@ -219,6 +191,9 @@ mod tests {
     fn make_ctx() -> ToolUseContext {
         ToolUseContext {
             working_directory: PathBuf::from("/tmp"),
+            read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::registry::ReadFileState::new(),
+            )),
         }
     }
 
@@ -338,6 +313,5 @@ mod tests {
         assert!(actions.contains(&"hover"));
         assert!(actions.contains(&"definition"));
         assert!(actions.contains(&"references"));
->>>>>>> worktree-agent-ab49e999
     }
 }

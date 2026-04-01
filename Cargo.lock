@@ -251,6 +251,7 @@ dependencies = [
  "futures-util",
  "glob",
  "hex",
+ "once_cell",
  "open",
  "rand",
  "reqwest",
