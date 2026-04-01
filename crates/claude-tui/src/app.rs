@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
+    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
     KeyModifiers, MouseEvent, MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -44,6 +44,7 @@ const TOKEN_CRITICAL_THRESHOLD: f64 = 0.95; // Red warning at 95%
 
 pub enum AppEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Resize(u16, u16),
     Tick,
     SpinnerTick,
@@ -140,6 +141,25 @@ impl App {
             context_window: 200_000,
             viewport_height: 24,
         })
+    }
+
+    /// Add the welcome header matching TS LogoV2 — shows version, model, and cwd.
+    fn push_welcome_header(&mut self) {
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        // Shorten home dir to ~
+        let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default();
+        let display_cwd = if !home.is_empty() && cwd.starts_with(&home) {
+            format!("~{}", &cwd[home.len()..])
+        } else {
+            cwd
+        };
+
+        self.message_list.push(MessageEntry::Logo {
+            model: self.model_name.clone(),
+            cwd: display_cwd,
+        });
     }
 
     /// Set the model name displayed in the header and cost tracker.
@@ -282,7 +302,7 @@ impl App {
     /// Original standalone run loop (no engine). Kept for backwards compatibility.
     pub async fn run(&mut self) -> Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(100);
 
@@ -296,6 +316,7 @@ impl App {
                             CrosstermEvent::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => Some(AppEvent::Key(k)),
                             CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
+                            CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
                             _ => None,
                         };
                         if let Some(e) = app_evt {
@@ -339,6 +360,7 @@ impl App {
                     AppEvent::SpinnerTick => self.spinner.advance(),
                     AppEvent::Key(k) => self.handle_key_standalone(k),
                     AppEvent::Resize(_, _) => self.render()?,
+                    AppEvent::Mouse(m) => self.handle_mouse(m),
                     AppEvent::Quit => self.should_quit = true,
                     _ => {}
                 }
@@ -346,7 +368,7 @@ impl App {
         }
 
         terminal::disable_raw_mode()?;
-        execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
+        execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen, cursor::Show)?;
         Ok(())
     }
 
@@ -359,7 +381,7 @@ impl App {
         permission_mode: PermissionMode,
     ) -> Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
 
@@ -373,6 +395,7 @@ impl App {
                             CrosstermEvent::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => Some(AppEvent::Key(k)),
                             CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
+                            CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
                             _ => None,
                         };
                         if let Some(e) = app_evt {
@@ -440,6 +463,9 @@ impl App {
         // Current index into pending_tools when walking through permission dialogs
         let mut pending_tool_index: usize = 0;
 
+        // Show welcome header (matching TS LogoV2)
+        self.push_welcome_header();
+
         // Main event loop
         while !self.should_quit {
             let Some(event) = rx.recv().await else {
@@ -455,6 +481,9 @@ impl App {
                 }
                 AppEvent::Resize(_, _) => {
                     self.render()?;
+                }
+                AppEvent::Mouse(m) => {
+                    self.handle_mouse(m);
                 }
                 AppEvent::Quit => {
                     self.should_quit = true;
@@ -576,6 +605,11 @@ impl App {
                                 self.message_list.toggle_thinking();
                                 continue;
                             }
+                            // Ctrl+L: clear screen (redraw)
+                            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                                let _ = self.terminal.clear();
+                                continue;
+                            }
                             _ => {}
                         }
 
@@ -693,6 +727,41 @@ impl App {
                             None => {
                                 // Not a known command, treat as regular input
                             }
+                        }
+                    }
+
+                    // `! command` prefix: run shell command and show output
+                    // (matches TS behavior where `!` runs a command in the session)
+                    if text.starts_with("! ") || text.starts_with("!") && text.len() > 1 && text.chars().nth(1) != Some('!') {
+                        let cmd = text.strip_prefix("! ").or_else(|| text.strip_prefix("!")).unwrap_or("");
+                        if !cmd.trim().is_empty() {
+                            self.message_list.push(MessageEntry::User { text: text.clone() });
+                            let output = std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(cmd)
+                                .output();
+                            match output {
+                                Ok(out) => {
+                                    let stdout = String::from_utf8_lossy(&out.stdout);
+                                    let stderr = String::from_utf8_lossy(&out.stderr);
+                                    let combined = if stderr.is_empty() {
+                                        stdout.to_string()
+                                    } else if stdout.is_empty() {
+                                        stderr.to_string()
+                                    } else {
+                                        format!("{}\n{}", stdout, stderr)
+                                    };
+                                    self.message_list.push(MessageEntry::System {
+                                        text: combined,
+                                    });
+                                }
+                                Err(e) => {
+                                    self.message_list.push(MessageEntry::System {
+                                        text: format!("Error running command: {}", e),
+                                    });
+                                }
+                            }
+                            continue;
                         }
                     }
 
@@ -1141,7 +1210,6 @@ impl App {
     }
 
     /// Handle mouse events (scroll wheel).
-    #[allow(dead_code)]
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
@@ -1343,6 +1411,20 @@ impl App {
             if let Some(ref ask_dialog) = ask_user_dialog {
                 let dialog_area = centered_rect(70, 10, area);
                 frame.render_widget(ask_dialog, dialog_area);
+            }
+
+            // Show cursor at input position when no dialog is active
+            if permission_dialog.is_none() && ask_user_dialog.is_none() && !engine_busy {
+                // Cursor position: prompt char "❯ " is 2 display columns,
+                // then the text up to cursor position
+                let cursor_display_col = prompt.text()[..prompt.cursor()]
+                    .chars()
+                    .count() as u16;
+                let cursor_x = input_area.x + 2 + cursor_display_col; // 2 = "❯ "
+                let cursor_y = input_area.y + 1; // input is on row 1 of input_area
+                if cursor_x < input_area.x + input_area.width && cursor_y < area.y + area.height {
+                    frame.set_cursor_position((cursor_x, cursor_y));
+                }
             }
         })?;
 

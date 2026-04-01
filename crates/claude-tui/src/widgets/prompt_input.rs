@@ -83,6 +83,16 @@ impl PromptInput {
                 }
                 InputAction::None
             }
+            // Ctrl+Left — move cursor one word left (must be before catch-all Left)
+            (KeyModifiers::CONTROL, KeyCode::Left) => {
+                self.cursor = self.word_boundary_left();
+                InputAction::None
+            }
+            // Ctrl+Right — move cursor one word right (must be before catch-all Right)
+            (KeyModifiers::CONTROL, KeyCode::Right) => {
+                self.cursor = self.word_boundary_right();
+                InputAction::None
+            }
             // Left arrow
             (_, KeyCode::Left) => {
                 if self.cursor > 0 {
@@ -128,6 +138,13 @@ impl PromptInput {
                 self.cursor = 0;
                 InputAction::None
             }
+            // Ctrl+W — delete word before cursor
+            (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                let new_pos = self.word_boundary_left();
+                self.text = format!("{}{}", &self.text[..new_pos], &self.text[self.cursor..]);
+                self.cursor = new_pos;
+                InputAction::None
+            }
             // Up — history previous
             (_, KeyCode::Up) => {
                 self.history_prev();
@@ -150,6 +167,47 @@ impl PromptInput {
             }
             _ => InputAction::None,
         }
+    }
+
+    /// Find the byte position of the start of the previous word.
+    fn word_boundary_left(&self) -> usize {
+        let before = &self.text[..self.cursor];
+        // Skip trailing whitespace, then skip word chars
+        let trimmed = before.trim_end();
+        if trimmed.is_empty() {
+            return 0;
+        }
+        // Find last whitespace in trimmed portion
+        match trimmed.rfind(|c: char| c.is_whitespace()) {
+            Some(pos) => {
+                // Move past the whitespace char
+                pos + trimmed[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(0)
+            }
+            None => 0,
+        }
+    }
+
+    /// Find the byte position of the end of the next word.
+    fn word_boundary_right(&self) -> usize {
+        let after = &self.text[self.cursor..];
+        // Skip leading whitespace, then skip word chars
+        let mut chars = after.char_indices();
+        // Skip whitespace
+        let mut pos = 0;
+        for (i, c) in &mut chars {
+            if !c.is_whitespace() {
+                pos = i;
+                break;
+            }
+            pos = i + c.len_utf8();
+        }
+        // Skip word chars
+        for (i, c) in after[pos..].char_indices() {
+            if c.is_whitespace() {
+                return self.cursor + pos + i;
+            }
+        }
+        self.text.len()
     }
 
     fn history_prev(&mut self) {

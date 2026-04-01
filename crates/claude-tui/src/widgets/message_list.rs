@@ -27,6 +27,8 @@ const TEARDROP_ASTERISK: &str = "\u{273B}";
 
 #[derive(Clone, Debug)]
 pub enum MessageEntry {
+    /// Welcome header shown at the start of a conversation.
+    Logo { model: String, cwd: String },
     User { text: String },
     Assistant { text: String },
     ToolUse { name: String, input_summary: String },
@@ -142,6 +144,39 @@ impl<'a> MessageListWidget<'a> {
     }
 }
 
+/// Word-wrap a line of text to fit within `max_width` columns.
+fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 || text.len() <= max_width {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_inclusive(' ') {
+        if current.len() + word.len() > max_width && !current.is_empty() {
+            lines.push(current.trim_end().to_string());
+            current = String::new();
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current.trim_end().to_string());
+    }
+
+    if lines.is_empty() {
+        // Fallback: hard-wrap if no word boundaries
+        let mut pos = 0;
+        while pos < text.len() {
+            let end = (pos + max_width).min(text.len());
+            lines.push(text[pos..end].to_string());
+            pos = end;
+        }
+    }
+
+    lines
+}
+
 fn looks_like_diff(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("--- ") || trimmed.starts_with("diff --git")
@@ -204,20 +239,99 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
     let mut lines = Vec::new();
 
     match msg {
+        MessageEntry::Logo { model, cwd } => {
+            // Welcome header matching TS LogoV2 condensed format:
+            //   ╭─────────────────────────╮
+            //   │  ✻  Claude Code         │
+            //   │                         │
+            //   │  Model: claude-sonnet   │
+            //   │  cwd: ~/projects/foo    │
+            //   ╰─────────────────────────╯
+            let box_width = (width as usize).min(50);
+            let inner = box_width.saturating_sub(4); // 2 border + 2 padding
+
+            // Top border
+            lines.push(Line::from(Span::styled(
+                format!("  \u{256D}{}\u{256E}", "\u{2500}".repeat(box_width.saturating_sub(2))),
+                Style::default().fg(theme.claude),
+            )));
+
+            // Title line: "  ✻  Claude Code"
+            let title = "\u{273B} Claude Code";
+            let pad = inner.saturating_sub(title.len());
+            lines.push(Line::from(vec![
+                Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
+                Span::styled(
+                    title.to_string(),
+                    Style::default().fg(theme.claude).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("{}", " ".repeat(pad)), Style::default()),
+                Span::styled(" \u{2502}", Style::default().fg(theme.claude)),
+            ]));
+
+            // Blank line
+            lines.push(Line::from(vec![
+                Span::styled("  \u{2502}", Style::default().fg(theme.claude)),
+                Span::raw(" ".repeat(box_width.saturating_sub(2))),
+                Span::styled("\u{2502}", Style::default().fg(theme.claude)),
+            ]));
+
+            // Model line
+            let model_text = format!("Model: {}", model);
+            let model_text = if model_text.len() > inner {
+                format!("{}...", &model_text[..inner.saturating_sub(3)])
+            } else {
+                model_text
+            };
+            let model_pad = inner.saturating_sub(model_text.len());
+            lines.push(Line::from(vec![
+                Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
+                Span::styled(model_text, Style::default().fg(theme.inactive)),
+                Span::raw(" ".repeat(model_pad)),
+                Span::styled(" \u{2502}", Style::default().fg(theme.claude)),
+            ]));
+
+            // CWD line
+            let cwd_text = format!("cwd: {}", cwd);
+            let cwd_text = if cwd_text.len() > inner {
+                format!("{}...", &cwd_text[..inner.saturating_sub(3)])
+            } else {
+                cwd_text
+            };
+            let cwd_pad = inner.saturating_sub(cwd_text.len());
+            lines.push(Line::from(vec![
+                Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
+                Span::styled(cwd_text, Style::default().fg(theme.inactive)),
+                Span::raw(" ".repeat(cwd_pad)),
+                Span::styled(" \u{2502}", Style::default().fg(theme.claude)),
+            ]));
+
+            // Bottom border
+            lines.push(Line::from(Span::styled(
+                format!("  \u{2570}{}\u{256F}", "\u{2500}".repeat(box_width.saturating_sub(2))),
+                Style::default().fg(theme.claude),
+            )));
+
+            lines.push(Line::from(""));
+        }
         MessageEntry::User { text } => {
             // Original: marginTop=1 (blank line), then user text with
-            // backgroundColor=userMessageBackground, paddingRight=1.
-            // No badge — just the text on a colored background.
+            // backgroundColor=userMessageBackground filling the full width.
             lines.push(Line::from(""));
+            let content_width = width as usize;
             for line in text.lines() {
-                // User text renders with a background color on the full line
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!(" {}", line),
-                        Style::default()
-                            .bg(theme.user_message_bg),
-                    ),
-                ]));
+                // Word-wrap long lines
+                for wrapped in word_wrap(line, content_width.saturating_sub(2)) {
+                    // Pad to full width so background fills the entire line
+                    let display = format!(" {}", wrapped);
+                    let pad = content_width.saturating_sub(display.len());
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{}{}", display, " ".repeat(pad)),
+                            Style::default().bg(theme.user_message_bg),
+                        ),
+                    ]));
+                }
             }
         }
         MessageEntry::Assistant { text } => {
@@ -227,20 +341,40 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
             lines.push(Line::from(""));
 
             let md_lines = render_markdown(text);
+            let wrap_width = (width as usize).saturating_sub(2); // account for "  " prefix
             for (i, md_line) in md_lines.iter().enumerate() {
                 let prefix = if i == 0 {
-                    // First line gets the circle indicator
                     Span::styled(
                         format!("{} ", BLACK_CIRCLE),
                         Style::default().fg(theme.text),
                     )
                 } else {
-                    // Continuation lines get 2-space indent (minWidth=2)
                     Span::raw("  ".to_string())
                 };
-                let mut spans = vec![prefix];
-                spans.extend(md_line.spans.clone());
-                lines.push(Line::from(spans));
+
+                // Check if the line content is too long and needs wrapping
+                let line_text: String = md_line.spans.iter().map(|s| s.content.as_ref()).collect();
+                if line_text.len() > wrap_width && md_line.spans.len() == 1 {
+                    // Simple single-span line: word wrap it
+                    for (j, wrapped) in word_wrap(&line_text, wrap_width).iter().enumerate() {
+                        let pfx = if j == 0 {
+                            prefix.clone()
+                        } else {
+                            Span::raw("  ".to_string())
+                        };
+                        let style = md_line.spans.first()
+                            .map(|s| s.style)
+                            .unwrap_or_default();
+                        lines.push(Line::from(vec![
+                            pfx,
+                            Span::styled(wrapped.clone(), style),
+                        ]));
+                    }
+                } else {
+                    let mut spans = vec![prefix];
+                    spans.extend(md_line.spans.clone());
+                    lines.push(Line::from(spans));
+                }
             }
         }
         MessageEntry::ToolUse { name, input_summary } => {
