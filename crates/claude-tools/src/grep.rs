@@ -216,7 +216,12 @@ impl ToolExecutor for GrepTool {
             RgBinary::ClaudeMultiCall(path) => {
                 let mut c = Command::new(&path);
                 // The Claude binary acts as rg when argv[0] == "rg"
-                c.arg0("rg");
+                // arg0() is Unix-only; on Windows, just pass the path directly
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    c.arg0("rg");
+                }
                 c
             }
         };

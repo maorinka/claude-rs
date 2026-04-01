@@ -17,14 +17,17 @@ impl ToolExecutor for PushNotificationTool {
     fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
 
     async fn call(&self, input: &Value, _ctx: &ToolUseContext, _cancel: CancellationToken, _progress: Option<ProgressSender>) -> Result<ToolResultData> {
-        let title = match input.get("title").and_then(|v| v.as_str()) {
+        let _title = match input.get("title").and_then(|v| v.as_str()) {
             Some(t) => t,
             None => return Ok(ToolResultData { data: json!({ "error": "missing required field: title" }), is_error: true }),
         };
-        let body = match input.get("body").and_then(|v| v.as_str()) {
+        let _body = match input.get("body").and_then(|v| v.as_str()) {
             Some(b) => b,
             None => return Ok(ToolResultData { data: json!({ "error": "missing required field: body" }), is_error: true }),
         };
+        // Alias without underscore for platform-specific blocks
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let (title, body) = (_title, _body);
         #[cfg(target_os = "macos")]
         {
             let script = format!(r#"display notification "{}" with title "{}""#, body.replace('\\', "\\\\").replace('"', "\\\""), title.replace('\\', "\\\\").replace('"', "\\\""));
