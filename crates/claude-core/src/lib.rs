@@ -4,8 +4,12 @@ pub mod auth;
 pub mod bridge;
 pub mod config;
 pub mod context;
+<<<<<<< HEAD
 pub mod file_history;
 pub mod mcp;
+=======
+pub mod lsp;
+>>>>>>> worktree-agent-ab49e999
 pub mod permissions;
 pub mod plugins;
 pub mod query;
