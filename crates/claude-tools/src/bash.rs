@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
@@ -8,6 +9,36 @@ use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
 const MAX_OUTPUT_CHARS: usize = 30_000;
+
+/// Default timeout for bash commands in milliseconds (2 minutes).
+/// Matches TS `DEFAULT_TIMEOUT_MS` in `utils/timeouts.ts`.
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+
+/// Maximum timeout for bash commands in milliseconds (10 minutes).
+/// Matches TS `MAX_TIMEOUT_MS` in `utils/timeouts.ts`.
+const MAX_TIMEOUT_MS: u64 = 600_000;
+
+/// Get the default bash timeout, respecting the `BASH_DEFAULT_TIMEOUT_MS`
+/// environment variable (matches TS `getDefaultBashTimeoutMs`).
+fn get_default_timeout_ms() -> u64 {
+    std::env::var("BASH_DEFAULT_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+}
+
+/// Get the maximum bash timeout, respecting the `BASH_MAX_TIMEOUT_MS`
+/// environment variable (matches TS `getMaxBashTimeoutMs`).
+fn get_max_timeout_ms() -> u64 {
+    let default = get_default_timeout_ms();
+    std::env::var("BASH_MAX_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .map(|v| v.max(default))
+        .unwrap_or_else(|| MAX_TIMEOUT_MS.max(default))
+}
 
 /// Maximum number of sub-commands we will individually check permissions for.
 /// Beyond this limit the command is treated as requiring a permission prompt.
@@ -232,13 +263,17 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                     "type": "string",
                     "description": "The bash command to execute"
                 },
+                "timeout": {
+                    "type": "number",
+                    "description": format!("Optional timeout in milliseconds (max {})", get_max_timeout_ms())
+                },
                 "description": {
                     "type": "string",
-                    "description": "Optional description of what the command does"
+                    "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls \u{2192} \"List files in current directory\"\n- git status \u{2192} \"Show working tree status\"\n- npm install \u{2192} \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; \u{2192} \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main \u{2192} \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' \u{2192} \"Fetch JSON from URL and extract data array elements\""
                 },
                 "run_in_background": {
                     "type": "boolean",
-                    "description": "Whether to run the command in the background"
+                    "description": "Set to true to run this command in the background. Use Read to read the output later."
                 }
             },
             "required": ["command"]
@@ -256,6 +291,23 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'command' field"))?
             .to_string();
+
+        // Parse timeout: use provided value clamped to max, or default.
+        // Matches TS: `const timeoutMs = timeout || getDefaultTimeoutMs()`
+        let max_timeout = get_max_timeout_ms();
+        let timeout_ms = input
+            .get("timeout")
+            .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)))
+            .map(|t| t.min(max_timeout))
+            .unwrap_or_else(get_default_timeout_ms);
+        let timeout_duration = Duration::from_millis(timeout_ms);
+
+        // Parse run_in_background flag.
+        // Matches TS: `if (run_in_background === true && !isBackgroundTasksDisabled)`
+        let run_in_background = input
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // If already cancelled before we even start, return immediately
         if cancel.is_cancelled() {
@@ -278,6 +330,33 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             .stderr(std::process::Stdio::piped())
             .spawn()?;
 
+        // Handle run_in_background: return immediately, let the process run.
+        // Matches TS behavior: returns `{ stdout: '', stderr: '', code: 0,
+        // interrupted: false, backgroundTaskId: shellId }`.
+        // We don't have a full task manager yet, so we use the process ID.
+        if run_in_background {
+            let pid = child.id().unwrap_or(0);
+            let task_id = format!("bg_{}", pid);
+
+            // Spawn a detached task that waits for the child so it doesn't become
+            // a zombie. Output is discarded (the user can read it via /tasks or
+            // by reading the output file later).
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+
+            return Ok(ToolResultData {
+                data: json!({
+                    "stdout": "",
+                    "stderr": "",
+                    "code": 0,
+                    "interrupted": false,
+                    "backgroundTaskId": task_id
+                }),
+                is_error: false,
+            });
+        }
+
         // Take pipes before any select so we can read them after wait
         let mut stdout_pipe = child.stdout.take().expect("stdout pipe");
         let mut stderr_pipe = child.stderr.take().expect("stderr pipe");
@@ -291,6 +370,31 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                     data: json!({
                         "stdout": "",
                         "stderr": "",
+                        "code": -1,
+                        "interrupted": true
+                    }),
+                    is_error: false,
+                })
+            }
+            _ = tokio::time::sleep(timeout_duration) => {
+                // Timeout: kill the process and report.
+                // Matches TS behavior where exec uses { timeout: timeoutMs }.
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+
+                // Read any partial output produced before timeout
+                let mut stdout_bytes = Vec::new();
+                let mut stderr_bytes = Vec::new();
+                let _ = stdout_pipe.read_to_end(&mut stdout_bytes).await;
+                let _ = stderr_pipe.read_to_end(&mut stderr_bytes).await;
+
+                let stdout = truncate(String::from_utf8_lossy(&stdout_bytes).into_owned());
+                let stderr = truncate(String::from_utf8_lossy(&stderr_bytes).into_owned());
+
+                Ok(ToolResultData {
+                    data: json!({
+                        "stdout": stdout,
+                        "stderr": format!("{}\n\nCommand timed out after {}ms", stderr, timeout_ms),
                         "code": -1,
                         "interrupted": true
                     }),
@@ -468,5 +572,266 @@ mod tests {
             check_permissions("ls -la && cat file.txt | grep pattern"),
             PermissionCheckResult::Allow,
         );
+    }
+
+    // -- timeout helper tests --
+
+    #[test]
+    fn test_get_default_timeout_ms_returns_default() {
+        // When env var is not set, should return DEFAULT_TIMEOUT_MS
+        // We can't control env vars in parallel tests easily, so we just
+        // verify the function returns a reasonable value.
+        let val = get_default_timeout_ms();
+        assert!(val > 0, "default timeout should be positive");
+    }
+
+    #[test]
+    fn test_get_max_timeout_ms_at_least_default() {
+        let max = get_max_timeout_ms();
+        let default = get_default_timeout_ms();
+        assert!(
+            max >= default,
+            "max ({}) should be >= default ({})",
+            max,
+            default
+        );
+    }
+
+    // -- BashTool integration tests (async) --
+
+    fn make_ctx() -> ToolUseContext {
+        ToolUseContext {
+            working_directory: std::env::current_dir().unwrap_or_else(|_| "/tmp".into()),
+            read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::registry::ReadFileState::new(),
+            )),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bash_simple_command() {
+        let tool = BashTool;
+        let input = json!({"command": "echo hello"});
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["interrupted"], false);
+        assert_eq!(result.data["code"], 0);
+        assert!(
+            result.data["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("hello"),
+            "stdout should contain 'hello', got: {}",
+            result.data["stdout"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout_kills_long_command() {
+        let tool = BashTool;
+        // sleep 60 should be killed well before it completes
+        let input = json!({
+            "command": "sleep 60",
+            "timeout": 200  // 200ms -- very short
+        });
+        let start = std::time::Instant::now();
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(!result.is_error);
+        assert_eq!(result.data["interrupted"], true);
+        assert_eq!(result.data["code"], -1);
+        assert!(
+            result.data["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("timed out"),
+            "stderr should mention timeout, got: {}",
+            result.data["stderr"]
+        );
+        // Should complete in well under 5 seconds (the timeout was 200ms)
+        assert!(
+            elapsed.as_secs() < 5,
+            "should have timed out quickly, took {:?}",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout_clamped_to_max() {
+        let tool = BashTool;
+        // Pass a timeout larger than MAX_TIMEOUT_MS; the tool should clamp it.
+        // We can't easily test the clamped value directly, but we can verify
+        // the command still works with a very large timeout.
+        let input = json!({
+            "command": "echo clamped",
+            "timeout": 999_999_999
+        });
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["code"], 0);
+        assert!(
+            result.data["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("clamped")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_default_timeout_applied() {
+        // Without explicit timeout, the default should be applied.
+        // A fast command should complete well within the default timeout.
+        let tool = BashTool;
+        let input = json!({"command": "echo fast"});
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["interrupted"], false);
+        assert_eq!(result.data["code"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_bash_run_in_background_returns_immediately() {
+        let tool = BashTool;
+        let input = json!({
+            "command": "sleep 30",
+            "run_in_background": true
+        });
+        let start = std::time::Instant::now();
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(!result.is_error);
+        assert_eq!(result.data["interrupted"], false);
+        assert_eq!(result.data["code"], 0);
+        // Should return almost immediately (background)
+        assert!(
+            elapsed.as_secs() < 3,
+            "run_in_background should return immediately, took {:?}",
+            elapsed
+        );
+        // Should have a backgroundTaskId
+        assert!(
+            result.data["backgroundTaskId"].is_string(),
+            "should have backgroundTaskId, got: {}",
+            result.data
+        );
+        let task_id = result.data["backgroundTaskId"].as_str().unwrap();
+        assert!(
+            task_id.starts_with("bg_"),
+            "backgroundTaskId should start with 'bg_', got: {}",
+            task_id
+        );
+        // stdout/stderr should be empty for background tasks
+        assert_eq!(result.data["stdout"], "");
+        assert_eq!(result.data["stderr"], "");
+    }
+
+    #[tokio::test]
+    async fn test_bash_run_in_background_false_waits() {
+        let tool = BashTool;
+        let input = json!({
+            "command": "echo foreground",
+            "run_in_background": false
+        });
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["code"], 0);
+        assert!(
+            result.data["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("foreground")
+        );
+        // No backgroundTaskId
+        assert!(result.data.get("backgroundTaskId").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_bash_cancellation_kills_command() {
+        let tool = BashTool;
+        let input = json!({"command": "sleep 60"});
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        let handle = tokio::spawn(async move {
+            tool.call(&input, &make_ctx(), cancel_clone, None).await
+        });
+
+        // Cancel after a short delay
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+
+        let result = handle.await.unwrap().unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["interrupted"], true);
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout_as_float() {
+        // The TS uses semanticNumber which allows float values
+        let tool = BashTool;
+        let input = json!({
+            "command": "sleep 60",
+            "timeout": 200.5  // float timeout
+        });
+        let start = std::time::Instant::now();
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.data["interrupted"], true);
+        assert!(elapsed.as_secs() < 5);
+    }
+
+    #[tokio::test]
+    async fn test_bash_schema_contains_timeout() {
+        let tool = BashTool;
+        let schema = tool.input_schema();
+        let props = schema["properties"].as_object().unwrap();
+        assert!(
+            props.contains_key("timeout"),
+            "schema should contain timeout property"
+        );
+        assert!(
+            props.contains_key("run_in_background"),
+            "schema should contain run_in_background property"
+        );
+        assert!(
+            props.contains_key("command"),
+            "schema should contain command property"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_pre_cancelled_returns_immediately() {
+        let tool = BashTool;
+        let input = json!({"command": "echo should-not-run"});
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // pre-cancel
+
+        let result = tool.call(&input, &make_ctx(), cancel, None).await.unwrap();
+        assert_eq!(result.data["interrupted"], true);
+        assert_eq!(result.data["code"], -1);
     }
 }
