@@ -293,7 +293,8 @@ impl App {
                 if event::poll(Duration::from_millis(16)).unwrap_or(false) {
                     if let Ok(evt) = event::read() {
                         let app_evt = match evt {
-                            CrosstermEvent::Key(k) => Some(AppEvent::Key(k)),
+                            CrosstermEvent::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => Some(AppEvent::Key(k)),
+                            CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             _ => None,
                         };
@@ -369,7 +370,8 @@ impl App {
                 if event::poll(Duration::from_millis(16)).unwrap_or(false) {
                     if let Ok(evt) = event::read() {
                         let app_evt = match evt {
-                            CrosstermEvent::Key(k) => Some(AppEvent::Key(k)),
+                            CrosstermEvent::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => Some(AppEvent::Key(k)),
+                            CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             _ => None,
                         };
