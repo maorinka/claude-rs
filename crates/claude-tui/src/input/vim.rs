@@ -1,4 +1,5 @@
 //! Full vim input mode implementation.
+// Many functions are infrastructure for full vim operator+motion support.
 
 use std::collections::HashMap;
 
