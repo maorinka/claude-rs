@@ -57,6 +57,16 @@ pub struct SharedCommandState {
     pub clear_requested: bool,
     /// Whether a fork was requested (signal to the TUI)
     pub fork_requested: bool,
+    /// Session name set by /rename
+    pub session_name: String,
+    /// Whether sandbox mode is enabled
+    pub sandbox_mode: bool,
+    /// Session color name (e.g. "red", "blue")
+    pub session_color: String,
+    /// Additional working directories added by /add-dir
+    pub extra_dirs: Vec<String>,
+    /// Per-turn token usage: Vec<(turn_number, input_tokens, output_tokens)>
+    pub per_turn_tokens: Vec<(usize, u64, u64)>,
 }
 
 impl Default for SharedCommandState {
@@ -79,6 +89,11 @@ impl Default for SharedCommandState {
             context_window: 200_000,
             clear_requested: false,
             fork_requested: false,
+            session_name: String::new(),
+            sandbox_mode: false,
+            session_color: String::new(),
+            extra_dirs: Vec::new(),
+            per_turn_tokens: Vec::new(),
         }
     }
 }
