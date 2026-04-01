@@ -364,40 +364,86 @@ While the Bash tool can do similar things, it's better to use the built-in tools
         // Handle run_in_background: return immediately, let the process run.
         // Matches TS behavior: returns `{ stdout: '', stderr: '', code: 0,
         // interrupted: false, backgroundTaskId: shellId }`.
-        // TS uses `spawnBackgroundTask()` which persists output to a file so it
-        // can be read later. We mirror this by writing output to a temp file.
+        // TS uses `spawnBackgroundTask()` → `shellCommand.background(taskId)`
+        // which streams output to a file WHILE the command runs (so reads/
+        // notifications work before the process exits). We mirror this by
+        // taking the stdout/stderr pipes and appending to the output file
+        // incrementally in a background task.
         if run_in_background {
             let pid = child.id().unwrap_or(0);
             let task_id = format!("bg_{}", pid);
 
             // Build output path matching TS `getTaskOutputPath(taskId)`.
-            // TS stores in a per-session temp dir; we use $TMPDIR/claude-bg-tasks/.
+            // TS uses `<taskOutputDir>/<taskId>.output`; we use
+            // `$TMPDIR/claude-bg-tasks/<task_id>.output`.
             let output_dir = std::env::temp_dir().join("claude-bg-tasks");
             let _ = std::fs::create_dir_all(&output_dir);
-            let output_path = output_dir.join(format!("{}.txt", task_id));
-            let output_path_clone = output_path.clone();
+            let output_path = output_dir.join(format!("{}.output", task_id));
 
-            // Spawn a detached task that waits for the child, captures output,
-            // and writes it to the output file so the user can read it later.
+            // Take pipes so we can stream output to the file incrementally.
+            let mut stdout_pipe = child.stdout.take().expect("stdout pipe");
+            let mut stderr_pipe = child.stderr.take().expect("stderr pipe");
+            let output_path_for_task = output_path.clone();
+
+            // Spawn a detached task that streams output to the file while the
+            // process runs, matching TS `shellCommand.background()` behavior
+            // where the task output file is written to incrementally.
             tokio::spawn(async move {
-                let output = child.wait_with_output().await;
-                if let Ok(output) = output {
-                    let mut content = String::new();
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stdout.is_empty() {
-                        content.push_str(&stdout);
-                    }
-                    if !stderr.is_empty() {
-                        if !content.is_empty() {
-                            content.push('\n');
+                use tokio::io::AsyncWriteExt;
+
+                let file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&output_path_for_task)
+                    .await;
+
+                if let Ok(mut file) = file {
+                    // Stream stdout and stderr concurrently, appending to file.
+                    let mut stdout_buf = vec![0u8; 4096];
+                    let mut stderr_buf = vec![0u8; 4096];
+                    let mut stdout_done = false;
+                    let mut stderr_done = false;
+
+                    loop {
+                        tokio::select! {
+                            result = stdout_pipe.read(&mut stdout_buf), if !stdout_done => {
+                                match result {
+                                    Ok(0) => stdout_done = true,
+                                    Ok(n) => {
+                                        let _ = file.write_all(&stdout_buf[..n]).await;
+                                        let _ = file.flush().await;
+                                    }
+                                    Err(_) => stdout_done = true,
+                                }
+                            }
+                            result = stderr_pipe.read(&mut stderr_buf), if !stderr_done => {
+                                match result {
+                                    Ok(0) => stderr_done = true,
+                                    Ok(n) => {
+                                        let _ = file.write_all(b"[stderr] ").await;
+                                        let _ = file.write_all(&stderr_buf[..n]).await;
+                                        let _ = file.flush().await;
+                                    }
+                                    Err(_) => stderr_done = true,
+                                }
+                            }
+                            else => break,
                         }
-                        content.push_str("[stderr]\n");
-                        content.push_str(&stderr);
+
+                        if stdout_done && stderr_done {
+                            break;
+                        }
                     }
-                    let code = output.status.code().unwrap_or(-1);
-                    content.push_str(&format!("\n[exit code: {}]", code));
-                    let _ = std::fs::write(&output_path_clone, &content);
+
+                    // Wait for exit and write final status
+                    let status = child.wait().await;
+                    let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+                    let _ = file.write_all(format!("\n[exit code: {}]\n", code).as_bytes()).await;
+                    let _ = file.flush().await;
+                } else {
+                    // File open failed; still wait so the child doesn't zombie
+                    let _ = child.wait().await;
                 }
             });
 
@@ -940,11 +986,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bash_background_output_persisted() {
-        // Background tasks should persist output to disk
+    async fn test_bash_background_output_streamed() {
+        // Background tasks should stream output to disk incrementally
         let tool = BashTool;
         let input = json!({
-            "command": "echo persisted_output",
+            "command": "echo streamed_output",
             "run_in_background": true
         });
         let result = tool
@@ -953,13 +999,19 @@ mod tests {
             .unwrap();
 
         let output_path = result.data["outputPath"].as_str().unwrap();
-        // Wait a bit for the background task to write
+        // File extension should match TS convention (.output)
+        assert!(
+            output_path.ends_with(".output"),
+            "output path should use .output extension, got: {}",
+            output_path
+        );
+        // Wait a bit for the background task to stream output
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         let content = std::fs::read_to_string(output_path).unwrap_or_default();
         assert!(
-            content.contains("persisted_output"),
-            "background output should be persisted to file, got: {}",
+            content.contains("streamed_output"),
+            "background output should be streamed to file, got: {}",
             content
         );
         assert!(
@@ -969,6 +1021,42 @@ mod tests {
         );
 
         // Cleanup
+        let _ = std::fs::remove_file(output_path);
+    }
+
+    #[tokio::test]
+    async fn test_bash_background_output_readable_while_running() {
+        // Verify output is streamed incrementally (readable before process exits)
+        let tool = BashTool;
+        // Command that writes output then sleeps -- we should be able to read
+        // partial output before the sleep finishes
+        let input = json!({
+            "command": "echo early_output && sleep 10",
+            "run_in_background": true
+        });
+        let result = tool
+            .call(&input, &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+
+        let output_path = result.data["outputPath"].as_str().unwrap();
+        // Wait enough for echo to complete but not for sleep to finish
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let content = std::fs::read_to_string(output_path).unwrap_or_default();
+        assert!(
+            content.contains("early_output"),
+            "should be able to read partial output while command is still running, got: {}",
+            content
+        );
+        // File should NOT yet have [exit code] since sleep 10 is still running
+        assert!(
+            !content.contains("[exit code:"),
+            "should not have exit code while command is still running, got: {}",
+            content
+        );
+
+        // Cleanup (the sleep 10 will be killed by process cleanup)
         let _ = std::fs::remove_file(output_path);
     }
 }
