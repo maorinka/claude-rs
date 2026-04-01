@@ -80,7 +80,17 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Some(SubCommand::Logout) => {
-            println!("Logout not yet implemented");
+            if let Ok(dir) = claude_core::config::paths::claude_dir() {
+                let cred = dir.join(".credentials.json");
+                if cred.exists() { let _ = std::fs::remove_file(&cred); }
+            }
+            if cfg!(target_os = "macos") {
+                let user = std::env::var("USER").unwrap_or_default();
+                let _ = std::process::Command::new("security")
+                    .args(["delete-generic-password", "-a", &user, "-s", "Claude Code-credentials"])
+                    .output();
+            }
+            println!("Logged out successfully.");
             return Ok(());
         }
         Some(SubCommand::Config) => {
