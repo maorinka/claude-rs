@@ -231,15 +231,54 @@ pub enum PermissionCheckResult {
 
 /// Read-only commands that never need permission prompts.
 const READ_ONLY_COMMANDS: &[&str] = &[
-    "ls", "cat", "head", "tail", "less", "more", "wc", "file", "stat",
-    "find", "grep", "rg", "ag", "ack", "which", "where", "type",
-    "echo", "printf", "date", "pwd", "whoami", "hostname", "uname",
-    "env", "printenv", "true", "false", "test", "[",
-    "git status", "git log", "git diff", "git show", "git branch",
-    "git remote", "git tag", "git stash list",
-    "cargo check", "cargo test", "cargo clippy", "cargo build",
-    "npm test", "npm run lint", "npx tsc", "node -e",
-    "python -c", "python3 -c",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "wc",
+    "file",
+    "stat",
+    "find",
+    "grep",
+    "rg",
+    "ag",
+    "ack",
+    "which",
+    "where",
+    "type",
+    "echo",
+    "printf",
+    "date",
+    "pwd",
+    "whoami",
+    "hostname",
+    "uname",
+    "env",
+    "printenv",
+    "true",
+    "false",
+    "test",
+    "[",
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git remote",
+    "git tag",
+    "git stash list",
+    "cargo check",
+    "cargo test",
+    "cargo clippy",
+    "cargo build",
+    "npm test",
+    "npm run lint",
+    "npx tsc",
+    "node -e",
+    "python -c",
+    "python3 -c",
 ];
 
 /// Check permissions for a command by splitting compound commands and
@@ -263,9 +302,9 @@ pub fn check_permissions(command: &str) -> PermissionCheckResult {
         };
 
         // Check if the command (or command + subcommand prefix) is read-only
-        let is_safe = READ_ONLY_COMMANDS.iter().any(|safe| {
-            sub_cmd.starts_with(safe)
-        });
+        let is_safe = READ_ONLY_COMMANDS
+            .iter()
+            .any(|safe| sub_cmd.starts_with(safe));
 
         if !is_safe {
             needs_ask.push(sub_cmd.clone());
@@ -756,8 +795,14 @@ mod tests {
     #[test]
     fn test_permission_read_only_allowed() {
         assert_eq!(check_permissions("ls -la"), PermissionCheckResult::Allow);
-        assert_eq!(check_permissions("git status"), PermissionCheckResult::Allow);
-        assert_eq!(check_permissions("echo hello"), PermissionCheckResult::Allow);
+        assert_eq!(
+            check_permissions("git status"),
+            PermissionCheckResult::Allow
+        );
+        assert_eq!(
+            check_permissions("echo hello"),
+            PermissionCheckResult::Allow
+        );
     }
 
     #[test]
@@ -788,7 +833,10 @@ mod tests {
         // Generate more than MAX_SUBCOMMANDS_FOR_SECURITY_CHECK commands
         let commands: Vec<&str> = (0..51).map(|_| "echo hi").collect();
         let big_command = commands.join(" && ");
-        assert_eq!(check_permissions(&big_command), PermissionCheckResult::TooComplex);
+        assert_eq!(
+            check_permissions(&big_command),
+            PermissionCheckResult::TooComplex
+        );
     }
 
     #[test]
@@ -845,10 +893,7 @@ mod tests {
         assert_eq!(result.data["interrupted"], false);
         assert_eq!(result.data["code"], 0);
         assert!(
-            result.data["stdout"]
-                .as_str()
-                .unwrap()
-                .contains("hello"),
+            result.data["stdout"].as_str().unwrap().contains("hello"),
             "stdout should contain 'hello', got: {}",
             result.data["stdout"]
         );
@@ -905,12 +950,7 @@ mod tests {
             .unwrap();
         assert!(!result.is_error);
         assert_eq!(result.data["code"], 0);
-        assert!(
-            result.data["stdout"]
-                .as_str()
-                .unwrap()
-                .contains("clamped")
-        );
+        assert!(result.data["stdout"].as_str().unwrap().contains("clamped"));
     }
 
     #[tokio::test]
@@ -993,12 +1033,10 @@ mod tests {
             .unwrap();
         assert!(!result.is_error);
         assert_eq!(result.data["code"], 0);
-        assert!(
-            result.data["stdout"]
-                .as_str()
-                .unwrap()
-                .contains("foreground")
-        );
+        assert!(result.data["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("foreground"));
         // No backgroundTaskId
         assert!(result.data.get("backgroundTaskId").is_none());
     }
@@ -1010,9 +1048,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
-        let handle = tokio::spawn(async move {
-            tool.call(&input, &make_ctx(), cancel_clone, None).await
-        });
+        let handle =
+            tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
         // Cancel after a short delay
         tokio::time::sleep(Duration::from_millis(100)).await;

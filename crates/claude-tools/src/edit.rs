@@ -114,14 +114,12 @@ Usage:
                     is_error: false,
                 });
             }
-            return Ok(error_result(format!(
-                "File not found: {}",
-                file_path
-            )));
+            return Ok(error_result(format!("File not found: {}", file_path)));
         }
 
         // Staleness check: ensure the file has been read and not modified since.
-        if let Err(msg) = crate::write::check_file_staleness(file_path, path, &ctx.read_file_state) {
+        if let Err(msg) = crate::write::check_file_staleness(file_path, path, &ctx.read_file_state)
+        {
             return Ok(error_result(msg));
         }
 

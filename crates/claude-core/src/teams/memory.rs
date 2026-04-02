@@ -130,7 +130,8 @@ mod tests {
         let sync = make_sync(&tmp);
 
         for i in 0..5 {
-            sync.write_memory(&format!("key-{}", i), &format!("value {}", i)).unwrap();
+            sync.write_memory(&format!("key-{}", i), &format!("value {}", i))
+                .unwrap();
         }
 
         let keys = sync.list_memories().unwrap();

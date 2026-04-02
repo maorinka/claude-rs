@@ -1,6 +1,5 @@
 use claude_tools::plan_mode::{
-    is_plan_mode_active, set_plan_mode, should_plan_mode_block,
-    EnterPlanModeTool, ExitPlanModeTool,
+    is_plan_mode_active, set_plan_mode, should_plan_mode_block, EnterPlanModeTool, ExitPlanModeTool,
 };
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use serde_json::json;

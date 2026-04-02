@@ -40,7 +40,9 @@ pub fn check_file_staleness(
     path: &std::path::Path,
     read_state: &Arc<Mutex<ReadFileState>>,
 ) -> std::result::Result<(), String> {
-    let state = read_state.lock().map_err(|_| "internal error: lock poisoned".to_string())?;
+    let state = read_state
+        .lock()
+        .map_err(|_| "internal error: lock poisoned".to_string())?;
 
     let entry = match state.get(file_path) {
         Some(e) => e,
@@ -52,9 +54,7 @@ pub fn check_file_staleness(
     };
 
     if entry.is_partial_view {
-        return Err(
-            "File has not been read yet. Read it first before writing to it.".to_string(),
-        );
+        return Err("File has not been read yet. Read it first before writing to it.".to_string());
     }
 
     // Check mtime
@@ -155,7 +155,11 @@ Usage:
             None
         };
 
-        let write_type = if original_file.is_some() { "update" } else { "create" };
+        let write_type = if original_file.is_some() {
+            "update"
+        } else {
+            "create"
+        };
 
         // Create parent directories if they do not exist.
         if let Some(parent) = path.parent() {
@@ -180,7 +184,10 @@ Usage:
             "originalFile": original_file,
         });
 
-        Ok(ToolResultData { data, is_error: false })
+        Ok(ToolResultData {
+            data,
+            is_error: false,
+        })
     }
 
     fn is_destructive(&self, _input: &Value) -> bool {
@@ -211,11 +218,7 @@ mod tests {
         std::fs::write(path, "original").unwrap();
 
         let state = Arc::new(Mutex::new(ReadFileState::new()));
-        let result = check_file_staleness(
-            path.to_str().unwrap(),
-            path,
-            &state,
-        );
+        let result = check_file_staleness(path.to_str().unwrap(), path, &state);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not been read yet"));
     }
@@ -228,13 +231,12 @@ mod tests {
 
         let state = Arc::new(Mutex::new(ReadFileState::new()));
         // Simulate a read
-        state.lock().unwrap().record_read(path.to_str().unwrap(), false);
+        state
+            .lock()
+            .unwrap()
+            .record_read(path.to_str().unwrap(), false);
 
-        let result = check_file_staleness(
-            path.to_str().unwrap(),
-            path,
-            &state,
-        );
+        let result = check_file_staleness(path.to_str().unwrap(), path, &state);
         assert!(result.is_ok());
     }
 
@@ -258,11 +260,7 @@ mod tests {
         }
 
         // File's mtime will be newer than timestamp 1000
-        let result = check_file_staleness(
-            path.to_str().unwrap(),
-            path,
-            &state,
-        );
+        let result = check_file_staleness(path.to_str().unwrap(), path, &state);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("modified since read"));
     }
@@ -275,13 +273,12 @@ mod tests {
 
         let state = Arc::new(Mutex::new(ReadFileState::new()));
         // Record a partial read
-        state.lock().unwrap().record_read(path.to_str().unwrap(), true);
+        state
+            .lock()
+            .unwrap()
+            .record_read(path.to_str().unwrap(), true);
 
-        let result = check_file_staleness(
-            path.to_str().unwrap(),
-            path,
-            &state,
-        );
+        let result = check_file_staleness(path.to_str().unwrap(), path, &state);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not been read yet"));
     }

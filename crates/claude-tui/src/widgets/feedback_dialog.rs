@@ -300,7 +300,12 @@ impl Widget for FeedbackWidget<'_> {
                     "How was this session?",
                     Style::default().add_modifier(Modifier::BOLD),
                 ));
-                buf.set_line(inner.x + 1, inner.y, &question, inner.width.saturating_sub(2));
+                buf.set_line(
+                    inner.x + 1,
+                    inner.y,
+                    &question,
+                    inner.width.saturating_sub(2),
+                );
 
                 if inner.height > 2 {
                     let options = Line::from(vec![
@@ -342,10 +347,7 @@ impl Widget for FeedbackWidget<'_> {
                     .unwrap_or("?");
                 let header = Line::from(vec![
                     Span::raw("Rated: "),
-                    Span::styled(
-                        rating_label,
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(rating_label, Style::default().add_modifier(Modifier::BOLD)),
                 ]);
                 buf.set_line(inner.x + 1, inner.y, &header, inner.width.saturating_sub(2));
 
@@ -553,10 +555,11 @@ mod tests {
         let area = Rect::new(0, 0, 50, 10);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
-        let content: String = buf.content().iter().map(|c| c.symbol().to_string()).collect();
-        assert!(
-            content.trim().is_empty(),
-            "Closed dialog should not render"
-        );
+        let content: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(content.trim().is_empty(), "Closed dialog should not render");
     }
 }

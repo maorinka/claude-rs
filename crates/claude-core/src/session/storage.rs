@@ -81,8 +81,12 @@ mod tests {
         // Write some transcript lines
         let msg1 = json!({"role": "user", "content": [{"type": "text", "text": "hello"}]});
         let msg2 = json!({"role": "assistant", "content": [{"type": "text", "text": "hi there"}]});
-        storage.append_transcript(&serde_json::to_string(&msg1).unwrap()).unwrap();
-        storage.append_transcript(&serde_json::to_string(&msg2).unwrap()).unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&msg1).unwrap())
+            .unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&msg2).unwrap())
+            .unwrap();
 
         let messages = storage.load_transcript().unwrap();
         assert_eq!(messages.len(), 2);
@@ -96,7 +100,9 @@ mod tests {
         let storage = SessionStorage::from_dir(tmp.path().to_path_buf());
 
         let msg1 = json!({"role": "user", "content": "hello"});
-        storage.append_transcript(&serde_json::to_string(&msg1).unwrap()).unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&msg1).unwrap())
+            .unwrap();
         storage.append_transcript("not valid json!!!").unwrap();
         storage.append_transcript("").unwrap(); // empty line
 
@@ -113,9 +119,15 @@ mod tests {
         let msg1 = json!({"role": "user", "content": [{"type": "text", "text": "what is 2+2?"}]});
         let msg2 = json!({"role": "assistant", "content": [{"type": "text", "text": "4"}]});
         let msg3 = json!({"role": "user", "content": [{"type": "text", "text": "thanks"}]});
-        storage.append_transcript(&serde_json::to_string(&msg1).unwrap()).unwrap();
-        storage.append_transcript(&serde_json::to_string(&msg2).unwrap()).unwrap();
-        storage.append_transcript(&serde_json::to_string(&msg3).unwrap()).unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&msg1).unwrap())
+            .unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&msg2).unwrap())
+            .unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&msg3).unwrap())
+            .unwrap();
 
         let messages = storage.load_transcript().unwrap();
         assert_eq!(messages.len(), 3);

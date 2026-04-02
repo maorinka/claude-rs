@@ -1,8 +1,8 @@
+use super::content::ContentBlock;
+use super::usage::Usage;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use super::content::ContentBlock;
-use super::usage::Usage;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]

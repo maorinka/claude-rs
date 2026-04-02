@@ -1,20 +1,26 @@
-use claude_tui::widgets::message_list::*;
 use claude_tui::markdown::*;
+use claude_tui::widgets::message_list::*;
 
 #[test]
 fn test_message_list_push_and_len() {
     let mut list = MessageList::new();
     assert!(list.is_empty());
-    list.push(MessageEntry::User { text: "hello".into() });
+    list.push(MessageEntry::User {
+        text: "hello".into(),
+    });
     assert_eq!(list.len(), 1);
-    list.push(MessageEntry::Assistant { text: "hi there".into() });
+    list.push(MessageEntry::Assistant {
+        text: "hi there".into(),
+    });
     assert_eq!(list.len(), 2);
 }
 
 #[test]
 fn test_message_list_clear() {
     let mut list = MessageList::new();
-    list.push(MessageEntry::User { text: "test".into() });
+    list.push(MessageEntry::User {
+        text: "test".into(),
+    });
     list.clear();
     assert!(list.is_empty());
 }
@@ -23,7 +29,9 @@ fn test_message_list_clear() {
 fn test_message_list_scroll() {
     let mut list = MessageList::new();
     for i in 0..20 {
-        list.push(MessageEntry::User { text: format!("msg {}", i) });
+        list.push(MessageEntry::User {
+            text: format!("msg {}", i),
+        });
     }
     list.scroll_up(5);
     list.scroll_down(2);
@@ -64,7 +72,8 @@ fn test_markdown_bold() {
 #[test]
 fn test_permission_dialog_buttons() {
     use claude_tui::widgets::permission_dialog::*;
-    let mut dialog = PermissionDialog::new("Bash".into(), "Execute command".into(), "ls -la".into());
+    let mut dialog =
+        PermissionDialog::new("Bash".into(), "Execute command".into(), "ls -la".into());
     assert_eq!(dialog.selected(), "allow");
     dialog.next_button();
     assert_eq!(dialog.selected(), "deny");

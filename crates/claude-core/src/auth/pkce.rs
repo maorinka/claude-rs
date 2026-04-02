@@ -1,6 +1,6 @@
-use sha2::{Sha256, Digest};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 
 /// Generate a 43-character base64url-encoded code verifier (32 random bytes)
 pub fn generate_code_verifier() -> String {

@@ -54,7 +54,11 @@ impl CompactionSummary {
         lines.push("=== Compaction Summary ===".into());
         lines.push(String::new());
 
-        let kind = if self.is_auto { "Auto-compaction" } else { "Manual compaction" };
+        let kind = if self.is_auto {
+            "Auto-compaction"
+        } else {
+            "Manual compaction"
+        };
         let direction = match self.direction {
             CompactionDirection::UpTo => "up to this point",
             CompactionDirection::FromPoint => "from this point",
@@ -62,10 +66,7 @@ impl CompactionSummary {
         lines.push(format!("{} ({})", kind, direction));
         lines.push(String::new());
 
-        lines.push(format!(
-            "Messages summarized: {}",
-            self.messages_removed
-        ));
+        lines.push(format!("Messages summarized: {}", self.messages_removed));
         lines.push(format!(
             "Tokens freed:        {} ({:.1}% of context)",
             format_tokens(self.tokens_freed),
@@ -160,10 +161,7 @@ impl Widget for CompactSummaryWidget<'_> {
             CompactionDirection::FromPoint => "from this point",
         };
         let header = Line::from(vec![
-            Span::styled(
-                "Summarized ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("Summarized ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!("{}", self.summary.messages_removed),
                 Style::default()
@@ -210,7 +208,12 @@ impl Widget for CompactSummaryWidget<'_> {
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
-            buf.set_line(inner.x + 1, row, &context_line, inner.width.saturating_sub(2));
+            buf.set_line(
+                inner.x + 1,
+                row,
+                &context_line,
+                inner.width.saturating_sub(2),
+            );
             row += 1;
         }
 

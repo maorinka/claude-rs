@@ -5,7 +5,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Parser)]
-#[command(name = "claude-rs", about = "Claude Code - AI coding assistant (Rust port)", version)]
+#[command(
+    name = "claude-rs",
+    about = "Claude Code - AI coding assistant (Rust port)",
+    version
+)]
 pub struct Cli {
     /// Initial prompt (non-interactive mode)
     pub prompt: Option<String>,
@@ -91,14 +95,17 @@ async fn main() -> Result<()> {
 
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter(
-            if cli.verbose { "debug" } else { "error" }
-        )
+        .with_env_filter(if cli.verbose { "debug" } else { "error" })
         .init();
 
     // Handle subcommands
     match &cli.command {
-        Some(SubCommand::Login { email, sso, console, claudeai }) => {
+        Some(SubCommand::Login {
+            email,
+            sso,
+            console,
+            claudeai,
+        }) => {
             let opts = claude_core::auth::login::LoginOptions {
                 email: email.clone(),
                 sso: *sso,
@@ -111,12 +118,16 @@ async fn main() -> Result<()> {
         Some(SubCommand::Logout) => {
             // Delete tokens from secure storage (keychain + file)
             claude_core::auth::storage::delete_tokens().await.ok();
+            claude_core::auth::storage::delete_managed_api_key()
+                .await
+                .ok();
             // Clear account info from global config
             claude_core::config::global::save_global_config(|mut config| {
                 config.oauth_account = None;
                 config.primary_api_key = None;
                 config
-            }).ok();
+            })
+            .ok();
             println!("Successfully logged out from your Anthropic account.");
             return Ok(());
         }
@@ -124,7 +135,10 @@ async fn main() -> Result<()> {
             let cwd = std::env::current_dir()?;
             let root = claude_core::config::paths::detect_project_root(&cwd);
             println!("Project root: {}", root.display());
-            println!("Config dir: {}", claude_core::config::paths::claude_dir()?.display());
+            println!(
+                "Config dir: {}",
+                claude_core::config::paths::claude_dir()?.display()
+            );
             return Ok(());
         }
         Some(SubCommand::Server { port }) => {
@@ -152,7 +166,7 @@ async fn main() -> Result<()> {
             eprintln!("  {}", e);
             eprintln!();
             eprintln!("  To get started:");
-            eprintln!("  1. Run \x1b[1mclaude login\x1b[0m (if Claude Code is installed)");
+            eprintln!("  1. Run \x1b[1mclaude-rs login\x1b[0m");
             eprintln!("  2. Or set: \x1b[1mexport ANTHROPIC_API_KEY=sk-ant-...\x1b[0m");
             eprintln!();
             std::process::exit(1);
@@ -246,12 +260,14 @@ async fn main() -> Result<()> {
     );
 
     // Build system prompt
-    let tool_descriptions: Vec<(String, String)> = tools.all().iter()
+    let tool_descriptions: Vec<(String, String)> = tools
+        .all()
+        .iter()
         .map(|t| (t.name().to_string(), format!("Tool: {}", t.name())))
         .collect();
-    let system_prompt_values = claude_core::context::system_prompt::build_system_prompt(
-        &project_root, &tool_descriptions,
-    ).await?;
+    let system_prompt_values =
+        claude_core::context::system_prompt::build_system_prompt(&project_root, &tool_descriptions)
+            .await?;
 
     // Convert Vec<Value> to Vec<ContentBlock> for the engine
     let system_prompt: Vec<claude_core::types::content::ContentBlock> = system_prompt_values
@@ -281,7 +297,10 @@ async fn main() -> Result<()> {
 
     // Create query engine
     let mut query_engine = claude_core::query::engine::QueryEngine::new(
-        api_client, system_prompt, tool_defs, cancel.clone(),
+        api_client,
+        system_prompt,
+        tool_defs,
+        cancel.clone(),
     );
 
     if let Some(max) = cli.max_turns {
@@ -311,10 +330,21 @@ async fn main() -> Result<()> {
         let session_mgr = claude_core::session::manager::SessionManager::resume(&resolved_id)?;
         let transcript = session_mgr.storage().load_transcript()?;
         if transcript.is_empty() {
-            eprintln!("Warning: session '{}' has no transcript to resume", resolved_id);
+            eprintln!(
+                "Warning: session '{}' has no transcript to resume",
+                resolved_id
+            );
         } else {
-            tracing::info!("Resuming session '{}' with {} messages", resolved_id, transcript.len());
-            eprintln!("Resuming session {} ({} messages)", resolved_id, transcript.len());
+            tracing::info!(
+                "Resuming session '{}' with {} messages",
+                resolved_id,
+                transcript.len()
+            );
+            eprintln!(
+                "Resuming session {} ({} messages)",
+                resolved_id,
+                transcript.len()
+            );
             query_engine.load_messages(transcript);
         }
     }
@@ -365,13 +395,13 @@ async fn main() -> Result<()> {
     // Handle non-interactive prompt mode
     if let Some(prompt) = cli.prompt {
         // If using OAuth proxy, delegate to real claude binary
-        use std::path::PathBuf;
-        use tokio::sync::mpsc;
         use claude_core::permissions::evaluator::evaluate_permission_sync;
         use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
         use claude_core::query::engine::TurnResult;
         use claude_core::types::events::StreamEvent;
         use claude_tools::ToolUseContext;
+        use std::path::PathBuf;
+        use tokio::sync::mpsc;
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
@@ -453,9 +483,13 @@ async fn main() -> Result<()> {
                                             working_directory: cwd.clone(),
                                             read_file_state: read_file_state.clone(),
                                         };
-                                        match exec.call(&tool_info.input, &ctx, cancel.clone(), None).await {
+                                        match exec
+                                            .call(&tool_info.input, &ctx, cancel.clone(), None)
+                                            .await
+                                        {
                                             Ok(data) => {
-                                                let text = data.data
+                                                let text = data
+                                                    .data
                                                     .as_str()
                                                     .unwrap_or(&data.data.to_string())
                                                     .to_string();
@@ -490,7 +524,8 @@ async fn main() -> Result<()> {
     let mut app = claude_tui::app::App::new()?;
     app.set_model_name(&model_display);
     app.set_skills(skills);
-    app.run_with_engine(query_engine, tools, cancel.clone(), permission_mode).await?;
+    app.run_with_engine(query_engine, tools, cancel.clone(), permission_mode)
+        .await?;
 
     // Gracefully disconnect MCP servers
     let mgr = mcp_manager.read().await;

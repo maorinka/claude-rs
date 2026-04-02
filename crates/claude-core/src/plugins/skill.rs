@@ -78,7 +78,7 @@ fn split_frontmatter(input: &str) -> (Option<&str>, &str) {
     let remaining = &input_trimmed[yaml_start..];
     for (offset, _) in remaining.match_indices("\n---") {
         let after_close = yaml_start + offset + 4; // skip `\n---`
-        // The `---` must be followed by optional whitespace then newline or EOF.
+                                                   // The `---` must be followed by optional whitespace then newline or EOF.
         let tail = &input_trimmed[after_close..];
         let rest_start = if tail.is_empty() {
             after_close
@@ -95,7 +95,7 @@ fn split_frontmatter(input: &str) -> (Option<&str>, &str) {
         };
 
         let yaml_text = &input_trimmed[yaml_start..yaml_start + offset + 1]; // include trailing \n
-        // Trim the trailing newline from the yaml text for cleaner parsing
+                                                                             // Trim the trailing newline from the yaml text for cleaner parsing
         let yaml_text = yaml_text.trim();
         let content = &input_trimmed[rest_start..];
         return (Some(yaml_text), content);
@@ -262,7 +262,12 @@ pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
     // 1. User-level skills (~/.claude/skills/)
     if let Ok(home) = claude_dir() {
         let user_skills_dir = home.join("skills");
-        load_skills_from_dir(&user_skills_dir, &SkillSource::Builtin, &mut skills, &mut seen_names);
+        load_skills_from_dir(
+            &user_skills_dir,
+            &SkillSource::Builtin,
+            &mut skills,
+            &mut seen_names,
+        );
     }
 
     // 2. Project-level skills (<project>/.claude/skills/)
@@ -333,10 +338,7 @@ fn load_skills_from_dir(
             when_to_use: parsed.frontmatter.when_to_use,
             allowed_tools: parsed.frontmatter.allowed_tools,
             user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
-            disable_model_invocation: parsed
-                .frontmatter
-                .disable_model_invocation
-                .unwrap_or(false),
+            disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
         });
     }
 }
@@ -356,10 +358,7 @@ pub fn match_skill<'a>(input: &'a str, skill: &Skill) -> Option<&'a str> {
     // Explicit slash-command invocation: /skill-name [args...]
     if let Some(rest) = trimmed.strip_prefix('/') {
         if rest == skill.name || rest.starts_with(&format!("{} ", skill.name)) {
-            let args = rest
-                .strip_prefix(&skill.name)
-                .unwrap_or("")
-                .trim_start();
+            let args = rest.strip_prefix(&skill.name).unwrap_or("").trim_start();
             return Some(args);
         }
     }
@@ -436,7 +435,10 @@ Do the thing.
 "#;
         let parsed = parse_skill_file(md);
         assert_eq!(parsed.frontmatter.name.as_deref(), Some("my-skill"));
-        assert_eq!(parsed.frontmatter.description.as_deref(), Some("A test skill"));
+        assert_eq!(
+            parsed.frontmatter.description.as_deref(),
+            Some("A test skill")
+        );
         assert_eq!(
             parsed.frontmatter.argument_hint.as_deref(),
             Some("<message>")

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::login::OAUTH_BETA_HEADER;
-use crate::config::global::{AccountInfo, save_global_config};
+use crate::config::global::{save_global_config, AccountInfo};
 
 // ── Profile endpoint URLs ───────────────────────────────────────────────────
 
@@ -100,8 +100,8 @@ pub async fn fetch_profile_from_oauth_token(
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            let profile: OAuthProfileResponse = r.json().await
-                .context("failed to parse profile response")?;
+            let profile: OAuthProfileResponse =
+                r.json().await.context("failed to parse profile response")?;
             Ok(Some(profile))
         }
         Ok(r) => {
@@ -134,7 +134,9 @@ pub async fn fetch_profile_from_api_key(
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            let profile: OAuthProfileResponse = r.json().await
+            let profile: OAuthProfileResponse = r
+                .json()
+                .await
                 .context("failed to parse CLI profile response")?;
             Ok(Some(profile))
         }
@@ -150,22 +152,27 @@ pub async fn fetch_profile_info(access_token: &str) -> ProfileInfo {
         .await
         .unwrap_or(None);
 
-    let org_type = profile.as_ref()
+    let org_type = profile
+        .as_ref()
         .and_then(|p| p.organization.organization_type.as_deref());
 
     ProfileInfo {
         subscription_type: map_subscription_type(org_type),
-        rate_limit_tier: profile.as_ref()
+        rate_limit_tier: profile
+            .as_ref()
             .and_then(|p| p.organization.rate_limit_tier.clone()),
-        display_name: profile.as_ref()
+        display_name: profile
+            .as_ref()
             .and_then(|p| p.account.display_name.clone()),
-        has_extra_usage_enabled: profile.as_ref()
+        has_extra_usage_enabled: profile
+            .as_ref()
             .and_then(|p| p.organization.has_extra_usage_enabled),
-        billing_type: profile.as_ref()
+        billing_type: profile
+            .as_ref()
             .and_then(|p| p.organization.billing_type.clone()),
-        account_created_at: profile.as_ref()
-            .and_then(|p| p.account.created_at.clone()),
-        subscription_created_at: profile.as_ref()
+        account_created_at: profile.as_ref().and_then(|p| p.account.created_at.clone()),
+        subscription_created_at: profile
+            .as_ref()
             .and_then(|p| p.organization.subscription_created_at.clone()),
         raw_profile: profile,
     }
@@ -188,7 +195,9 @@ pub async fn fetch_and_store_user_roles(access_token: &str) -> Result<()> {
         anyhow::bail!("Failed to fetch user roles: {}", resp.status());
     }
 
-    let roles: UserRolesResponse = resp.json().await
+    let roles: UserRolesResponse = resp
+        .json()
+        .await
         .context("failed to parse roles response")?;
 
     save_global_config(|mut config| {
@@ -219,10 +228,22 @@ mod tests {
 
     #[test]
     fn test_map_subscription_type() {
-        assert_eq!(map_subscription_type(Some("claude_pro")), Some("pro".to_string()));
-        assert_eq!(map_subscription_type(Some("claude_max")), Some("max".to_string()));
-        assert_eq!(map_subscription_type(Some("claude_team")), Some("team".to_string()));
-        assert_eq!(map_subscription_type(Some("claude_enterprise")), Some("enterprise".to_string()));
+        assert_eq!(
+            map_subscription_type(Some("claude_pro")),
+            Some("pro".to_string())
+        );
+        assert_eq!(
+            map_subscription_type(Some("claude_max")),
+            Some("max".to_string())
+        );
+        assert_eq!(
+            map_subscription_type(Some("claude_team")),
+            Some("team".to_string())
+        );
+        assert_eq!(
+            map_subscription_type(Some("claude_enterprise")),
+            Some("enterprise".to_string())
+        );
         assert_eq!(map_subscription_type(Some("unknown")), None);
         assert_eq!(map_subscription_type(None), None);
     }
@@ -255,7 +276,10 @@ mod tests {
             profile.organization.organization_type.as_deref(),
             Some("claude_pro")
         );
-        assert_eq!(profile.organization.rate_limit_tier.as_deref(), Some("tier1"));
+        assert_eq!(
+            profile.organization.rate_limit_tier.as_deref(),
+            Some("tier1")
+        );
     }
 
     #[test]

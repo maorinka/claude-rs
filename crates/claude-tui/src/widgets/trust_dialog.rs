@@ -22,19 +22,11 @@ pub enum TrustDecision {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrustSubject {
     /// An MCP server.
-    McpServer {
-        name: String,
-        command: String,
-    },
+    McpServer { name: String, command: String },
     /// A project hook.
-    Hook {
-        event: String,
-        source: String,
-    },
+    Hook { event: String, source: String },
     /// A bash permission configuration from project settings.
-    BashPermission {
-        source: String,
-    },
+    BashPermission { source: String },
 }
 
 impl TrustSubject {
@@ -311,7 +303,12 @@ impl Widget for TrustDialogWidget<'_> {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ));
-        buf.set_line(inner.x + 1, inner.y, &warning, inner.width.saturating_sub(2));
+        buf.set_line(
+            inner.x + 1,
+            inner.y,
+            &warning,
+            inner.width.saturating_sub(2),
+        );
 
         // Description text
         if let Some(ref subject) = self.dialog.subject {
@@ -473,7 +470,11 @@ mod tests {
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
-        let content: String = buf.content().iter().map(|c| c.symbol().to_string()).collect();
+        let content: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
         assert!(
             content.trim().is_empty(),
             "Inactive dialog should not render"

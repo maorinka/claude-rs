@@ -79,10 +79,7 @@ mod tests {
     #[test]
     fn test_server_tool_definition_with_allowed_domains() {
         let allowed = vec!["example.com".to_string(), "docs.rs".to_string()];
-        let def = WebSearchTool::server_tool_definition_with_domains(
-            Some(&allowed),
-            None,
-        );
+        let def = WebSearchTool::server_tool_definition_with_domains(Some(&allowed), None);
         assert_eq!(def["type"], "web_search_20250305");
         assert_eq!(def["allowed_domains"][0], "example.com");
         assert_eq!(def["allowed_domains"][1], "docs.rs");
@@ -92,10 +89,7 @@ mod tests {
     #[test]
     fn test_server_tool_definition_with_blocked_domains() {
         let blocked = vec!["spam.com".to_string()];
-        let def = WebSearchTool::server_tool_definition_with_domains(
-            None,
-            Some(&blocked),
-        );
+        let def = WebSearchTool::server_tool_definition_with_domains(None, Some(&blocked));
         assert_eq!(def["blocked_domains"][0], "spam.com");
         assert!(def.get("allowed_domains").is_none());
     }
@@ -117,10 +111,7 @@ mod tests {
 
     #[test]
     fn test_empty_domain_lists_omitted() {
-        let def = WebSearchTool::server_tool_definition_with_domains(
-            Some(&[]),
-            Some(&[]),
-        );
+        let def = WebSearchTool::server_tool_definition_with_domains(Some(&[]), Some(&[]));
         // Empty arrays should not be added
         assert!(def.get("allowed_domains").is_none());
         assert!(def.get("blocked_domains").is_none());

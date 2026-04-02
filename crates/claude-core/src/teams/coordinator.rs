@@ -33,8 +33,7 @@ fn team_state_path(team_id: &str) -> PathBuf {
 /// Load a team from disk synchronously.
 fn read_team_sync(team_id: &str) -> Result<Team> {
     let path = team_state_path(team_id);
-    let json = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {:?}", path))?;
+    let json = std::fs::read_to_string(&path).with_context(|| format!("read {:?}", path))?;
     serde_json::from_str(&json).context("deserialize Team")
 }
 
@@ -93,7 +92,10 @@ fn kill_process(pid: u32) {
     #[cfg(not(unix))]
     {
         // On Windows we could use taskkill, but teams are a Unix-first feature.
-        warn!("kill_process: not implemented on this platform (pid={})", pid);
+        warn!(
+            "kill_process: not implemented on this platform (pid={})",
+            pid
+        );
     }
 }
 
@@ -250,9 +252,10 @@ impl TeamCoordinator {
         }
 
         // If all agents finished, mark team as stopped.
-        let all_done = team.agents.iter().all(|a| {
-            matches!(a.status, AgentStatus::Completed | AgentStatus::Failed)
-        });
+        let all_done = team
+            .agents
+            .iter()
+            .all(|a| matches!(a.status, AgentStatus::Completed | AgentStatus::Failed));
         if all_done && team.status == TeamStatus::Active {
             team.status = TeamStatus::Stopped;
         }
@@ -341,8 +344,7 @@ fn spawn_agent_process_with_exe(
     let (exe, is_real) = match exe_override {
         Some(p) => (p.to_path_buf(), false),
         None => (
-            std::env::current_exe()
-                .context("could not determine current executable path")?,
+            std::env::current_exe().context("could not determine current executable path")?,
             true,
         ),
     };
@@ -483,12 +485,12 @@ mod tests {
             let pid = team.agents[0].pid.expect("agent should have PID");
 
             // Process should be alive immediately after spawning.
-            assert!(process_is_running(pid), "process {pid} should be running before stop");
+            assert!(
+                process_is_running(pid),
+                "process {pid} should be running before stop"
+            );
 
-            coordinator
-                .stop_team(&team.id)
-                .await
-                .expect("stop_team");
+            coordinator.stop_team(&team.id).await.expect("stop_team");
 
             // Poll for up to 2 seconds to give the OS time to reap the process.
             let dead = {
@@ -503,7 +505,10 @@ mod tests {
                 dead
             };
 
-            assert!(dead, "process {pid} should be dead within 2s after stop_team");
+            assert!(
+                dead,
+                "process {pid} should be dead within 2s after stop_team"
+            );
 
             // Cleanup.
             let dir = teams_base_dir().join(&team.id);
@@ -552,10 +557,7 @@ mod tests {
     fn test_spawn_agent_uses_real_executable() {
         rt().block_on(async {
             let coordinator = TeamCoordinator::with_exe("/bin/echo");
-            let specs = vec![
-                AgentSpec::new("echo-agent", "hello world")
-                    .with_model("test-model"),
-            ];
+            let specs = vec![AgentSpec::new("echo-agent", "hello world").with_model("test-model")];
 
             let team = coordinator
                 .create_team("test-real-exe-spawn", specs)

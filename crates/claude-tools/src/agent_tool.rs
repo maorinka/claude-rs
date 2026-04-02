@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
-use crate::task_tools::{create_task_entry, register_process, append_output};
+use crate::task_tools::{append_output, create_task_entry, register_process};
 use claude_core::types::events::ToolResultData;
 
 pub struct AgentTool;

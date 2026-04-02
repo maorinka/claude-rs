@@ -1,5 +1,5 @@
-use anyhow::Result;
 use super::types::*;
+use anyhow::Result;
 
 const REMOTE_API_URL: &str = "https://api.anthropic.com/v1/environments";
 
@@ -74,10 +74,7 @@ impl RemoteClient {
             anyhow::bail!("Failed to register environment: {}", resp.status());
         }
         let data: serde_json::Value = resp.json().await?;
-        Ok(data["environment_id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string())
+        Ok(data["environment_id"].as_str().unwrap_or("").to_string())
     }
 }
 

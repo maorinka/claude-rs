@@ -1,19 +1,34 @@
+use crate::types::message::ApiMessage;
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
-use crate::types::message::ApiMessage;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum SseEvent {
-    MessageStart { message: ApiMessage },
-    ContentBlockStart { index: usize, block: ContentBlockStart },
-    ContentBlockDelta { index: usize, delta: ContentDelta },
-    ContentBlockStop { index: usize },
-    MessageDelta { stop_reason: Option<String>, usage: Option<DeltaUsage> },
+    MessageStart {
+        message: ApiMessage,
+    },
+    ContentBlockStart {
+        index: usize,
+        block: ContentBlockStart,
+    },
+    ContentBlockDelta {
+        index: usize,
+        delta: ContentDelta,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
+    MessageDelta {
+        stop_reason: Option<String>,
+        usage: Option<DeltaUsage>,
+    },
     MessageStop,
     Ping,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -116,7 +131,10 @@ pub fn parse_sse_event(event_type: &str, data: &str) -> Result<SseEvent> {
                 },
                 other => return Err(anyhow!("Unknown content_block type: {}", other)),
             };
-            Ok(SseEvent::ContentBlockStart { index: p.index, block })
+            Ok(SseEvent::ContentBlockStart {
+                index: p.index,
+                block,
+            })
         }
 
         "content_block_delta" => {
@@ -136,7 +154,10 @@ pub fn parse_sse_event(event_type: &str, data: &str) -> Result<SseEvent> {
                 },
                 other => return Err(anyhow!("Unknown delta type: {}", other)),
             };
-            Ok(SseEvent::ContentBlockDelta { index: p.index, delta })
+            Ok(SseEvent::ContentBlockDelta {
+                index: p.index,
+                delta,
+            })
         }
 
         "content_block_stop" => {

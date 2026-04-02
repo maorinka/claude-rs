@@ -84,7 +84,8 @@ fn repair_tool_pairing(messages: &mut Vec<Value>) {
     }
 
     // Strip orphaned tool_results (no matching tool_use)
-    let orphaned_results: Vec<String> = tool_result_ids.difference(&tool_use_ids).cloned().collect();
+    let orphaned_results: Vec<String> =
+        tool_result_ids.difference(&tool_use_ids).cloned().collect();
     if !orphaned_results.is_empty() {
         for msg in messages.iter_mut() {
             if msg["role"].as_str() == Some("user") {

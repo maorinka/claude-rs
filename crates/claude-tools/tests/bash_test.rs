@@ -1,5 +1,5 @@
-use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use claude_tools::bash::BashTool;
+use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use serde_json::json;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -52,7 +52,11 @@ async fn test_bash_stderr() {
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
     assert!(!result.is_error);
     let stderr = result.data["stderr"].as_str().unwrap();
-    assert!(stderr.contains("oops"), "stderr should contain 'oops', got: {:?}", stderr);
+    assert!(
+        stderr.contains("oops"),
+        "stderr should contain 'oops', got: {:?}",
+        stderr
+    );
 }
 
 #[tokio::test]
@@ -68,7 +72,10 @@ async fn test_bash_cwd() {
     // Canonicalize both sides to handle macOS /private/tmp symlinks
     let actual = std::fs::canonicalize(&stdout).unwrap_or_else(|_| PathBuf::from(&stdout));
     let expected = std::fs::canonicalize(&working_dir).unwrap_or(working_dir);
-    assert_eq!(actual, expected, "pwd output should match working_directory");
+    assert_eq!(
+        actual, expected,
+        "pwd output should match working_directory"
+    );
 }
 
 #[tokio::test]
@@ -82,5 +89,8 @@ async fn test_bash_cancellation() {
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
     assert!(!result.is_error);
     let interrupted = result.data["interrupted"].as_bool().unwrap();
-    assert!(interrupted, "should be interrupted when cancel token is already cancelled");
+    assert!(
+        interrupted,
+        "should be interrupted when cancel token is already cancelled"
+    );
 }

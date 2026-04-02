@@ -1,3 +1,3 @@
-pub mod types;
-pub mod server;
 pub mod protocol;
+pub mod server;
+pub mod types;

@@ -1,6 +1,6 @@
+use super::types::*;
 use anyhow::Result;
 use std::path::Path;
-use super::types::*;
 
 pub struct VcrPlayer {
     fixture: VcrFixture,

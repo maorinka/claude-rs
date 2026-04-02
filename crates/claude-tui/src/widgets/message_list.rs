@@ -28,13 +28,31 @@ const TEARDROP_ASTERISK: &str = "\u{273B}";
 #[derive(Clone, Debug)]
 pub enum MessageEntry {
     /// Welcome header shown at the start of a conversation.
-    Logo { model: String, cwd: String },
-    User { text: String },
-    Assistant { text: String },
-    ToolUse { name: String, input_summary: String },
-    ToolResult { name: String, output: String, is_error: bool },
-    Thinking { text: String },
-    System { text: String },
+    Logo {
+        model: String,
+        cwd: String,
+    },
+    User {
+        text: String,
+    },
+    Assistant {
+        text: String,
+    },
+    ToolUse {
+        name: String,
+        input_summary: String,
+    },
+    ToolResult {
+        name: String,
+        output: String,
+        is_error: bool,
+    },
+    Thinking {
+        text: String,
+    },
+    System {
+        text: String,
+    },
 }
 
 pub struct MessageList {
@@ -66,13 +84,19 @@ impl MessageList {
         }
     }
 
-    pub fn messages(&self) -> &[MessageEntry] { &self.messages }
+    pub fn messages(&self) -> &[MessageEntry] {
+        &self.messages
+    }
     pub fn messages_mut(&mut self) -> &mut Vec<MessageEntry> {
         self.height_cache.iter_mut().for_each(|h| *h = None);
         &mut self.messages
     }
-    pub fn len(&self) -> usize { self.messages.len() }
-    pub fn is_empty(&self) -> bool { self.messages.is_empty() }
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
 
     pub fn scroll_up(&mut self, lines: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
@@ -192,7 +216,9 @@ fn render_tool_output_line(line_text: &str, theme: &Theme) -> Line<'static> {
     if contains_ansi(line_text) {
         let mut spans = vec![Span::styled(
             TOOL_RESULT_PREFIX.to_string(),
-            Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(theme.inactive)
+                .add_modifier(Modifier::DIM),
         )];
         spans.extend(parse_ansi(line_text));
         Line::from(spans)
@@ -201,19 +227,25 @@ fn render_tool_output_line(line_text: &str, theme: &Theme) -> Line<'static> {
         if paths.is_empty() {
             Line::from(Span::styled(
                 format!("{}{}", TOOL_RESULT_PREFIX, line_text),
-                Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM),
             ))
         } else {
             let mut spans: Vec<Span<'static>> = vec![Span::styled(
                 TOOL_RESULT_PREFIX.to_string(),
-                Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM),
             )];
             let mut last_end = 0;
             for (start, end) in &paths {
                 if *start > last_end {
                     spans.push(Span::styled(
                         line_text[last_end..*start].to_string(),
-                        Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(theme.inactive)
+                            .add_modifier(Modifier::DIM),
                     ));
                 }
                 spans.push(Span::styled(
@@ -227,7 +259,9 @@ fn render_tool_output_line(line_text: &str, theme: &Theme) -> Line<'static> {
             if last_end < line_text.len() {
                 spans.push(Span::styled(
                     line_text[last_end..].to_string(),
-                    Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(theme.inactive)
+                        .add_modifier(Modifier::DIM),
                 ));
             }
             Line::from(spans)
@@ -235,7 +269,12 @@ fn render_tool_output_line(line_text: &str, theme: &Theme) -> Line<'static> {
     }
 }
 
-fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &Theme) -> Vec<Line<'static>> {
+fn render_message(
+    msg: &MessageEntry,
+    width: u16,
+    show_thinking: bool,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     match msg {
@@ -252,7 +291,10 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
 
             // Top border
             lines.push(Line::from(Span::styled(
-                format!("  \u{256D}{}\u{256E}", "\u{2500}".repeat(box_width.saturating_sub(2))),
+                format!(
+                    "  \u{256D}{}\u{256E}",
+                    "\u{2500}".repeat(box_width.saturating_sub(2))
+                ),
                 Style::default().fg(theme.claude),
             )));
 
@@ -263,7 +305,9 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
                 Span::styled(
                     title.to_string(),
-                    Style::default().fg(theme.claude).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.claude)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!("{}", " ".repeat(pad)), Style::default()),
                 Span::styled(" \u{2502}", Style::default().fg(theme.claude)),
@@ -308,7 +352,10 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
 
             // Bottom border
             lines.push(Line::from(Span::styled(
-                format!("  \u{2570}{}\u{256F}", "\u{2500}".repeat(box_width.saturating_sub(2))),
+                format!(
+                    "  \u{2570}{}\u{256F}",
+                    "\u{2500}".repeat(box_width.saturating_sub(2))
+                ),
                 Style::default().fg(theme.claude),
             )));
 
@@ -325,12 +372,10 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                     // Pad to full width so background fills the entire line
                     let display = format!(" {}", wrapped);
                     let pad = content_width.saturating_sub(display.len());
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{}{}", display, " ".repeat(pad)),
-                            Style::default().bg(theme.user_message_bg),
-                        ),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("{}{}", display, " ".repeat(pad)),
+                        Style::default().bg(theme.user_message_bg),
+                    )]));
                 }
             }
         }
@@ -362,13 +407,8 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                         } else {
                             Span::raw("  ".to_string())
                         };
-                        let style = md_line.spans.first()
-                            .map(|s| s.style)
-                            .unwrap_or_default();
-                        lines.push(Line::from(vec![
-                            pfx,
-                            Span::styled(wrapped.clone(), style),
-                        ]));
+                        let style = md_line.spans.first().map(|s| s.style).unwrap_or_default();
+                        lines.push(Line::from(vec![pfx, Span::styled(wrapped.clone(), style)]));
                     }
                 } else {
                     let mut spans = vec![prefix];
@@ -377,7 +417,10 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 }
             }
         }
-        MessageEntry::ToolUse { name, input_summary } => {
+        MessageEntry::ToolUse {
+            name,
+            input_summary,
+        } => {
             // Original: BLACK_CIRCLE (or ToolUseLoader dot) + bold tool name + (summary)
             // marginTop=1 if addMargin. Tool name is bold, summary in parens.
             lines.push(Line::from(vec![
@@ -389,9 +432,7 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 // Bold tool name
                 Span::styled(
                     name.clone(),
-                    Style::default()
-                        .fg(theme.text)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                 ),
                 // Input summary in parentheses
                 if input_summary.is_empty() {
@@ -404,7 +445,11 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 },
             ]));
         }
-        MessageEntry::ToolResult { name: _, output, is_error } => {
+        MessageEntry::ToolResult {
+            name: _,
+            output,
+            is_error,
+        } => {
             // Original: MessageResponse renders "  ⎿  " prefix (dim) then content.
             // Success results show tool output dimmed.
             // Error results show the error text in error color.
@@ -413,7 +458,9 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 lines.push(Line::from(vec![
                     Span::styled(
                         TOOL_RESULT_PREFIX.to_string(),
-                        Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(theme.inactive)
+                            .add_modifier(Modifier::DIM),
                     ),
                     Span::styled(
                         output.lines().next().unwrap_or("Error").to_string(),
@@ -432,7 +479,9 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 for dl in diff_lines {
                     let mut spans = vec![Span::styled(
                         TOOL_RESULT_PREFIX.to_string(),
-                        Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(theme.inactive)
+                            .add_modifier(Modifier::DIM),
                     )];
                     spans.extend(dl.spans);
                     lines.push(Line::from(spans));
@@ -445,8 +494,14 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
                 let output_line_count = output.lines().count();
                 if output_line_count > max_preview_lines {
                     lines.push(Line::from(Span::styled(
-                        format!("{}... ({} more lines)", TOOL_RESULT_PREFIX, output_line_count - max_preview_lines),
-                        Style::default().fg(theme.inactive).add_modifier(Modifier::DIM),
+                        format!(
+                            "{}... ({} more lines)",
+                            TOOL_RESULT_PREFIX,
+                            output_line_count - max_preview_lines
+                        ),
+                        Style::default()
+                            .fg(theme.inactive)
+                            .add_modifier(Modifier::DIM),
                     )));
                 }
             }
@@ -456,14 +511,12 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
             // When expanded (verbose/show_thinking): thinking text in dim markdown, paddingLeft=2.
             // When collapsed: "∴ Thinking (ctrl+o to expand)" in dim+italic.
             if show_thinking {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "\u{2234} Thinking\u{2026}".to_string(),
-                        Style::default()
-                            .fg(theme.thinking)
-                            .add_modifier(Modifier::DIM | Modifier::ITALIC),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "\u{2234} Thinking\u{2026}".to_string(),
+                    Style::default()
+                        .fg(theme.thinking)
+                        .add_modifier(Modifier::DIM | Modifier::ITALIC),
+                )]));
                 // Content indented by 2 (paddingLeft=2 in original)
                 for line in text.lines() {
                     lines.push(Line::from(vec![
@@ -495,12 +548,10 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
         }
         MessageEntry::System { text } => {
             // System messages: plain text in inactive/muted color
-            lines.push(Line::from(vec![
-                Span::styled(
-                    text.clone(),
-                    Style::default().fg(theme.inactive),
-                ),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                text.clone(),
+                Style::default().fg(theme.inactive),
+            )]));
         }
     }
 
@@ -509,7 +560,9 @@ fn render_message(msg: &MessageEntry, width: u16, show_thinking: bool, theme: &T
 
 impl<'a> Widget for MessageListWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 { return; }
+        if area.height == 0 {
+            return;
+        }
 
         let visible_height = area.height as usize;
         let show_thinking = self.show_thinking;
@@ -527,14 +580,18 @@ impl<'a> Widget for MessageListWidget<'a> {
         let scroll = if self.list.sticky_bottom {
             total_lines.saturating_sub(visible_height)
         } else {
-            self.list.scroll_offset.min(total_lines.saturating_sub(visible_height))
+            self.list
+                .scroll_offset
+                .min(total_lines.saturating_sub(visible_height))
         };
 
         let end = total_lines.min(scroll + visible_height);
         let visible = &all_lines[scroll..end];
         for (i, line) in visible.iter().enumerate() {
             let y = area.y + i as u16;
-            if y >= area.y + area.height { break; }
+            if y >= area.y + area.height {
+                break;
+            }
             buf.set_line(area.x, y, line, area.width);
         }
     }
@@ -564,7 +621,9 @@ mod tests {
     fn user_message_has_blank_line_before() {
         let theme = crate::theme::dark_theme();
         let lines = render_message(
-            &MessageEntry::User { text: "hello".to_string() },
+            &MessageEntry::User {
+                text: "hello".to_string(),
+            },
             80,
             false,
             &theme,
@@ -577,7 +636,9 @@ mod tests {
     fn assistant_message_has_circle() {
         let theme = crate::theme::dark_theme();
         let lines = render_message(
-            &MessageEntry::Assistant { text: "hi".to_string() },
+            &MessageEntry::Assistant {
+                text: "hi".to_string(),
+            },
             80,
             false,
             &theme,
@@ -611,7 +672,9 @@ mod tests {
     fn thinking_collapsed_shows_ctrl_o() {
         let theme = crate::theme::dark_theme();
         let lines = render_message(
-            &MessageEntry::Thinking { text: "let me think...".to_string() },
+            &MessageEntry::Thinking {
+                text: "let me think...".to_string(),
+            },
             80,
             false, // collapsed
             &theme,
@@ -625,7 +688,9 @@ mod tests {
     fn thinking_expanded_shows_content() {
         let theme = crate::theme::dark_theme();
         let lines = render_message(
-            &MessageEntry::Thinking { text: "let me think about this".to_string() },
+            &MessageEntry::Thinking {
+                text: "let me think about this".to_string(),
+            },
             80,
             true, // expanded
             &theme,

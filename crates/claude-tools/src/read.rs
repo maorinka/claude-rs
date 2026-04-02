@@ -4,8 +4,8 @@ use base64::Engine;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use claude_core::types::events::ToolResultData;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use claude_core::types::events::ToolResultData;
 
 /// Paths that must never be opened (infinite / blocking / sensitive device files).
 const BLOCKED_PATHS: &[&str] = &[
@@ -38,29 +38,22 @@ const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 /// PDF and image extensions are excluded from this check since FileReadTool renders them natively.
 const BINARY_EXTENSIONS: &[&str] = &[
     // Images (non-API-supported)
-    ".bmp", ".ico", ".tiff", ".tif",
-    // Videos
+    ".bmp", ".ico", ".tiff", ".tif", // Videos
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpeg", ".mpg",
     // Audio
     ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".wma", ".aiff", ".opus",
     // Archives
     ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".xz", ".z", ".tgz", ".iso",
     // Executables/binaries
-    ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".obj", ".lib", ".app", ".msi",
-    ".deb", ".rpm",
-    // Documents (non-PDF)
-    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
-    // Fonts
-    ".ttf", ".otf", ".woff", ".woff2", ".eot",
-    // Bytecode / VM artifacts
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".obj", ".lib", ".app", ".msi", ".deb",
+    ".rpm", // Documents (non-PDF)
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", // Fonts
+    ".ttf", ".otf", ".woff", ".woff2", ".eot", // Bytecode / VM artifacts
     ".pyc", ".pyo", ".class", ".jar", ".war", ".ear", ".node", ".wasm", ".rlib",
     // Database files
-    ".sqlite", ".sqlite3", ".db", ".mdb", ".idx",
-    // Design / 3D
-    ".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".blend", ".3ds", ".max",
-    // Flash
-    ".swf", ".fla",
-    // Lock/profiling data
+    ".sqlite", ".sqlite3", ".db", ".mdb", ".idx", // Design / 3D
+    ".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".blend", ".3ds", ".max", // Flash
+    ".swf", ".fla", // Lock/profiling data
     ".lockb", ".dat", ".data",
 ];
 
@@ -249,14 +242,9 @@ fn render_notebook(raw: &[u8], file_path: &str) -> Result<ToolResultData> {
                             }));
                         }
                         "error" => {
-                            let ename = output
-                                .get("ename")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            let evalue = output
-                                .get("evalue")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let ename = output.get("ename").and_then(|v| v.as_str()).unwrap_or("");
+                            let evalue =
+                                output.get("evalue").and_then(|v| v.as_str()).unwrap_or("");
                             let traceback = output
                                 .get("traceback")
                                 .and_then(|v| v.as_array())
@@ -456,10 +444,7 @@ impl FileReadTool {
         let raw = match tokio::fs::read(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                return Ok(error_result(&format!(
-                    "cannot read '{}': {}",
-                    file_path, e
-                )));
+                return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
             }
         };
 
@@ -484,18 +469,11 @@ impl FileReadTool {
     }
 
     /// Read a PDF file and return base64-encoded document block.
-    async fn read_pdf(
-        &self,
-        file_path: &str,
-        _pages: Option<&str>,
-    ) -> Result<ToolResultData> {
+    async fn read_pdf(&self, file_path: &str, _pages: Option<&str>) -> Result<ToolResultData> {
         let raw = match tokio::fs::read(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                return Ok(error_result(&format!(
-                    "cannot read '{}': {}",
-                    file_path, e
-                )));
+                return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
             }
         };
 
@@ -533,10 +511,7 @@ impl FileReadTool {
         let raw = match tokio::fs::read(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                return Ok(error_result(&format!(
-                    "cannot read '{}': {}",
-                    file_path, e
-                )));
+                return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
             }
         };
 
@@ -557,10 +532,7 @@ impl FileReadTool {
         let raw_bytes = match tokio::fs::read(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                return Ok(error_result(&format!(
-                    "cannot read '{}': {}",
-                    file_path, e
-                )));
+                return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
             }
         };
 
@@ -650,11 +622,11 @@ fn error_result(msg: &str) -> ToolResultData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::ReadFileState;
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
-    use crate::registry::ReadFileState;
 
     // ---- Helper ----
 
@@ -778,11 +750,10 @@ mod tests {
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
             0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
-            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
-            0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, // IDAT chunk
-            0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00,
-            0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33,
-            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND chunk
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49,
+            0x44, 0x41, 0x54, // IDAT chunk
+            0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21,
+            0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND chunk
             0xAE, 0x42, 0x60, 0x82,
         ];
         let f = make_temp_file("png", &png_data);
@@ -954,7 +925,10 @@ mod tests {
         assert_eq!(cells[2]["cell_type"], "code");
         let outputs2 = cells[2]["outputs"].as_array().unwrap();
         assert_eq!(outputs2[0]["output_type"], "error");
-        assert!(outputs2[0]["text"].as_str().unwrap().contains("ZeroDivisionError"));
+        assert!(outputs2[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ZeroDivisionError"));
     }
 
     #[tokio::test]
@@ -1032,10 +1006,7 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("too large"));
+        assert!(result.data["error"].as_str().unwrap().contains("too large"));
     }
 
     #[tokio::test]
@@ -1118,10 +1089,7 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("blocked"));
+        assert!(result.data["error"].as_str().unwrap().contains("blocked"));
     }
 
     #[tokio::test]

@@ -223,7 +223,10 @@ mod tests {
 
         assert!(!result.is_error);
         assert_eq!(result.data["mode"], "plan");
-        assert!(is_plan_mode_active(), "plan mode flag should be active after EnterPlanMode");
+        assert!(
+            is_plan_mode_active(),
+            "plan mode flag should be active after EnterPlanMode"
+        );
 
         set_plan_mode(false);
     }
@@ -242,7 +245,10 @@ mod tests {
 
         assert!(!result.is_error);
         assert_eq!(result.data["mode"], "normal");
-        assert!(!is_plan_mode_active(), "plan mode flag should be inactive after ExitPlanMode");
+        assert!(
+            !is_plan_mode_active(),
+            "plan mode flag should be inactive after ExitPlanMode"
+        );
     }
 
     #[tokio::test]
@@ -258,7 +264,10 @@ mod tests {
 
         assert!(result.is_error, "should error when not in plan mode");
         assert!(
-            result.data["error"].as_str().unwrap().contains("not in plan mode"),
+            result.data["error"]
+                .as_str()
+                .unwrap()
+                .contains("not in plan mode"),
             "error should explain you're not in plan mode"
         );
     }

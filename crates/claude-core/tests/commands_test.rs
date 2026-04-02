@@ -1,3 +1,4 @@
+use anyhow::Result;
 use claude_core::commands::builtin::build_default_commands;
 use claude_core::commands::registry::{
     Command, CommandContext, CommandHandler, CommandRegistry, CommandResult, CommandType,
@@ -5,7 +6,6 @@ use claude_core::commands::registry::{
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use anyhow::Result;
 
 fn make_ctx() -> CommandContext {
     CommandContext {
@@ -22,7 +22,9 @@ fn make_ctx_with_shared() -> (CommandContext, Arc<Mutex<SharedCommandState>>) {
         message_count: 12,
         session_id: "abc-1234-def".to_string(),
         permission_mode: "default".to_string(),
-        cost_summary: "Tokens: 30000 in / 20000 out | Cache: 0 read / 0 write | Requests: 5 | Cost: $0.3750".to_string(),
+        cost_summary:
+            "Tokens: 30000 in / 20000 out | Cache: 0 read / 0 write | Requests: 5 | Cost: $0.3750"
+                .to_string(),
         request_count: 5,
         total_cost_usd: 0.375,
         fast_mode: false,
@@ -64,7 +66,10 @@ fn test_register_and_get_command() {
     });
 
     let cmd = registry.get("echo");
-    assert!(cmd.is_some(), "Command 'echo' should be found after registration");
+    assert!(
+        cmd.is_some(),
+        "Command 'echo' should be found after registration"
+    );
     assert_eq!(cmd.unwrap().name, "echo");
 
     assert!(
@@ -102,7 +107,10 @@ fn test_search_commands() {
 
     // Search with no results
     let results = registry.search("xyzzy_no_match_12345");
-    assert!(results.is_empty(), "Nonsense query should return no results");
+    assert!(
+        results.is_empty(),
+        "Nonsense query should return no results"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +119,9 @@ fn test_search_commands() {
 #[test]
 fn test_help_command_output() {
     let registry = build_default_commands();
-    let cmd = registry.get("help").expect("'help' command must be registered");
+    let cmd = registry
+        .get("help")
+        .expect("'help' command must be registered");
     let ctx = make_ctx();
 
     let result = cmd.handler.execute("", &ctx).expect("help should not fail");
@@ -131,10 +141,15 @@ fn test_help_command_output() {
 #[test]
 fn test_commit_command_returns_prompt() {
     let registry = build_default_commands();
-    let cmd = registry.get("commit").expect("'commit' command must be registered");
+    let cmd = registry
+        .get("commit")
+        .expect("'commit' command must be registered");
     let ctx = make_ctx();
 
-    let result = cmd.handler.execute("", &ctx).expect("commit should not fail");
+    let result = cmd
+        .handler
+        .execute("", &ctx)
+        .expect("commit should not fail");
     match result {
         CommandResult::Message(text) => {
             assert!(
@@ -152,10 +167,15 @@ fn test_commit_command_returns_prompt() {
 #[test]
 fn test_clear_command() {
     let registry = build_default_commands();
-    let cmd = registry.get("clear").expect("'clear' command must be registered");
+    let cmd = registry
+        .get("clear")
+        .expect("'clear' command must be registered");
     let ctx = make_ctx();
 
-    let result = cmd.handler.execute("", &ctx).expect("clear should not fail");
+    let result = cmd
+        .handler
+        .execute("", &ctx)
+        .expect("clear should not fail");
     match result {
         CommandResult::Action(text) => {
             assert!(
@@ -185,15 +205,54 @@ fn test_all_builtin_commands_registered() {
 
     // Spot-check a selection of required commands
     let required = [
-        "help", "status", "clear", "compact", "model", "config", "cost",
-        "permissions", "verbose", "plan", "exit-plan", "commit", "review",
-        "branch", "pr", "bug", "test", "refactor", "explain", "docs",
-        "memory", "tasks", "resume", "fork", "context", "theme", "fast",
-        "brief", "effort",
+        "help",
+        "status",
+        "clear",
+        "compact",
+        "model",
+        "config",
+        "cost",
+        "permissions",
+        "verbose",
+        "plan",
+        "exit-plan",
+        "commit",
+        "review",
+        "branch",
+        "pr",
+        "bug",
+        "test",
+        "refactor",
+        "explain",
+        "docs",
+        "memory",
+        "tasks",
+        "resume",
+        "fork",
+        "context",
+        "theme",
+        "fast",
+        "brief",
+        "effort",
         // Batch 1
-        "doctor", "diff", "export", "mcp", "plugin", "skills", "agents",
-        "rewind", "files", "init", "stats", "env", "hooks", "session",
-        "copy", "pr-comments", "proactive", "ultrareview",
+        "doctor",
+        "diff",
+        "export",
+        "mcp",
+        "plugin",
+        "skills",
+        "agents",
+        "rewind",
+        "files",
+        "init",
+        "stats",
+        "env",
+        "hooks",
+        "session",
+        "copy",
+        "pr-comments",
+        "proactive",
+        "ultrareview",
         // Batch 2 commands will be added when rate limit resets
     ];
     for name in &required {
@@ -371,7 +430,11 @@ fn test_permissions_shows_mode_description() {
     match result {
         CommandResult::Action(text) => {
             assert!(text.contains("default"), "mode: {}", text);
-            assert!(text.contains("require approval") || text.contains("approval"), "description: {}", text);
+            assert!(
+                text.contains("require approval") || text.contains("approval"),
+                "description: {}",
+                text
+            );
         }
         _ => panic!("expected Action"),
     }
@@ -405,7 +468,11 @@ fn test_memory_handler_runs_without_panic() {
     let result = cmd.handler.execute("", &ctx).unwrap();
     match result {
         CommandResult::Action(text) => {
-            assert!(text.contains("Memory files") || text.contains("memory"), "header: {}", text);
+            assert!(
+                text.contains("Memory files") || text.contains("memory"),
+                "header: {}",
+                text
+            );
         }
         _ => panic!("expected Action"),
     }

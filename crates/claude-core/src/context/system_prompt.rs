@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
-use super::git::get_git_context;
 use super::environment::build_environment_context;
+use super::git::get_git_context;
 
 /// External hook for adding mode-specific sections to the system prompt.
 /// Populated by claude-tools::brief_tool and claude-tools::plan_mode.
@@ -33,10 +33,7 @@ pub fn clear_system_prompt_sections() {
 /// Collect all active system prompt sections from registered providers.
 fn collect_dynamic_sections() -> Vec<String> {
     let providers = SECTION_PROVIDERS.lock().unwrap();
-    providers
-        .iter()
-        .filter_map(|provider| provider())
-        .collect()
+    providers.iter().filter_map(|provider| provider()).collect()
 }
 
 /// Instruction prefix added before CLAUDE.md contents in the system prompt.
@@ -46,7 +43,7 @@ const MEMORY_INSTRUCTION_PROMPT: &str =
 
 pub async fn build_system_prompt(
     project_root: &Path,
-    tool_descriptions: &[(String, String)],  // (name, description)
+    tool_descriptions: &[(String, String)], // (name, description)
 ) -> Result<Vec<Value>> {
     let mut parts: Vec<String> = Vec::new();
 
@@ -85,7 +82,8 @@ pub async fn build_system_prompt(
     }
 
     // Assemble into content blocks
-    let blocks: Vec<Value> = parts.into_iter()
+    let blocks: Vec<Value> = parts
+        .into_iter()
         .map(|text| json!({"type": "text", "text": text}))
         .collect();
 
@@ -96,7 +94,8 @@ fn base_system_prompt() -> String {
     "You are Claude, an AI assistant made by Anthropic. You are helping the user with \
      software engineering tasks in their codebase. You have access to tools for reading files, \
      writing files, editing files, searching code, running shell commands, and more. \
-     Use these tools to help the user accomplish their goals. Be concise and direct.".to_string()
+     Use these tools to help the user accomplish their goals. Be concise and direct."
+        .to_string()
 }
 
 /// Load CLAUDE.md files following the discovery order from the TS implementation:
@@ -174,12 +173,7 @@ pub fn load_claude_md_files(project_root: &Path) -> Vec<(String, String)> {
     if let Ok(entries) = std::fs::read_dir(&rules_dir) {
         let mut rule_files: Vec<_> = entries
             .flatten()
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "md")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
             .collect();
         // Sort by filename for deterministic ordering
         rule_files.sort_by_key(|e| e.file_name());
@@ -207,8 +201,8 @@ pub fn load_claude_md_files(project_root: &Path) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_load_claude_md_from_project_root() {
@@ -218,7 +212,9 @@ mod tests {
 
         let results = load_claude_md_files(root);
         assert!(!results.is_empty());
-        let project_entry = results.iter().find(|(src, _)| src.contains("CLAUDE.md") && !src.contains(".claude"));
+        let project_entry = results
+            .iter()
+            .find(|(src, _)| src.contains("CLAUDE.md") && !src.contains(".claude"));
         assert!(project_entry.is_some());
         assert_eq!(project_entry.unwrap().1, "Project instructions");
     }
@@ -232,7 +228,9 @@ mod tests {
         fs::write(dotclaude.join("CLAUDE.md"), "Dotclaude instructions").unwrap();
 
         let results = load_claude_md_files(root);
-        let entry = results.iter().find(|(src, _)| src.contains(".claude/CLAUDE.md"));
+        let entry = results
+            .iter()
+            .find(|(src, _)| src.contains(".claude/CLAUDE.md"));
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().1, "Dotclaude instructions");
     }
@@ -248,7 +246,9 @@ mod tests {
 
         let results = load_claude_md_files(root);
         assert!(results.iter().any(|(_, content)| content == "Style guide"));
-        assert!(results.iter().any(|(_, content)| content == "Testing rules"));
+        assert!(results
+            .iter()
+            .any(|(_, content)| content == "Testing rules"));
     }
 
     #[test]
@@ -277,7 +277,9 @@ mod tests {
 
         let results = load_claude_md_files(root);
         // Empty/whitespace-only files should be skipped
-        assert!(results.iter().all(|(src, _)| !src.ends_with("CLAUDE.md") || !src.contains(root.to_str().unwrap())));
+        assert!(results
+            .iter()
+            .all(|(src, _)| !src.ends_with("CLAUDE.md") || !src.contains(root.to_str().unwrap())));
     }
 
     #[test]

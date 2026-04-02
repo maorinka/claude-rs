@@ -1,10 +1,13 @@
-use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Credentials keychain service suffix, matching TS `CREDENTIALS_SERVICE_SUFFIX`.
 /// Distinguishes the OAuth credentials entry from the legacy API key entry.
 const CREDENTIALS_SERVICE_SUFFIX: &str = "-credentials";
+
+/// Legacy API key storage uses the base service name without a suffix.
+const LEGACY_API_KEY_SERVICE_SUFFIX: &str = "";
 
 /// Compute the keychain service name, matching the TS
 /// `getMacOsKeychainStorageServiceName` in macOsKeychainHelpers.ts.
@@ -15,17 +18,25 @@ const CREDENTIALS_SERVICE_SUFFIX: &str = "-credentials";
 ///   (from `getOauthConfig().OAUTH_FILE_SUFFIX`)
 /// - `serviceSuffix`: `-credentials` for OAuth token storage
 /// - `dirHash`: only appended when `CLAUDE_CONFIG_DIR` is set (non-default dir)
-pub fn keychain_service_name() -> String {
+fn keychain_service_name_with_suffix(service_suffix: &str) -> String {
     let dir_hash = match std::env::var("CLAUDE_CONFIG_DIR") {
         Ok(dir) if !dir.is_empty() => {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let hash = Sha256::digest(dir.as_bytes());
             format!("-{}", &hex::encode(hash)[..8])
         }
         _ => String::new(),
     };
     // Production: "Claude Code-credentials" (+ dirHash if custom config dir)
-    format!("Claude Code{}{}", CREDENTIALS_SERVICE_SUFFIX, dir_hash)
+    format!("Claude Code{}{}", service_suffix, dir_hash)
+}
+
+pub fn keychain_service_name() -> String {
+    keychain_service_name_with_suffix(CREDENTIALS_SERVICE_SUFFIX)
+}
+
+pub fn legacy_api_key_service_name() -> String {
+    keychain_service_name_with_suffix(LEGACY_API_KEY_SERVICE_SUFFIX)
 }
 
 /// Get the username for keychain operations, matching TS `getUsername()`.
@@ -96,9 +107,11 @@ async fn load_from_keychain() -> Result<Option<OAuthStoredTokens>> {
     let output = tokio::process::Command::new("security")
         .args([
             "find-generic-password",
-            "-a", &username,
+            "-a",
+            &username,
             "-w",
-            "-s", &service,
+            "-s",
+            &service,
         ])
         .output()
         .await
@@ -120,14 +133,12 @@ async fn load_from_keychain() -> Result<Option<OAuthStoredTokens>> {
         raw
     } else {
         // Hex-encoded JSON (the normal case for real Claude Code)
-        let bytes = hex::decode(&raw)
-            .context("Keychain value is neither JSON nor valid hex")?;
-        String::from_utf8(bytes)
-            .context("Hex-decoded keychain value is not valid UTF-8")?
+        let bytes = hex::decode(&raw).context("Keychain value is neither JSON nor valid hex")?;
+        String::from_utf8(bytes).context("Hex-decoded keychain value is not valid UTF-8")?
     };
 
-    let data: SecureStorageData = serde_json::from_str(&json_str)
-        .context("Failed to parse keychain JSON")?;
+    let data: SecureStorageData =
+        serde_json::from_str(&json_str).context("Failed to parse keychain JSON")?;
 
     Ok(data.claude_ai_oauth)
 }
@@ -174,6 +185,65 @@ pub async fn store_tokens(tokens: &OAuthStoredTokens) -> Result<()> {
     Ok(())
 }
 
+/// Load the `/login`-managed API key.
+///
+/// Matches the TS `getApiKeyFromConfigOrMacOSKeychain()` behavior:
+/// - macOS keychain first
+/// - then `primaryApiKey` in global config
+pub async fn load_managed_api_key() -> Result<Option<String>> {
+    if cfg!(target_os = "macos") {
+        if let Some(key) = load_api_key_from_keychain().await? {
+            return Ok(Some(key));
+        }
+    }
+
+    let config = crate::config::global::load_global_config()?;
+    Ok(config.primary_api_key)
+}
+
+/// Store the `/login`-managed API key.
+///
+/// On macOS, prefer keychain storage and keep the raw key out of config when
+/// that succeeds, matching the TS client.
+pub async fn store_managed_api_key(api_key: &str) -> Result<()> {
+    let mut saved_to_keychain = false;
+
+    if cfg!(target_os = "macos") {
+        match store_api_key_to_keychain(api_key).await {
+            Ok(()) => saved_to_keychain = true,
+            Err(e) => tracing::warn!("Failed to store managed API key in keychain: {}", e),
+        }
+    }
+
+    crate::config::global::save_global_config(|mut config| {
+        if !saved_to_keychain {
+            config.primary_api_key = Some(api_key.to_string());
+        }
+        config
+    })?;
+
+    Ok(())
+}
+
+/// Delete the `/login`-managed API key from keychain and config.
+pub async fn delete_managed_api_key() -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let username = get_username();
+        let service = legacy_api_key_service_name();
+        let _ = tokio::process::Command::new("security")
+            .args(["delete-generic-password", "-a", &username, "-s", &service])
+            .output()
+            .await;
+    }
+
+    crate::config::global::save_global_config(|mut config| {
+        config.primary_api_key = None;
+        config
+    })?;
+
+    Ok(())
+}
+
 /// Write to the macOS Keychain using `security -i` with hex-encoded value.
 ///
 /// Matches the TS `macOsKeychainStorage.update()` which pipes
@@ -183,6 +253,18 @@ async fn store_to_keychain(json: &str) -> Result<()> {
     let service = keychain_service_name();
     let hex_value = hex::encode(json.as_bytes());
 
+    store_hex_value_in_keychain(&service, &username, &hex_value).await
+}
+
+async fn store_api_key_to_keychain(api_key: &str) -> Result<()> {
+    let username = get_username();
+    let service = legacy_api_key_service_name();
+    let hex_value = hex::encode(api_key.as_bytes());
+
+    store_hex_value_in_keychain(&service, &username, &hex_value).await
+}
+
+async fn store_hex_value_in_keychain(service: &str, username: &str, hex_value: &str) -> Result<()> {
     let command = format!(
         "add-generic-password -U -a \"{}\" -s \"{}\" -X \"{}\"\n",
         username, service, hex_value
@@ -210,6 +292,44 @@ async fn store_to_keychain(json: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn load_api_key_from_keychain() -> Result<Option<String>> {
+    let username = get_username();
+    let service = legacy_api_key_service_name();
+
+    let output = tokio::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-a",
+            &username,
+            "-w",
+            "-s",
+            &service,
+        ])
+        .output()
+        .await
+        .context("Failed to run security command for API key")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+
+    if raw.starts_with("sk-") {
+        return Ok(Some(raw));
+    }
+
+    let bytes = hex::decode(&raw)
+        .context("Managed API key keychain value is neither raw text nor valid hex")?;
+    let decoded =
+        String::from_utf8(bytes).context("Managed API key keychain value is not valid UTF-8")?;
+
+    Ok(Some(decoded))
 }
 
 /// Delete stored OAuth tokens (both keychain and file).
@@ -271,7 +391,10 @@ mod tests {
         let json = serde_json::to_string(&data).unwrap();
         // Must use camelCase (matching TS)
         assert!(json.contains("claudeAiOauth"), "Must use camelCase key");
-        assert!(json.contains("accessToken"), "Must use camelCase for fields");
+        assert!(
+            json.contains("accessToken"),
+            "Must use camelCase for fields"
+        );
         assert!(json.contains("refreshToken"));
         assert!(json.contains("expiresAt"));
 

@@ -1,15 +1,31 @@
-use anyhow::Result;
+use super::login::{build_token_refresh_body, is_claude_ai_auth, TOKEN_URL};
 use crate::api::client::AuthMethod;
-use super::login::{
-    TOKEN_URL, is_claude_ai_auth, build_token_refresh_body,
-};
+use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::sync::Mutex;
 
-/// Check if an OAuth token has expired (with 5 minute buffer, matching TS).
+const CCR_OAUTH_TOKEN_PATH: &str = "/home/claude/.claude/remote/.oauth_token";
+const CCR_API_KEY_PATH: &str = "/home/claude/.claude/remote/.api_key";
+const REFRESH_LOCK_RETRIES: usize = 5;
+const DEFAULT_API_KEY_HELPER_TTL_MS: u64 = 5 * 60 * 1000;
+
+static API_KEY_HELPER_CACHE: Lazy<Mutex<Option<ApiKeyHelperCacheEntry>>> =
+    Lazy::new(|| Mutex::new(None));
+
+#[derive(Clone)]
+struct ApiKeyHelperCacheEntry {
+    value: String,
+    cached_at_ms: u64,
+}
+
+/// Check if an OAuth token has expired (with a 5 minute buffer, matching TS).
 fn is_token_expired(expires_at: Option<u64>) -> bool {
     match expires_at {
         None => false,
         Some(exp) => {
-            let buffer_ms = 5 * 60 * 1000; // 5 minutes, matching TS
+            let buffer_ms = 5 * 60 * 1000;
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -19,79 +35,148 @@ fn is_token_expired(expires_at: Option<u64>) -> bool {
     }
 }
 
-/// Resolve authentication.
+/// Resolve authentication, matching the leaked client's runtime precedence.
 ///
-/// Checks in order (matching the TS `getAuthTokenSource` / `getAnthropicClient`):
-/// 1. ANTHROPIC_API_KEY env var -> ApiKey
-/// 2. ANTHROPIC_AUTH_TOKEN env var -> OAuthToken (Bearer token)
-/// 3. CLAUDE_CODE_OAUTH_TOKEN env var -> OAuthToken (inference-only)
-/// 4. Stored OAuth tokens from keychain/file -> OAuthToken (with refresh if expired)
-///
-/// For Claude.ai subscribers (scopes include `user:inference`):
-///   - Uses `authToken` (sent as `Authorization: Bearer <token>`)
-///
-/// For Console users (no `user:inference` scope):
-///   - The stored API key is used instead (from the create_api_key flow)
+/// Priority:
+/// 1. `CLAUDE_CODE_OAUTH_TOKEN`
+/// 2. `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` (or CCR disk fallback)
+/// 3. Stored Claude.ai OAuth tokens
+/// 4. `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` (+ `CLAUDE_CODE_OAUTH_SCOPES`)
+/// 5. `ANTHROPIC_AUTH_TOKEN`
+/// 6. `ANTHROPIC_API_KEY`
+/// 7. `apiKeyHelper`
+/// 8. `/login`-managed API key (keychain / config)
+/// 9. `~/.claude/settings.json` `api_key`
 pub async fn resolve_auth() -> Result<AuthMethod> {
-    // 1. Check env var (direct API key)
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            return Ok(AuthMethod::ApiKey(key));
+    if is_anthropic_unix_socket_proxy_mode() {
+        if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+            if !token.is_empty() {
+                return Ok(AuthMethod::OAuthToken(token));
+            }
         }
+        anyhow::bail!("No authentication found for proxied OAuth session");
     }
 
-    // 2. Check ANTHROPIC_AUTH_TOKEN env var (Bearer token, matching TS getAuthTokenSource)
-    if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
-        if !token.is_empty() {
-            return Ok(AuthMethod::OAuthToken(token));
-        }
+    if is_third_party_auth_mode() {
+        anyhow::bail!("Anthropic direct authentication is disabled in third-party provider mode");
     }
 
-    // 3. Check for OAuth token from env var (inference-only, e.g. from CCD/CCR)
     if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
         if !token.is_empty() {
             return Ok(AuthMethod::OAuthToken(token));
         }
     }
 
-    // 4. Read stored OAuth tokens from keychain and refresh if needed
-    if let Some(tokens) = super::storage::load_tokens().await? {
-        // Check if this is a Claude.ai subscriber
-        if is_claude_ai_auth(&tokens.scopes) {
-            // Claude.ai subscriber — use authToken (Bearer)
-            if let Some(refresh_token) = &tokens.refresh_token {
-                if is_token_expired(tokens.expires_at) {
-                    // Token expired — refresh it
-                    match refresh_oauth_token(refresh_token, &tokens.scopes).await {
-                        Ok(fresh) => return Ok(AuthMethod::OAuthToken(fresh)),
-                        Err(e) => {
-                            tracing::warn!("Token refresh failed ({}), using stored token", e);
-                            return Ok(AuthMethod::OAuthToken(tokens.access_token));
-                        }
-                    }
-                }
+    if let Some(token) = read_credential_from_fd_or_file(
+        "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+        CCR_OAUTH_TOKEN_PATH,
+    )? {
+        return Ok(AuthMethod::OAuthToken(token));
+    }
+
+    if let Some(tokens) = resolve_stored_oauth_token(false).await? {
+        return Ok(AuthMethod::OAuthToken(tokens));
+    }
+
+    if let Ok(refresh_token) = std::env::var("CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
+        if !refresh_token.is_empty() {
+            let scopes = std::env::var("CLAUDE_CODE_OAUTH_SCOPES")
+                .unwrap_or_default()
+                .split_whitespace()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+
+            if scopes.is_empty() {
+                anyhow::bail!(
+                    "CLAUDE_CODE_OAUTH_SCOPES is required when using CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
+                );
             }
-            return Ok(AuthMethod::OAuthToken(tokens.access_token));
-        } else {
-            // Console user — they should have an API key stored
-            // (created during login via create_api_key endpoint)
-            // Try to use the OAuth token to create/get an API key,
-            // but fall through to the OAuth token as fallback
-            return Ok(AuthMethod::OAuthToken(tokens.access_token));
+
+            return Ok(AuthMethod::OAuthToken(
+                refresh_oauth_token(&refresh_token, &scopes).await?,
+            ));
         }
     }
 
-    anyhow::bail!("No authentication found. Run `claude login` or set ANTHROPIC_API_KEY")
+    if !is_managed_oauth_context() {
+        if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
+            if !token.is_empty() {
+                return Ok(AuthMethod::OAuthToken(token));
+            }
+        }
+    }
+
+    if !is_managed_oauth_context() {
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            if !key.is_empty() {
+                return Ok(AuthMethod::ApiKey(key));
+            }
+        }
+    }
+
+    if let Some(key) =
+        read_credential_from_fd_or_file("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", CCR_API_KEY_PATH)?
+    {
+        return Ok(AuthMethod::ApiKey(key));
+    }
+
+    if !is_managed_oauth_context() {
+        if let Some(key) = get_api_key_from_helper().await? {
+            if !key.is_empty() {
+                return Ok(AuthMethod::ApiKey(key));
+            }
+        }
+    }
+
+    if let Some(key) = super::storage::load_managed_api_key().await? {
+        if !key.is_empty() {
+            return Ok(AuthMethod::ApiKey(key));
+        }
+    }
+
+    if !is_managed_oauth_context() {
+        let settings_path = crate::config::paths::user_settings_path()?;
+        let settings = crate::config::settings::Settings::load_from_file(&settings_path);
+        if let Some(key) = settings.api_key {
+            if !key.is_empty() {
+                return Ok(AuthMethod::ApiKey(key));
+            }
+        }
+    }
+
+    anyhow::bail!("No authentication found. Run `claude-rs login` or set ANTHROPIC_API_KEY")
 }
 
-/// Refresh an OAuth token via the token endpoint.
-///
-/// For Claude.ai subscribers, uses `CLAUDE_AI_OAUTH_SCOPES` as default
-/// (allows scope expansion on refresh without re-login, matching TS).
-/// For Console users, uses the original scopes.
+fn is_managed_oauth_context() -> bool {
+    env_truthy("CLAUDE_CODE_REMOTE")
+        || std::env::var("CLAUDE_CODE_ENTRYPOINT")
+            .map(|v| v == "claude-desktop")
+            .unwrap_or(false)
+}
+
+fn is_anthropic_unix_socket_proxy_mode() -> bool {
+    std::env::var_os("ANTHROPIC_UNIX_SOCKET").is_some()
+}
+
+fn is_third_party_auth_mode() -> bool {
+    env_truthy("CLAUDE_CODE_USE_BEDROCK")
+        || env_truthy("CLAUDE_CODE_USE_VERTEX")
+        || env_truthy("CLAUDE_CODE_USE_FOUNDRY")
+}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            matches!(
+                v.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        })
+        .unwrap_or(false)
+}
+
 async fn refresh_oauth_token(refresh_token: &str, stored_scopes: &[String]) -> Result<String> {
-    // For Claude.ai subscribers, omit scopes so the default CLAUDE_AI_OAUTH_SCOPES
-    // applies — this allows scope expansion on refresh (matching TS).
     let scopes = if is_claude_ai_auth(stored_scopes) {
         None
     } else {
@@ -120,13 +205,13 @@ async fn refresh_oauth_token(refresh_token: &str, stored_scopes: &[String]) -> R
         .ok_or_else(|| anyhow::anyhow!("No access_token in response"))?
         .to_string();
 
-    // Store refreshed tokens back
+    let existing = super::storage::load_tokens().await?;
     let new_tokens = super::storage::OAuthStoredTokens {
         access_token: access_token.clone(),
         refresh_token: data["refresh_token"]
             .as_str()
             .map(|s| s.to_string())
-            .or_else(|| Some(refresh_token.to_string())), // Keep original if not returned
+            .or_else(|| Some(refresh_token.to_string())),
         expires_at: data["expires_in"].as_u64().map(|secs| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -137,14 +222,240 @@ async fn refresh_oauth_token(refresh_token: &str, stored_scopes: &[String]) -> R
         scopes: data["scope"]
             .as_str()
             .map(|s| s.split(' ').map(|x| x.to_string()).collect())
-            .unwrap_or_default(),
-        // Preserve existing subscription type on refresh (matching TS logic)
-        subscription_type: None,
-        rate_limit_tier: None,
+            .unwrap_or_else(|| stored_scopes.to_vec()),
+        subscription_type: existing
+            .as_ref()
+            .and_then(|tokens| tokens.subscription_type.clone()),
+        rate_limit_tier: existing
+            .as_ref()
+            .and_then(|tokens| tokens.rate_limit_tier.clone()),
     };
     let _ = super::storage::store_tokens(&new_tokens).await;
 
     Ok(access_token)
+}
+
+pub async fn handle_oauth_401_error(failed_access_token: &str) -> Result<bool> {
+    let current_tokens = super::storage::load_tokens().await?;
+    let Some(current_tokens) = current_tokens else {
+        return Ok(false);
+    };
+
+    if !is_claude_ai_auth(&current_tokens.scopes) || current_tokens.refresh_token.is_none() {
+        return Ok(false);
+    }
+
+    if current_tokens.access_token != failed_access_token {
+        return Ok(true);
+    }
+
+    let refreshed = resolve_stored_oauth_token(true).await?;
+    Ok(refreshed
+        .as_deref()
+        .map(|token| token != failed_access_token)
+        .unwrap_or(false))
+}
+
+pub async fn resolve_stored_oauth_token(force_refresh: bool) -> Result<Option<String>> {
+    let Some(tokens) = super::storage::load_tokens().await? else {
+        return Ok(None);
+    };
+
+    if !is_claude_ai_auth(&tokens.scopes) {
+        return Ok(None);
+    }
+
+    let needs_refresh = force_refresh || is_token_expired(tokens.expires_at);
+    if !needs_refresh {
+        return Ok(Some(tokens.access_token));
+    }
+
+    let Some(refresh_token) = tokens.refresh_token.clone() else {
+        return Ok(Some(tokens.access_token));
+    };
+
+    match refresh_oauth_token_with_lock(&refresh_token, &tokens.scopes, force_refresh).await {
+        Ok(token) => Ok(Some(token)),
+        Err(e) => {
+            tracing::warn!("Token refresh failed ({}), using stored token", e);
+            Ok(Some(tokens.access_token))
+        }
+    }
+}
+
+async fn refresh_oauth_token_with_lock(
+    refresh_token: &str,
+    stored_scopes: &[String],
+    force_refresh: bool,
+) -> Result<String> {
+    let lock_path = refresh_lock_path()?;
+    if let Some(parent) = lock_path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+
+    let _lock = acquire_refresh_lock(&lock_path).await?;
+
+    if let Some(latest) = super::storage::load_tokens().await? {
+        if is_claude_ai_auth(&latest.scopes) {
+            let still_expired = force_refresh || is_token_expired(latest.expires_at);
+            if !still_expired {
+                return Ok(latest.access_token);
+            }
+        }
+    }
+
+    refresh_oauth_token(refresh_token, stored_scopes).await
+}
+
+fn refresh_lock_path() -> Result<PathBuf> {
+    Ok(crate::config::paths::claude_dir()?.join(".lock"))
+}
+
+struct RefreshLock {
+    path: PathBuf,
+}
+
+impl Drop for RefreshLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+async fn acquire_refresh_lock(path: &Path) -> Result<RefreshLock> {
+    for attempt in 0..=REFRESH_LOCK_RETRIES {
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .await
+        {
+            Ok(_) => {
+                return Ok(RefreshLock {
+                    path: path.to_path_buf(),
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if attempt == REFRESH_LOCK_RETRIES {
+                    anyhow::bail!("timed out waiting for OAuth refresh lock");
+                }
+                tokio::time::sleep(Duration::from_millis(1000 + (attempt as u64 * 250))).await;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("failed to create lock {}", path.display()))
+            }
+        }
+    }
+
+    anyhow::bail!("timed out waiting for OAuth refresh lock")
+}
+
+fn read_credential_from_fd_or_file(env_var: &str, fallback_path: &str) -> Result<Option<String>> {
+    if let Ok(fd_env) = std::env::var(env_var) {
+        if !fd_env.is_empty() {
+            if let Ok(fd) = fd_env.parse::<i32>() {
+                let fd_path = if cfg!(any(target_os = "macos", target_os = "freebsd")) {
+                    format!("/dev/fd/{}", fd)
+                } else {
+                    format!("/proc/self/fd/{}", fd)
+                };
+
+                match std::fs::read_to_string(&fd_path) {
+                    Ok(value) => {
+                        let trimmed = value.trim().to_string();
+                        if !trimmed.is_empty() {
+                            return Ok(Some(trimmed));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to read {} via {}: {}", env_var, fd_path, e);
+                    }
+                }
+            } else {
+                tracing::warn!("{} is not a valid file descriptor number", env_var);
+            }
+        }
+    }
+
+    read_token_file(fallback_path)
+}
+
+fn read_token_file(path: &str) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(value) => {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("failed to read credential file {}", path)),
+    }
+}
+
+async fn get_api_key_from_helper() -> Result<Option<String>> {
+    let settings_path = crate::config::paths::user_settings_path()?;
+    let settings = crate::config::settings::Settings::load_from_file(&settings_path);
+    let Some(command) = settings.api_key_helper else {
+        return Ok(None);
+    };
+
+    let ttl_ms = std::env::var("CLAUDE_CODE_API_KEY_HELPER_TTL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_API_KEY_HELPER_TTL_MS);
+    let now_ms = current_time_ms();
+
+    {
+        let cache = API_KEY_HELPER_CACHE.lock().await;
+        if let Some(entry) = cache.as_ref() {
+            if now_ms.saturating_sub(entry.cached_at_ms) < ttl_ms {
+                return Ok(Some(entry.value.clone()));
+            }
+        }
+    }
+
+    let output = tokio::process::Command::new("/bin/sh")
+        .arg("-lc")
+        .arg(&command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .context("failed to execute apiKeyHelper")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!(
+            "apiKeyHelper failed: {}",
+            if stderr.is_empty() {
+                format!("exited with {}", output.status)
+            } else {
+                stderr
+            }
+        );
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        anyhow::bail!("apiKeyHelper did not return a value");
+    }
+
+    let mut cache = API_KEY_HELPER_CACHE.lock().await;
+    *cache = Some(ApiKeyHelperCacheEntry {
+        value: value.clone(),
+        cached_at_ms: now_ms,
+    });
+
+    Ok(Some(value))
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -158,8 +469,7 @@ mod tests {
 
     #[test]
     fn test_is_token_expired_far_future() {
-        // Token expires in year 2099
-        let far_future = 4_102_444_800_000u64; // ~2099
+        let far_future = 4_102_444_800_000u64;
         assert!(!is_token_expired(Some(far_future)));
     }
 
@@ -171,7 +481,6 @@ mod tests {
 
     #[test]
     fn test_is_token_expired_within_buffer() {
-        // Token expires in 3 minutes — within the 5 minute buffer — should be "expired"
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -182,12 +491,27 @@ mod tests {
 
     #[test]
     fn test_is_token_expired_outside_buffer() {
-        // Token expires in 10 minutes — outside the 5 minute buffer — should NOT be expired
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
         let ten_min = 10 * 60 * 1000;
         assert!(!is_token_expired(Some(now_ms + ten_min)));
+    }
+
+    #[test]
+    fn test_read_token_file_missing_returns_none() {
+        let missing = format!("/tmp/claude-rs-missing-{}", std::process::id());
+        assert!(read_token_file(&missing).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_read_token_file_trims_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "  abc123 \n").unwrap();
+
+        let token = read_token_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(token.as_deref(), Some("abc123"));
     }
 }

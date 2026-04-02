@@ -16,14 +16,20 @@ const ALL_TOOLS: &[(&str, &str)] = &[
     ("Grep", "Search for patterns in files using ripgrep"),
     ("Glob", "Find files matching a glob pattern"),
     ("Config", "Get, set, or list Claude configuration settings"),
-    ("EnterPlanMode", "Switch to plan mode for describing actions before executing"),
+    (
+        "EnterPlanMode",
+        "Switch to plan mode for describing actions before executing",
+    ),
     ("ExitPlanMode", "Return to normal mode after planning"),
     ("AskUser", "Ask the user a question and receive an answer"),
     ("Brief", "Toggle brief mode for more concise output"),
     ("SendMessage", "Send a message to another agent or channel"),
     ("MCP", "Call a tool on a connected MCP server"),
     ("LSP", "Run an LSP action such as diagnostics on a file"),
-    ("ToolSearch", "Search registered tools by name or description"),
+    (
+        "ToolSearch",
+        "Search registered tools by name or description",
+    ),
 ];
 
 pub struct ToolSearchTool;

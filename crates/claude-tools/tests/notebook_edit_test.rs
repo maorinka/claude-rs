@@ -99,7 +99,10 @@ async fn test_edit_markdown_cell_source() {
     assert!(!result.is_error);
     assert_eq!(result.data["cellType"], "markdown");
     assert!(
-        result.data["previousSource"].as_str().unwrap().contains("Title"),
+        result.data["previousSource"]
+            .as_str()
+            .unwrap()
+            .contains("Title"),
         "previousSource should contain original markdown"
     );
 
@@ -135,7 +138,10 @@ async fn test_edit_cell_type_change() {
 
     let updated_raw = tokio::fs::read_to_string(&path).await.unwrap();
     let updated: serde_json::Value = serde_json::from_str(&updated_raw).unwrap();
-    assert_eq!(updated["cells"][0]["cell_type"].as_str().unwrap(), "markdown");
+    assert_eq!(
+        updated["cells"][0]["cell_type"].as_str().unwrap(),
+        "markdown"
+    );
 }
 
 #[tokio::test]

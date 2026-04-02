@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::sandbox::types::SandboxSettings;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A single permission rule referencing a tool, with an optional glob pattern.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -58,12 +58,20 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 
+    /// Command used to resolve an API key dynamically.
+    #[serde(rename = "apiKeyHelper", skip_serializing_if = "Option::is_none")]
+    pub api_key_helper: Option<String>,
+
     pub permissions: SettingsPermissions,
 
     /// MCP server configurations keyed by server name.
     ///
     /// Matches the TS `mcpServers` key in `~/.claude/settings.json`.
-    #[serde(default, rename = "mcpServers", skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        rename = "mcpServers",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub mcp_servers: HashMap<String, McpServerSettingsEntry>,
 
     /// Sandbox configuration for isolated bash command execution.
@@ -96,6 +104,10 @@ impl Settings {
             verbose: overlay.verbose.or(self.verbose),
             max_tokens: overlay.max_tokens.or(self.max_tokens),
             api_key: overlay.api_key.clone().or_else(|| self.api_key.clone()),
+            api_key_helper: overlay
+                .api_key_helper
+                .clone()
+                .or_else(|| self.api_key_helper.clone()),
             permissions: SettingsPermissions {
                 allow: if overlay.permissions.allow.is_empty() {
                     self.permissions.allow.clone()

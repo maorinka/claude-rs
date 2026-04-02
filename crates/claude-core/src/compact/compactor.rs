@@ -3,8 +3,8 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::api::accumulator::ContentBlockAccumulator;
-use crate::api::sse::{self, SseEvent};
 use crate::api::client::ApiClient;
+use crate::api::sse::{self, SseEvent};
 use crate::types::content::ContentBlock;
 
 /// Token estimation: extract actual text content and divide by ~4 chars per token.
@@ -59,40 +59,40 @@ fn estimate_block_tokens(block: &Value) -> u64 {
     let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     match block_type {
-        "text" => {
-            block.get("text")
-                .and_then(|t| t.as_str())
-                .map(|s| s.len() as u64)
-                .unwrap_or(0)
-        }
+        "text" => block
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(|s| s.len() as u64)
+            .unwrap_or(0),
         "tool_use" => {
-            let name_len = block.get("name")
+            let name_len = block
+                .get("name")
                 .and_then(|n| n.as_str())
                 .map(|s| s.len())
                 .unwrap_or(0);
-            let input_len = block.get("input")
+            let input_len = block
+                .get("input")
                 .map(|i| serde_json::to_string(i).unwrap_or_default().len())
                 .unwrap_or(0);
             (name_len + input_len) as u64
         }
         "tool_result" => {
             // Recursively count nested content
-            block.get("content")
+            block
+                .get("content")
                 .map(|c| estimate_content_tokens(c))
                 .unwrap_or(0)
         }
-        "thinking" => {
-            block.get("thinking")
-                .and_then(|t| t.as_str())
-                .map(|s| s.len() as u64)
-                .unwrap_or(0)
-        }
-        "redacted_thinking" => {
-            block.get("data")
-                .and_then(|t| t.as_str())
-                .map(|s| s.len() as u64)
-                .unwrap_or(0)
-        }
+        "thinking" => block
+            .get("thinking")
+            .and_then(|t| t.as_str())
+            .map(|s| s.len() as u64)
+            .unwrap_or(0),
+        "redacted_thinking" => block
+            .get("data")
+            .and_then(|t| t.as_str())
+            .map(|s| s.len() as u64)
+            .unwrap_or(0),
         "image" | "document" => {
             // Fixed estimate for images/documents (matches TS IMAGE_MAX_TOKEN_SIZE * 4)
             8000 // 2000 tokens * 4 chars/token
@@ -111,7 +111,8 @@ const MAX_OUTPUT_TOKENS_FOR_SUMMARY: u64 = 20_000;
 /// Check if compaction is needed based on estimated token count.
 pub fn should_compact(messages: &[Value], context_window: u64) -> bool {
     let estimated = estimate_tokens(messages);
-    let threshold = context_window.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS + MAX_OUTPUT_TOKENS_FOR_SUMMARY);
+    let threshold =
+        context_window.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS + MAX_OUTPUT_TOKENS_FOR_SUMMARY);
     estimated >= threshold
 }
 
@@ -251,7 +252,8 @@ mod tests {
 
     #[test]
     fn test_format_compact_summary_strips_analysis() {
-        let input = "<analysis>scratchpad stuff</analysis>\n\n<summary>\nThe actual summary\n</summary>";
+        let input =
+            "<analysis>scratchpad stuff</analysis>\n\n<summary>\nThe actual summary\n</summary>";
         let result = format_compact_summary(input);
         assert_eq!(result, "Summary:\nThe actual summary");
     }

@@ -98,8 +98,7 @@ impl CommandPicker {
                 if q.is_empty() {
                     true
                 } else {
-                    e.name.to_lowercase().contains(&q)
-                        || e.description.to_lowercase().contains(&q)
+                    e.name.to_lowercase().contains(&q) || e.description.to_lowercase().contains(&q)
                 }
             })
             .map(|(i, _)| i)
@@ -153,7 +152,10 @@ impl<'a> Widget for CommandPickerWidget<'a> {
             0
         };
 
-        let visible_entries = self.picker.filtered.iter()
+        let visible_entries = self
+            .picker
+            .filtered
+            .iter()
             .skip(scroll_offset)
             .take(max_visible);
 

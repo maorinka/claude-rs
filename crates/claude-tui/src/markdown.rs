@@ -62,17 +62,23 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
         if line.starts_with("### ") {
             lines.push(Line::from(Span::styled(
                 line[4..].to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
         } else if line.starts_with("## ") {
             lines.push(Line::from(Span::styled(
                 line[3..].to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
         } else if line.starts_with("# ") {
             lines.push(Line::from(Span::styled(
                 line[2..].to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
         }
         // List items
@@ -123,10 +129,14 @@ fn render_inline_line(text: &str) -> Line<'static> {
             }
             i += 1;
             let start = i;
-            while i < chars.len() && chars[i] != '`' { i += 1; }
+            while i < chars.len() && chars[i] != '`' {
+                i += 1;
+            }
             let code: String = chars[start..i].iter().collect();
             spans.push(Span::styled(code, Style::default().fg(Color::Green)));
-            if i < chars.len() { i += 1; }
+            if i < chars.len() {
+                i += 1;
+            }
         }
         // Bold
         else if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
@@ -136,10 +146,19 @@ fn render_inline_line(text: &str) -> Line<'static> {
             }
             i += 2;
             let start = i;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '*') { i += 1; }
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '*') {
+                i += 1;
+            }
             let bold: String = chars[start..i].iter().collect();
-            spans.push(Span::styled(bold, Style::default().add_modifier(Modifier::BOLD)));
-            if i + 1 < chars.len() { i += 2; } else { i = chars.len(); }
+            spans.push(Span::styled(
+                bold,
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            if i + 1 < chars.len() {
+                i += 2;
+            } else {
+                i = chars.len();
+            }
         }
         // Italic
         else if chars[i] == '*' {
@@ -149,12 +168,18 @@ fn render_inline_line(text: &str) -> Line<'static> {
             }
             i += 1;
             let start = i;
-            while i < chars.len() && chars[i] != '*' { i += 1; }
+            while i < chars.len() && chars[i] != '*' {
+                i += 1;
+            }
             let italic: String = chars[start..i].iter().collect();
-            spans.push(Span::styled(italic, Style::default().add_modifier(Modifier::ITALIC)));
-            if i < chars.len() { i += 1; }
-        }
-        else {
+            spans.push(Span::styled(
+                italic,
+                Style::default().add_modifier(Modifier::ITALIC),
+            ));
+            if i < chars.len() {
+                i += 1;
+            }
+        } else {
             current.push(chars[i]);
             i += 1;
         }

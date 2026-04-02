@@ -20,8 +20,7 @@ use claude_core::types::events::ToolResultData;
 // The TUI detects the tool awaiting input, shows an input dialog, and calls
 // `send_user_answer` with the response. That unblocks the tool.
 
-static ASK_USER_TX: Lazy<Mutex<Option<oneshot::Sender<String>>>> =
-    Lazy::new(|| Mutex::new(None));
+static ASK_USER_TX: Lazy<Mutex<Option<oneshot::Sender<String>>>> = Lazy::new(|| Mutex::new(None));
 
 /// Called by the TUI layer when the user has submitted an answer.
 /// Returns `true` if a waiting sender was found, `false` otherwise.
@@ -45,8 +44,7 @@ pub fn is_awaiting_answer() -> bool {
 
 /// Get the current pending question info (question, options) if available.
 /// This is stored alongside the sender when a question is asked.
-static PENDING_QUESTION: Lazy<Mutex<Option<PendingQuestion>>> =
-    Lazy::new(|| Mutex::new(None));
+static PENDING_QUESTION: Lazy<Mutex<Option<PendingQuestion>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone)]
 pub struct PendingQuestion {
@@ -140,9 +138,11 @@ impl ToolExecutor for AskUserQuestionTool {
                 arr.iter()
                     .filter_map(|v| {
                         // Support { label, description } objects or plain strings
-                        v.as_str()
-                            .map(|s| s.to_string())
-                            .or_else(|| v.get("label").and_then(|l| l.as_str()).map(|s| s.to_string()))
+                        v.as_str().map(|s| s.to_string()).or_else(|| {
+                            v.get("label")
+                                .and_then(|l| l.as_str())
+                                .map(|s| s.to_string())
+                        })
                     })
                     .collect()
             })
@@ -247,9 +247,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
-        let handle = tokio::spawn(async move {
-            tool.call(&input, &make_ctx(), cancel_clone, None).await
-        });
+        let handle =
+            tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -282,9 +281,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
-        let handle = tokio::spawn(async move {
-            tool.call(&input, &make_ctx(), cancel_clone, None).await
-        });
+        let handle =
+            tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         send_user_answer("Red".to_string());
@@ -306,9 +304,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
-        let handle = tokio::spawn(async move {
-            tool.call(&input, &make_ctx(), cancel_clone, None).await
-        });
+        let handle =
+            tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         cancel.cancel();

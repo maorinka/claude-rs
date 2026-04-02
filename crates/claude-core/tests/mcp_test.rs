@@ -296,10 +296,7 @@ fn test_tool_result_with_image() {
     assert_eq!(result.content.len(), 1);
     assert_eq!(result.content[0].content_type, "image");
     assert_eq!(result.content[0].data.as_deref(), Some("base64data=="));
-    assert_eq!(
-        result.content[0].mime_type.as_deref(),
-        Some("image/png")
-    );
+    assert_eq!(result.content[0].mime_type.as_deref(), Some("image/png"));
     assert!(result.is_error.is_none());
 }
 
@@ -307,11 +304,7 @@ fn test_tool_result_with_image() {
 
 #[test]
 fn test_jsonrpc_request_construction() {
-    let request = JsonRpcRequest::new(
-        1,
-        "tools/list",
-        Some(serde_json::json!({})),
-    );
+    let request = JsonRpcRequest::new(1, "tools/list", Some(serde_json::json!({})));
     assert_eq!(request.jsonrpc, "2.0");
     assert_eq!(request.id, 1);
     assert_eq!(request.method, "tools/list");
@@ -375,10 +368,7 @@ fn test_jsonrpc_tools_call_request() {
 
 #[test]
 fn test_jsonrpc_notification_construction() {
-    let notification = JsonRpcNotification::new(
-        methods::INITIALIZED,
-        None,
-    );
+    let notification = JsonRpcNotification::new(methods::INITIALIZED, None);
 
     let json = serde_json::to_value(&notification).unwrap();
     assert_eq!(json["jsonrpc"], "2.0");
@@ -515,10 +505,7 @@ fn test_parse_tool_complex_schema() {
 
 #[test]
 fn test_build_mcp_tool_name_basic() {
-    assert_eq!(
-        build_mcp_tool_name("server", "tool"),
-        "mcp__server__tool"
-    );
+    assert_eq!(build_mcp_tool_name("server", "tool"), "mcp__server__tool");
 }
 
 #[test]

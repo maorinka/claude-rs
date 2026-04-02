@@ -10,8 +10,7 @@ use super::types::{PermissionDecision, PermissionMode, PermissionRule, ToolPermi
 pub type PlanModeChecker = fn(tool_name: &str, is_read_only: bool) -> bool;
 
 /// Registered plan mode checker.
-static PLAN_MODE_CHECKER: std::sync::Mutex<Option<PlanModeChecker>> =
-    std::sync::Mutex::new(None);
+static PLAN_MODE_CHECKER: std::sync::Mutex<Option<PlanModeChecker>> = std::sync::Mutex::new(None);
 
 /// Register the plan mode checker. Called during startup.
 pub fn register_plan_mode_checker(checker: PlanModeChecker) {
@@ -83,7 +82,10 @@ pub fn evaluate_permission_sync(
             }
         }
         PermissionMode::InteractiveOnly => PermissionDecision::Ask {
-            message: format!("Tool '{}' requires user confirmation (interactive mode).", tool_name),
+            message: format!(
+                "Tool '{}' requires user confirmation (interactive mode).",
+                tool_name
+            ),
         },
     }
 }
@@ -140,7 +142,10 @@ mod tests {
         let ctx = empty_ctx();
         let decision = evaluate_permission_sync("Edit", &serde_json::json!({}), &ctx, false);
         if let PermissionDecision::Ask { message } = decision {
-            assert!(message.contains("plan mode"), "message should mention plan mode");
+            assert!(
+                message.contains("plan mode"),
+                "message should mention plan mode"
+            );
         } else {
             panic!("expected Ask decision");
         }

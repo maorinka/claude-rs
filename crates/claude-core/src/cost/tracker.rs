@@ -10,12 +10,27 @@ struct ModelPricing {
 
 fn get_pricing(model: &str) -> ModelPricing {
     if model.contains("opus") {
-        ModelPricing { input_per_million: 15.0, output_per_million: 75.0, cache_read_per_million: 1.5, cache_write_per_million: 18.75 }
+        ModelPricing {
+            input_per_million: 15.0,
+            output_per_million: 75.0,
+            cache_read_per_million: 1.5,
+            cache_write_per_million: 18.75,
+        }
     } else if model.contains("haiku") {
-        ModelPricing { input_per_million: 0.25, output_per_million: 1.25, cache_read_per_million: 0.025, cache_write_per_million: 0.3 }
+        ModelPricing {
+            input_per_million: 0.25,
+            output_per_million: 1.25,
+            cache_read_per_million: 0.025,
+            cache_write_per_million: 0.3,
+        }
     } else {
         // Sonnet default
-        ModelPricing { input_per_million: 3.0, output_per_million: 15.0, cache_read_per_million: 0.3, cache_write_per_million: 3.75 }
+        ModelPricing {
+            input_per_million: 3.0,
+            output_per_million: 15.0,
+            cache_read_per_million: 0.3,
+            cache_write_per_million: 3.75,
+        }
     }
 }
 
@@ -66,9 +81,12 @@ impl CostTracker {
     pub fn summary(&self) -> String {
         format!(
             "Tokens: {} in / {} out | Cache: {} read / {} write | Requests: {} | Cost: ${:.4}",
-            self.total_input_tokens, self.total_output_tokens,
-            self.total_cache_read_tokens, self.total_cache_write_tokens,
-            self.request_count, self.total_cost_usd()
+            self.total_input_tokens,
+            self.total_output_tokens,
+            self.total_cache_read_tokens,
+            self.total_cache_write_tokens,
+            self.request_count,
+            self.total_cost_usd()
         )
     }
 
@@ -120,18 +138,33 @@ impl CostTracker {
         }
     }
 
-    pub fn total_tokens(&self) -> u64 { self.total_input_tokens + self.total_output_tokens }
-    pub fn total_input_tokens(&self) -> u64 { self.total_input_tokens }
-    pub fn total_output_tokens(&self) -> u64 { self.total_output_tokens }
-    pub fn request_count(&self) -> u32 { self.request_count }
-    pub fn model(&self) -> &str { &self.model }
+    pub fn total_tokens(&self) -> u64 {
+        self.total_input_tokens + self.total_output_tokens
+    }
+    pub fn total_input_tokens(&self) -> u64 {
+        self.total_input_tokens
+    }
+    pub fn total_output_tokens(&self) -> u64 {
+        self.total_output_tokens
+    }
+    pub fn request_count(&self) -> u32 {
+        self.request_count
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_usage(input: u64, output: u64, cache_read: Option<u64>, cache_write: Option<u64>) -> Usage {
+    fn make_usage(
+        input: u64,
+        output: u64,
+        cache_read: Option<u64>,
+        cache_write: Option<u64>,
+    ) -> Usage {
         Usage {
             input_tokens: input,
             output_tokens: output,
@@ -158,7 +191,11 @@ mod tests {
         // 1M input tokens at $3/M = $3, 1M output at $15/M = $15
         tracker.add_usage(&make_usage(1_000_000, 1_000_000, None, None));
         let cost = tracker.total_cost_usd();
-        assert!((cost - 18.0).abs() < 0.01, "sonnet cost should be ~$18, got {}", cost);
+        assert!(
+            (cost - 18.0).abs() < 0.01,
+            "sonnet cost should be ~$18, got {}",
+            cost
+        );
     }
 
     #[test]
@@ -166,7 +203,11 @@ mod tests {
         let mut tracker = CostTracker::new("claude-opus-4-6");
         tracker.add_usage(&make_usage(1_000_000, 1_000_000, None, None));
         let cost = tracker.total_cost_usd();
-        assert!((cost - 90.0).abs() < 0.01, "opus cost should be ~$90, got {}", cost);
+        assert!(
+            (cost - 90.0).abs() < 0.01,
+            "opus cost should be ~$90, got {}",
+            cost
+        );
     }
 
     #[test]
@@ -176,13 +217,19 @@ mod tests {
 
         tracker.add_usage(&make_usage(400, 400, None, None));
         // 800 tokens total, below 1k threshold
-        assert!(tracker.header_display().contains("800 tokens"),
-            "got: {}", tracker.header_display());
+        assert!(
+            tracker.header_display().contains("800 tokens"),
+            "got: {}",
+            tracker.header_display()
+        );
 
         tracker.add_usage(&make_usage(50_000, 50_000, None, None));
         // Now > 1k, should show "k tokens"
-        assert!(tracker.header_display().contains("k tokens"),
-            "got: {}", tracker.header_display());
+        assert!(
+            tracker.header_display().contains("k tokens"),
+            "got: {}",
+            tracker.header_display()
+        );
     }
 
     #[test]

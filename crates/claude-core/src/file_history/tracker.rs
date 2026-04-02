@@ -52,10 +52,7 @@ impl FileHistoryTracker {
         std::fs::create_dir_all(&self.snapshot_dir)?;
 
         self.sequence += 1;
-        let base_name = file_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
+        let base_name = file_path.file_name().unwrap_or_default().to_string_lossy();
         let snapshot_name = format!("{}_{}", self.sequence, base_name);
         let snapshot_path = self.snapshot_dir.join(&snapshot_name);
 

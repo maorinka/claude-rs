@@ -138,18 +138,14 @@ async fn receive_messages_in(home: &PathBuf, agent_id: &str) -> Result<Vec<Mailb
 pub type MailboxReceiver = mpsc::Receiver<Vec<MailboxMessage>>;
 
 /// Global handle to the active polling task, so it can be stopped.
-static POLLING_HANDLE: Lazy<Mutex<Option<CancellationToken>>> =
-    Lazy::new(|| Mutex::new(None));
+static POLLING_HANDLE: Lazy<Mutex<Option<CancellationToken>>> = Lazy::new(|| Mutex::new(None));
 
 /// Start a background task that polls the mailbox for the given agent_id
 /// every `interval`. New messages are sent through the returned channel.
 ///
 /// Only one polling task runs at a time. Calling this again replaces the
 /// previous poller.
-pub async fn start_mailbox_polling(
-    agent_id: String,
-    interval: Duration,
-) -> MailboxReceiver {
+pub async fn start_mailbox_polling(agent_id: String, interval: Duration) -> MailboxReceiver {
     // Stop any existing poller
     stop_mailbox_polling().await;
 
@@ -455,7 +451,11 @@ mod tests {
 
         let msg = mk_msg("create-test", "orchestrator", agent_id, "Wake up!");
         let result = write_to_mailbox_in(&home, &msg).await;
-        assert!(result.is_ok(), "write_to_mailbox_in failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "write_to_mailbox_in failed: {:?}",
+            result.err()
+        );
 
         assert!(dir.exists(), "mailbox dir was not created");
         let file = dir.join("msg_create-test.json");
@@ -467,7 +467,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().to_path_buf();
         let messages = receive_messages_in(&home, "nobody").await.unwrap();
-        assert!(messages.is_empty(), "expected no messages for unknown agent");
+        assert!(
+            messages.is_empty(),
+            "expected no messages for unknown agent"
+        );
     }
 
     #[tokio::test]
@@ -492,7 +495,11 @@ mod tests {
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
-        assert!(!result.is_error, "expected no error, got: {:?}", result.data);
+        assert!(
+            !result.is_error,
+            "expected no error, got: {:?}",
+            result.data
+        );
         assert_eq!(result.data["success"], true);
         assert_eq!(result.data["to"], "tool-target");
         assert!(
@@ -540,7 +547,10 @@ mod tests {
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
         assert!(
-            result.data["error"].as_str().unwrap().contains("bare teammate name"),
+            result.data["error"]
+                .as_str()
+                .unwrap()
+                .contains("bare teammate name"),
             "should reject @ in recipient"
         );
     }

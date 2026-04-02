@@ -17,7 +17,10 @@ fn test_snapshot_of_nonexistent_file_is_noop() {
     assert!(result.is_ok(), "snapshot of nonexistent file should be Ok");
 
     let history = tracker.history(&nonexistent);
-    assert!(history.is_empty(), "history should be empty for nonexistent file");
+    assert!(
+        history.is_empty(),
+        "history should be empty for nonexistent file"
+    );
 }
 
 #[test]
@@ -33,8 +36,8 @@ fn test_snapshot_captures_file_content() {
     let history = tracker.history(&file);
     assert_eq!(history.len(), 1, "should have one snapshot");
 
-    let snapshot_content = fs::read_to_string(&history[0].snapshot_path)
-        .expect("snapshot file should be readable");
+    let snapshot_content =
+        fs::read_to_string(&history[0].snapshot_path).expect("snapshot file should be readable");
     assert_eq!(snapshot_content, "original content");
 }
 
@@ -57,7 +60,10 @@ fn test_restore_reverts_to_snapshot() {
     assert!(restored, "restore should return true when snapshot exists");
 
     let restored_content = fs::read_to_string(&file).unwrap();
-    assert_eq!(restored_content, "before edit", "content should be reverted");
+    assert_eq!(
+        restored_content, "before edit",
+        "content should be reverted"
+    );
 }
 
 #[test]
@@ -69,7 +75,10 @@ fn test_restore_returns_false_when_no_snapshot() {
     fs::write(&file, "some content").unwrap();
 
     let restored = tracker.restore(&file).expect("restore should not error");
-    assert!(!restored, "restore should return false when no snapshot exists");
+    assert!(
+        !restored,
+        "restore should return false when no snapshot exists"
+    );
 }
 
 #[test]
@@ -135,10 +144,20 @@ fn test_snapshot_creates_snapshot_directory() {
     fs::write(&file, "content").unwrap();
 
     // Before snapshot the dir should not exist
-    assert!(!tracker.snapshot_dir().exists() || tracker.snapshot_dir().read_dir().map(|mut d| d.next().is_none()).unwrap_or(true),
-        "snapshot dir should be empty/absent before first snapshot");
+    assert!(
+        !tracker.snapshot_dir().exists()
+            || tracker
+                .snapshot_dir()
+                .read_dir()
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(true),
+        "snapshot dir should be empty/absent before first snapshot"
+    );
 
     tracker.snapshot(&file).expect("snapshot should succeed");
 
-    assert!(tracker.snapshot_dir().exists(), "snapshot dir should be created");
+    assert!(
+        tracker.snapshot_dir().exists(),
+        "snapshot dir should be created"
+    );
 }

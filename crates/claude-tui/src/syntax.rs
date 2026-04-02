@@ -222,10 +222,7 @@ mod tests {
         let lines = highlight_code(code, "rust");
         assert_eq!(lines.len(), 1);
         // Should have multiple colored spans (keywords, literals, etc.)
-        let has_color = lines[0]
-            .spans
-            .iter()
-            .any(|span| span.style.fg.is_some());
+        let has_color = lines[0].spans.iter().any(|span| span.style.fg.is_some());
         assert!(has_color, "highlighted code should have colored spans");
     }
 

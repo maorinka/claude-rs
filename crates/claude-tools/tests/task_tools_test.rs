@@ -1,8 +1,8 @@
+use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use claude_tools::task_tools::{
     append_output, register_process, TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool,
     TaskStopTool, TaskUpdateTool,
 };
-use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use serde_json::json;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -63,7 +63,10 @@ async fn test_task_get_nonexistent_returns_error() {
         .await
         .unwrap();
 
-    assert!(result.is_error, "get of nonexistent task should be an error");
+    assert!(
+        result.is_error,
+        "get of nonexistent task should be an error"
+    );
 }
 
 #[tokio::test]
@@ -78,7 +81,9 @@ async fn test_task_list_includes_created_tasks() {
         .unwrap();
 
     assert!(!result.is_error);
-    let tasks = result.data["tasks"].as_array().expect("tasks should be array");
+    let tasks = result.data["tasks"]
+        .as_array()
+        .expect("tasks should be array");
     let found = tasks.iter().any(|t| t["id"].as_str() == Some(&id));
     assert!(found, "created task should appear in list");
 }
@@ -138,7 +143,12 @@ async fn test_task_stop_sets_status_stopped() {
     // Verify via get
     let get_tool = TaskGetTool;
     let get_result = get_tool
-        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(get_result.data["status"], "stopped");
@@ -178,7 +188,12 @@ async fn test_task_output_returns_real_output_when_set() {
 
     let tool = TaskOutputTool;
     let result = tool
-        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .unwrap();
 
@@ -195,13 +210,21 @@ async fn test_task_output_falls_back_to_description() {
     // No output appended — should fall back to description
     let tool = TaskOutputTool;
     let result = tool
-        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .unwrap();
 
     assert!(!result.is_error);
     let output = result.data["output"].as_str().unwrap_or("");
-    assert!(output.contains("description fallback"), "should fall back to description");
+    assert!(
+        output.contains("description fallback"),
+        "should fall back to description"
+    );
 }
 
 #[tokio::test]
@@ -214,13 +237,21 @@ async fn test_register_process_sets_pid_and_status() {
 
     let tool = TaskGetTool;
     let result = tool
-        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .unwrap();
 
     assert!(!result.is_error);
     assert_eq!(result.data["pid"], 12345, "pid should be set to 12345");
-    assert_eq!(result.data["status"], "in_progress", "status should be in_progress");
+    assert_eq!(
+        result.data["status"], "in_progress",
+        "status should be in_progress"
+    );
 }
 
 #[tokio::test]
@@ -233,13 +264,21 @@ async fn test_task_output_includes_pid() {
 
     let tool = TaskOutputTool;
     let result = tool
-        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .unwrap();
 
     assert!(!result.is_error);
     assert_eq!(result.data["pid"], 99999);
-    assert_eq!(result.data["output"].as_str().unwrap_or(""), "some process output");
+    assert_eq!(
+        result.data["output"].as_str().unwrap_or(""),
+        "some process output"
+    );
 }
 
 #[tokio::test]
@@ -250,7 +289,12 @@ async fn test_task_stop_with_no_pid() {
     // No PID registered — stop should still succeed and set status
     let tool = TaskStopTool;
     let result = tool
-        .call(&json!({ "taskId": id }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .unwrap();
 

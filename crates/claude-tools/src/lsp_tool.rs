@@ -107,10 +107,7 @@ fn operation_to_method_and_params(
             "textDocument/documentSymbol",
             json!({ "textDocument": { "uri": uri } }),
         )),
-        "workspaceSymbol" => Ok((
-            "workspace/symbol",
-            json!({ "query": "" }),
-        )),
+        "workspaceSymbol" => Ok(("workspace/symbol", json!({ "query": "" }))),
         "goToImplementation" => Ok((
             "textDocument/implementation",
             json!({ "textDocument": { "uri": uri }, "position": position }),
@@ -216,10 +213,7 @@ impl ToolExecutor for LSPTool {
             .get("operation")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let file_path = input
-            .get("filePath")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let file_path = input.get("filePath").and_then(|v| v.as_str()).unwrap_or("");
 
         if operation.is_empty() {
             return Ok(ToolResultData {
@@ -238,8 +232,7 @@ impl ToolExecutor for LSPTool {
         let absolute_path = if Path::new(file_path).is_absolute() {
             file_path.to_string()
         } else {
-            let cwd =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
             cwd.join(file_path).to_string_lossy().to_string()
         };
 
@@ -283,8 +276,7 @@ impl ToolExecutor for LSPTool {
         match result {
             Ok(Some(value)) => {
                 // Handle two-step call hierarchy for incomingCalls/outgoingCalls
-                let final_value = if operation == "incomingCalls" || operation == "outgoingCalls"
-                {
+                let final_value = if operation == "incomingCalls" || operation == "outgoingCalls" {
                     self.handle_call_hierarchy(&mgr, &absolute_path, operation, &value)
                         .await
                         .unwrap_or(value)
@@ -510,10 +502,7 @@ mod tests {
             .unwrap();
 
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("operation"));
+        assert!(result.data["error"].as_str().unwrap().contains("operation"));
     }
 
     #[tokio::test]
@@ -528,10 +517,7 @@ mod tests {
             .unwrap();
 
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("filePath"));
+        assert!(result.data["error"].as_str().unwrap().contains("filePath"));
     }
 
     #[test]
@@ -581,8 +567,7 @@ mod tests {
             operation_to_method_and_params("findReferences", "/test.rs", 10, 5).unwrap();
         assert_eq!(method, "textDocument/references");
 
-        let (method, _) =
-            operation_to_method_and_params("hover", "/test.rs", 10, 5).unwrap();
+        let (method, _) = operation_to_method_and_params("hover", "/test.rs", 10, 5).unwrap();
         assert_eq!(method, "textDocument/hover");
 
         let result = operation_to_method_and_params("badOp", "/test.rs", 10, 5);

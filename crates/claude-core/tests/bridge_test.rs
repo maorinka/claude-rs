@@ -1,8 +1,8 @@
 use claude_core::bridge::protocol::{BridgeError, BridgeRequest, BridgeResponse};
-use claude_core::bridge::server::{BridgeServer, BridgeState, dispatch_request, dispatch_request_stateless};
-use claude_core::bridge::types::{
-    BridgeConfig, BridgeMessage, IdeType, SessionInfo, SessionState,
+use claude_core::bridge::server::{
+    dispatch_request, dispatch_request_stateless, BridgeServer, BridgeState,
 };
+use claude_core::bridge::types::{BridgeConfig, BridgeMessage, IdeType, SessionInfo, SessionState};
 
 // ─── BridgeMessage serde ────────────────────────────────────────────────────
 
@@ -321,7 +321,11 @@ async fn bridge_server_handles_ping() {
 
     // Read the response
     let mut lines = BufReader::new(reader).lines();
-    let line = lines.next_line().await.unwrap().expect("expected a response line");
+    let line = lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("expected a response line");
     let resp: BridgeResponse = serde_json::from_str(&line).unwrap();
 
     assert_eq!(resp.id, "test-1");
@@ -356,7 +360,11 @@ async fn bridge_server_handles_unknown_method() {
     writer.write_all(payload.as_bytes()).await.unwrap();
 
     let mut lines = BufReader::new(reader).lines();
-    let line = lines.next_line().await.unwrap().expect("expected a response line");
+    let line = lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("expected a response line");
     let resp: BridgeResponse = serde_json::from_str(&line).unwrap();
 
     assert_eq!(resp.id, "test-2");

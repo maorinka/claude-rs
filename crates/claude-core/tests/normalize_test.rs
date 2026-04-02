@@ -72,12 +72,10 @@ fn test_add_cache_markers() {
 
 #[test]
 fn test_cache_markers_skip_thinking() {
-    let mut messages = vec![
-        json!({"role": "assistant", "content": [
-            {"type": "text", "text": "answer"},
-            {"type": "thinking", "thinking": "hmm", "signature": "sig"}
-        ]}),
-    ];
+    let mut messages = vec![json!({"role": "assistant", "content": [
+        {"type": "text", "text": "answer"},
+        {"type": "thinking", "thinking": "hmm", "signature": "sig"}
+    ]})];
     add_cache_markers(&mut messages);
     // Should NOT add cache_control to thinking block
     let content = messages[0]["content"].as_array().unwrap();

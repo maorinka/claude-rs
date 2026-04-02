@@ -42,7 +42,9 @@ fn test_build_request_body() {
 fn test_build_request_body_thinking_enabled() {
     let config = ApiConfig {
         model: "claude-sonnet-4-6".into(),
-        thinking: ThinkingConfig::Enabled { budget_tokens: 10000 },
+        thinking: ThinkingConfig::Enabled {
+            budget_tokens: 10000,
+        },
         ..Default::default()
     };
     let body = build_request_body(&config, &[], &[], &[]);
@@ -69,7 +71,10 @@ fn test_build_request_body_includes_web_search_server_tool() {
     // The tools array should contain the web_search server tool definition
     let tools = body["tools"].as_array().expect("tools should be an array");
     let web_search = tools.iter().find(|t| t["name"] == "web_search");
-    assert!(web_search.is_some(), "web_search server tool should be present in tools");
+    assert!(
+        web_search.is_some(),
+        "web_search server tool should be present in tools"
+    );
 
     let ws = web_search.unwrap();
     assert_eq!(ws["type"], "web_search_20250305");

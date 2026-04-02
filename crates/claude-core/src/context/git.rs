@@ -1,5 +1,5 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 use tokio::process::Command;
 
 pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
@@ -7,7 +7,8 @@ pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
     let check = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(project_root)
-        .output().await?;
+        .output()
+        .await?;
 
     if !check.status.success() {
         return Ok(None);
@@ -48,6 +49,7 @@ async fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(dir)
-        .output().await?;
+        .output()
+        .await?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

@@ -174,7 +174,10 @@ mod tests {
         let _guard = BRIEF_TEST_LOCK.lock().unwrap();
         set_brief_mode(true);
         let section = get_brief_system_prompt_section();
-        assert!(section.is_some(), "should return a section when brief is enabled");
+        assert!(
+            section.is_some(),
+            "should return a section when brief is enabled"
+        );
         let text = section.unwrap();
         assert!(text.contains("Brief Mode (ACTIVE)"));
         assert!(text.contains("Keep responses short"));
@@ -187,7 +190,10 @@ mod tests {
         let _guard = BRIEF_TEST_LOCK.lock().unwrap();
         set_brief_mode(false);
         let section = get_brief_system_prompt_section();
-        assert!(section.is_none(), "should return None when brief is disabled");
+        assert!(
+            section.is_none(),
+            "should return None when brief is disabled"
+        );
     }
 
     #[test]

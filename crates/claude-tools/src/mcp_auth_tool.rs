@@ -23,10 +23,7 @@ static AUTH_STORE: Lazy<Mutex<HashMap<String, AuthState>>> =
 /// Get the auth state for a server.
 pub fn get_auth_state(server: &str) -> AuthState {
     let store = AUTH_STORE.lock().unwrap();
-    store
-        .get(server)
-        .cloned()
-        .unwrap_or(AuthState::LoggedOut)
+    store.get(server).cloned().unwrap_or(AuthState::LoggedOut)
 }
 
 /// Set the auth state for a server.
@@ -197,19 +194,11 @@ mod tests {
             .contains("server_name"));
 
         let result = tool
-            .call(
-                &json!({ "server_name": "test" }),
-                &ctx,
-                cancel,
-                None,
-            )
+            .call(&json!({ "server_name": "test" }), &ctx, cancel, None)
             .await
             .unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("action"));
+        assert!(result.data["error"].as_str().unwrap().contains("action"));
     }
 
     #[tokio::test]

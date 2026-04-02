@@ -10,12 +10,15 @@ pub struct SubscribePRTool;
 
 #[async_trait]
 impl ToolExecutor for SubscribePRTool {
-    fn name(&self) -> &str { "SubscribePR" }
+    fn name(&self) -> &str {
+        "SubscribePR"
+    }
 
     fn description(&self) -> String {
         "Subscribe to events on a GitHub pull request. When subscribed, you will \
          be notified of comments, reviews, CI status changes, and merges on the \
-         specified PR.".to_string()
+         specified PR."
+            .to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -31,28 +34,67 @@ impl ToolExecutor for SubscribePRTool {
         })
     }
 
-    fn is_read_only(&self, _input: &Value) -> bool { false }
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        false
+    }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
 
-    async fn call(&self, input: &Value, _ctx: &ToolUseContext, _cancel: CancellationToken, _progress: Option<ProgressSender>) -> Result<ToolResultData> {
+    async fn call(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData> {
         let owner = match input.get("owner").and_then(|v| v.as_str()) {
             Some(o) => o,
-            None => return Ok(ToolResultData { data: json!({ "error": "missing required field: owner" }), is_error: true }),
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": "missing required field: owner" }),
+                    is_error: true,
+                })
+            }
         };
         let repo = match input.get("repo").and_then(|v| v.as_str()) {
             Some(r) => r,
-            None => return Ok(ToolResultData { data: json!({ "error": "missing required field: repo" }), is_error: true }),
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": "missing required field: repo" }),
+                    is_error: true,
+                })
+            }
         };
         let pr_number = match input.get("prNumber").and_then(|v| v.as_u64()) {
             Some(n) => n,
-            None => return Ok(ToolResultData { data: json!({ "error": "missing required field: prNumber (must be a positive integer)" }), is_error: true }),
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": "missing required field: prNumber (must be a positive integer)" }),
+                    is_error: true,
+                })
+            }
         };
-        let events: Vec<String> = input.get("events").and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        let events: Vec<String> = input
+            .get("events")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_else(|| vec!["all".to_string()]);
 
-        let subscription_id = format!("pr_sub_{}_{}_{}_{}", owner, repo, pr_number,
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+        let subscription_id = format!(
+            "pr_sub_{}_{}_{}_{}",
+            owner,
+            repo,
+            pr_number,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         Ok(ToolResultData {
             data: json!({
@@ -78,13 +120,24 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext { working_directory: PathBuf::from("/tmp"), read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())) }
+        ToolUseContext {
+            working_directory: PathBuf::from("/tmp"),
+            read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+        }
     }
 
     #[tokio::test]
     async fn subscribe_pr_success() {
         let tool = SubscribePRTool;
-        let result = tool.call(&json!({ "owner": "anthropics", "repo": "claude-code", "prNumber": 123 }), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(
+                &json!({ "owner": "anthropics", "repo": "claude-code", "prNumber": 123 }),
+                &make_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(!result.is_error);
         assert!(result.data["subscribed"].as_bool().unwrap());
         assert_eq!(result.data["prNumber"].as_u64().unwrap(), 123);
@@ -94,11 +147,35 @@ mod tests {
     async fn subscribe_pr_missing_fields() {
         let tool = SubscribePRTool;
         let ctx = make_ctx();
-        let r = tool.call(&json!({ "repo": "x", "prNumber": 1 }), &ctx, CancellationToken::new(), None).await.unwrap();
+        let r = tool
+            .call(
+                &json!({ "repo": "x", "prNumber": 1 }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(r.is_error);
-        let r = tool.call(&json!({ "owner": "x", "prNumber": 1 }), &ctx, CancellationToken::new(), None).await.unwrap();
+        let r = tool
+            .call(
+                &json!({ "owner": "x", "prNumber": 1 }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(r.is_error);
-        let r = tool.call(&json!({ "owner": "x", "repo": "y" }), &ctx, CancellationToken::new(), None).await.unwrap();
+        let r = tool
+            .call(
+                &json!({ "owner": "x", "repo": "y" }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(r.is_error);
     }
 

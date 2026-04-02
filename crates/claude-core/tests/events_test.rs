@@ -3,7 +3,9 @@ use claude_core::types::message::StopReason;
 
 #[test]
 fn test_stream_event_text_delta() {
-    let event = StreamEvent::TextDelta { text: "Hello".into() };
+    let event = StreamEvent::TextDelta {
+        text: "Hello".into(),
+    };
     match event {
         StreamEvent::TextDelta { text } => assert_eq!(text, "Hello"),
         _ => panic!("Wrong variant"),
@@ -25,7 +27,9 @@ fn test_stream_event_tool_start() {
 
 #[test]
 fn test_stream_event_done() {
-    let event = StreamEvent::Done { stop_reason: StopReason::EndTurn };
+    let event = StreamEvent::Done {
+        stop_reason: StopReason::EndTurn,
+    };
     match event {
         StreamEvent::Done { stop_reason } => assert_eq!(stop_reason, StopReason::EndTurn),
         _ => panic!("Wrong variant"),

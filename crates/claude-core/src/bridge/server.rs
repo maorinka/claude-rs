@@ -119,10 +119,7 @@ pub fn dispatch_request(
     state: Option<&std::sync::Arc<std::sync::Mutex<BridgeState>>>,
 ) -> BridgeResponse {
     match request.method.as_str() {
-        "ping" => BridgeResponse::success(
-            request.id.clone(),
-            serde_json::json!({"pong": true}),
-        ),
+        "ping" => BridgeResponse::success(request.id.clone(), serde_json::json!({"pong": true})),
 
         "status" | "get_status" => {
             if let Some(state) = state {
@@ -138,14 +135,13 @@ pub fn dispatch_request(
                     );
                 }
             }
-            BridgeResponse::success(
-                request.id.clone(),
-                serde_json::json!({"state": "ready"}),
-            )
+            BridgeResponse::success(request.id.clone(), serde_json::json!({"state": "ready"}))
         }
 
         "prompt" => {
-            let text = request.params.get("text")
+            let text = request
+                .params
+                .get("text")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -178,11 +174,15 @@ pub fn dispatch_request(
         }
 
         "file_changed" => {
-            let path = request.params.get("path")
+            let path = request
+                .params
+                .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let change_type = request.params.get("change_type")
+            let change_type = request
+                .params
+                .get("change_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("modified")
                 .to_string();
@@ -214,19 +214,17 @@ pub fn dispatch_request(
             )
         }
 
-        "get_diagnostics" => {
-            BridgeResponse::success(
-                request.id.clone(),
-                serde_json::json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "uptime_secs": 0,
-                    "supported_methods": [
-                        "ping", "status", "get_status", "prompt",
-                        "file_changed", "get_diagnostics"
-                    ],
-                }),
-            )
-        }
+        "get_diagnostics" => BridgeResponse::success(
+            request.id.clone(),
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "uptime_secs": 0,
+                "supported_methods": [
+                    "ping", "status", "get_status", "prompt",
+                    "file_changed", "get_diagnostics"
+                ],
+            }),
+        ),
 
         _ => BridgeResponse::error(
             request.id.clone(),

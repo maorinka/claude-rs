@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 
 use crate::api::sse::{ContentBlockStart, ContentDelta};
 use crate::types::content::ContentBlock;
@@ -7,10 +7,23 @@ use crate::types::content::ContentBlock;
 // ── In-progress block state ───────────────────────────────────────────────────
 
 enum InProgressBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input_json: String },
-    Thinking { thinking: String, signature: String },
-    ServerToolUse { id: String, name: String, input_json: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    ServerToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+    },
 }
 
 // ── Accumulator ───────────────────────────────────────────────────────────────
@@ -31,7 +44,9 @@ impl ContentBlockAccumulator {
     /// Called when a `content_block_start` event arrives for `index`.
     pub fn on_start(&mut self, index: usize, start: ContentBlockStart) {
         let block = match start {
-            ContentBlockStart::Text => InProgressBlock::Text { text: String::new() },
+            ContentBlockStart::Text => InProgressBlock::Text {
+                text: String::new(),
+            },
             ContentBlockStart::ToolUse { id, name } => InProgressBlock::ToolUse {
                 id,
                 name,
@@ -63,16 +78,28 @@ impl ContentBlockAccumulator {
             (InProgressBlock::Text { text }, ContentDelta::TextDelta { text: chunk }) => {
                 text.push_str(&chunk);
             }
-            (InProgressBlock::ToolUse { input_json, .. }, ContentDelta::InputJsonDelta { partial_json }) => {
+            (
+                InProgressBlock::ToolUse { input_json, .. },
+                ContentDelta::InputJsonDelta { partial_json },
+            ) => {
                 input_json.push_str(&partial_json);
             }
-            (InProgressBlock::ServerToolUse { input_json, .. }, ContentDelta::InputJsonDelta { partial_json }) => {
+            (
+                InProgressBlock::ServerToolUse { input_json, .. },
+                ContentDelta::InputJsonDelta { partial_json },
+            ) => {
                 input_json.push_str(&partial_json);
             }
-            (InProgressBlock::Thinking { thinking, .. }, ContentDelta::ThinkingDelta { thinking: chunk }) => {
+            (
+                InProgressBlock::Thinking { thinking, .. },
+                ContentDelta::ThinkingDelta { thinking: chunk },
+            ) => {
                 thinking.push_str(&chunk);
             }
-            (InProgressBlock::Thinking { signature, .. }, ContentDelta::SignatureDelta { signature: sig }) => {
+            (
+                InProgressBlock::Thinking { signature, .. },
+                ContentDelta::SignatureDelta { signature: sig },
+            ) => {
                 signature.push_str(&sig);
             }
             // All mismatched combinations are silently ignored.
@@ -93,7 +120,11 @@ impl ContentBlockAccumulator {
 
         let content_block = match block {
             InProgressBlock::Text { text } => ContentBlock::Text { text },
-            InProgressBlock::ToolUse { id, name, input_json } => {
+            InProgressBlock::ToolUse {
+                id,
+                name,
+                input_json,
+            } => {
                 let input: serde_json::Value = if input_json.is_empty() {
                     serde_json::Value::Object(serde_json::Map::new())
                 } else {
@@ -102,10 +133,18 @@ impl ContentBlockAccumulator {
                 };
                 ContentBlock::ToolUse { id, name, input }
             }
-            InProgressBlock::Thinking { thinking, signature } => {
-                ContentBlock::Thinking { thinking, signature }
-            }
-            InProgressBlock::ServerToolUse { id, name, input_json } => {
+            InProgressBlock::Thinking {
+                thinking,
+                signature,
+            } => ContentBlock::Thinking {
+                thinking,
+                signature,
+            },
+            InProgressBlock::ServerToolUse {
+                id,
+                name,
+                input_json,
+            } => {
                 let input: serde_json::Value = if input_json.is_empty() {
                     serde_json::Value::Object(serde_json::Map::new())
                 } else {

@@ -23,7 +23,9 @@ use claude_core::types::events::{StreamEvent, ToolResultData};
 use claude_tools::{ToolRegistry, ToolUseContext};
 
 use claude_core::commands::builtin::build_default_commands;
-use claude_core::commands::registry::{CommandContext, CommandRegistry, CommandResult, SharedCommandState};
+use claude_core::commands::registry::{
+    CommandContext, CommandRegistry, CommandResult, SharedCommandState,
+};
 use claude_core::cost::tracker::CostTracker;
 use claude_core::plugins::skill;
 use claude_core::plugins::types::Skill;
@@ -149,7 +151,9 @@ impl App {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
         // Shorten home dir to ~
-        let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default();
+        let home = dirs::home_dir()
+            .map(|h| h.display().to_string())
+            .unwrap_or_default();
         let display_cwd = if !home.is_empty() && cwd.starts_with(&home) {
             format!("~{}", &cwd[home.len()..])
         } else {
@@ -245,8 +249,7 @@ impl App {
             }
 
             let ctx = CommandContext {
-                working_directory: std::env::current_dir()
-                    .unwrap_or_else(|_| PathBuf::from(".")),
+                working_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 model: self.model_name.clone(),
                 shared: Some(self.shared_state.clone()),
             };
@@ -260,7 +263,9 @@ impl App {
                     self.cost_tracker = CostTracker::new(&state.model);
                 }
                 // Theme change
-                if state.dark_theme != (matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255))) {
+                if state.dark_theme
+                    != (matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255)))
+                {
                     self.theme = if state.dark_theme {
                         crate::theme::dark_theme()
                     } else {
@@ -302,7 +307,12 @@ impl App {
     /// Original standalone run loop (no engine). Kept for backwards compatibility.
     pub async fn run(&mut self) -> Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            cursor::Hide
+        )?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(100);
 
@@ -313,7 +323,11 @@ impl App {
                 if event::poll(Duration::from_millis(16)).unwrap_or(false) {
                     if let Ok(evt) = event::read() {
                         let app_evt = match evt {
-                            CrosstermEvent::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => Some(AppEvent::Key(k)),
+                            CrosstermEvent::Key(k)
+                                if k.kind == crossterm::event::KeyEventKind::Press =>
+                            {
+                                Some(AppEvent::Key(k))
+                            }
                             CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
@@ -368,7 +382,12 @@ impl App {
         }
 
         terminal::disable_raw_mode()?;
-        execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen, cursor::Show)?;
+        execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            cursor::Show
+        )?;
         Ok(())
     }
 
@@ -381,7 +400,12 @@ impl App {
         permission_mode: PermissionMode,
     ) -> Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            cursor::Hide
+        )?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
 
@@ -392,7 +416,11 @@ impl App {
                 if event::poll(Duration::from_millis(16)).unwrap_or(false) {
                     if let Ok(evt) = event::read() {
                         let app_evt = match evt {
-                            CrosstermEvent::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => Some(AppEvent::Key(k)),
+                            CrosstermEvent::Key(k)
+                                if k.kind == crossterm::event::KeyEventKind::Press =>
+                            {
+                                Some(AppEvent::Key(k))
+                            }
                             CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
@@ -449,7 +477,8 @@ impl App {
             if let Ok(mut state) = self.shared_state.lock() {
                 state.permission_mode = mode_str.to_string();
                 // Detect initial theme from current app state
-                state.dark_theme = matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255));
+                state.dark_theme =
+                    matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255));
             }
         }
 
@@ -562,8 +591,7 @@ impl App {
                                 }
                             }
                             KeyCode::Char(c)
-                                if k.modifiers.is_empty()
-                                    || k.modifiers == KeyModifiers::SHIFT =>
+                                if k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT =>
                             {
                                 self.prompt.handle_key(k);
                                 let text = self.prompt.text().to_string();
@@ -638,9 +666,8 @@ impl App {
                         match self.try_execute_command(&text) {
                             Some(CommandAction::Display(output)) => {
                                 // Action-type command: show output as system message
-                                self.message_list.push(MessageEntry::System {
-                                    text: output,
-                                });
+                                self.message_list
+                                    .push(MessageEntry::System { text: output });
 
                                 // Handle side effects from stateful commands
                                 if let Ok(mut state) = self.shared_state.lock() {
@@ -668,9 +695,8 @@ impl App {
                             }
                             Some(CommandAction::Prompt(prompt_text)) => {
                                 // Prompt-type command: inject as user message
-                                self.message_list.push(MessageEntry::User {
-                                    text: text.clone(),
-                                });
+                                self.message_list
+                                    .push(MessageEntry::User { text: text.clone() });
                                 engine.add_user_message(&prompt_text);
                                 self.engine_busy = true;
                                 self.spinner.start(SpinnerMode::Thinking);
@@ -732,14 +758,20 @@ impl App {
 
                     // `! command` prefix: run shell command and show output
                     // (matches TS behavior where `!` runs a command in the session)
-                    if text.starts_with("! ") || text.starts_with("!") && text.len() > 1 && text.chars().nth(1) != Some('!') {
-                        let cmd = text.strip_prefix("! ").or_else(|| text.strip_prefix("!")).unwrap_or("");
+                    if text.starts_with("! ")
+                        || text.starts_with("!")
+                            && text.len() > 1
+                            && text.chars().nth(1) != Some('!')
+                    {
+                        let cmd = text
+                            .strip_prefix("! ")
+                            .or_else(|| text.strip_prefix("!"))
+                            .unwrap_or("");
                         if !cmd.trim().is_empty() {
-                            self.message_list.push(MessageEntry::User { text: text.clone() });
-                            let output = std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(cmd)
-                                .output();
+                            self.message_list
+                                .push(MessageEntry::User { text: text.clone() });
+                            let output =
+                                std::process::Command::new("sh").arg("-c").arg(cmd).output();
                             match output {
                                 Ok(out) => {
                                     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -751,9 +783,8 @@ impl App {
                                     } else {
                                         format!("{}\n{}", stdout, stderr)
                                     };
-                                    self.message_list.push(MessageEntry::System {
-                                        text: combined,
-                                    });
+                                    self.message_list
+                                        .push(MessageEntry::System { text: combined });
                                 }
                                 Err(e) => {
                                     self.message_list.push(MessageEntry::System {
@@ -843,8 +874,9 @@ impl App {
                         "allow" | "always" => {
                             // Execute this tool
                             let info = &pending_tools[tool_idx].info;
-                            self.spinner
-                                .start(SpinnerMode::Tool { name: info.name.clone() });
+                            self.spinner.start(SpinnerMode::Tool {
+                                name: info.name.clone(),
+                            });
                             let tool_result = execute_tool(
                                 &tools,
                                 &info.name,
@@ -930,11 +962,7 @@ impl App {
                         }
                         "deny" => {
                             let info = &pending_tools[tool_idx].info;
-                            engine.add_tool_result(
-                                &info.id,
-                                "Permission denied by user",
-                                true,
-                            );
+                            engine.add_tool_result(&info.id, "Permission denied by user", true);
                             self.message_list.push(MessageEntry::ToolResult {
                                 name: info.name.clone(),
                                 output: "Permission denied".to_string(),
@@ -1017,7 +1045,11 @@ impl App {
                     }
                 }
 
-                AppEvent::ShowAskUserDialog { tool_use_id: _, question, options } => {
+                AppEvent::ShowAskUserDialog {
+                    tool_use_id: _,
+                    question,
+                    options,
+                } => {
                     // Show the AskUser input dialog; execution is paused in the tool
                     // via a oneshot channel until the user submits.
                     self.ask_user_dialog = Some(AskUserDialog::new(question, options));
@@ -1074,12 +1106,8 @@ impl App {
                 .map(|t| t.is_read_only(&info.input))
                 .unwrap_or(false);
 
-            let decision = evaluate_permission_sync(
-                &info.name,
-                &info.input,
-                perm_ctx,
-                is_read_only,
-            );
+            let decision =
+                evaluate_permission_sync(&info.name, &info.input, perm_ctx, is_read_only);
 
             match decision {
                 PermissionDecision::Allow => {
@@ -1087,7 +1115,9 @@ impl App {
                     // For simplicity, send an "allow" permission response immediately
                     let tx2 = tx.clone();
                     tokio::spawn(async move {
-                        let _ = tx2.send(AppEvent::PermissionResponse("allow".to_string())).await;
+                        let _ = tx2
+                            .send(AppEvent::PermissionResponse("allow".to_string()))
+                            .await;
                     });
                     return;
                 }
@@ -1105,7 +1135,9 @@ impl App {
                     // Auto-deny, send deny response
                     let tx2 = tx.clone();
                     tokio::spawn(async move {
-                        let _ = tx2.send(AppEvent::PermissionResponse("deny".to_string())).await;
+                        let _ = tx2
+                            .send(AppEvent::PermissionResponse("deny".to_string()))
+                            .await;
                     });
                     self.message_list.push(MessageEntry::System {
                         text: format!("Denied: {}", message),
@@ -1125,8 +1157,7 @@ impl App {
                 {
                     t.push_str(&text);
                 } else {
-                    self.message_list
-                        .push(MessageEntry::Assistant { text });
+                    self.message_list.push(MessageEntry::Assistant { text });
                 }
             }
             StreamEvent::ThinkingDelta { text } => {
@@ -1135,8 +1166,7 @@ impl App {
                 {
                     t.push_str(&text);
                 } else {
-                    self.message_list
-                        .push(MessageEntry::Thinking { text });
+                    self.message_list.push(MessageEntry::Thinking { text });
                 }
             }
             StreamEvent::ToolStart {
@@ -1144,8 +1174,7 @@ impl App {
                 name,
                 input,
             } => {
-                let summary = serde_json::to_string(&input)
-                    .unwrap_or_else(|_| input.to_string());
+                let summary = serde_json::to_string(&input).unwrap_or_else(|_| input.to_string());
                 let summary = if summary.len() > 120 {
                     format!("{}...", &summary[..117])
                 } else {
@@ -1155,8 +1184,7 @@ impl App {
                     name: name.clone(),
                     input_summary: summary,
                 });
-                self.spinner
-                    .start(SpinnerMode::Tool { name });
+                self.spinner.start(SpinnerMode::Tool { name });
             }
             StreamEvent::ToolResult {
                 tool_use_id: _,
@@ -1274,9 +1302,9 @@ impl App {
             let spinner_height = if spinner.active { 1 } else { 0 };
             let chunks = Layout::default()
                 .constraints([
-                    Constraint::Min(1),                    // Messages
-                    Constraint::Length(spinner_height),     // Spinner
-                    Constraint::Length(3),                  // Input (border + input + border)
+                    Constraint::Min(1),                 // Messages
+                    Constraint::Length(spinner_height), // Spinner
+                    Constraint::Length(3),              // Input (border + input + border)
                 ])
                 .split(area);
 
@@ -1307,7 +1335,10 @@ impl App {
                 let mode_text = perm_mode.clone();
 
                 // Status info: "model · cost (pct%) · mode"
-                let status = format!("{} \u{00B7} {} ({}) \u{00B7} {}", model_text, cost_text, pct_text, mode_text);
+                let status = format!(
+                    "{} \u{00B7} {} ({}) \u{00B7} {}",
+                    model_text, cost_text, pct_text, mode_text
+                );
 
                 // Build the top border with status text embedded:
                 // ── status text ──────────
@@ -1354,20 +1385,27 @@ impl App {
                     };
 
                     let prompt_line = ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(
-                            "\u{276F} ",
-                            prompt_style,
-                        ),
+                        ratatui::text::Span::styled("\u{276F} ", prompt_style),
                         ratatui::text::Span::raw(prompt.text().to_string()),
                     ]);
-                    buf.set_line(input_area.x, input_area.y + 1, &prompt_line, input_area.width);
+                    buf.set_line(
+                        input_area.x,
+                        input_area.y + 1,
+                        &prompt_line,
+                        input_area.width,
+                    );
 
                     // Bottom border
                     let bottom_line = ratatui::text::Line::from(ratatui::text::Span::styled(
                         "\u{2500}".repeat(input_area.width as usize),
                         ratatui::style::Style::default().fg(border_color),
                     ));
-                    buf.set_line(input_area.x, input_area.y + 2, &bottom_line, input_area.width);
+                    buf.set_line(
+                        input_area.x,
+                        input_area.y + 2,
+                        &bottom_line,
+                        input_area.width,
+                    );
                 } else {
                     // Minimal: prompt line only
                     let prompt_style = if engine_busy {
@@ -1378,10 +1416,7 @@ impl App {
                         ratatui::style::Style::default()
                     };
                     let prompt_line = ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(
-                            "\u{276F} ",
-                            prompt_style,
-                        ),
+                        ratatui::text::Span::styled("\u{276F} ", prompt_style),
                         ratatui::text::Span::raw(prompt.text().to_string()),
                     ]);
                     buf.set_line(input_area.x, input_area.y, &prompt_line, input_area.width);
@@ -1417,9 +1452,7 @@ impl App {
             if permission_dialog.is_none() && ask_user_dialog.is_none() && !engine_busy {
                 // Cursor position: prompt char "❯ " is 2 display columns,
                 // then the text up to cursor position
-                let cursor_display_col = prompt.text()[..prompt.cursor()]
-                    .chars()
-                    .count() as u16;
+                let cursor_display_col = prompt.text()[..prompt.cursor()].chars().count() as u16;
                 let cursor_x = input_area.x + 2 + cursor_display_col; // 2 = "❯ "
                 let cursor_y = input_area.y + 1; // input is on row 1 of input_area
                 if cursor_x < input_area.x + input_area.width && cursor_y < area.y + area.height {

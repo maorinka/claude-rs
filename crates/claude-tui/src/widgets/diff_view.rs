@@ -148,18 +148,9 @@ impl DiffViewWidget {
         let gutter_width = 10; // "NNNN NNNN " = 10 chars
 
         let (marker, line_style) = match diff_line.kind {
-            DiffLineKind::Added => (
-                "+",
-                Style::default().fg(Color::Green),
-            ),
-            DiffLineKind::Removed => (
-                "-",
-                Style::default().fg(Color::Red),
-            ),
-            DiffLineKind::Context => (
-                " ",
-                Style::default().fg(Color::White),
-            ),
+            DiffLineKind::Added => ("+", Style::default().fg(Color::Green)),
+            DiffLineKind::Removed => ("-", Style::default().fg(Color::Red)),
+            DiffLineKind::Context => (" ", Style::default().fg(Color::White)),
             DiffLineKind::HunkHeader => {
                 return Line::from(Span::styled(
                     diff_line.content.clone(),
@@ -187,10 +178,12 @@ impl DiffViewWidget {
             .map(|n| format!("{:>4}", n))
             .unwrap_or_else(|| "    ".to_string());
 
-        let content_width = (width as usize)
-            .saturating_sub(gutter_width + 1); // +1 for marker
+        let content_width = (width as usize).saturating_sub(gutter_width + 1); // +1 for marker
         let content = if diff_line.content.len() > content_width {
-            format!("{}...", &diff_line.content[..content_width.saturating_sub(3)])
+            format!(
+                "{}...",
+                &diff_line.content[..content_width.saturating_sub(3)]
+            )
         } else {
             diff_line.content.clone()
         };
@@ -314,17 +307,26 @@ mod tests {
     fn test_parse_diff_line_numbers() {
         let lines = parse_unified_diff(SAMPLE_DIFF);
         // First context line after hunk: old=1, new=1
-        let first_ctx = lines.iter().find(|l| l.kind == DiffLineKind::Context).unwrap();
+        let first_ctx = lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Context)
+            .unwrap();
         assert_eq!(first_ctx.old_lineno, Some(1));
         assert_eq!(first_ctx.new_lineno, Some(1));
 
         // Added line should have new_lineno but no old_lineno
-        let first_add = lines.iter().find(|l| l.kind == DiffLineKind::Added).unwrap();
+        let first_add = lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Added)
+            .unwrap();
         assert!(first_add.old_lineno.is_none());
         assert!(first_add.new_lineno.is_some());
 
         // Removed line should have old_lineno but no new_lineno
-        let first_rem = lines.iter().find(|l| l.kind == DiffLineKind::Removed).unwrap();
+        let first_rem = lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Removed)
+            .unwrap();
         assert!(first_rem.old_lineno.is_some());
         assert!(first_rem.new_lineno.is_none());
     }
@@ -357,19 +359,31 @@ mod tests {
     #[test]
     fn test_diff_added_color_is_green() {
         let lines = parse_unified_diff(SAMPLE_DIFF);
-        let added = lines.iter().find(|l| l.kind == DiffLineKind::Added).unwrap();
+        let added = lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Added)
+            .unwrap();
         let rendered = DiffViewWidget::render_diff_line(added, 80);
         // The marker span should be green
-        let has_green = rendered.spans.iter().any(|s| s.style.fg == Some(Color::Green));
+        let has_green = rendered
+            .spans
+            .iter()
+            .any(|s| s.style.fg == Some(Color::Green));
         assert!(has_green, "added lines should be green");
     }
 
     #[test]
     fn test_diff_removed_color_is_red() {
         let lines = parse_unified_diff(SAMPLE_DIFF);
-        let removed = lines.iter().find(|l| l.kind == DiffLineKind::Removed).unwrap();
+        let removed = lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Removed)
+            .unwrap();
         let rendered = DiffViewWidget::render_diff_line(removed, 80);
-        let has_red = rendered.spans.iter().any(|s| s.style.fg == Some(Color::Red));
+        let has_red = rendered
+            .spans
+            .iter()
+            .any(|s| s.style.fg == Some(Color::Red));
         assert!(has_red, "removed lines should be red");
     }
 }

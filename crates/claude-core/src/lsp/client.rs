@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, warn};
 
 use super::types::*;
@@ -44,7 +44,11 @@ impl LspClient {
     /// the reader task to process incoming messages. Does NOT perform the
     /// initialization handshake -- call `initialize()` after this.
     pub async fn start(name: &str, command: &str, args: &[String]) -> Result<Self> {
-        debug!(server = name, command = command, "Starting LSP server process");
+        debug!(
+            server = name,
+            command = command,
+            "Starting LSP server process"
+        );
 
         let mut cmd = Command::new(command);
         cmd.args(args)
@@ -279,15 +283,8 @@ impl LspClient {
     ///
     /// Sends `textDocument/didChange` notification with full document sync
     /// (sends complete new content). Increments the document version counter.
-    pub async fn text_document_did_change(
-        &mut self,
-        uri: &str,
-        text: &str,
-    ) -> Result<()> {
-        let version = self
-            .document_versions
-            .entry(uri.to_string())
-            .or_insert(0);
+    pub async fn text_document_did_change(&mut self, uri: &str, text: &str) -> Result<()> {
+        let version = self.document_versions.entry(uri.to_string()).or_insert(0);
         *version += 1;
         let current_version = *version;
 
@@ -311,10 +308,7 @@ impl LspClient {
     /// Sends `textDocument/diagnostic` request (LSP 3.17+ pull diagnostics).
     /// Falls back to returning an empty list if the server does not support
     /// pull diagnostics (diagnostics will arrive via publishDiagnostics notifications).
-    pub async fn text_document_diagnostics(
-        &self,
-        uri: &str,
-    ) -> Result<Vec<Diagnostic>> {
+    pub async fn text_document_diagnostics(&self, uri: &str) -> Result<Vec<Diagnostic>> {
         let params = serde_json::json!({
             "textDocument": { "uri": uri }
         });
@@ -389,10 +383,7 @@ impl LspClient {
         // Send shutdown request (best-effort)
         let shutdown_result = self.send_request(methods::SHUTDOWN, None).await;
         if let Err(e) = &shutdown_result {
-            warn!(
-                server = self.name,
-                "LSP shutdown request failed: {}", e
-            );
+            warn!(server = self.name, "LSP shutdown request failed: {}", e);
         }
 
         // Send exit notification (best-effort)
@@ -416,11 +407,7 @@ impl LspClient {
     }
 
     /// Send a JSON-RPC request via Content-Length framed stdio and wait for the response.
-    async fn send_request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<JsonRpcResponse> {
+    async fn send_request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = JsonRpcRequest::new(id, method, params);
 
@@ -452,7 +439,12 @@ impl LspClient {
             }
         }
 
-        debug!(server = self.name, method = method, id = id, "Sent LSP request");
+        debug!(
+            server = self.name,
+            method = method,
+            id = id,
+            "Sent LSP request"
+        );
 
         // Wait for response with timeout
         let timeout = Duration::from_millis(LSP_REQUEST_TIMEOUT_MS);
@@ -476,11 +468,7 @@ impl LspClient {
     }
 
     /// Send a JSON-RPC notification (no response expected) with Content-Length framing.
-    async fn send_notification(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<()> {
+    async fn send_notification(&self, method: &str, params: Option<Value>) -> Result<()> {
         let notification = JsonRpcNotification::new(method, params);
         let body = serde_json::to_string(&notification)?;
         let message = encode_message(&body);
@@ -488,15 +476,9 @@ impl LspClient {
         {
             let mut writer_guard = self.writer.lock().await;
             if let Some(writer) = writer_guard.as_mut() {
-                writer
-                    .write_all(&message)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to write notification to LSP server '{}'",
-                            self.name
-                        )
-                    })?;
+                writer.write_all(&message).await.with_context(|| {
+                    format!("Failed to write notification to LSP server '{}'", self.name)
+                })?;
                 writer
                     .flush()
                     .await
@@ -589,8 +571,7 @@ mod tests {
         let message_str = String::from_utf8(message).unwrap();
 
         // Verify Content-Length framing
-        let (content_length, header_end) =
-            parse_content_length(message_str.as_bytes()).unwrap();
+        let (content_length, header_end) = parse_content_length(message_str.as_bytes()).unwrap();
         assert_eq!(content_length, body.len());
 
         // Verify the extracted body matches
@@ -630,7 +611,10 @@ mod tests {
         });
 
         assert_eq!(params["textDocument"]["version"], 3);
-        assert_eq!(params["contentChanges"][0]["text"], "fn main() { /* changed */ }");
+        assert_eq!(
+            params["contentChanges"][0]["text"],
+            "fn main() { /* changed */ }"
+        );
     }
 
     #[test]

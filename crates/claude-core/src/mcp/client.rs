@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, warn};
 
 use super::types::*;
@@ -75,10 +75,7 @@ impl McpClient {
     ///
     /// Spawns the server process, starts the reader task, and performs the
     /// MCP initialization handshake.
-    pub async fn connect_stdio(
-        name: &str,
-        config: &McpStdioServerConfig,
-    ) -> Result<Self> {
+    pub async fn connect_stdio(name: &str, config: &McpStdioServerConfig) -> Result<Self> {
         debug!(server = name, command = %config.command, "Connecting to MCP server via stdio");
 
         let mut cmd = Command::new(&config.command);
@@ -261,8 +258,7 @@ impl McpClient {
                                         *mu = Some(msg_url);
                                         debug!(
                                             server = server_name,
-                                            "SSE endpoint discovered: {}",
-                                            event_data
+                                            "SSE endpoint discovered: {}", event_data
                                         );
                                     }
 
@@ -272,9 +268,7 @@ impl McpClient {
                                             serde_json::from_str::<JsonRpcResponse>(&event_data)
                                         {
                                             let mut pending = pending_clone.lock().await;
-                                            if let Some(sender) =
-                                                pending.remove(&response.id)
-                                            {
+                                            if let Some(sender) = pending.remove(&response.id) {
                                                 let _ = sender.send(response);
                                             }
                                         }
@@ -282,10 +276,7 @@ impl McpClient {
                                 }
                             }
                             Err(e) => {
-                                debug!(
-                                    server = server_name,
-                                    "SSE stream error: {}", e
-                                );
+                                debug!(server = server_name, "SSE stream error: {}", e);
                                 break;
                             }
                         }
@@ -301,8 +292,7 @@ impl McpClient {
         // Wait briefly for the endpoint event
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let writer: Arc<Mutex<Option<Box<dyn Write + Send>>>> =
-            Arc::new(Mutex::new(None));
+        let writer: Arc<Mutex<Option<Box<dyn Write + Send>>>> = Arc::new(Mutex::new(None));
 
         let mut client = Self {
             name: name.to_string(),
@@ -340,8 +330,7 @@ impl McpClient {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
-        let writer: Arc<Mutex<Option<Box<dyn Write + Send>>>> =
-            Arc::new(Mutex::new(None));
+        let writer: Arc<Mutex<Option<Box<dyn Write + Send>>>> = Arc::new(Mutex::new(None));
 
         let mut client = Self {
             name: name.to_string(),
@@ -425,11 +414,7 @@ impl McpClient {
     ///
     /// Dispatches to the appropriate transport: stdio writes to stdin,
     /// SSE POSTs to the message endpoint, HTTP POSTs to the server URL.
-    async fn send_request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<JsonRpcResponse> {
+    async fn send_request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = JsonRpcRequest::new(id, method, params);
 
@@ -448,17 +433,23 @@ impl McpClient {
                 {
                     let mut writer_guard = self.writer.lock().await;
                     if let Some(writer) = writer_guard.as_mut() {
-                        writeln!(writer, "{}", msg)
-                            .with_context(|| format!("Failed to write to MCP server '{}'", self.name))?;
-                        writer
-                            .flush()
-                            .with_context(|| format!("Failed to flush MCP server '{}'", self.name))?;
+                        writeln!(writer, "{}", msg).with_context(|| {
+                            format!("Failed to write to MCP server '{}'", self.name)
+                        })?;
+                        writer.flush().with_context(|| {
+                            format!("Failed to flush MCP server '{}'", self.name)
+                        })?;
                     } else {
                         return Err(anyhow!("MCP server '{}' writer is closed", self.name));
                     }
                 }
 
-                debug!(server = self.name, method = method, id = id, "Sent MCP request (stdio)");
+                debug!(
+                    server = self.name,
+                    method = method,
+                    id = id,
+                    "Sent MCP request (stdio)"
+                );
 
                 // Wait for response with timeout
                 let timeout = Duration::from_millis(MCP_TOOL_TIMEOUT_MS);
@@ -481,13 +472,21 @@ impl McpClient {
                 }
             }
 
-            McpTransport::Sse { http, headers, message_url, .. } => {
+            McpTransport::Sse {
+                http,
+                headers,
+                message_url,
+                ..
+            } => {
                 // For SSE, POST the request to the message endpoint.
                 // The response comes back via the SSE event stream.
                 let msg_url = {
                     let mu = message_url.lock().await;
                     mu.clone().ok_or_else(|| {
-                        anyhow!("MCP SSE server '{}' message endpoint not yet discovered", self.name)
+                        anyhow!(
+                            "MCP SSE server '{}' message endpoint not yet discovered",
+                            self.name
+                        )
                     })?
                 };
 
@@ -497,7 +496,8 @@ impl McpClient {
                     pending.insert(id, tx);
                 }
 
-                let mut req = http.post(&msg_url)
+                let mut req = http
+                    .post(&msg_url)
                     .header("content-type", "application/json");
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
@@ -506,7 +506,10 @@ impl McpClient {
                 }
 
                 let resp = req.json(&request).send().await.with_context(|| {
-                    format!("Failed to POST to MCP SSE server '{}' at {}", self.name, msg_url)
+                    format!(
+                        "Failed to POST to MCP SSE server '{}' at {}",
+                        self.name, msg_url
+                    )
                 })?;
 
                 if !resp.status().is_success() {
@@ -514,11 +517,18 @@ impl McpClient {
                     let body = resp.text().await.unwrap_or_default();
                     return Err(anyhow!(
                         "MCP SSE server '{}' POST error {}: {}",
-                        self.name, status, body
+                        self.name,
+                        status,
+                        body
                     ));
                 }
 
-                debug!(server = self.name, method = method, id = id, "Sent MCP request (SSE POST)");
+                debug!(
+                    server = self.name,
+                    method = method,
+                    id = id,
+                    "Sent MCP request (SSE POST)"
+                );
 
                 // Wait for the SSE stream to deliver the response
                 let timeout = Duration::from_millis(MCP_TOOL_TIMEOUT_MS);
@@ -526,23 +536,31 @@ impl McpClient {
                     Ok(Ok(response)) => Ok(response),
                     Ok(Err(_)) => Err(anyhow!(
                         "MCP SSE server '{}' response channel closed for request {}",
-                        self.name, id
+                        self.name,
+                        id
                     )),
                     Err(_) => {
                         let mut pending = self.pending.lock().await;
                         pending.remove(&id);
                         Err(anyhow!(
                             "MCP SSE request to '{}' timed out (method: {})",
-                            self.name, method
+                            self.name,
+                            method
                         ))
                     }
                 }
             }
 
-            McpTransport::Http { url, http, headers, session_id } => {
+            McpTransport::Http {
+                url,
+                http,
+                headers,
+                session_id,
+            } => {
                 // For HTTP (Streamable HTTP), POST the JSON-RPC request and
                 // read the response directly from the HTTP response body.
-                let mut req = http.post(url)
+                let mut req = http
+                    .post(url)
                     .header("content-type", "application/json")
                     .header("accept", "application/json, text/event-stream");
 
@@ -561,7 +579,10 @@ impl McpClient {
                 }
 
                 let resp = req.json(&request).send().await.with_context(|| {
-                    format!("Failed to POST to MCP HTTP server '{}' at {}", self.name, url)
+                    format!(
+                        "Failed to POST to MCP HTTP server '{}' at {}",
+                        self.name, url
+                    )
                 })?;
 
                 // Capture session ID from response header
@@ -577,14 +598,24 @@ impl McpClient {
                     let body = resp.text().await.unwrap_or_default();
                     return Err(anyhow!(
                         "MCP HTTP server '{}' error {}: {}",
-                        self.name, status, body
+                        self.name,
+                        status,
+                        body
                     ));
                 }
 
-                debug!(server = self.name, method = method, id = id, "Sent MCP request (HTTP POST)");
+                debug!(
+                    server = self.name,
+                    method = method,
+                    id = id,
+                    "Sent MCP request (HTTP POST)"
+                );
 
                 let body = resp.text().await.with_context(|| {
-                    format!("Failed to read response from MCP HTTP server '{}'", self.name)
+                    format!(
+                        "Failed to read response from MCP HTTP server '{}'",
+                        self.name
+                    )
                 })?;
 
                 let response: JsonRpcResponse = serde_json::from_str(&body).with_context(|| {
@@ -601,11 +632,7 @@ impl McpClient {
     }
 
     /// Send a JSON-RPC notification (no response expected).
-    async fn send_notification(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<()> {
+    async fn send_notification(&self, method: &str, params: Option<Value>) -> Result<()> {
         let notification = JsonRpcNotification::new(method, params);
         let msg = serde_json::to_string(&notification)?;
 
@@ -613,8 +640,9 @@ impl McpClient {
             McpTransport::Stdio => {
                 let mut writer_guard = self.writer.lock().await;
                 if let Some(writer) = writer_guard.as_mut() {
-                    writeln!(writer, "{}", msg)
-                        .with_context(|| format!("Failed to write notification to MCP server '{}'", self.name))?;
+                    writeln!(writer, "{}", msg).with_context(|| {
+                        format!("Failed to write notification to MCP server '{}'", self.name)
+                    })?;
                     writer
                         .flush()
                         .with_context(|| format!("Failed to flush MCP server '{}'", self.name))?;
@@ -623,15 +651,24 @@ impl McpClient {
                 }
             }
 
-            McpTransport::Sse { http, headers, message_url, .. } => {
+            McpTransport::Sse {
+                http,
+                headers,
+                message_url,
+                ..
+            } => {
                 let msg_url = {
                     let mu = message_url.lock().await;
                     mu.clone().ok_or_else(|| {
-                        anyhow!("MCP SSE server '{}' message endpoint not yet discovered", self.name)
+                        anyhow!(
+                            "MCP SSE server '{}' message endpoint not yet discovered",
+                            self.name
+                        )
                     })?
                 };
 
-                let mut req = http.post(&msg_url)
+                let mut req = http
+                    .post(&msg_url)
                     .header("content-type", "application/json");
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
@@ -640,13 +677,20 @@ impl McpClient {
                 }
 
                 let _ = req.json(&notification).send().await.with_context(|| {
-                    format!("Failed to send notification to MCP SSE server '{}'", self.name)
+                    format!(
+                        "Failed to send notification to MCP SSE server '{}'",
+                        self.name
+                    )
                 })?;
             }
 
-            McpTransport::Http { url, http, headers, session_id } => {
-                let mut req = http.post(url)
-                    .header("content-type", "application/json");
+            McpTransport::Http {
+                url,
+                http,
+                headers,
+                session_id,
+            } => {
+                let mut req = http.post(url).header("content-type", "application/json");
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
                         req = req.header(k, v);
@@ -660,7 +704,10 @@ impl McpClient {
                 }
 
                 let _ = req.json(&notification).send().await.with_context(|| {
-                    format!("Failed to send notification to MCP HTTP server '{}'", self.name)
+                    format!(
+                        "Failed to send notification to MCP HTTP server '{}'",
+                        self.name
+                    )
                 })?;
             }
         }
@@ -701,23 +748,17 @@ impl McpClient {
     /// Call a tool on this MCP server.
     ///
     /// Sends a `tools/call` request with the given tool name and arguments.
-    pub async fn call_tool(
-        &self,
-        tool_name: &str,
-        arguments: Value,
-    ) -> Result<McpToolResult> {
+    pub async fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<McpToolResult> {
         let params = serde_json::json!({
             "name": tool_name,
             "arguments": arguments
         });
 
-        let response = self
-            .send_request(methods::TOOLS_CALL, Some(params))
-            .await?;
+        let response = self.send_request(methods::TOOLS_CALL, Some(params)).await?;
 
         if let Some(result) = response.result {
-            let tool_result: McpToolResult = serde_json::from_value(result)
-                .context("Failed to parse MCP tool call result")?;
+            let tool_result: McpToolResult =
+                serde_json::from_value(result).context("Failed to parse MCP tool call result")?;
             return Ok(tool_result);
         }
 
@@ -822,9 +863,7 @@ impl McpClient {
 
     /// Ping the MCP server.
     pub async fn ping(&self) -> Result<()> {
-        let response = self
-            .send_request(methods::PING, None)
-            .await?;
+        let response = self.send_request(methods::PING, None).await?;
 
         if let Some(err) = response.error {
             return Err(anyhow!(
@@ -948,7 +987,13 @@ pub fn build_mcp_tool_name(server_name: &str, tool_name: &str) -> String {
 /// Matches the TS `normalizeNameForMCP` function.
 pub fn normalize_mcp_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -962,10 +1007,7 @@ mod tests {
             build_mcp_tool_name("my-server", "my-tool"),
             "mcp__my_server__my_tool"
         );
-        assert_eq!(
-            build_mcp_tool_name("server", "tool"),
-            "mcp__server__tool"
-        );
+        assert_eq!(build_mcp_tool_name("server", "tool"), "mcp__server__tool");
         assert_eq!(
             build_mcp_tool_name("my.server.name", "tool.name"),
             "mcp__my_server_name__tool_name"

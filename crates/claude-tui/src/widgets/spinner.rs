@@ -136,10 +136,7 @@ impl Widget for &SpinnerState {
                 format!("{} ", frame_char),
                 Style::default().fg(claude_color),
             ),
-            Span::styled(
-                format!("{}…", verb),
-                Style::default().fg(claude_color),
-            ),
+            Span::styled(format!("{}…", verb), Style::default().fg(claude_color)),
         ];
 
         // Duration and token info in parentheses, dim

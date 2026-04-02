@@ -3,9 +3,9 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::api::accumulator::ContentBlockAccumulator;
 use crate::api::client::{ApiClient, ToolDefinition};
 use crate::api::sse::{self, ContentDelta, SseEvent};
-use crate::api::accumulator::ContentBlockAccumulator;
 use crate::types::content::ContentBlock;
 use crate::types::events::StreamEvent;
 use crate::types::message::StopReason;
@@ -109,10 +109,7 @@ impl QueryEngine {
 
     /// Run one turn of the query loop.
     /// Returns collected tool_use blocks (if any) and the stop reason.
-    pub async fn run_turn(
-        &mut self,
-        event_tx: &mpsc::Sender<StreamEvent>,
-    ) -> Result<TurnResult> {
+    pub async fn run_turn(&mut self, event_tx: &mpsc::Sender<StreamEvent>) -> Result<TurnResult> {
         if self.cancel.is_cancelled() {
             self.state = QueryState::Terminal {
                 stop_reason: StopReason::EndTurn,
@@ -235,9 +232,7 @@ impl QueryEngine {
                                     match &delta {
                                         ContentDelta::TextDelta { text } => {
                                             let _ = event_tx
-                                                .send(StreamEvent::TextDelta {
-                                                    text: text.clone(),
-                                                })
+                                                .send(StreamEvent::TextDelta { text: text.clone() })
                                                 .await;
                                         }
                                         ContentDelta::ThinkingDelta { thinking } => {
@@ -280,7 +275,10 @@ impl QueryEngine {
                                                     "text": text,
                                                 }));
                                             }
-                                            ContentBlock::Thinking { thinking, signature } => {
+                                            ContentBlock::Thinking {
+                                                thinking,
+                                                signature,
+                                            } => {
                                                 assistant_content.push(serde_json::json!({
                                                     "type": "thinking",
                                                     "thinking": thinking,

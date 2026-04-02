@@ -1,6 +1,6 @@
+use claude_core::types::events::ToolResultData;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use claude_tools::write::FileWriteTool;
-use claude_core::types::events::ToolResultData;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -24,7 +24,11 @@ async fn test_write_new_file() {
     let tmp = tempfile::tempdir().unwrap();
     let tool = FileWriteTool;
     let ctx = make_ctx(tmp.path());
-    let file_path = tmp.path().join("new_file.txt").to_string_lossy().to_string();
+    let file_path = tmp
+        .path()
+        .join("new_file.txt")
+        .to_string_lossy()
+        .to_string();
     let content = "hello, world!";
 
     let result = call_tool(
@@ -88,7 +92,10 @@ async fn test_write_overwrites_existing() {
     std::fs::write(&file_path, original).unwrap();
 
     // Record a read (required by staleness check before overwriting)
-    ctx.read_file_state.lock().unwrap().record_read(&file_path, false);
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(&file_path, false);
 
     let result = call_tool(
         &tool,

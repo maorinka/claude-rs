@@ -185,7 +185,9 @@ fn test_settings_empty_mcp_servers() {
 
 #[test]
 fn test_settings_load_from_nonexistent_file() {
-    let settings = Settings::load_from_file(std::path::Path::new("/tmp/nonexistent_claude_settings_xyz.json"));
+    let settings = Settings::load_from_file(std::path::Path::new(
+        "/tmp/nonexistent_claude_settings_xyz.json",
+    ));
     assert!(settings.mcp_servers.is_empty());
     assert!(settings.model.is_none());
 }

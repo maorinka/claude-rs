@@ -240,9 +240,7 @@ pub fn encode_message(body: &str) -> Vec<u8> {
 /// Returns None if the buffer does not yet contain a complete header.
 pub fn parse_content_length(buf: &[u8]) -> Option<(usize, usize)> {
     // Look for the \r\n\r\n separator that terminates the header section
-    let header_end = buf
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")?;
+    let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
 
     let header_str = std::str::from_utf8(&buf[..header_end]).ok()?;
 
@@ -262,10 +260,22 @@ mod tests {
 
     #[test]
     fn test_diagnostic_severity_from_u8() {
-        assert_eq!(DiagnosticSeverity::from_u8(1), Some(DiagnosticSeverity::Error));
-        assert_eq!(DiagnosticSeverity::from_u8(2), Some(DiagnosticSeverity::Warning));
-        assert_eq!(DiagnosticSeverity::from_u8(3), Some(DiagnosticSeverity::Information));
-        assert_eq!(DiagnosticSeverity::from_u8(4), Some(DiagnosticSeverity::Hint));
+        assert_eq!(
+            DiagnosticSeverity::from_u8(1),
+            Some(DiagnosticSeverity::Error)
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_u8(2),
+            Some(DiagnosticSeverity::Warning)
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_u8(3),
+            Some(DiagnosticSeverity::Information)
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_u8(4),
+            Some(DiagnosticSeverity::Hint)
+        );
         assert_eq!(DiagnosticSeverity::from_u8(0), None);
         assert_eq!(DiagnosticSeverity::from_u8(5), None);
     }
@@ -433,7 +443,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_response_with_error() {
-        let json_str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let json_str =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
         let resp: JsonRpcResponse = serde_json::from_str(json_str).unwrap();
         assert_eq!(resp.id, 1);
         assert!(resp.result.is_none());

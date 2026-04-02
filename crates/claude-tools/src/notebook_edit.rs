@@ -36,7 +36,8 @@ impl ToolExecutor for NotebookEditTool {
     }
 
     fn description(&self) -> String {
-        "Edit a Jupyter notebook (.ipynb) cell. Replaces the source of a specific cell by index.".to_string()
+        "Edit a Jupyter notebook (.ipynb) cell. Replaces the source of a specific cell by index."
+            .to_string()
     }
 
     fn input_schema(&self) -> Value {

@@ -48,9 +48,28 @@ fn strip_html(html: &str) -> String {
                     in_style = false;
                 }
                 // Add whitespace for block-level elements
-                let block_tags = ["div", "p", "br", "h1", "h2", "h3", "h4", "h5", "h6",
-                                  "li", "tr", "td", "th", "blockquote", "section", "article",
-                                  "header", "footer", "nav", "main"];
+                let block_tags = [
+                    "div",
+                    "p",
+                    "br",
+                    "h1",
+                    "h2",
+                    "h3",
+                    "h4",
+                    "h5",
+                    "h6",
+                    "li",
+                    "tr",
+                    "td",
+                    "th",
+                    "blockquote",
+                    "section",
+                    "article",
+                    "header",
+                    "footer",
+                    "nav",
+                    "main",
+                ];
                 for bt in &block_tags {
                     if tag_lower.starts_with(bt) || tag_lower == format!("/{}", bt) {
                         result.push('\n');

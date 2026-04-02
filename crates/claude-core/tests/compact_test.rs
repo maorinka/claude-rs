@@ -4,9 +4,7 @@ use serde_json::json;
 
 #[test]
 fn test_should_compact_below_threshold() {
-    let messages = vec![
-        json!({"role": "user", "content": [{"type": "text", "text": "hello"}]}),
-    ];
+    let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": "hello"}]})];
     assert!(!should_compact(&messages, 200_000));
 }
 
@@ -14,9 +12,7 @@ fn test_should_compact_below_threshold() {
 fn test_should_compact_above_threshold() {
     // Create a message that's very large
     let big_text = "x".repeat(800_000); // ~200K tokens
-    let messages = vec![
-        json!({"role": "user", "content": [{"type": "text", "text": big_text}]}),
-    ];
+    let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": big_text}]})];
     assert!(should_compact(&messages, 200_000));
 }
 

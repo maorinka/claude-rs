@@ -58,7 +58,7 @@ fn validate_cron_expression(expr: &str) -> bool {
         && validate_field(fields[1], 0, 23)   // hour
         && validate_field(fields[2], 1, 31)   // day of month
         && validate_field(fields[3], 1, 12)   // month
-        && validate_field(fields[4], 0, 7)    // day of week (0 and 7 = Sunday)
+        && validate_field(fields[4], 0, 7) // day of week (0 and 7 = Sunday)
 }
 
 #[async_trait]
@@ -173,11 +173,7 @@ Parameters:
         let mut count = 0;
         if let Ok(mut entries) = tokio::fs::read_dir(&cron_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
-                if entry
-                    .path()
-                    .extension()
-                    .map_or(false, |ext| ext == "json")
-                {
+                if entry.path().extension().map_or(false, |ext| ext == "json") {
                     count += 1;
                 }
             }
@@ -201,8 +197,7 @@ Parameters:
         });
 
         let file_path = cron_dir.join(format!("{}.json", name));
-        if let Err(e) = tokio::fs::write(&file_path, serde_json::to_string_pretty(&config)?).await
-        {
+        if let Err(e) = tokio::fs::write(&file_path, serde_json::to_string_pretty(&config)?).await {
             return Ok(ToolResultData {
                 data: json!({ "error": format!("Failed to write cron config: {}", e) }),
                 is_error: true,
@@ -264,10 +259,7 @@ fn cron_to_human(expr: &str) -> String {
         return format!("daily at {}:{:0>2}", hour, minute);
     }
 
-    format!(
-        "cron({} {} {} {} {})",
-        minute, hour, dom, month, dow
-    )
+    format!("cron({} {} {} {} {})", minute, hour, dom, month, dow)
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +270,9 @@ pub struct CronDeleteTool;
 
 #[async_trait]
 impl ToolExecutor for CronDeleteTool {
-    fn name(&self) -> &str { "CronDelete" }
+    fn name(&self) -> &str {
+        "CronDelete"
+    }
 
     fn description(&self) -> String {
         "Cancel a scheduled cron job by its ID. The job's JSON configuration file \
@@ -334,7 +328,10 @@ impl ToolExecutor for CronDeleteTool {
             }
         };
 
-        let file_path = home.join(".claude").join("cron").join(format!("{}.json", id));
+        let file_path = home
+            .join(".claude")
+            .join("cron")
+            .join(format!("{}.json", id));
         if !file_path.exists() {
             return Ok(ToolResultData {
                 data: json!({ "error": format!("No scheduled job with id '{}'", id) }),
@@ -364,7 +361,9 @@ pub struct CronListTool;
 
 #[async_trait]
 impl ToolExecutor for CronListTool {
-    fn name(&self) -> &str { "CronList" }
+    fn name(&self) -> &str {
+        "CronList"
+    }
 
     fn description(&self) -> String {
         "List all active scheduled cron jobs. Returns each job's id, cron expression, \
@@ -380,8 +379,12 @@ impl ToolExecutor for CronListTool {
         })
     }
 
-    fn is_read_only(&self, _input: &Value) -> bool { true }
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(
         &self,
@@ -420,10 +423,25 @@ impl ToolExecutor for CronListTool {
             }
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 if let Ok(data) = serde_json::from_str::<Value>(&content) {
-                    let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                    let cron_expr = data.get("cron").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let prompt = data.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let recurring = data.get("recurring").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let id = data
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    let cron_expr = data
+                        .get("cron")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let prompt = data
+                        .get("prompt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let recurring = data
+                        .get("recurring")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
                     let human_schedule = cron_to_human(&cron_expr);
                     jobs.push(json!({
                         "id": id,
@@ -437,7 +455,10 @@ impl ToolExecutor for CronListTool {
         }
 
         jobs.sort_by(|a, b| {
-            a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or(""))
+            a["id"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["id"].as_str().unwrap_or(""))
         });
         let count = jobs.len();
 
@@ -499,25 +520,14 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("cron"));
+        assert!(result.data["error"].as_str().unwrap().contains("cron"));
 
         let result = tool
-            .call(
-                &json!({ "cron": "*/5 * * * *" }),
-                &ctx,
-                cancel,
-                None,
-            )
+            .call(&json!({ "cron": "*/5 * * * *" }), &ctx, cancel, None)
             .await
             .unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("prompt"));
+        assert!(result.data["error"].as_str().unwrap().contains("prompt"));
     }
 
     #[tokio::test]
@@ -553,10 +563,7 @@ mod tests {
 
         // Clean up
         if let Some(home) = dirs_home() {
-            let file_path = home
-                .join(".claude")
-                .join("cron")
-                .join("test-cron-job.json");
+            let file_path = home.join(".claude").join("cron").join("test-cron-job.json");
             let _ = tokio::fs::remove_file(file_path).await;
         }
     }
@@ -573,7 +580,10 @@ mod tests {
     #[tokio::test]
     async fn cron_delete_missing_id() {
         let tool = CronDeleteTool;
-        let result = tool.call(&json!({}), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(&json!({}), &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.data["error"].as_str().unwrap().contains("id"));
     }
@@ -581,7 +591,15 @@ mod tests {
     #[tokio::test]
     async fn cron_delete_path_traversal_rejected() {
         let tool = CronDeleteTool;
-        let result = tool.call(&json!({ "id": "../etc/passwd" }), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(
+                &json!({ "id": "../etc/passwd" }),
+                &make_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.data["error"].as_str().unwrap().contains("Invalid"));
     }
@@ -589,9 +607,20 @@ mod tests {
     #[tokio::test]
     async fn cron_delete_nonexistent_job() {
         let tool = CronDeleteTool;
-        let result = tool.call(&json!({ "id": "nonexistent-job-12345" }), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(
+                &json!({ "id": "nonexistent-job-12345" }),
+                &make_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"].as_str().unwrap().contains("No scheduled job"));
+        assert!(result.data["error"]
+            .as_str()
+            .unwrap()
+            .contains("No scheduled job"));
     }
 
     #[tokio::test]
@@ -606,9 +635,18 @@ mod tests {
     async fn cron_list_empty() {
         // When no cron dir exists, should return empty list
         let tool = CronListTool;
-        let result = tool.call(&json!({}), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(&json!({}), &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
         assert!(!result.is_error);
-        assert_eq!(result.data["count"].as_u64().unwrap_or(0), result.data["jobs"].as_array().map(|a| a.len() as u64).unwrap_or(0));
+        assert_eq!(
+            result.data["count"].as_u64().unwrap_or(0),
+            result.data["jobs"]
+                .as_array()
+                .map(|a| a.len() as u64)
+                .unwrap_or(0)
+        );
     }
 
     #[tokio::test]

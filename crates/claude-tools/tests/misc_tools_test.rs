@@ -1,5 +1,7 @@
 use claude_tools::ask_user::{send_user_answer, AskUserQuestionTool};
-use claude_tools::brief_tool::{is_brief_enabled, set_brief_mode, get_brief_system_prompt_section, BriefTool};
+use claude_tools::brief_tool::{
+    get_brief_system_prompt_section, is_brief_enabled, set_brief_mode, BriefTool,
+};
 use claude_tools::lsp_tool::LSPTool;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use claude_tools::send_message::SendMessageTool;
@@ -44,8 +46,14 @@ async fn test_ask_user_basic() {
     send_user_answer("Alice".to_string());
 
     let result = handle.await.unwrap();
-    assert!(!result.is_error, "result should not be an error: {:?}", result.data);
-    let answer = result.data["answer"].as_str().expect("answer should be a string");
+    assert!(
+        !result.is_error,
+        "result should not be an error: {:?}",
+        result.data
+    );
+    let answer = result.data["answer"]
+        .as_str()
+        .expect("answer should be a string");
     assert_eq!(answer, "Alice", "answer should match what was sent");
     // Check answers map
     assert_eq!(result.data["answers"]["What is your name?"], "Alice");
@@ -74,8 +82,14 @@ async fn test_ask_user_with_options() {
     send_user_answer("red".to_string());
 
     let result = handle.await.unwrap();
-    assert!(!result.is_error, "result should not be an error: {:?}", result.data);
-    let answer = result.data["answer"].as_str().expect("answer should be a string");
+    assert!(
+        !result.is_error,
+        "result should not be an error: {:?}",
+        result.data
+    );
+    let answer = result.data["answer"]
+        .as_str()
+        .expect("answer should be a string");
     assert_eq!(answer, "red");
 }
 
@@ -102,7 +116,12 @@ async fn test_brief_enable() {
     let _guard = BRIEF_TEST_LOCK.lock().unwrap();
     let tool = BriefTool;
     let result = tool
-        .call(&json!({ "enabled": true }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "enabled": true }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .expect("call should not fail");
 
@@ -112,7 +131,10 @@ async fn test_brief_enable() {
 
     // System prompt section should be active
     let section = get_brief_system_prompt_section();
-    assert!(section.is_some(), "should have brief system prompt section when enabled");
+    assert!(
+        section.is_some(),
+        "should have brief system prompt section when enabled"
+    );
     assert!(section.unwrap().contains("Brief Mode"));
 
     set_brief_mode(false);
@@ -124,7 +146,12 @@ async fn test_brief_disable() {
     set_brief_mode(true);
     let tool = BriefTool;
     let result = tool
-        .call(&json!({ "enabled": false }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "enabled": false }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .expect("call should not fail");
 
@@ -134,7 +161,10 @@ async fn test_brief_disable() {
 
     // System prompt section should be inactive
     let section = get_brief_system_prompt_section();
-    assert!(section.is_none(), "should not have brief system prompt section when disabled");
+    assert!(
+        section.is_none(),
+        "should not have brief system prompt section when disabled"
+    );
 }
 
 #[tokio::test]
@@ -177,7 +207,12 @@ async fn test_send_message_basic() {
 async fn test_send_message_missing_to() {
     let tool = SendMessageTool;
     let result = tool
-        .call(&json!({ "content": "Hello!" }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "content": "Hello!" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .expect("call should not fail");
     assert!(result.is_error, "missing 'to' should produce an error");
@@ -187,7 +222,12 @@ async fn test_send_message_missing_to() {
 async fn test_send_message_missing_content() {
     let tool = SendMessageTool;
     let result = tool
-        .call(&json!({ "to": "agent-2" }), &make_ctx(), CancellationToken::new(), None)
+        .call(
+            &json!({ "to": "agent-2" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
         .await
         .expect("call should not fail");
     assert!(result.is_error, "missing 'content' should produce an error");
@@ -233,7 +273,10 @@ async fn test_lsp_unknown_operation() {
         .expect("call should not fail");
 
     assert!(result.is_error);
-    assert!(result.data["error"].as_str().unwrap().contains("Unknown LSP operation"));
+    assert!(result.data["error"]
+        .as_str()
+        .unwrap()
+        .contains("Unknown LSP operation"));
 }
 
 #[test]

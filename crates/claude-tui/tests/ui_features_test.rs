@@ -1,10 +1,10 @@
 //! Tests for the new UI features: syntax highlighting, diff view, token budget
 //! warnings, scroll keyboard shortcuts, and persistent status line.
 
+use claude_tui::markdown::render_markdown;
 use claude_tui::syntax;
 use claude_tui::widgets::diff_view;
 use claude_tui::widgets::message_list::{MessageEntry, MessageList};
-use claude_tui::markdown::render_markdown;
 
 // ---------- Syntax highlighting tests ----------
 
@@ -16,7 +16,11 @@ fn test_syntax_highlight_rust_produces_multiple_spans() {
     // "fn" keyword should be highlighted differently from "main"
     // Just verify we get multiple spans per line (not plain green fallback)
     let total_spans: usize = lines.iter().map(|l| l.spans.len()).sum();
-    assert!(total_spans > 4, "expected multi-span highlighting, got {} spans total", total_spans);
+    assert!(
+        total_spans > 4,
+        "expected multi-span highlighting, got {} spans total",
+        total_spans
+    );
 }
 
 #[test]
@@ -47,7 +51,10 @@ fn test_markdown_code_block_with_language() {
     // Should have: top separator, highlighted code line, bottom separator
     assert_eq!(lines.len(), 3);
     // The code line should be indented (first span is "  ")
-    assert!(lines[1].spans.len() >= 2, "highlighted code should have indent + syntax spans");
+    assert!(
+        lines[1].spans.len() >= 2,
+        "highlighted code should have indent + syntax spans"
+    );
 }
 
 #[test]
@@ -71,8 +78,14 @@ fn test_diff_view_added_and_removed_counts() {
 +added2
  line3";
     let parsed = diff_view::parse_unified_diff(diff);
-    let added = parsed.iter().filter(|l| l.kind == diff_view::DiffLineKind::Added).count();
-    let removed = parsed.iter().filter(|l| l.kind == diff_view::DiffLineKind::Removed).count();
+    let added = parsed
+        .iter()
+        .filter(|l| l.kind == diff_view::DiffLineKind::Added)
+        .count();
+    let removed = parsed
+        .iter()
+        .filter(|l| l.kind == diff_view::DiffLineKind::Removed)
+        .count();
     assert_eq!(added, 2);
     assert_eq!(removed, 1);
 }
@@ -93,7 +106,10 @@ fn test_diff_line_numbers_increment_correctly() {
     // added (old=none, new=21)
     // added (old=none, new=22)
     // context (old=12, new=23)
-    let context_lines: Vec<_> = parsed.iter().filter(|l| l.kind == diff_view::DiffLineKind::Context).collect();
+    let context_lines: Vec<_> = parsed
+        .iter()
+        .filter(|l| l.kind == diff_view::DiffLineKind::Context)
+        .collect();
     assert_eq!(context_lines[0].old_lineno, Some(10));
     assert_eq!(context_lines[0].new_lineno, Some(20));
     assert_eq!(context_lines[1].old_lineno, Some(12));
@@ -117,8 +133,11 @@ fn test_token_budget_at_warning_threshold() {
     let context_window: u64 = 200_000;
     let total_tokens: u64 = 160_000; // 80%
     let pct = total_tokens as f64 / context_window as f64;
-    assert!(pct >= 0.80 && pct < 0.95,
-        "80% should be in warning range, got {:.2}", pct);
+    assert!(
+        pct >= 0.80 && pct < 0.95,
+        "80% should be in warning range, got {:.2}",
+        pct
+    );
 }
 
 #[test]
@@ -127,7 +146,11 @@ fn test_token_budget_at_critical_threshold() {
     let context_window: u64 = 200_000;
     let total_tokens: u64 = 190_000; // 95%
     let pct = total_tokens as f64 / context_window as f64;
-    assert!(pct >= 0.95, "95% should be at critical threshold, got {:.2}", pct);
+    assert!(
+        pct >= 0.95,
+        "95% should be at critical threshold, got {:.2}",
+        pct
+    );
 }
 
 #[test]
@@ -144,7 +167,11 @@ fn test_token_budget_zero_context_window() {
     // Edge case: zero context window should not panic
     let context_window: u64 = 0;
     let total_tokens: u64 = 100;
-    let pct = if context_window == 0 { 0.0 } else { total_tokens as f64 / context_window as f64 };
+    let pct = if context_window == 0 {
+        0.0
+    } else {
+        total_tokens as f64 / context_window as f64
+    };
     assert_eq!(pct, 0.0, "zero context window should return 0%");
 }
 
@@ -154,7 +181,9 @@ fn test_token_budget_zero_context_window() {
 fn test_scroll_page_up_from_bottom() {
     let mut list = MessageList::new();
     for i in 0..100 {
-        list.push(MessageEntry::User { text: format!("message {}", i) });
+        list.push(MessageEntry::User {
+            text: format!("message {}", i),
+        });
     }
     // Start at bottom (sticky)
     assert!(list.is_at_bottom());
@@ -168,7 +197,9 @@ fn test_scroll_page_up_from_bottom() {
 fn test_scroll_page_down_then_bottom() {
     let mut list = MessageList::new();
     for i in 0..100 {
-        list.push(MessageEntry::User { text: format!("message {}", i) });
+        list.push(MessageEntry::User {
+            text: format!("message {}", i),
+        });
     }
     list.scroll_to_top();
     assert!(!list.is_at_bottom());
@@ -184,7 +215,9 @@ fn test_scroll_page_down_then_bottom() {
 fn test_scroll_home_jumps_to_top() {
     let mut list = MessageList::new();
     for i in 0..50 {
-        list.push(MessageEntry::User { text: format!("msg {}", i) });
+        list.push(MessageEntry::User {
+            text: format!("msg {}", i),
+        });
     }
     // Home should go to top
     list.scroll_to_top();
@@ -195,7 +228,9 @@ fn test_scroll_home_jumps_to_top() {
 fn test_scroll_end_jumps_to_bottom() {
     let mut list = MessageList::new();
     for i in 0..50 {
-        list.push(MessageEntry::User { text: format!("msg {}", i) });
+        list.push(MessageEntry::User {
+            text: format!("msg {}", i),
+        });
     }
     list.scroll_to_top();
     list.scroll_to_bottom();
@@ -206,7 +241,9 @@ fn test_scroll_end_jumps_to_bottom() {
 fn test_scroll_single_line_up_down() {
     let mut list = MessageList::new();
     for i in 0..50 {
-        list.push(MessageEntry::User { text: format!("msg {}", i) });
+        list.push(MessageEntry::User {
+            text: format!("msg {}", i),
+        });
     }
     // Ctrl+Up/Down scrolls by 1 line
     list.scroll_to_top();
@@ -220,7 +257,9 @@ fn test_scroll_single_line_up_down() {
 #[test]
 fn test_scroll_up_underflow_protection() {
     let mut list = MessageList::new();
-    list.push(MessageEntry::User { text: "only one".into() });
+    list.push(MessageEntry::User {
+        text: "only one".into(),
+    });
     // Scrolling up from 0 should not panic or underflow
     list.scroll_up(100);
     list.scroll_up(usize::MAX);

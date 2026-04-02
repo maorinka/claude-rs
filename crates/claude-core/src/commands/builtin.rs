@@ -151,8 +151,7 @@ impl CommandHandler for ConfigHandler {
     fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
         let settings_path = crate::config::paths::user_settings_path()
             .unwrap_or_else(|_| std::path::PathBuf::from("~/.claude/settings.json"));
-        let content =
-            std::fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".into());
+        let content = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".into());
         Ok(CommandResult::Action(format!(
             "Settings ({}):\n{}",
             settings_path.display(),
@@ -191,9 +190,7 @@ impl CommandHandler for PermissionsHandler {
             "default" => "All tool calls require approval before execution.",
             "plan" => "Read-only tools are auto-approved; write tools require approval.",
             "auto-edit" => "File edits are auto-approved; shell commands require approval.",
-            "yolo" | "dangerously-skip-permissions" => {
-                "All tools auto-approved (dangerous)."
-            }
+            "yolo" | "dangerously-skip-permissions" => "All tools auto-approved (dangerous).",
             _ => "All tool calls require approval before execution.",
         };
 
@@ -212,7 +209,11 @@ impl CommandHandler for VerboseHandler {
                 state.verbose_mode = !state.verbose_mode;
                 return Ok(CommandResult::Action(format!(
                     "Verbose mode {}.",
-                    if state.verbose_mode { "enabled" } else { "disabled" }
+                    if state.verbose_mode {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
                 )));
             }
         }
@@ -329,7 +330,11 @@ impl CommandHandler for FastHandler {
                 state.fast_mode = !state.fast_mode;
                 return Ok(CommandResult::Action(format!(
                     "Fast mode {}.",
-                    if state.fast_mode { "enabled" } else { "disabled" }
+                    if state.fast_mode {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
                 )));
             }
         }
@@ -345,7 +350,11 @@ impl CommandHandler for BriefHandler {
                 state.brief_mode = !state.brief_mode;
                 return Ok(CommandResult::Action(format!(
                     "Brief mode {}.",
-                    if state.brief_mode { "enabled" } else { "disabled" }
+                    if state.brief_mode {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
                 )));
             }
         }
@@ -520,16 +529,10 @@ impl CommandHandler for DiffHandler {
             }
             Ok(result) => {
                 let stderr = String::from_utf8_lossy(&result.stderr);
-                output.push_str(&format!(
-                    "git diff --cached failed: {}\n",
-                    stderr.trim()
-                ));
+                output.push_str(&format!("git diff --cached failed: {}\n", stderr.trim()));
             }
             Err(e) => {
-                output.push_str(&format!(
-                    "Failed to run git diff --cached: {}\n",
-                    e
-                ));
+                output.push_str(&format!("Failed to run git diff --cached: {}\n", e));
             }
         }
 
@@ -581,17 +584,14 @@ impl CommandHandler for McpHandler {
         if sub.is_empty() || sub == "list" {
             let settings_path = crate::config::paths::user_settings_path()
                 .unwrap_or_else(|_| std::path::PathBuf::from("~/.claude/settings.json"));
-            let content = std::fs::read_to_string(&settings_path)
-                .unwrap_or_else(|_| "{}".into());
+            let content = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".into());
 
             let parsed: serde_json::Value = serde_json::from_str(&content)
                 .unwrap_or(serde_json::Value::Object(Default::default()));
 
             let mut report = String::from("=== MCP Servers ===\n\n");
 
-            if let Some(servers) =
-                parsed.get("mcpServers").and_then(|v| v.as_object())
-            {
+            if let Some(servers) = parsed.get("mcpServers").and_then(|v| v.as_object()) {
                 if servers.is_empty() {
                     report.push_str("No MCP servers configured.\n");
                 } else {
@@ -636,10 +636,7 @@ impl CommandHandler for PluginHandler {
                         let mut found = false;
                         for entry in entries.flatten() {
                             if entry.path().is_dir() {
-                                let name = entry
-                                    .file_name()
-                                    .to_string_lossy()
-                                    .to_string();
+                                let name = entry.file_name().to_string_lossy().to_string();
                                 report.push_str(&format!("  - {}\n", name));
                                 found = true;
                             }
@@ -667,8 +664,7 @@ impl CommandHandler for PluginHandler {
 pub struct SkillsHandler;
 impl CommandHandler for SkillsHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
-        let project_root =
-            crate::config::paths::detect_project_root(&ctx.working_directory);
+        let project_root = crate::config::paths::detect_project_root(&ctx.working_directory);
         let skills = crate::plugins::skill::discover_skills(&project_root);
 
         let mut report = String::from("=== Available Skills ===\n\n");
@@ -686,10 +682,7 @@ impl CommandHandler for SkillsHandler {
         } else {
             report.push_str("\nDiscovered:\n");
             for skill in &skills {
-                report.push_str(&format!(
-                    "  /{} - {}\n",
-                    skill.name, skill.description
-                ));
+                report.push_str(&format!("  /{} - {}\n", skill.name, skill.description));
             }
         }
 
@@ -885,10 +878,7 @@ impl CommandHandler for HooksHandler {
         let settings_path = crate::config::paths::user_settings_path()
             .unwrap_or_else(|_| std::path::PathBuf::from("~/.claude/settings.json"));
 
-        let project_settings = ctx
-            .working_directory
-            .join(".claude")
-            .join("settings.json");
+        let project_settings = ctx.working_directory.join(".claude").join("settings.json");
 
         let mut found_any = false;
 
@@ -1392,10 +1382,8 @@ impl CommandHandler for UsageHandler {
                     report.push_str("  Turn | Input tokens | Output tokens\n");
                     report.push_str("  -----|-------------|-------------\n");
                     for (turn, input, output) in &state.per_turn_tokens {
-                        report.push_str(&format!(
-                            "  {:>4} | {:>11} | {:>12}\n",
-                            turn, input, output
-                        ));
+                        report
+                            .push_str(&format!("  {:>4} | {:>11} | {:>12}\n", turn, input, output));
                     }
                 }
 
@@ -1608,9 +1596,10 @@ impl CommandHandler for ReloadPluginsHandler {
                         let skills_dir = path.join("skills");
                         if skills_dir.is_dir() {
                             if let Ok(skill_entries) = std::fs::read_dir(&skills_dir) {
-                                skill_count +=
-                                    skill_entries.flatten().filter(|e| e.path().is_dir()).count()
-                                        as u32;
+                                skill_count += skill_entries
+                                    .flatten()
+                                    .filter(|e| e.path().is_dir())
+                                    .count() as u32;
                             }
                         }
                         // Check for manifest validity
@@ -1677,8 +1666,8 @@ impl CommandHandler for ReleaseNotesHandler {
         }
 
         // Fall back to the project's own CHANGELOG if present
-        let project_changelog = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../CHANGELOG.md");
+        let project_changelog =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../CHANGELOG.md");
         if project_changelog.exists() {
             if let Ok(content) = std::fs::read_to_string(&project_changelog) {
                 let preview: String = content.lines().take(80).collect::<Vec<_>>().join("\n");
@@ -1845,7 +1834,10 @@ impl CommandHandler for CommitPushPrHandler {
         let extra = if args.trim().is_empty() {
             String::new()
         } else {
-            format!("\n\n## Additional instructions from user\n\n{}", args.trim())
+            format!(
+                "\n\n## Additional instructions from user\n\n{}",
+                args.trim()
+            )
         };
 
         Ok(CommandResult::Message(format!(
@@ -1875,7 +1867,8 @@ impl CommandHandler for CommitPushPrHandler {
              - Keep PR titles under 70 characters\n\
              - NEVER force push or skip hooks\n\
              - Do not commit files containing secrets (.env, credentials, etc.)\n\
-             - Return the PR URL when done{}", extra
+             - Return the PR URL when done{}",
+            extra
         )))
     }
 }
@@ -2057,78 +2050,208 @@ pub fn build_default_commands() -> CommandRegistry {
     use super::registry::CommandType;
 
     // Action commands (existing)
-    register!("help",        "Show available commands",                         Action, HelpHandler);
-    register!("status",      "Show session status (model, tokens, messages)",   Action, StatusHandler);
-    register!("clear",       "Clear conversation history",                      Action, ClearHandler);
-    register!("model",       "Show or change the current model",                Action, ModelHandler);
-    register!("config",      "Show configuration",                              Action, ConfigHandler);
-    register!("cost",        "Show token usage and estimated cost",             Action, CostHandler);
-    register!("permissions", "Show current permission mode",                    Action, PermissionsHandler);
-    register!("verbose",     "Toggle verbose mode",                             Action, VerboseHandler);
-    register!("memory",      "Show auto-memory files",                          Action, MemoryHandler);
-    register!("tasks",       "Show current task list",                          Action, TasksHandler);
-    register!("resume",      "Resume a previous session",                       Action, ResumeHandler);
-    register!("fork",        "Fork the current session",                        Action, ForkHandler);
-    register!("context",     "Show context window usage",                       Action, ContextHandler);
-    register!("theme",       "Toggle light/dark theme",                         Action, ThemeHandler);
-    register!("fast",        "Toggle fast mode",                                Action, FastHandler);
-    register!("brief",       "Toggle brief mode",                               Action, BriefHandler);
-    register!("effort",      "Set effort level",                                Action, EffortHandler);
+    register!("help", "Show available commands", Action, HelpHandler);
+    register!(
+        "status",
+        "Show session status (model, tokens, messages)",
+        Action,
+        StatusHandler
+    );
+    register!("clear", "Clear conversation history", Action, ClearHandler);
+    register!(
+        "model",
+        "Show or change the current model",
+        Action,
+        ModelHandler
+    );
+    register!("config", "Show configuration", Action, ConfigHandler);
+    register!(
+        "cost",
+        "Show token usage and estimated cost",
+        Action,
+        CostHandler
+    );
+    register!(
+        "permissions",
+        "Show current permission mode",
+        Action,
+        PermissionsHandler
+    );
+    register!("verbose", "Toggle verbose mode", Action, VerboseHandler);
+    register!("memory", "Show auto-memory files", Action, MemoryHandler);
+    register!("tasks", "Show current task list", Action, TasksHandler);
+    register!("resume", "Resume a previous session", Action, ResumeHandler);
+    register!("fork", "Fork the current session", Action, ForkHandler);
+    register!(
+        "context",
+        "Show context window usage",
+        Action,
+        ContextHandler
+    );
+    register!("theme", "Toggle light/dark theme", Action, ThemeHandler);
+    register!("fast", "Toggle fast mode", Action, FastHandler);
+    register!("brief", "Toggle brief mode", Action, BriefHandler);
+    register!("effort", "Set effort level", Action, EffortHandler);
 
     // Action commands (new)
-    register!("doctor",      "Run environment health checks",                   Action, DoctorHandler);
-    register!("diff",        "Show git diff (staged + unstaged)",               Action, DiffHandler);
-    register!("export",      "Export session to file",                          Action, ExportHandler);
-    register!("mcp",         "Manage MCP servers",                              Action, McpHandler);
-    register!("plugin",      "Manage plugins",                                  Action, PluginHandler);
-    register!("skills",      "List available skills",                           Action, SkillsHandler);
-    register!("agents",      "List running agents",                             Action, AgentsHandler);
-    register!("rewind",      "Revert recent file changes",                      Action, RewindHandler);
-    register!("files",       "List project files",                              Action, FilesHandler);
-    register!("init",        "Initialize Claude Code in project",               Action, InitHandler);
-    register!("stats",       "Show usage statistics",                           Action, StatsHandler);
-    register!("env",         "Show environment variables",                      Action, EnvHandler);
-    register!("hooks",       "List configured hooks",                           Action, HooksHandler);
-    register!("session",     "Session management",                              Action, SessionHandler);
-    register!("copy",        "Copy last response to clipboard",                 Action, CopyHandler);
+    register!(
+        "doctor",
+        "Run environment health checks",
+        Action,
+        DoctorHandler
+    );
+    register!(
+        "diff",
+        "Show git diff (staged + unstaged)",
+        Action,
+        DiffHandler
+    );
+    register!("export", "Export session to file", Action, ExportHandler);
+    register!("mcp", "Manage MCP servers", Action, McpHandler);
+    register!("plugin", "Manage plugins", Action, PluginHandler);
+    register!("skills", "List available skills", Action, SkillsHandler);
+    register!("agents", "List running agents", Action, AgentsHandler);
+    register!(
+        "rewind",
+        "Revert recent file changes",
+        Action,
+        RewindHandler
+    );
+    register!("files", "List project files", Action, FilesHandler);
+    register!(
+        "init",
+        "Initialize Claude Code in project",
+        Action,
+        InitHandler
+    );
+    register!("stats", "Show usage statistics", Action, StatsHandler);
+    register!("env", "Show environment variables", Action, EnvHandler);
+    register!("hooks", "List configured hooks", Action, HooksHandler);
+    register!("session", "Session management", Action, SessionHandler);
+    register!(
+        "copy",
+        "Copy last response to clipboard",
+        Action,
+        CopyHandler
+    );
 
     // Prompt commands (existing)
-    register!("compact",      "Manually trigger conversation compaction",        Prompt, CompactHandler);
-    register!("plan",         "Enter plan mode",                                 Prompt, PlanHandler);
-    register!("exit-plan",    "Exit plan mode",                                  Prompt, ExitPlanHandler);
-    register!("commit",       "Generate a git commit for staged changes",        Prompt, CommitHandler);
-    register!("review",       "Review code changes (git diff)",                  Prompt, ReviewHandler);
-    register!("branch",       "Create a new git branch",                         Prompt, BranchHandler);
-    register!("pr",           "Create a pull request description",               Prompt, PrHandler);
-    register!("bug",          "Report or analyze a bug",                         Prompt, BugHandler);
-    register!("test",         "Generate tests for code",                         Prompt, TestHandler);
-    register!("refactor",     "Suggest refactoring",                             Prompt, RefactorHandler);
-    register!("explain",      "Explain code",                                    Prompt, ExplainHandler);
-    register!("docs",         "Generate documentation",                          Prompt, DocsHandler);
+    register!(
+        "compact",
+        "Manually trigger conversation compaction",
+        Prompt,
+        CompactHandler
+    );
+    register!("plan", "Enter plan mode", Prompt, PlanHandler);
+    register!("exit-plan", "Exit plan mode", Prompt, ExitPlanHandler);
+    register!(
+        "commit",
+        "Generate a git commit for staged changes",
+        Prompt,
+        CommitHandler
+    );
+    register!(
+        "review",
+        "Review code changes (git diff)",
+        Prompt,
+        ReviewHandler
+    );
+    register!("branch", "Create a new git branch", Prompt, BranchHandler);
+    register!("pr", "Create a pull request description", Prompt, PrHandler);
+    register!("bug", "Report or analyze a bug", Prompt, BugHandler);
+    register!("test", "Generate tests for code", Prompt, TestHandler);
+    register!("refactor", "Suggest refactoring", Prompt, RefactorHandler);
+    register!("explain", "Explain code", Prompt, ExplainHandler);
+    register!("docs", "Generate documentation", Prompt, DocsHandler);
 
     // Prompt commands (new)
-    register!("pr-comments",  "Analyze PR comments",                             Prompt, PrCommentsHandler);
-    register!("proactive",    "Enable proactive mode",                           Prompt, ProactiveHandler);
-    register!("ultrareview",  "Deep code review",                                Prompt, UltrareviewHandler);
+    register!(
+        "pr-comments",
+        "Analyze PR comments",
+        Prompt,
+        PrCommentsHandler
+    );
+    register!(
+        "proactive",
+        "Enable proactive mode",
+        Prompt,
+        ProactiveHandler
+    );
+    register!(
+        "ultrareview",
+        "Deep code review",
+        Prompt,
+        UltrareviewHandler
+    );
 
     // Batch 3 – Action commands
-    register!("share",           "Share conversation as markdown",                  Action, ShareHandler);
-    register!("usage",           "Detailed token usage breakdown",                  Action, UsageHandler);
-    register!("rename",          "Rename current session",                          Action, RenameHandler);
-    register!("add-dir",         "Add working directories",                         Action, AddDirHandler);
-    register!("keybindings",     "Show keyboard shortcuts",                         Action, KeybindingsHandler);
-    register!("reload-plugins",  "Reload plugin directory",                         Action, ReloadPluginsHandler);
-    register!("release-notes",   "Show release notes",                              Action, ReleaseNotesHandler);
-    register!("color",           "Set session color",                               Action, ColorHandler);
-    register!("sandbox",         "Toggle sandbox mode",                             Action, SandboxHandler);
-    register!("output-style",    "(deprecated) Use /config",                        Action, OutputStyleHandler);
+    register!(
+        "share",
+        "Share conversation as markdown",
+        Action,
+        ShareHandler
+    );
+    register!(
+        "usage",
+        "Detailed token usage breakdown",
+        Action,
+        UsageHandler
+    );
+    register!("rename", "Rename current session", Action, RenameHandler);
+    register!("add-dir", "Add working directories", Action, AddDirHandler);
+    register!(
+        "keybindings",
+        "Show keyboard shortcuts",
+        Action,
+        KeybindingsHandler
+    );
+    register!(
+        "reload-plugins",
+        "Reload plugin directory",
+        Action,
+        ReloadPluginsHandler
+    );
+    register!(
+        "release-notes",
+        "Show release notes",
+        Action,
+        ReleaseNotesHandler
+    );
+    register!("color", "Set session color", Action, ColorHandler);
+    register!("sandbox", "Toggle sandbox mode", Action, SandboxHandler);
+    register!(
+        "output-style",
+        "(deprecated) Use /config",
+        Action,
+        OutputStyleHandler
+    );
 
     // Batch 3 – Prompt commands
-    register!("commit-push-pr",  "Commit, push, and create PR",                    Prompt, CommitPushPrHandler);
-    register!("security-review", "Security review of branch",                       Prompt, SecurityReviewHandler);
-    register!("ultraplan",       "Ultra-detailed planning mode",                    Prompt, UltraplanHandler);
-    register!("thinkback",       "Replay reasoning process",                        Prompt, ThinkbackHandler);
-    register!("insights",        "Usage insights report",                           Prompt, InsightsHandler);
+    register!(
+        "commit-push-pr",
+        "Commit, push, and create PR",
+        Prompt,
+        CommitPushPrHandler
+    );
+    register!(
+        "security-review",
+        "Security review of branch",
+        Prompt,
+        SecurityReviewHandler
+    );
+    register!(
+        "ultraplan",
+        "Ultra-detailed planning mode",
+        Prompt,
+        UltraplanHandler
+    );
+    register!(
+        "thinkback",
+        "Replay reasoning process",
+        Prompt,
+        ThinkbackHandler
+    );
+    register!("insights", "Usage insights report", Prompt, InsightsHandler);
 
     registry
 }
@@ -2556,13 +2679,40 @@ mod tests {
     fn test_registry_contains_all_new_commands() {
         let registry = build_default_commands();
         let expected = [
-            "doctor", "diff", "export", "mcp", "plugin", "skills", "agents", "rewind",
-            "files", "init", "stats", "env", "hooks", "session", "copy", "pr-comments",
-            "proactive", "ultrareview",
+            "doctor",
+            "diff",
+            "export",
+            "mcp",
+            "plugin",
+            "skills",
+            "agents",
+            "rewind",
+            "files",
+            "init",
+            "stats",
+            "env",
+            "hooks",
+            "session",
+            "copy",
+            "pr-comments",
+            "proactive",
+            "ultrareview",
             // Batch 3
-            "share", "usage", "rename", "add-dir", "keybindings", "reload-plugins",
-            "release-notes", "color", "sandbox", "output-style", "commit-push-pr",
-            "security-review", "ultraplan", "thinkback", "insights",
+            "share",
+            "usage",
+            "rename",
+            "add-dir",
+            "keybindings",
+            "reload-plugins",
+            "release-notes",
+            "color",
+            "sandbox",
+            "output-style",
+            "commit-push-pr",
+            "security-review",
+            "ultraplan",
+            "thinkback",
+            "insights",
         ];
         for name in &expected {
             assert!(
@@ -2581,15 +2731,40 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 for cmd in &[
-                    "/doctor", "/diff", "/export", "/mcp", "/plugin", "/skills",
-                    "/agents", "/rewind", "/files", "/init", "/stats", "/env",
-                    "/hooks", "/session", "/copy", "/pr-comments", "/proactive",
+                    "/doctor",
+                    "/diff",
+                    "/export",
+                    "/mcp",
+                    "/plugin",
+                    "/skills",
+                    "/agents",
+                    "/rewind",
+                    "/files",
+                    "/init",
+                    "/stats",
+                    "/env",
+                    "/hooks",
+                    "/session",
+                    "/copy",
+                    "/pr-comments",
+                    "/proactive",
                     "/ultrareview",
                     // Batch 3
-                    "/share", "/usage", "/rename", "/add-dir", "/keybindings",
-                    "/reload-plugins", "/release-notes", "/color", "/sandbox",
-                    "/output-style", "/commit-push-pr", "/security-review",
-                    "/ultraplan", "/thinkback", "/insights",
+                    "/share",
+                    "/usage",
+                    "/rename",
+                    "/add-dir",
+                    "/keybindings",
+                    "/reload-plugins",
+                    "/release-notes",
+                    "/color",
+                    "/sandbox",
+                    "/output-style",
+                    "/commit-push-pr",
+                    "/security-review",
+                    "/ultraplan",
+                    "/thinkback",
+                    "/insights",
                 ] {
                     assert!(text.contains(cmd), "/help should list {}", cmd);
                 }
@@ -2621,17 +2796,21 @@ mod tests {
         let result = handler.execute("", &ctx).unwrap();
         match result {
             CommandResult::Action(text) => {
-                assert!(text.contains("shared to"), "should report success: {}", text);
-                assert!(text.contains("claude_share_"), "should include filename: {}", text);
+                assert!(
+                    text.contains("shared to"),
+                    "should report success: {}",
+                    text
+                );
+                assert!(
+                    text.contains("claude_share_"),
+                    "should include filename: {}",
+                    text
+                );
                 // Verify file was created
                 let files: Vec<_> = std::fs::read_dir(tmp.path())
                     .unwrap()
                     .flatten()
-                    .filter(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .starts_with("claude_share_")
-                    })
+                    .filter(|e| e.file_name().to_string_lossy().starts_with("claude_share_"))
                     .collect();
                 assert_eq!(files.len(), 1, "should create exactly one share file");
             }
@@ -2675,9 +2854,15 @@ mod tests {
                 assert!(text.contains("Token Usage Breakdown"));
                 assert!(text.contains("2500"), "should show total tokens");
                 assert!(text.contains("0.0042"), "should show cost");
-                assert!(text.contains("Per-turn breakdown"), "should have per-turn section");
+                assert!(
+                    text.contains("Per-turn breakdown"),
+                    "should have per-turn section"
+                );
                 assert!(text.contains("200"), "should show turn input tokens");
-                assert!(text.contains("Average tokens/message"), "should compute average");
+                assert!(
+                    text.contains("Average tokens/message"),
+                    "should compute average"
+                );
             }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
@@ -2735,7 +2920,10 @@ mod tests {
             CommandResult::Error(text) => {
                 assert!(text.contains("Usage:"));
             }
-            other => panic!("expected Error for empty arg, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected Error for empty arg, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         }
     }
 
@@ -2748,7 +2936,10 @@ mod tests {
             CommandResult::Error(text) => {
                 assert!(text.contains("not found"));
             }
-            other => panic!("expected Error for nonexistent path, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected Error for nonexistent path, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         }
     }
 
@@ -2764,7 +2955,9 @@ mod tests {
             ))),
         };
         let handler = AddDirHandler;
-        let result = handler.execute(extra.path().to_str().unwrap(), &ctx).unwrap();
+        let result = handler
+            .execute(extra.path().to_str().unwrap(), &ctx)
+            .unwrap();
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("Added"));
@@ -2809,7 +3002,10 @@ mod tests {
                 // Acceptable if plugins dir doesn't exist in test env
                 assert!(!text.is_empty());
             }
-            other => panic!("expected Action or Error, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected Action or Error, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         }
     }
 
@@ -3048,7 +3244,9 @@ mod tests {
     fn test_ultraplan_with_task() {
         let handler = UltraplanHandler;
         let ctx = test_ctx();
-        let result = handler.execute("migrate database to PostgreSQL", &ctx).unwrap();
+        let result = handler
+            .execute("migrate database to PostgreSQL", &ctx)
+            .unwrap();
         match result {
             CommandResult::Message(text) => {
                 assert!(text.contains("migrate database to PostgreSQL"));

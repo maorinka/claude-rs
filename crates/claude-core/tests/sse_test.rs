@@ -15,7 +15,8 @@ fn test_parse_message_start_event() {
 
 #[test]
 fn test_parse_content_block_start_text() {
-    let data = r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+    let data =
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
     let event = parse_sse_event("content_block_start", data).unwrap();
     match event {
         SseEvent::ContentBlockStart { index, block } => {
@@ -47,7 +48,8 @@ fn test_parse_content_block_start_tool_use() {
 
 #[test]
 fn test_parse_text_delta() {
-    let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+    let data =
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
     let event = parse_sse_event("content_block_delta", data).unwrap();
     match event {
         SseEvent::ContentBlockDelta { index, delta } => {

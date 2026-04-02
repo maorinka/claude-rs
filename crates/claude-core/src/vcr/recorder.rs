@@ -1,6 +1,6 @@
+use super::types::*;
 use anyhow::Result;
 use std::path::Path;
-use super::types::*;
 
 pub struct VcrRecorder {
     requests: Vec<VcrRequest>,
@@ -9,7 +9,10 @@ pub struct VcrRecorder {
 
 impl VcrRecorder {
     pub fn new(enabled: bool) -> Self {
-        Self { requests: Vec::new(), enabled }
+        Self {
+            requests: Vec::new(),
+            enabled,
+        }
     }
 
     pub fn record(

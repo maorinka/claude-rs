@@ -15,10 +15,10 @@ pub enum InputAction {
 
 pub struct PromptInput {
     text: String,
-    cursor: usize,          // byte position
+    cursor: usize, // byte position
     history: Vec<String>,
     history_index: Option<usize>, // None = current input, Some(i) = history[i]
-    saved_current: String,  // Current input saved when browsing history
+    saved_current: String,        // Current input saved when browsing history
 }
 
 impl PromptInput {
@@ -181,7 +181,11 @@ impl PromptInput {
         match trimmed.rfind(|c: char| c.is_whitespace()) {
             Some(pos) => {
                 // Move past the whitespace char
-                pos + trimmed[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(0)
+                pos + trimmed[pos..]
+                    .chars()
+                    .next()
+                    .map(|c| c.len_utf8())
+                    .unwrap_or(0)
             }
             None => 0,
         }
@@ -316,10 +320,7 @@ impl<'a> Widget for PromptInputWidget<'a> {
             };
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{} ", PROMPT_CHAR),
-                    prompt_style,
-                ),
+                Span::styled(format!("{} ", PROMPT_CHAR), prompt_style),
                 Span::raw(&self.input.text),
             ]);
             buf.set_line(area.x, area.y + 1, &line, area.width);
@@ -341,10 +342,7 @@ impl<'a> Widget for PromptInputWidget<'a> {
             };
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{} ", PROMPT_CHAR),
-                    prompt_style,
-                ),
+                Span::styled(format!("{} ", PROMPT_CHAR), prompt_style),
                 Span::raw(&self.input.text),
             ]);
             buf.set_line(area.x, area.y + 1, &line, area.width);
@@ -359,10 +357,7 @@ impl<'a> Widget for PromptInputWidget<'a> {
             };
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{} ", PROMPT_CHAR),
-                    prompt_style,
-                ),
+                Span::styled(format!("{} ", PROMPT_CHAR), prompt_style),
                 Span::raw(&self.input.text),
             ]);
             buf.set_line(area.x, area.y, &line, area.width);

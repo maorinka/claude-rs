@@ -1,6 +1,6 @@
+use claude_core::types::events::ToolResultData;
 use claude_tools::edit::FileEditTool;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
-use claude_core::types::events::ToolResultData;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -33,7 +33,10 @@ async fn test_edit_replace_string() {
     let ctx = make_ctx(&dir);
 
     // Simulate reading the file first (required by staleness check)
-    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false);
 
     let result = call_tool(
         &tool,
@@ -46,7 +49,11 @@ async fn test_edit_replace_string() {
     )
     .await;
 
-    assert!(!result.is_error, "Expected success, got error: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "Expected success, got error: {:?}",
+        result.data
+    );
 
     let content = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(content, "goodbye world");
@@ -68,7 +75,10 @@ async fn test_edit_replace_all() {
     let ctx = make_ctx(&dir);
 
     // Simulate reading the file first (required by staleness check)
-    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false);
 
     let result = call_tool(
         &tool,
@@ -82,7 +92,11 @@ async fn test_edit_replace_all() {
     )
     .await;
 
-    assert!(!result.is_error, "Expected success, got error: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "Expected success, got error: {:?}",
+        result.data
+    );
 
     let content = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(content, "qux bar qux baz qux");
@@ -100,7 +114,10 @@ async fn test_edit_error_on_ambiguous_match() {
     let ctx = make_ctx(&dir);
 
     // Simulate reading the file first (required by staleness check)
-    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false);
 
     let result = call_tool(
         &tool,
@@ -127,7 +144,10 @@ async fn test_edit_string_not_found() {
     let ctx = make_ctx(&dir);
 
     // Simulate reading the file first (required by staleness check)
-    ctx.read_file_state.lock().unwrap().record_read(file_path.to_str().unwrap(), false);
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false);
 
     let result = call_tool(
         &tool,

@@ -34,11 +34,18 @@ async fn test_config_list_empty() {
     let (tool, _dir) = make_tool_with_temp_settings();
     let result = call(&tool, json!({ "action": "list" })).await;
 
-    assert!(!result.is_error, "list should succeed even with no settings file");
+    assert!(
+        !result.is_error,
+        "list should succeed even with no settings file"
+    );
     assert_eq!(result.data["action"], "list");
     let settings = &result.data["settings"];
     assert!(settings.is_object(), "settings should be a JSON object");
-    assert_eq!(settings.as_object().unwrap().len(), 0, "empty settings file");
+    assert_eq!(
+        settings.as_object().unwrap().len(),
+        0,
+        "empty settings file"
+    );
 }
 
 #[tokio::test]
@@ -46,21 +53,29 @@ async fn test_config_set_and_get() {
     let (tool, _dir) = make_tool_with_temp_settings();
 
     // Set a key
-    let set_result = call(&tool, json!({
-        "action": "set",
-        "key": "theme",
-        "value": "dark"
-    })).await;
+    let set_result = call(
+        &tool,
+        json!({
+            "action": "set",
+            "key": "theme",
+            "value": "dark"
+        }),
+    )
+    .await;
     assert!(!set_result.is_error, "set should succeed");
     assert_eq!(set_result.data["action"], "set");
     assert_eq!(set_result.data["key"], "theme");
     assert_eq!(set_result.data["value"], "dark");
 
     // Get the key back
-    let get_result = call(&tool, json!({
-        "action": "get",
-        "key": "theme"
-    })).await;
+    let get_result = call(
+        &tool,
+        json!({
+            "action": "get",
+            "key": "theme"
+        }),
+    )
+    .await;
 
     assert!(!get_result.is_error, "get should succeed");
     assert_eq!(get_result.data["action"], "get");
@@ -72,7 +87,11 @@ async fn test_config_set_and_get() {
 async fn test_config_set_then_list() {
     let (tool, _dir) = make_tool_with_temp_settings();
 
-    call(&tool, json!({ "action": "set", "key": "color", "value": "blue" })).await;
+    call(
+        &tool,
+        json!({ "action": "set", "key": "color", "value": "blue" }),
+    )
+    .await;
     let list_result = call(&tool, json!({ "action": "list" })).await;
 
     assert!(!list_result.is_error);

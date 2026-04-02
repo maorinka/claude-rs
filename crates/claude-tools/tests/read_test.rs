@@ -1,6 +1,6 @@
+use claude_core::types::events::ToolResultData;
 use claude_tools::read::FileReadTool;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
-use claude_core::types::events::ToolResultData;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::PathBuf;
@@ -40,7 +40,10 @@ async fn test_read_text_file() {
     assert_eq!(file["totalLines"], 3);
 
     let content = file["content"].as_str().unwrap();
-    assert!(content.contains("1\talpha"), "line 1 should have cat-n format");
+    assert!(
+        content.contains("1\talpha"),
+        "line 1 should have cat-n format"
+    );
     assert!(content.contains("2\tbeta"));
     assert!(content.contains("3\tgamma"));
 }
@@ -60,8 +63,14 @@ async fn test_read_with_offset_and_limit() {
 
     let file = &result.data["file"];
     assert_eq!(file["numLines"], 2, "should return exactly 2 lines");
-    assert_eq!(file["startLine"], 3, "startLine should be 1-based (offset 2 => line 3)");
-    assert_eq!(file["totalLines"], 5, "totalLines is the full file line count");
+    assert_eq!(
+        file["startLine"], 3,
+        "startLine should be 1-based (offset 2 => line 3)"
+    );
+    assert_eq!(
+        file["totalLines"], 5,
+        "totalLines is the full file line count"
+    );
 
     let content = file["content"].as_str().unwrap();
     // lines returned are "three" and "four" (1-based lines 3 and 4)
@@ -73,21 +82,31 @@ async fn test_read_with_offset_and_limit() {
 
 #[tokio::test]
 async fn test_read_nonexistent_file() {
-    let result = call_tool(json!({ "file_path": "/tmp/this_file_does_not_exist_abc123.txt" })).await;
+    let result =
+        call_tool(json!({ "file_path": "/tmp/this_file_does_not_exist_abc123.txt" })).await;
     assert!(result.is_error, "missing file should produce is_error=true");
 }
 
 #[tokio::test]
 async fn test_read_blocked_device() {
     let result = call_tool(json!({ "file_path": "/dev/zero" })).await;
-    assert!(result.is_error, "/dev/zero should be blocked and return is_error=true");
+    assert!(
+        result.is_error,
+        "/dev/zero should be blocked and return is_error=true"
+    );
 }
 
 #[test]
 fn test_read_is_concurrent_and_readonly() {
     let tool = FileReadTool;
     let dummy = json!({});
-    assert!(tool.is_concurrency_safe(&dummy), "FileReadTool should be concurrency-safe");
-    assert!(tool.is_read_only(&dummy), "FileReadTool should be read-only");
+    assert!(
+        tool.is_concurrency_safe(&dummy),
+        "FileReadTool should be concurrency-safe"
+    );
+    assert!(
+        tool.is_read_only(&dummy),
+        "FileReadTool should be read-only"
+    );
     assert_eq!(tool.max_result_size_chars(), usize::MAX);
 }

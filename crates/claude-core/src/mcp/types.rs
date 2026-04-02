@@ -85,7 +85,10 @@ impl McpServerConfig {
         if let Some(obj) = value.as_object() {
             if !obj.contains_key("type") {
                 let mut obj = obj.clone();
-                obj.insert("type".to_string(), serde_json::Value::String("stdio".to_string()));
+                obj.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("stdio".to_string()),
+                );
                 return serde_json::from_value(serde_json::Value::Object(obj));
             }
         }

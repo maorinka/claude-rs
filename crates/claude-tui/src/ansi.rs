@@ -19,7 +19,9 @@ pub fn parse_ansi(text: &str) -> Vec<Span<'static>> {
                 code.push(chars[i]);
                 i += 1;
             }
-            if i < chars.len() { i += 1; }
+            if i < chars.len() {
+                i += 1;
+            }
             for part in code.split(';') {
                 match part {
                     "0" => current_style = Style::default(),

@@ -1,10 +1,10 @@
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use anyhow::Result;
 
 pub enum CommandType {
-    Prompt,  // Returns text injected as user message
-    Action,  // Side effects, no message injection
+    Prompt, // Returns text injected as user message
+    Action, // Side effects, no message injection
 }
 
 pub struct Command {
@@ -140,9 +140,7 @@ impl CommandRegistry {
             .values()
             .filter(|c| {
                 c.name.contains(query)
-                    || c.description
-                        .to_lowercase()
-                        .contains(&query.to_lowercase())
+                    || c.description.to_lowercase().contains(&query.to_lowercase())
             })
             .collect()
     }

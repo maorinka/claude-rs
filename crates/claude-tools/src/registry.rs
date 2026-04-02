@@ -1,12 +1,12 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use claude_core::types::events::{ToolProgressData, ToolResultData};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use anyhow::Result;
-use async_trait::async_trait;
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use claude_core::types::events::{ToolProgressData, ToolResultData};
 
 pub type ProgressSender = mpsc::Sender<ToolProgressData>;
 
@@ -31,7 +31,9 @@ pub struct ReadFileState {
 
 impl ReadFileState {
     pub fn new() -> Self {
-        Self { entries: HashMap::new() }
+        Self {
+            entries: HashMap::new(),
+        }
     }
 
     /// Record that a file was read at the current time.
@@ -40,10 +42,13 @@ impl ReadFileState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        self.entries.insert(path.to_string(), ReadFileEntry {
-            timestamp: now,
-            is_partial_view,
-        });
+        self.entries.insert(
+            path.to_string(),
+            ReadFileEntry {
+                timestamp: now,
+                is_partial_view,
+            },
+        );
     }
 
     /// Update the read timestamp for a file after a successful write, so
@@ -53,10 +58,13 @@ impl ReadFileState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        self.entries.insert(path.to_string(), ReadFileEntry {
-            timestamp: now,
-            is_partial_view: false,
-        });
+        self.entries.insert(
+            path.to_string(),
+            ReadFileEntry {
+                timestamp: now,
+                is_partial_view: false,
+            },
+        );
     }
 
     /// Get the read entry for a file, if it exists.
@@ -87,16 +95,34 @@ pub struct ToolUseContext {
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     fn name(&self) -> &str;
-    fn aliases(&self) -> &[&str] { &[] }
+    fn aliases(&self) -> &[&str] {
+        &[]
+    }
     /// Full description of what this tool does, sent to the API as the tool's
     /// `description` field.  Mirrors the TS `tool.prompt()` output.
-    fn description(&self) -> String { format!("Tool: {}", self.name()) }
+    fn description(&self) -> String {
+        format!("Tool: {}", self.name())
+    }
     fn input_schema(&self) -> Value;
-    async fn call(&self, input: &Value, ctx: &ToolUseContext, cancel: CancellationToken, progress: Option<ProgressSender>) -> Result<ToolResultData>;
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { false }
-    fn is_read_only(&self, _input: &Value) -> bool { false }
-    fn is_destructive(&self, _input: &Value) -> bool { false }
-    fn max_result_size_chars(&self) -> usize { 100_000 }
+    async fn call(
+        &self,
+        input: &Value,
+        ctx: &ToolUseContext,
+        cancel: CancellationToken,
+        progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData>;
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        false
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        false
+    }
+    fn is_destructive(&self, _input: &Value) -> bool {
+        false
+    }
+    fn max_result_size_chars(&self) -> usize {
+        100_000
+    }
 }
 
 pub struct ToolRegistry {

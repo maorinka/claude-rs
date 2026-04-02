@@ -9,7 +9,10 @@ async fn test_hook_runner_echo_command() {
         timeout_ms: None,
     }];
     let runner = HookRunner::new(hooks);
-    let results = runner.run_hooks(HookEvent::PostResponse, &[]).await.unwrap();
+    let results = runner
+        .run_hooks(HookEvent::PostResponse, &[])
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].exit_code, 0);
     assert!(results[0].stdout.contains("hello"));
@@ -24,7 +27,10 @@ async fn test_hook_runner_wrong_event_not_run() {
     }];
     let runner = HookRunner::new(hooks);
     // Run with PostResponse — hook is for PreToolUse, should not execute
-    let results = runner.run_hooks(HookEvent::PostResponse, &[]).await.unwrap();
+    let results = runner
+        .run_hooks(HookEvent::PostResponse, &[])
+        .await
+        .unwrap();
     assert_eq!(results.len(), 0);
 }
 
@@ -48,7 +54,10 @@ async fn test_hook_runner_env_variable_passed() {
 async fn test_hook_runner_from_settings_empty() {
     let settings = serde_json::json!({});
     let runner = HookRunner::from_settings(&settings);
-    let results = runner.run_hooks(HookEvent::PostResponse, &[]).await.unwrap();
+    let results = runner
+        .run_hooks(HookEvent::PostResponse, &[])
+        .await
+        .unwrap();
     assert_eq!(results.len(), 0);
 }
 
@@ -60,7 +69,10 @@ async fn test_hook_runner_from_settings_with_hooks() {
         ]
     });
     let runner = HookRunner::from_settings(&settings);
-    let results = runner.run_hooks(HookEvent::PostResponse, &[]).await.unwrap();
+    let results = runner
+        .run_hooks(HookEvent::PostResponse, &[])
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].exit_code, 0);
     assert!(results[0].stdout.contains("from_settings"));

@@ -36,7 +36,9 @@ fn test_list_sessions_includes_created_session() {
     let id = mgr.session_id().to_string();
 
     // Write a transcript so last_modified is populated
-    mgr.storage().append_transcript(r#"{"role":"user"}"#).expect("write transcript");
+    mgr.storage()
+        .append_transcript(r#"{"role":"user"}"#)
+        .expect("write transcript");
 
     let sessions = SessionManager::list_sessions().expect("list sessions");
     let found = sessions.iter().any(|s| s.id == id);

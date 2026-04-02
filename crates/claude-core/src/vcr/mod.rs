@@ -1,5 +1,5 @@
-pub mod recorder;
 pub mod player;
+pub mod recorder;
 pub mod types;
 
 #[cfg(test)]

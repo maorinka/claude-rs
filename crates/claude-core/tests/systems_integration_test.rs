@@ -29,8 +29,16 @@ mod cost_tracking {
         let header = tracker.header_display();
 
         // Should contain token count and cost
-        assert!(header.contains("k tokens"), "header should show k tokens, got: {}", header);
-        assert!(header.contains("$"), "header should show cost, got: {}", header);
+        assert!(
+            header.contains("k tokens"),
+            "header should show k tokens, got: {}",
+            header
+        );
+        assert!(
+            header.contains("$"),
+            "header should show cost, got: {}",
+            header
+        );
     }
 
     #[test]
@@ -46,10 +54,19 @@ mod cost_tracking {
 
         // Must contain all the fields the /cost command needs
         assert!(detail.contains("Total cost:"), "missing total cost");
-        assert!(detail.contains("Total input tokens:"), "missing input tokens");
-        assert!(detail.contains("Total output tokens:"), "missing output tokens");
+        assert!(
+            detail.contains("Total input tokens:"),
+            "missing input tokens"
+        );
+        assert!(
+            detail.contains("Total output tokens:"),
+            "missing output tokens"
+        );
         assert!(detail.contains("Cache read tokens:"), "missing cache read");
-        assert!(detail.contains("Cache write tokens:"), "missing cache write");
+        assert!(
+            detail.contains("Cache write tokens:"),
+            "missing cache write"
+        );
         assert!(detail.contains("API requests:"), "missing request count");
         assert!(detail.contains("claude-sonnet-4-6"), "missing model name");
     }
@@ -57,11 +74,14 @@ mod cost_tracking {
     #[test]
     fn cost_command_reads_from_shared_state() {
         use claude_core::commands::builtin::CostHandler;
-        use claude_core::commands::registry::{CommandContext, CommandHandler, CommandResult, SharedCommandState};
+        use claude_core::commands::registry::{
+            CommandContext, CommandHandler, CommandResult, SharedCommandState,
+        };
         use std::sync::{Arc, Mutex};
 
         let mut state = SharedCommandState::default();
-        state.cost_summary = "Total cost:            $1.2345\nTotal input tokens:    100000".to_string();
+        state.cost_summary =
+            "Total cost:            $1.2345\nTotal input tokens:    100000".to_string();
 
         let ctx = CommandContext {
             working_directory: std::path::PathBuf::from("/tmp"),
@@ -72,7 +92,11 @@ mod cost_tracking {
         let result = CostHandler.execute("", &ctx).unwrap();
         match result {
             CommandResult::Action(text) => {
-                assert!(text.contains("$1.2345"), "should show cost from shared state, got: {}", text);
+                assert!(
+                    text.contains("$1.2345"),
+                    "should show cost from shared state, got: {}",
+                    text
+                );
                 assert!(text.contains("100000"), "should show tokens, got: {}", text);
             }
             _ => panic!("expected Action variant"),
@@ -101,7 +125,9 @@ mod session_resume {
         ];
 
         for msg in &msgs {
-            storage.append_transcript(&serde_json::to_string(msg).unwrap()).unwrap();
+            storage
+                .append_transcript(&serde_json::to_string(msg).unwrap())
+                .unwrap();
         }
 
         let loaded = storage.load_transcript().unwrap();
@@ -117,10 +143,14 @@ mod session_resume {
         let storage = mgr.storage();
 
         let good = json!({"role": "user", "content": "test"});
-        storage.append_transcript(&serde_json::to_string(&good).unwrap()).unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&good).unwrap())
+            .unwrap();
         storage.append_transcript("not json!!!").unwrap();
         storage.append_transcript("").unwrap();
-        storage.append_transcript(&serde_json::to_string(&good).unwrap()).unwrap();
+        storage
+            .append_transcript(&serde_json::to_string(&good).unwrap())
+            .unwrap();
 
         let loaded = storage.load_transcript().unwrap();
         assert_eq!(loaded.len(), 2, "should skip bad lines and keep good ones");
@@ -130,25 +160,36 @@ mod session_resume {
     fn resume_last_finds_most_recent_session() {
         // Create two sessions with transcripts
         let s1 = SessionManager::new().unwrap();
-        s1.storage().append_transcript(
-            &serde_json::to_string(&json!({"role": "user", "content": "first session"})).unwrap()
-        ).unwrap();
+        s1.storage()
+            .append_transcript(
+                &serde_json::to_string(&json!({"role": "user", "content": "first session"}))
+                    .unwrap(),
+            )
+            .unwrap();
 
         // Small delay to ensure different modification times
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         let s2 = SessionManager::new().unwrap();
-        s2.storage().append_transcript(
-            &serde_json::to_string(&json!({"role": "user", "content": "second session"})).unwrap()
-        ).unwrap();
+        s2.storage()
+            .append_transcript(
+                &serde_json::to_string(&json!({"role": "user", "content": "second session"}))
+                    .unwrap(),
+            )
+            .unwrap();
 
         let sessions = SessionManager::list_sessions().unwrap();
         assert!(!sessions.is_empty(), "should find sessions");
 
         // The most recent session (s2) should be first (sorted by modification time desc)
         let most_recent = &sessions[0];
-        assert_eq!(most_recent.id, s2.session_id(),
-            "most recent session should be s2, got {} (expected {})", most_recent.id, s2.session_id());
+        assert_eq!(
+            most_recent.id,
+            s2.session_id(),
+            "most recent session should be s2, got {} (expected {})",
+            most_recent.id,
+            s2.session_id()
+        );
     }
 }
 
@@ -157,7 +198,9 @@ mod session_resume {
 // =============================================================================
 
 mod compaction {
-    use claude_core::compact::compactor::{should_compact, estimate_tokens, default_context_window};
+    use claude_core::compact::compactor::{
+        default_context_window, estimate_tokens, should_compact,
+    };
     use serde_json::json;
 
     #[test]
@@ -166,8 +209,10 @@ mod compaction {
             json!({"role": "user", "content": [{"type": "text", "text": "hello"}]}),
             json!({"role": "assistant", "content": [{"type": "text", "text": "hi"}]}),
         ];
-        assert!(!should_compact(&messages, default_context_window()),
-            "short conversation should not trigger compaction");
+        assert!(
+            !should_compact(&messages, default_context_window()),
+            "short conversation should not trigger compaction"
+        );
     }
 
     #[test]
@@ -176,23 +221,25 @@ mod compaction {
         // threshold = 200_000 - 13_000 - 20_000 = 167_000 tokens
         // At 4 chars per token, we need ~668_000 chars of text content.
         let big_text = "x".repeat(700_000); // ~175k tokens
-        let messages = vec![
-            json!({"role": "user", "content": [{"type": "text", "text": big_text}]}),
-        ];
-        assert!(should_compact(&messages, default_context_window()),
-            "conversation near token limit should trigger compaction");
+        let messages =
+            vec![json!({"role": "user", "content": [{"type": "text", "text": big_text}]})];
+        assert!(
+            should_compact(&messages, default_context_window()),
+            "conversation near token limit should trigger compaction"
+        );
     }
 
     #[test]
     fn estimate_tokens_counts_text_blocks_not_json() {
         // Verify text-based estimation, not JSON serialization
         let text = "a".repeat(400); // 400 chars = 100 tokens
-        let messages = vec![
-            json!({"role": "user", "content": [{"type": "text", "text": text}]}),
-        ];
+        let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": text}]})];
         let tokens = estimate_tokens(&messages);
-        assert_eq!(tokens, 100,
-            "should estimate 100 tokens from 400 chars, got {}", tokens);
+        assert_eq!(
+            tokens, 100,
+            "should estimate 100 tokens from 400 chars, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -202,7 +249,9 @@ mod compaction {
         // BEFORE the API request. We verify the compactor returns correct
         // results which the engine depends on.
         let small = vec![json!({"role": "user", "content": "short"})];
-        let big = vec![json!({"role": "user", "content": [{"type": "text", "text": "x".repeat(700_000)}]})];
+        let big = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "x".repeat(700_000)}]}),
+        ];
 
         // Small conversation: no compaction
         assert!(!should_compact(&small, default_context_window()));
@@ -217,7 +266,7 @@ mod compaction {
 
 mod bridge {
     use claude_core::bridge::protocol::BridgeRequest;
-    use claude_core::bridge::server::{BridgeState, dispatch_request, dispatch_request_stateless};
+    use claude_core::bridge::server::{dispatch_request, dispatch_request_stateless, BridgeState};
     use std::sync::{Arc, Mutex};
 
     fn make_request(id: &str, method: &str, params: serde_json::Value) -> BridgeRequest {
@@ -258,8 +307,11 @@ mod bridge {
     #[test]
     fn file_changed_handler_records_change() {
         let state = Arc::new(Mutex::new(BridgeState::default()));
-        let req = make_request("f1", "file_changed",
-            serde_json::json!({"path": "src/main.rs", "change_type": "saved"}));
+        let req = make_request(
+            "f1",
+            "file_changed",
+            serde_json::json!({"path": "src/main.rs", "change_type": "saved"}),
+        );
         let resp = dispatch_request(&req, Some(&state));
 
         assert!(resp.error.is_none(), "file_changed should succeed");
@@ -305,9 +357,18 @@ mod bridge {
 
         assert!(method_names.contains(&"ping"), "should support ping");
         assert!(method_names.contains(&"prompt"), "should support prompt");
-        assert!(method_names.contains(&"file_changed"), "should support file_changed");
-        assert!(method_names.contains(&"get_status"), "should support get_status");
-        assert!(method_names.contains(&"get_diagnostics"), "should support get_diagnostics");
+        assert!(
+            method_names.contains(&"file_changed"),
+            "should support file_changed"
+        );
+        assert!(
+            method_names.contains(&"get_status"),
+            "should support get_status"
+        );
+        assert!(
+            method_names.contains(&"get_diagnostics"),
+            "should support get_diagnostics"
+        );
     }
 
     #[test]
@@ -369,7 +430,10 @@ mod mcp_transports {
         // Connection will fail (no server), but it should not panic
         match &results[0].status {
             McpConnectionStatus::Failed { error } => {
-                assert!(error.is_some(), "should have error message for failed SSE connection");
+                assert!(
+                    error.is_some(),
+                    "should have error message for failed SSE connection"
+                );
             }
             _ => {
                 // If it somehow connected (unlikely), that's also fine
@@ -397,7 +461,10 @@ mod mcp_transports {
         // Connection will fail (no server), but routing should work
         match &results[0].status {
             McpConnectionStatus::Failed { error } => {
-                assert!(error.is_some(), "should have error for failed HTTP connection");
+                assert!(
+                    error.is_some(),
+                    "should have error for failed HTTP connection"
+                );
             }
             _ => {}
         }
@@ -408,25 +475,31 @@ mod mcp_transports {
         let manager = McpManager::new();
         let mut configs = HashMap::new();
 
-        configs.insert("sse-server".to_string(), ScopedMcpServerConfig {
-            config: McpServerConfig::Sse(McpSseServerConfig {
-                url: "http://127.0.0.1:1/sse".to_string(),
-                headers: Some({
-                    let mut h = HashMap::new();
-                    h.insert("Authorization".to_string(), "Bearer token".to_string());
-                    h
+        configs.insert(
+            "sse-server".to_string(),
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Sse(McpSseServerConfig {
+                    url: "http://127.0.0.1:1/sse".to_string(),
+                    headers: Some({
+                        let mut h = HashMap::new();
+                        h.insert("Authorization".to_string(), "Bearer token".to_string());
+                        h
+                    }),
                 }),
-            }),
-            scope: ConfigScope::User,
-        });
+                scope: ConfigScope::User,
+            },
+        );
 
-        configs.insert("http-server".to_string(), ScopedMcpServerConfig {
-            config: McpServerConfig::Http(McpHttpServerConfig {
-                url: "http://127.0.0.1:1/http".to_string(),
-                headers: None,
-            }),
-            scope: ConfigScope::Project,
-        });
+        configs.insert(
+            "http-server".to_string(),
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Http(McpHttpServerConfig {
+                    url: "http://127.0.0.1:1/http".to_string(),
+                    headers: None,
+                }),
+                scope: ConfigScope::Project,
+            },
+        );
 
         let results = manager.connect_all(configs).await;
         assert_eq!(results.len(), 2);

@@ -1,11 +1,13 @@
-use anyhow::{Context, Result};
 use super::pkce::*;
-use super::storage::{OAuthStoredTokens, store_tokens, delete_tokens};
 use super::profile::{
-    fetch_profile_info, fetch_and_store_user_roles, store_oauth_account_info,
-    OAuthProfileResponse,
+    fetch_and_store_user_roles, fetch_profile_info, store_oauth_account_info, OAuthProfileResponse,
 };
-use crate::config::global::{AccountInfo, save_global_config};
+use super::storage::{
+    delete_managed_api_key, delete_tokens, store_managed_api_key, store_tokens, OAuthStoredTokens,
+};
+use crate::config::global::{save_global_config, AccountInfo};
+use anyhow::{Context, Result};
+use tokio::io::AsyncBufReadExt;
 
 // ── OAuth constants matching the real Claude Code (src/constants/oauth.ts) ────
 
@@ -60,7 +62,10 @@ pub const CLAUDE_AI_OAUTH_SCOPES: &[&str] = &[
 pub fn all_oauth_scopes() -> Vec<&'static str> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
-    for &scope in CONSOLE_OAUTH_SCOPES.iter().chain(CLAUDE_AI_OAUTH_SCOPES.iter()) {
+    for &scope in CONSOLE_OAUTH_SCOPES
+        .iter()
+        .chain(CLAUDE_AI_OAUTH_SCOPES.iter())
+    {
         if seen.insert(scope) {
             result.push(scope);
         }
@@ -168,7 +173,10 @@ pub fn build_token_exchange_body(
 ///
 /// For Claude.ai subscribers, uses CLAUDE_AI_OAUTH_SCOPES (allows scope expansion).
 /// For Console users, uses the original scopes.
-pub fn build_token_refresh_body(refresh_token: &str, scopes: Option<&[String]>) -> serde_json::Value {
+pub fn build_token_refresh_body(
+    refresh_token: &str,
+    scopes: Option<&[String]>,
+) -> serde_json::Value {
     let scope_str = match scopes {
         Some(s) if !s.is_empty() => s.join(" "),
         _ => CLAUDE_AI_OAUTH_SCOPES.join(" "),
@@ -219,6 +227,35 @@ pub fn parse_callback_params(request_line: &str) -> Result<(String, String)> {
     Ok((code, state))
 }
 
+fn parse_manual_callback_input(input: &str) -> Result<(String, String)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("empty manual authorization input");
+    }
+
+    if let Ok(url) = url::Url::parse(trimmed) {
+        let code = url
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .map(|(_, v)| v.into_owned())
+            .context("manual callback URL missing code parameter")?;
+        let state = url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .context("manual callback URL missing state parameter")?;
+        return Ok((code, state));
+    }
+
+    if let Some((code, state)) = trimmed.split_once('#') {
+        if !code.is_empty() && !state.is_empty() {
+            return Ok((code.to_string(), state.to_string()));
+        }
+    }
+
+    anyhow::bail!("paste the full callback URL or code#state")
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Write all bytes to a tokio TcpStream, handling WouldBlock.
@@ -266,7 +303,10 @@ async fn exchange_code_for_tokens(
         anyhow::bail!("Token exchange failed ({}): {}", status, text);
     }
 
-    let data: serde_json::Value = resp.json().await.context("failed to parse token response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("failed to parse token response")?;
 
     let access_token = data["access_token"]
         .as_str()
@@ -287,12 +327,18 @@ async fn exchange_code_for_tokens(
         .collect();
 
     // Extract account info from token response (fallback when profile fetch fails)
-    let token_account = data["account"].as_object().map(|acc| {
-        TokenAccountInfo {
-            uuid: acc.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            email_address: acc.get("email_address").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            organization_uuid: data["organization"]["uuid"].as_str().map(|s| s.to_string()),
-        }
+    let token_account = data["account"].as_object().map(|acc| TokenAccountInfo {
+        uuid: acc
+            .get("uuid")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        email_address: acc
+            .get("email_address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        organization_uuid: data["organization"]["uuid"].as_str().map(|s| s.to_string()),
     });
 
     let tokens = OAuthStoredTokens {
@@ -322,7 +368,11 @@ struct TokenAccountInfo {
 async fn refresh_for_login(
     refresh_token: &str,
     scopes: &[String],
-) -> Result<(OAuthStoredTokens, Option<OAuthProfileResponse>, Option<TokenAccountInfo>)> {
+) -> Result<(
+    OAuthStoredTokens,
+    Option<OAuthProfileResponse>,
+    Option<TokenAccountInfo>,
+)> {
     let body = build_token_refresh_body(refresh_token, Some(scopes));
 
     let client = reqwest::Client::new();
@@ -363,12 +413,18 @@ async fn refresh_for_login(
     // Fetch profile info
     let profile_info = fetch_profile_info(&access_token).await;
 
-    let token_account = data["account"].as_object().map(|acc| {
-        TokenAccountInfo {
-            uuid: acc.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            email_address: acc.get("email_address").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            organization_uuid: data["organization"]["uuid"].as_str().map(|s| s.to_string()),
-        }
+    let token_account = data["account"].as_object().map(|acc| TokenAccountInfo {
+        uuid: acc
+            .get("uuid")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        email_address: acc
+            .get("email_address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        organization_uuid: data["organization"]["uuid"].as_str().map(|s| s.to_string()),
     });
 
     let tokens = OAuthStoredTokens {
@@ -450,11 +506,7 @@ async fn install_oauth_tokens(
         tracing::info!("Console login detected — creating API key");
         match create_and_store_api_key(&tokens.access_token).await {
             Ok(Some(key)) => {
-                // Store the API key in global config
-                save_global_config(|mut config| {
-                    config.primary_api_key = Some(key);
-                    config
-                }).ok();
+                store_managed_api_key(&key).await?;
             }
             Ok(None) => {
                 anyhow::bail!(
@@ -479,12 +531,16 @@ async fn perform_logout() {
         tracing::debug!("Failed to delete tokens during logout: {}", e);
     }
 
+    if let Err(e) = delete_managed_api_key().await {
+        tracing::debug!("Failed to delete managed API key during logout: {}", e);
+    }
+
     // Clear oauthAccount from global config (but preserve onboarding state)
     save_global_config(|mut config| {
         config.oauth_account = None;
-        config.primary_api_key = None;
         config
-    }).ok();
+    })
+    .ok();
 }
 
 /// Fetch and store the organization's first Claude Code token date.
@@ -518,7 +574,9 @@ async fn fetch_and_store_first_token_date(access_token: &str) -> Result<()> {
     }
 
     let data: serde_json::Value = resp.json().await?;
-    let first_token_date = data.get("first_token_date").cloned()
+    let first_token_date = data
+        .get("first_token_date")
+        .cloned()
         .unwrap_or(serde_json::Value::Null);
 
     // Validate date string if not null (matching TS validation)
@@ -531,10 +589,9 @@ async fn fetch_and_store_first_token_date(access_token: &str) -> Result<()> {
     }
 
     save_global_config(|mut config| {
-        config.extra.insert(
-            "claudeCodeFirstTokenDate".to_string(),
-            first_token_date,
-        );
+        config
+            .extra
+            .insert("claudeCodeFirstTokenDate".to_string(), first_token_date);
         config
     })?;
 
@@ -570,7 +627,8 @@ pub async fn login() -> Result<()> {
     login_with_options(LoginOptions {
         use_claude_ai: true,
         ..Default::default()
-    }).await
+    })
+    .await
 }
 
 /// Full login flow with all options.
@@ -630,46 +688,13 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
     println!("If the browser didn't open, visit: {}", manual_url);
     let _ = open::that(&auto_url);
 
-    // Wait for the callback request.
-    // Matches TS `AuthCodeListener` in `src/services/oauth/auth-code-listener.ts`.
-    let (stream, _) = listener.accept().await?;
+    println!("If automatic login does not complete, paste the full callback URL or `code#state` and press Enter.");
 
-    // Read the HTTP request — loop to handle spurious WouldBlock from tokio
-    let mut buf = vec![0u8; 4096];
-    let n = loop {
-        stream.readable().await?;
-        match stream.try_read(&mut buf) {
-            Ok(n) => break n,
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-            Err(e) => anyhow::bail!("failed to read callback request: {}", e),
-        }
-    };
-
-    if n == 0 {
-        anyhow::bail!("empty callback request from browser");
-    }
-
-    let request = String::from_utf8_lossy(&buf[..n]).to_string();
-
-    // Extract the first line (request line)
-    let request_line = request
-        .lines()
-        .next()
-        .context("empty HTTP request from callback")?;
-
-    // Parse code and state from the callback URL
-    let (code, received_state) =
-        parse_callback_params(request_line).context("failed to parse OAuth callback")?;
-
-    // Validate state parameter (CSRF protection)
-    if received_state != state {
-        let response = b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nInvalid state parameter";
-        write_all_to_stream(&stream, response).await;
-        anyhow::bail!("OAuth state mismatch: possible CSRF attack");
-    }
+    let (code, mut pending_stream) = await_authorization_code(&listener, &state).await?;
 
     // Exchange authorization code for tokens
-    let (mut tokens, token_account) = exchange_code_for_tokens(&code, &redirect_uri, &verifier, &state).await?;
+    let (mut tokens, token_account) =
+        exchange_code_for_tokens(&code, &redirect_uri, &verifier, &state).await?;
 
     // Fetch profile info (subscription type, rate limit tier, etc.)
     let profile_info = fetch_profile_info(&tokens.access_token).await;
@@ -682,15 +707,19 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
     } else {
         CONSOLE_SUCCESS_URL
     };
-    let response = format!(
-        "HTTP/1.1 302 Found\r\nLocation: {}\r\n\r\n",
-        success_url
-    );
-    write_all_to_stream(&stream, response.as_bytes()).await;
-    drop(stream);
+    if let Some(stream) = pending_stream.take() {
+        let response = format!("HTTP/1.1 302 Found\r\nLocation: {}\r\n\r\n", success_url);
+        write_all_to_stream(&stream, response.as_bytes()).await;
+        drop(stream);
+    }
 
     // Post-login setup: store account info, roles, API key
-    install_oauth_tokens(&tokens, profile_info.raw_profile.as_ref(), token_account.as_ref()).await?;
+    install_oauth_tokens(
+        &tokens,
+        profile_info.raw_profile.as_ref(),
+        token_account.as_ref(),
+    )
+    .await?;
 
     // Mark onboarding complete
     save_global_config(|mut config| {
@@ -698,10 +727,80 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
             config.has_completed_onboarding = Some(true);
         }
         config
-    }).ok();
+    })
+    .ok();
 
     println!("Login successful!");
     Ok(())
+}
+
+async fn await_authorization_code(
+    listener: &tokio::net::TcpListener,
+    expected_state: &str,
+) -> Result<(String, Option<tokio::net::TcpStream>)> {
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = accepted?;
+                let mut buf = vec![0u8; 4096];
+                let n = loop {
+                    stream.readable().await?;
+                    match stream.try_read(&mut buf) {
+                        Ok(n) => break n,
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(e) => anyhow::bail!("failed to read callback request: {}", e),
+                    }
+                };
+
+                if n == 0 {
+                    anyhow::bail!("empty callback request from browser");
+                }
+
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let request_line = request
+                    .lines()
+                    .next()
+                    .context("empty HTTP request from callback")?;
+
+                let (code, received_state) =
+                    parse_callback_params(request_line).context("failed to parse OAuth callback")?;
+
+                if received_state != expected_state {
+                    let response =
+                        b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nInvalid state parameter";
+                    write_all_to_stream(&stream, response).await;
+                    anyhow::bail!("OAuth state mismatch: possible CSRF attack");
+                }
+
+                return Ok((code, Some(stream)));
+            }
+            read = stdin.read_line(&mut line) => {
+                let read = read?;
+                if read == 0 {
+                    continue;
+                }
+
+                match parse_manual_callback_input(&line) {
+                    Ok((code, received_state)) => {
+                        if received_state != expected_state {
+                            eprintln!("Invalid state in pasted callback. Try again.");
+                            continue;
+                        }
+                        return Ok((code, None));
+                    }
+                    Err(err) => {
+                        eprintln!("Manual auth input error: {}.", err);
+                        continue;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Fast-path login from a refresh token env var (CI/CD).
@@ -715,7 +814,8 @@ async fn login_from_refresh_token(refresh_token: &str, _login_with_claude_ai: bo
              (e.g. \"user:inference\" or \"user:profile user:inference user:sessions:claude_code user:mcp_servers\")."
         ))?;
 
-    let scopes: Vec<String> = env_scopes.split_whitespace()
+    let scopes: Vec<String> = env_scopes
+        .split_whitespace()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
@@ -730,7 +830,8 @@ async fn login_from_refresh_token(refresh_token: &str, _login_with_claude_ai: bo
             config.has_completed_onboarding = Some(true);
         }
         config
-    }).ok();
+    })
+    .ok();
 
     println!("Login successful.");
     Ok(())
@@ -756,12 +857,28 @@ mod tests {
         });
 
         // Console flow uses platform.claude.com
-        assert!(url.starts_with(CONSOLE_AUTHORIZE_URL), "URL should start with Console URL, got: {}", url);
-        assert!(url.contains("code=true"), "URL must include code=true param");
-        assert!(url.contains(&format!("client_id={}", CLIENT_ID)), "URL must include client_id");
-        assert!(url.contains("response_type=code"), "URL must include response_type=code");
-        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback"),
-            "URL must include localhost redirect_uri, got: {}", url);
+        assert!(
+            url.starts_with(CONSOLE_AUTHORIZE_URL),
+            "URL should start with Console URL, got: {}",
+            url
+        );
+        assert!(
+            url.contains("code=true"),
+            "URL must include code=true param"
+        );
+        assert!(
+            url.contains(&format!("client_id={}", CLIENT_ID)),
+            "URL must include client_id"
+        );
+        assert!(
+            url.contains("response_type=code"),
+            "URL must include response_type=code"
+        );
+        assert!(
+            url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback"),
+            "URL must include localhost redirect_uri, got: {}",
+            url
+        );
         assert!(url.contains("code_challenge=test-challenge"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("state=test-state"));
@@ -781,7 +898,11 @@ mod tests {
         });
 
         // Claude.ai flow uses claude.com/cai
-        assert!(url.starts_with(CLAUDE_AI_AUTHORIZE_URL), "URL should start with Claude.ai URL, got: {}", url);
+        assert!(
+            url.starts_with(CLAUDE_AI_AUTHORIZE_URL),
+            "URL should start with Claude.ai URL, got: {}",
+            url
+        );
         assert!(url.contains("code=true"));
     }
 
@@ -800,8 +921,11 @@ mod tests {
 
         // Manual flow redirect URI should be the platform callback URL, not localhost
         let encoded_manual = urlencoding::encode(MANUAL_REDIRECT_URL);
-        assert!(url.contains(&format!("redirect_uri={}", encoded_manual)),
-            "Manual flow must use MANUAL_REDIRECT_URL, got: {}", url);
+        assert!(
+            url.contains(&format!("redirect_uri={}", encoded_manual)),
+            "Manual flow must use MANUAL_REDIRECT_URL, got: {}",
+            url
+        );
     }
 
     #[test]
@@ -818,17 +942,29 @@ mod tests {
         });
 
         let parsed = url::Url::parse(&url).unwrap();
-        let scope_param = parsed.query_pairs()
+        let scope_param = parsed
+            .query_pairs()
             .find(|(k, _)| k == "scope")
             .map(|(_, v)| v.to_string())
             .unwrap();
         let url_scopes: Vec<&str> = scope_param.split(' ').collect();
         let expected_scopes = all_oauth_scopes();
         for scope in &expected_scopes {
-            assert!(url_scopes.contains(scope), "URL must contain scope '{}', got scopes: {:?}", scope, url_scopes);
+            assert!(
+                url_scopes.contains(scope),
+                "URL must contain scope '{}', got scopes: {:?}",
+                scope,
+                url_scopes
+            );
         }
-        assert!(url_scopes.contains(&"org:create_api_key"), "Must contain org:create_api_key");
-        assert!(!url_scopes.contains(&"org:service_key_inference"), "Must NOT contain org:service_key_inference");
+        assert!(
+            url_scopes.contains(&"org:create_api_key"),
+            "Must contain org:create_api_key"
+        );
+        assert!(
+            !url_scopes.contains(&"org:service_key_inference"),
+            "Must NOT contain org:service_key_inference"
+        );
     }
 
     #[test]
@@ -845,8 +981,14 @@ mod tests {
         });
 
         assert!(url.contains("orgUUID=org-123"), "URL must contain orgUUID");
-        assert!(url.contains("login_hint=user%40example.com"), "URL must contain login_hint");
-        assert!(url.contains("login_method=sso"), "URL must contain login_method");
+        assert!(
+            url.contains("login_hint=user%40example.com"),
+            "URL must contain login_hint"
+        );
+        assert!(
+            url.contains("login_method=sso"),
+            "URL must contain login_method"
+        );
     }
 
     // ── Scope helpers ────────────────────────────────────────────────────
@@ -903,7 +1045,10 @@ mod tests {
         assert_eq!(body["refresh_token"], "rt_abc");
         assert_eq!(body["client_id"], CLIENT_ID);
         let scope = body["scope"].as_str().unwrap();
-        assert!(scope.contains("user:inference"), "Default refresh should use Claude AI scopes");
+        assert!(
+            scope.contains("user:inference"),
+            "Default refresh should use Claude AI scopes"
+        );
         assert!(scope.contains("user:profile"));
     }
 
@@ -957,11 +1102,23 @@ mod tests {
     #[test]
     fn test_constants_match_ts() {
         assert_eq!(CLIENT_ID, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
-        assert_eq!(CONSOLE_AUTHORIZE_URL, "https://platform.claude.com/oauth/authorize");
-        assert_eq!(CLAUDE_AI_AUTHORIZE_URL, "https://claude.com/cai/oauth/authorize");
+        assert_eq!(
+            CONSOLE_AUTHORIZE_URL,
+            "https://platform.claude.com/oauth/authorize"
+        );
+        assert_eq!(
+            CLAUDE_AI_AUTHORIZE_URL,
+            "https://claude.com/cai/oauth/authorize"
+        );
         assert_eq!(TOKEN_URL, "https://platform.claude.com/v1/oauth/token");
-        assert_eq!(API_KEY_URL, "https://api.anthropic.com/api/oauth/claude_cli/create_api_key");
-        assert_eq!(MANUAL_REDIRECT_URL, "https://platform.claude.com/oauth/code/callback");
+        assert_eq!(
+            API_KEY_URL,
+            "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
+        );
+        assert_eq!(
+            MANUAL_REDIRECT_URL,
+            "https://platform.claude.com/oauth/code/callback"
+        );
         assert_eq!(OAUTH_BETA_HEADER, "oauth-2025-04-20");
     }
 

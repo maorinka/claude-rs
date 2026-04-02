@@ -231,9 +231,6 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("my-server"));
+        assert!(result.data["error"].as_str().unwrap().contains("my-server"));
     }
 }

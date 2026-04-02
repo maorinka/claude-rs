@@ -131,7 +131,11 @@ fn test_discover_skills_in_temp_directory() {
         .filter(|s| matches!(&s.source, SkillSource::Directory(_)))
         .collect();
 
-    assert!(project_skills.len() >= 2, "Expected at least 2 project skills, got {}", project_skills.len());
+    assert!(
+        project_skills.len() >= 2,
+        "Expected at least 2 project skills, got {}",
+        project_skills.len()
+    );
 
     let greet = project_skills.iter().find(|s| s.name == "greet");
     assert!(greet.is_some(), "Should find 'greet' skill");
@@ -161,7 +165,11 @@ fn test_discover_skills_skips_non_directories() {
     fs::create_dir_all(&skills_dir).unwrap();
 
     // A plain file in skills/ (not a subdirectory) should be ignored
-    fs::write(skills_dir.join("not-a-skill.md"), "---\nname: bad\n---\nbody").unwrap();
+    fs::write(
+        skills_dir.join("not-a-skill.md"),
+        "---\nname: bad\n---\nbody",
+    )
+    .unwrap();
 
     let skills = discover_skills(tmp.path());
     let project_skills: Vec<_> = skills
@@ -170,7 +178,9 @@ fn test_discover_skills_skips_non_directories() {
         .collect();
     // Should not pick up the plain file
     assert!(
-        !project_skills.iter().any(|s| s.name == "bad" || s.name == "not-a-skill"),
+        !project_skills
+            .iter()
+            .any(|s| s.name == "bad" || s.name == "not-a-skill"),
         "Plain files in skills/ should not be loaded"
     );
 }
@@ -222,10 +232,7 @@ fn test_match_skill_partial_name_no_match() {
 #[test]
 fn test_match_skill_fuzzy_with_when_to_use() {
     let skill = test_skill("deploy", Some("When deploying the application"));
-    assert_eq!(
-        match_skill("please deploy the app", &skill),
-        Some("")
-    );
+    assert_eq!(match_skill("please deploy the app", &skill), Some(""));
     // Substring of a word should NOT match
     assert_eq!(match_skill("undeployable", &skill), None);
 }

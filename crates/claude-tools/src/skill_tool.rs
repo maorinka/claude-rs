@@ -127,10 +127,9 @@ Important:
         // Try exact match first, then try with plugin prefix matching
         let skill = store.get(skill_name).or_else(|| {
             // Try matching by the last segment for qualified names like "plugin:skill"
-            store.values().find(|s| {
-                s.name.ends_with(&format!(":{}", skill_name))
-                    || s.name == skill_name
-            })
+            store
+                .values()
+                .find(|s| s.name.ends_with(&format!(":{}", skill_name)) || s.name == skill_name)
         });
 
         match skill {
@@ -207,16 +206,17 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("not found"));
+        assert!(result.data["error"].as_str().unwrap().contains("not found"));
     }
 
     #[tokio::test]
     async fn skill_tool_found_and_invoked() {
         clear_skills();
-        register_skill("commit", "Create a git commit", "Run git add and git commit with a good message.");
+        register_skill(
+            "commit",
+            "Create a git commit",
+            "Run git add and git commit with a good message.",
+        );
 
         let tool = SkillTool;
         let input = json!({ "skill": "commit", "args": "-m 'Fix bug'" });
@@ -226,10 +226,7 @@ mod tests {
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(!result.is_error);
         assert_eq!(result.data["skill"].as_str().unwrap(), "commit");
-        assert!(result.data["content"]
-            .as_str()
-            .unwrap()
-            .contains("git add"));
+        assert!(result.data["content"].as_str().unwrap().contains("git add"));
         assert!(result.data["content"]
             .as_str()
             .unwrap()
@@ -241,7 +238,11 @@ mod tests {
     #[tokio::test]
     async fn skill_tool_invoked_without_args() {
         clear_skills();
-        register_skill("review-pr", "Review a PR", "Review the pull request for code quality.");
+        register_skill(
+            "review-pr",
+            "Review a PR",
+            "Review the pull request for code quality.",
+        );
 
         let tool = SkillTool;
         let input = json!({ "skill": "review-pr" });

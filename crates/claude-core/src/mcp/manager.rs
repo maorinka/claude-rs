@@ -101,10 +101,7 @@ impl McpManager {
             McpServerConfig::Stdio(stdio_config) => {
                 match McpClient::connect_stdio(name, stdio_config).await {
                     Ok(client) => {
-                        let capabilities = client
-                            .capabilities()
-                            .cloned()
-                            .unwrap_or_default();
+                        let capabilities = client.capabilities().cloned().unwrap_or_default();
                         let server_info = client.server_info().cloned();
                         let instructions = client.instructions().map(|s| s.to_string());
 
@@ -154,10 +151,7 @@ impl McpManager {
             McpServerConfig::Sse(sse_config) => {
                 match McpClient::connect_sse(name, sse_config).await {
                     Ok(client) => {
-                        let capabilities = client
-                            .capabilities()
-                            .cloned()
-                            .unwrap_or_default();
+                        let capabilities = client.capabilities().cloned().unwrap_or_default();
                         let server_info = client.server_info().cloned();
                         let instructions = client.instructions().map(|s| s.to_string());
 
@@ -207,10 +201,7 @@ impl McpManager {
             McpServerConfig::Http(http_config) => {
                 match McpClient::connect_http(name, http_config).await {
                     Ok(client) => {
-                        let capabilities = client
-                            .capabilities()
-                            .cloned()
-                            .unwrap_or_default();
+                        let capabilities = client.capabilities().cloned().unwrap_or_default();
                         let server_info = client.server_info().cloned();
                         let instructions = client.instructions().map(|s| s.to_string());
 
@@ -270,8 +261,7 @@ impl McpManager {
             match client.list_tools().await {
                 Ok(tools) => {
                     for tool in tools {
-                        let normalized_name =
-                            build_mcp_tool_name(server_name, &tool.name);
+                        let normalized_name = build_mcp_tool_name(server_name, &tool.name);
 
                         // Truncate description if too long
                         let description = tool.description.map(|d| {
@@ -368,11 +358,7 @@ impl McpManager {
     }
 
     /// Read a resource by URI. Tries to determine the server from registered resources.
-    pub async fn read_resource(
-        &self,
-        server_name: &str,
-        uri: &str,
-    ) -> Result<Value> {
+    pub async fn read_resource(&self, server_name: &str, uri: &str) -> Result<Value> {
         let clients = self.clients.read().await;
         let client = clients
             .get(server_name)
@@ -450,10 +436,7 @@ impl McpManager {
     }
 
     /// Try to resolve an MCP tool name to its server and original name.
-    pub async fn resolve_tool(
-        &self,
-        normalized_name: &str,
-    ) -> Option<(String, String)> {
+    pub async fn resolve_tool(&self, normalized_name: &str) -> Option<(String, String)> {
         self.tool_map.read().await.get(normalized_name).cloned()
     }
 }
@@ -484,9 +467,7 @@ mod tests {
             .call_tool("mcp__unknown__tool", serde_json::json!({}))
             .await;
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("Unknown MCP tool")
-        );
+        assert!(result.unwrap_err().to_string().contains("Unknown MCP tool"));
     }
 
     #[tokio::test]
@@ -499,11 +480,6 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_tool_empty() {
         let manager = McpManager::new();
-        assert!(
-            manager
-                .resolve_tool("mcp__server__tool")
-                .await
-                .is_none()
-        );
+        assert!(manager.resolve_tool("mcp__server__tool").await.is_none());
     }
 }

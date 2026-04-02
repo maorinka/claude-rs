@@ -216,10 +216,8 @@ impl Widget for OnboardingWidget<'_> {
         let progress_bar: String = (0..progress_width)
             .map(|i| if i < filled { '#' } else { '-' })
             .collect();
-        let progress_line = Line::from(Span::styled(
-            progress_bar,
-            Style::default().fg(Color::Cyan),
-        ));
+        let progress_line =
+            Line::from(Span::styled(progress_bar, Style::default().fg(Color::Cyan)));
         buf.set_line(
             inner.x + 1,
             inner.y,
@@ -241,9 +239,7 @@ impl Widget for OnboardingWidget<'_> {
             while !remaining.is_empty() && row < inner.y + inner.height {
                 let chunk = if remaining.len() > max_width {
                     // Find last space within max_width
-                    let split_at = remaining[..max_width]
-                        .rfind(' ')
-                        .unwrap_or(max_width);
+                    let split_at = remaining[..max_width].rfind(' ').unwrap_or(max_width);
                     let (chunk, rest) = remaining.split_at(split_at);
                     remaining = rest.trim_start();
                     chunk
@@ -375,7 +371,11 @@ mod tests {
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
         // Should be empty
-        let content: String = buf.content().iter().map(|c| c.symbol().to_string()).collect();
+        let content: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
         assert!(
             content.trim().is_empty(),
             "Completed wizard should not render"

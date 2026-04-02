@@ -13,10 +13,7 @@ use crate::plugins::types::{
 ///
 /// This mirrors the TypeScript plugin loader that walks marketplace
 /// install directories.
-pub fn load_plugins_from_dir(
-    dir: &Path,
-    settings: &PluginSettings,
-) -> PluginLoadResult {
+pub fn load_plugins_from_dir(dir: &Path, settings: &PluginSettings) -> PluginLoadResult {
     let mut result = PluginLoadResult::default();
 
     let entries = match std::fs::read_dir(dir) {
@@ -131,10 +128,7 @@ fn load_plugin_commands(plugin_dir: &Path) -> Vec<PluginCommand> {
     if let Ok(entries) = std::fs::read_dir(&commands_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let is_md = path
-                .extension()
-                .map(|e| e == "md")
-                .unwrap_or(false);
+            let is_md = path.extension().map(|e| e == "md").unwrap_or(false);
 
             if !is_md {
                 continue;

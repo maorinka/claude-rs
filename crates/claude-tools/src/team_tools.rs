@@ -96,7 +96,10 @@ impl ToolExecutor for TeamCreateTool {
             vec![AgentSpec::new("default-agent", &team_name)]
         };
 
-        match GLOBAL_COORDINATOR.create_team(team_name.clone(), agent_specs).await {
+        match GLOBAL_COORDINATOR
+            .create_team(team_name.clone(), agent_specs)
+            .await
+        {
             Ok(team) => {
                 info!(team_id = %team.id, team_name = %team_name, "TeamCreateTool: created team");
                 let agents_json: Vec<Value> = team
@@ -265,5 +268,4 @@ mod tests {
         assert!(schema["properties"]["team_id"].is_object());
         assert!(schema["properties"]["team_name"].is_object());
     }
-
 }

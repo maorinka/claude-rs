@@ -112,8 +112,7 @@ impl Widget for &AskUserDialog {
         let mut row = inner.y + 1;
         if !self.options.is_empty() {
             let opts = self.options.join("  |  ");
-            let opt_line =
-                Line::from(Span::styled(opts, Style::default().fg(Color::DarkGray)));
+            let opt_line = Line::from(Span::styled(opts, Style::default().fg(Color::DarkGray)));
             buf.set_line(inner.x + 1, row, &opt_line, inner.width.saturating_sub(2));
             row += 1;
         }
@@ -126,7 +125,12 @@ impl Widget for &AskUserDialog {
                 Span::raw(self.input.clone()),
             ]);
             let input_y = inner.y + inner.height - 1;
-            buf.set_line(inner.x + 1, input_y, &input_line, inner.width.saturating_sub(2));
+            buf.set_line(
+                inner.x + 1,
+                input_y,
+                &input_line,
+                inner.width.saturating_sub(2),
+            );
         }
     }
 }

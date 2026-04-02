@@ -10,12 +10,15 @@ pub struct VerifyPlanExecutionTool;
 
 #[async_trait]
 impl ToolExecutor for VerifyPlanExecutionTool {
-    fn name(&self) -> &str { "VerifyPlanExecution" }
+    fn name(&self) -> &str {
+        "VerifyPlanExecution"
+    }
 
     fn description(&self) -> String {
         "Verify that a plan was executed correctly by checking each planned step \
          against what was actually done. Call this after completing a multi-step \
-         plan to ensure nothing was missed.".to_string()
+         plan to ensure nothing was missed."
+            .to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -42,13 +45,28 @@ impl ToolExecutor for VerifyPlanExecutionTool {
         })
     }
 
-    fn is_read_only(&self, _input: &Value) -> bool { true }
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
 
-    async fn call(&self, input: &Value, _ctx: &ToolUseContext, _cancel: CancellationToken, _progress: Option<ProgressSender>) -> Result<ToolResultData> {
+    async fn call(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData> {
         let steps = match input.get("planSteps").and_then(|v| v.as_array()) {
             Some(s) => s,
-            None => return Ok(ToolResultData { data: json!({ "error": "missing required field: planSteps (must be an array)" }), is_error: true }),
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": "missing required field: planSteps (must be an array)" }),
+                    is_error: true,
+                })
+            }
         };
         let summary = input.get("summary").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -61,8 +79,14 @@ impl ToolExecutor for VerifyPlanExecutionTool {
 
         for step in steps {
             let id = step.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-            let description = step.get("description").and_then(|v| v.as_str()).unwrap_or("");
-            let status = step.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let description = step
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let status = step
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let evidence = step.get("evidence").and_then(|v| v.as_str()).unwrap_or("");
             match status {
                 "completed" => completed += 1,
@@ -98,7 +122,10 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext { working_directory: PathBuf::from("/tmp"), read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())) }
+        ToolUseContext {
+            working_directory: PathBuf::from("/tmp"),
+            read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+        }
     }
 
     #[tokio::test]
@@ -119,12 +146,20 @@ mod tests {
     #[tokio::test]
     async fn verify_partial_completion() {
         let tool = VerifyPlanExecutionTool;
-        let result = tool.call(&json!({
-            "planSteps": [
-                { "id": "1", "description": "Create file", "status": "completed" },
-                { "id": "2", "description": "Add tests", "status": "failed" },
-            ]
-        }), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(
+                &json!({
+                    "planSteps": [
+                        { "id": "1", "description": "Create file", "status": "completed" },
+                        { "id": "2", "description": "Add tests", "status": "failed" },
+                    ]
+                }),
+                &make_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
         assert!(!result.is_error);
         assert!(!result.data["verified"].as_bool().unwrap());
     }
@@ -132,7 +167,10 @@ mod tests {
     #[tokio::test]
     async fn verify_missing_steps() {
         let tool = VerifyPlanExecutionTool;
-        let result = tool.call(&json!({}), &make_ctx(), CancellationToken::new(), None).await.unwrap();
+        let result = tool
+            .call(&json!({}), &make_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
         assert!(result.is_error);
     }
 }

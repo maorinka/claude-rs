@@ -116,12 +116,12 @@ impl LspManager {
             .clone();
 
         // Start the server
-        let mut client = LspClient::start(&config.language_id, &config.command, &config.args).await?;
+        let mut client =
+            LspClient::start(&config.language_id, &config.command, &config.args).await?;
 
         // Initialize with workspace root
         let root_uri = self.root_uri.clone().unwrap_or_else(|| {
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
             format!("file://{}", cwd.display())
         });
 
@@ -200,9 +200,7 @@ impl LspManager {
             // We always send didChange here since we use full document sync and
             // the server should handle receiving didChange without a prior didOpen
             // gracefully (or we can track open state more precisely in the future).
-            client
-                .text_document_did_change(&uri, content)
-                .await
+            client.text_document_did_change(&uri, content).await
         } else {
             Ok(())
         }
@@ -325,12 +323,7 @@ mod tests {
     #[test]
     fn test_language_id_for_path() {
         let mut manager = LspManager::new();
-        manager.register_server(
-            "rust",
-            "rust-analyzer",
-            &[],
-            &[".rs".to_string()],
-        );
+        manager.register_server("rust", "rust-analyzer", &[], &[".rs".to_string()]);
         manager.register_server(
             "typescript",
             "typescript-language-server",
@@ -350,10 +343,7 @@ mod tests {
             manager.language_id_for_path("/project/src/component.tsx"),
             Some("typescript")
         );
-        assert_eq!(
-            manager.language_id_for_path("/project/readme.md"),
-            None
-        );
+        assert_eq!(manager.language_id_for_path("/project/readme.md"), None);
     }
 
     #[test]
@@ -361,12 +351,7 @@ mod tests {
         let mut manager = LspManager::new();
         assert_eq!(manager.registered_count(), 0);
 
-        manager.register_server(
-            "python",
-            "pylsp",
-            &[],
-            &[".py".to_string()],
-        );
+        manager.register_server("python", "pylsp", &[], &[".py".to_string()]);
         assert_eq!(manager.registered_count(), 1);
         assert_eq!(manager.registered_languages(), vec!["python".to_string()]);
     }
@@ -404,12 +389,7 @@ mod tests {
     #[tokio::test]
     async fn test_unregistered_extension_returns_empty() {
         let mut manager = LspManager::new();
-        manager.register_server(
-            "rust",
-            "rust-analyzer",
-            &[],
-            &[".rs".to_string()],
-        );
+        manager.register_server("rust", "rust-analyzer", &[], &[".rs".to_string()]);
 
         // .py is not registered, should return empty
         let diagnostics = manager.get_diagnostics("/some/file.py").await.unwrap();
@@ -432,11 +412,7 @@ mod tests {
     async fn test_send_request_no_server() {
         let manager = LspManager::new();
         let result = manager
-            .send_request(
-                "/some/file.rs",
-                "textDocument/hover",
-                serde_json::json!({}),
-            )
+            .send_request("/some/file.rs", "textDocument/hover", serde_json::json!({}))
             .await
             .unwrap();
         assert!(result.is_none());

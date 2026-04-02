@@ -1,5 +1,5 @@
-use claude_tools::web_fetch::WebFetchTool;
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
+use claude_tools::web_fetch::WebFetchTool;
 use serde_json::json;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +26,10 @@ async fn test_fetch_nonexistent_url_returns_error_gracefully() {
         .expect("call should not panic");
 
     // Should not panic; is_error should be true since connection will be refused
-    assert!(result.is_error, "expected is_error=true for unreachable URL");
+    assert!(
+        result.is_error,
+        "expected is_error=true for unreachable URL"
+    );
 }
 
 #[tokio::test]

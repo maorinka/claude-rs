@@ -1,6 +1,6 @@
-use claude_core::query::state::*;
-use claude_core::query::engine::*;
 use claude_core::api::client::{ApiClient, ApiConfig, AuthMethod};
+use claude_core::query::engine::*;
+use claude_core::query::state::*;
 use claude_core::types::message::StopReason;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

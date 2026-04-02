@@ -72,8 +72,20 @@ mod tests {
     fn test_player_load_and_replay() {
         // Record two interactions and save.
         let mut recorder = make_recorder();
-        recorder.record("POST", "https://api.example.com/a", &json!({"a":1}), 200, "resp-a");
-        recorder.record("DELETE", "https://api.example.com/b", &json!({"b":2}), 204, "resp-b");
+        recorder.record(
+            "POST",
+            "https://api.example.com/a",
+            &json!({"a":1}),
+            200,
+            "resp-a",
+        );
+        recorder.record(
+            "DELETE",
+            "https://api.example.com/b",
+            &json!({"b":2}),
+            204,
+            "resp-b",
+        );
 
         let tmp = NamedTempFile::new().unwrap();
         recorder.save(tmp.path()).unwrap();
@@ -98,7 +110,13 @@ mod tests {
     #[test]
     fn test_player_reset() {
         let mut recorder = make_recorder();
-        recorder.record("GET", "https://api.example.com/ping", &json!(null), 200, "pong");
+        recorder.record(
+            "GET",
+            "https://api.example.com/ping",
+            &json!(null),
+            200,
+            "pong",
+        );
 
         let tmp = NamedTempFile::new().unwrap();
         recorder.save(tmp.path()).unwrap();
@@ -129,9 +147,11 @@ mod tests {
     fn test_full_record_save_load_replay_cycle() {
         let method = "POST";
         let url = "https://api.anthropic.com/v1/messages";
-        let req_body = json!({"model": "claude-opus-4-5", "messages": [{"role": "user", "content": "hi"}]});
+        let req_body =
+            json!({"model": "claude-opus-4-5", "messages": [{"role": "user", "content": "hi"}]});
         let resp_status: u16 = 200;
-        let resp_body = r#"{"id":"msg_01","type":"message","content":[{"type":"text","text":"Hello!"}]}"#;
+        let resp_body =
+            r#"{"id":"msg_01","type":"message","content":[{"type":"text","text":"Hello!"}]}"#;
 
         // --- record ---
         let mut recorder = make_recorder();

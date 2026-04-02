@@ -134,8 +134,12 @@ impl ToolExecutor for TaskCreateTool {
         })
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { false }
-    fn is_read_only(&self, _input: &Value) -> bool { false }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        false
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        false
+    }
 
     async fn call(
         &self,
@@ -195,8 +199,12 @@ impl ToolExecutor for TaskListTool {
         })
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
-    fn is_read_only(&self, _input: &Value) -> bool { true }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(
         &self,
@@ -209,7 +217,10 @@ impl ToolExecutor for TaskListTool {
         let mut tasks: Vec<Value> = store.values().map(|t| t.to_json()).collect();
         // Sort by created_at for stable ordering
         tasks.sort_by(|a, b| {
-            a["createdAt"].as_str().unwrap_or("").cmp(b["createdAt"].as_str().unwrap_or(""))
+            a["createdAt"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["createdAt"].as_str().unwrap_or(""))
         });
 
         Ok(ToolResultData {
@@ -258,8 +269,12 @@ impl ToolExecutor for TaskUpdateTool {
         })
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { false }
-    fn is_read_only(&self, _input: &Value) -> bool { false }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        false
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        false
+    }
 
     async fn call(
         &self,
@@ -324,8 +339,12 @@ impl ToolExecutor for TaskGetTool {
         })
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
-    fn is_read_only(&self, _input: &Value) -> bool { true }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(
         &self,
@@ -378,8 +397,12 @@ impl ToolExecutor for TaskStopTool {
         })
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { false }
-    fn is_read_only(&self, _input: &Value) -> bool { false }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        false
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        false
+    }
 
     async fn call(
         &self,
@@ -414,7 +437,10 @@ impl ToolExecutor for TaskStopTool {
                 if let Some(msg) = kill_msg {
                     data["killMessage"] = json!(msg);
                 }
-                Ok(ToolResultData { data, is_error: false })
+                Ok(ToolResultData {
+                    data,
+                    is_error: false,
+                })
             }
             None => Ok(error_result(format!("task not found: {}", task_id))),
         }
@@ -431,9 +457,7 @@ fn kill_process(pid: u32) -> Option<String> {
             .args(["-9", &pid.to_string()])
             .output();
         match output {
-            Ok(out) if out.status.success() => {
-                Some(format!("Sent SIGKILL to PID {}", pid))
-            }
+            Ok(out) if out.status.success() => Some(format!("Sent SIGKILL to PID {}", pid)),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 Some(format!("kill -9 {} failed: {}", pid, stderr.trim()))
@@ -477,8 +501,12 @@ impl ToolExecutor for TaskOutputTool {
         })
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool { true }
-    fn is_read_only(&self, _input: &Value) -> bool { true }
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(
         &self,

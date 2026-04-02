@@ -73,7 +73,13 @@ fn test_spinner_start_stop() {
 fn test_spinner_mode_labels() {
     assert_eq!(SpinnerMode::Thinking.label(), "Thinking");
     assert_eq!(SpinnerMode::Waiting.label(), "Waiting");
-    assert_eq!(SpinnerMode::Tool { name: "Bash".into() }.label(), "Bash");
+    assert_eq!(
+        SpinnerMode::Tool {
+            name: "Bash".into()
+        }
+        .label(),
+        "Bash"
+    );
     assert_eq!(SpinnerMode::Stopped.label(), "Ready");
 }
 

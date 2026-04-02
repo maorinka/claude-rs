@@ -1,11 +1,11 @@
+use anyhow::Result;
+use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use anyhow::Result;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use serde_json::Value;
 
-use crate::types::events::{ToolResultData};
+use crate::types::events::ToolResultData;
 
 /// Info about a tool to execute
 #[derive(Clone, Debug)]
@@ -25,7 +25,16 @@ pub struct CompletedTool {
 }
 
 /// Callback type for executing a single tool
-pub type ToolCallFn = Arc<dyn Fn(String, String, Value, CancellationToken) -> tokio::task::JoinHandle<Result<ToolResultData>> + Send + Sync>;
+pub type ToolCallFn = Arc<
+    dyn Fn(
+            String,
+            String,
+            Value,
+            CancellationToken,
+        ) -> tokio::task::JoinHandle<Result<ToolResultData>>
+        + Send
+        + Sync,
+>;
 
 /// Executes tools with concurrency control.
 /// Concurrent-safe tools run in parallel.
@@ -88,7 +97,11 @@ impl StreamingToolExecutor {
                 if tool.is_concurrent {
                     // Start this and any subsequent concurrent tools
                     self.spawn_tool(tool);
-                    while self.pending_exclusive.front().map_or(false, |t| t.is_concurrent) {
+                    while self
+                        .pending_exclusive
+                        .front()
+                        .map_or(false, |t| t.is_concurrent)
+                    {
                         let t = self.pending_exclusive.pop_front().unwrap();
                         self.spawn_tool(t);
                     }
@@ -144,7 +157,9 @@ impl StreamingToolExecutor {
 
         self.executing.spawn(async move {
             let handle = call_fn(name.clone(), id.clone(), input, cancel);
-            let result = handle.await.unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e)));
+            let result = handle
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e)));
             CompletedTool { id, name, result }
         });
     }

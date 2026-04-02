@@ -148,7 +148,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("does-not-exist");
         // Should return empty vec, not an error
-        let result = MarketplaceClient::list_installed(&nonexistent).await.unwrap();
+        let result = MarketplaceClient::list_installed(&nonexistent)
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 

@@ -13,8 +13,7 @@ fn test_agent_tool_schema_has_team_name() {
         "Agent tool schema should have team_name property"
     );
     assert_eq!(
-        schema["properties"]["team_name"]["type"],
-        "string",
+        schema["properties"]["team_name"]["type"], "string",
         "team_name should be a string"
     );
 }
@@ -31,8 +30,7 @@ fn test_agent_tool_schema_has_name() {
         "Agent tool schema should have name property"
     );
     assert_eq!(
-        schema["properties"]["name"]["type"],
-        "string",
+        schema["properties"]["name"]["type"], "string",
         "name should be a string"
     );
 }
@@ -70,13 +68,18 @@ fn test_agent_tool_has_alias() {
     let reg = build_default_registry();
     // The Agent tool has "agent" as an alias
     let by_alias = reg.get("agent");
-    assert!(by_alias.is_some(), "Agent tool should be findable by alias 'agent'");
+    assert!(
+        by_alias.is_some(),
+        "Agent tool should be findable by alias 'agent'"
+    );
 }
 
 #[test]
 fn test_team_create_tool_schema() {
     let reg = build_default_registry();
-    let tool = reg.get("TeamCreate").expect("TeamCreate should be registered");
+    let tool = reg
+        .get("TeamCreate")
+        .expect("TeamCreate should be registered");
     let schema = tool.input_schema();
 
     assert_eq!(schema["type"], "object");
@@ -90,7 +93,9 @@ fn test_team_create_tool_schema() {
 #[test]
 fn test_team_delete_tool_schema() {
     let reg = build_default_registry();
-    let tool = reg.get("TeamDelete").expect("TeamDelete should be registered");
+    let tool = reg
+        .get("TeamDelete")
+        .expect("TeamDelete should be registered");
     let schema = tool.input_schema();
 
     assert_eq!(schema["type"], "object");

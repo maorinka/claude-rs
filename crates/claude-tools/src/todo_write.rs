@@ -286,7 +286,10 @@ mod tests {
 
         let new_todos = result.data["newTodos"].as_array().unwrap();
         assert_eq!(new_todos.len(), 2);
-        assert_eq!(new_todos[0]["content"].as_str().unwrap(), "Fix authentication bug");
+        assert_eq!(
+            new_todos[0]["content"].as_str().unwrap(),
+            "Fix authentication bug"
+        );
         assert_eq!(new_todos[0]["status"].as_str().unwrap(), "in_progress");
         assert_eq!(new_todos[1]["content"].as_str().unwrap(), "Write tests");
 
@@ -340,9 +343,9 @@ mod tests {
         // we just wrote (may also contain items from parallel tests, so
         // we check presence rather than exact count).
         let old_todos = result2.data["oldTodos"].as_array().unwrap();
-        let has_first = old_todos.iter().any(|t| {
-            t["content"].as_str() == Some("First task")
-        });
+        let has_first = old_todos
+            .iter()
+            .any(|t| t["content"].as_str() == Some("First task"));
         assert!(has_first, "oldTodos should contain 'First task'");
     }
 }

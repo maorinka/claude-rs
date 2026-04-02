@@ -57,9 +57,8 @@ async fn test_channel_flow_returns_answer() {
     let cancel_clone = cancel.clone();
 
     // Spawn the tool call — it will block waiting on the channel.
-    let handle = tokio::spawn(async move {
-        tool.call(&input, &make_ctx(), cancel_clone, None).await
-    });
+    let handle =
+        tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
     // Give the spawned task time to register the sender.
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -68,8 +67,15 @@ async fn test_channel_flow_returns_answer() {
     let sent = send_user_answer("Blue".to_string());
     assert!(sent, "send_user_answer should find a waiting sender");
 
-    let result = handle.await.expect("task should not panic").expect("call should succeed");
-    assert!(!result.is_error, "result should not be an error: {:?}", result.data);
+    let result = handle
+        .await
+        .expect("task should not panic")
+        .expect("call should succeed");
+    assert!(
+        !result.is_error,
+        "result should not be an error: {:?}",
+        result.data
+    );
     assert_eq!(
         result.data["answer"].as_str().unwrap_or(""),
         "Blue",
@@ -90,15 +96,18 @@ async fn test_channel_flow_with_options() {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move {
-        tool.call(&input, &make_ctx(), cancel_clone, None).await
-    });
+    let handle =
+        tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     send_user_answer("2".to_string());
 
     let result = handle.await.unwrap().unwrap();
-    assert!(!result.is_error, "result should not be an error: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "result should not be an error: {:?}",
+        result.data
+    );
     assert_eq!(result.data["answer"].as_str().unwrap_or(""), "2");
 }
 
@@ -112,9 +121,8 @@ async fn test_cancellation_returns_error() {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move {
-        tool.call(&input, &make_ctx(), cancel_clone, None).await
-    });
+    let handle =
+        tokio::spawn(async move { tool.call(&input, &make_ctx(), cancel_clone, None).await });
 
     // Give the task time to register its sender.
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -126,7 +134,15 @@ async fn test_cancellation_returns_error() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let result = handle.await.unwrap().unwrap();
-    assert!(result.is_error, "cancelled call should be an error: {:?}", result.data);
+    assert!(
+        result.is_error,
+        "cancelled call should be an error: {:?}",
+        result.data
+    );
     let err = result.data["error"].as_str().unwrap_or("");
-    assert!(err.contains("cancel"), "error should mention cancellation, got: {}", err);
+    assert!(
+        err.contains("cancel"),
+        "error should mention cancellation, got: {}",
+        err
+    );
 }

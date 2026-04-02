@@ -39,7 +39,9 @@ fn find_rg() -> RgBinary {
     ];
 
     for candidate in &native_candidates {
-        if candidate.is_empty() { continue; }
+        if candidate.is_empty() {
+            continue;
+        }
         let p = PathBuf::from(candidate);
         if p.is_file() {
             return RgBinary::Native(p);
@@ -70,9 +72,7 @@ fn find_rg() -> RgBinary {
 }
 
 /// VCS directories that ripgrep should exclude.
-const VCS_GLOBS: &[&str] = &[
-    "!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl",
-];
+const VCS_GLOBS: &[&str] = &["!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl"];
 
 /// Maximum column width passed to ripgrep.
 const MAX_COLUMNS: usize = 500;
@@ -205,10 +205,7 @@ impl ToolExecutor for GrepTool {
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_HEAD_LIMIT);
 
-        let offset = input["offset"]
-            .as_u64()
-            .map(|v| v as usize)
-            .unwrap_or(0);
+        let offset = input["offset"].as_u64().map(|v| v as usize).unwrap_or(0);
 
         // Build the rg command
         let mut cmd = match find_rg() {

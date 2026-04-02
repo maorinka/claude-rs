@@ -88,7 +88,10 @@ mod tests {
         // Now our session should have 0 events.
         let session_id = format!("session-{id}");
         let count_after = AnalyticsTracker::session_event_count(&session_id);
-        assert_eq!(count_after, 0, "flush should clear our session's stored events");
+        assert_eq!(
+            count_after, 0,
+            "flush should clear our session's stored events"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::types::*;
-use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
 static EVENTS: Lazy<Mutex<Vec<AnalyticsEvent>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
@@ -34,7 +34,10 @@ impl AnalyticsTracker {
     }
 
     pub fn flush() -> Vec<AnalyticsEvent> {
-        EVENTS.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default()
+        EVENTS
+            .lock()
+            .map(|mut v| std::mem::take(&mut *v))
+            .unwrap_or_default()
     }
 
     pub fn event_count() -> usize {

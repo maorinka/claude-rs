@@ -10,7 +10,9 @@ fn test_code_verifier_length() {
 #[test]
 fn test_code_verifier_is_base64url() {
     let v = generate_code_verifier();
-    assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    assert!(v
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
 }
 
 #[test]
@@ -59,7 +61,9 @@ async fn test_store_and_load_tokens() {
             "scopes": ["user:inference"]
         }
     });
-    tokio::fs::write(&cred_path, serde_json::to_string(&data).unwrap()).await.unwrap();
+    tokio::fs::write(&cred_path, serde_json::to_string(&data).unwrap())
+        .await
+        .unwrap();
 
     // Read back and verify the JSON was written correctly
     let content = tokio::fs::read_to_string(&cred_path).await.unwrap();

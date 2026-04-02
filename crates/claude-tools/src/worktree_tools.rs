@@ -319,10 +319,7 @@ This tool ONLY operates on worktrees created by EnterWorktree in this session. I
                 .await?;
 
             let status_text = String::from_utf8_lossy(&status_output.stdout);
-            let changed_files: usize = status_text
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .count();
+            let changed_files: usize = status_text.lines().filter(|l| !l.trim().is_empty()).count();
 
             if changed_files > 0 {
                 return Ok(ToolResultData {
@@ -456,10 +453,7 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("must be"));
+        assert!(result.data["error"].as_str().unwrap().contains("must be"));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Account info stored in global config after OAuth login.
 ///
@@ -75,10 +75,8 @@ pub fn load_global_config() -> Result<GlobalConfig> {
     if !path.exists() {
         return Ok(GlobalConfig::default());
     }
-    let content = std::fs::read_to_string(&path)
-        .context("failed to read global config")?;
-    let config: GlobalConfig = serde_json::from_str(&content)
-        .unwrap_or_default();
+    let content = std::fs::read_to_string(&path).context("failed to read global config")?;
+    let config: GlobalConfig = serde_json::from_str(&content).unwrap_or_default();
     Ok(config)
 }
 
@@ -99,16 +97,15 @@ where
     };
 
     let updated = updater(current);
-    let json = serde_json::to_string_pretty(&updated)
-        .context("failed to serialize global config")?;
+    let json =
+        serde_json::to_string_pretty(&updated).context("failed to serialize global config")?;
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
 
-    std::fs::write(&path, json)
-        .context("failed to write global config")?;
+    std::fs::write(&path, json).context("failed to write global config")?;
 
     Ok(())
 }
@@ -173,7 +170,10 @@ mod tests {
         // Round-trip: unknown fields must survive serialization
         let reserialized = serde_json::to_string(&config).unwrap();
         assert!(reserialized.contains("numStartups"));
-        assert!(reserialized.contains("\"theme\":\"dark\"") || reserialized.contains("\"theme\": \"dark\""));
+        assert!(
+            reserialized.contains("\"theme\":\"dark\"")
+                || reserialized.contains("\"theme\": \"dark\"")
+        );
         assert!(reserialized.contains("userID"));
     }
 

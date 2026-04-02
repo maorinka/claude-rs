@@ -191,7 +191,12 @@ pub fn build_request_body(
 
     // context_management: mirrors TS getAPIContextManagement().
     // For adaptive thinking, send clear_thinking strategy keeping all turns.
-    if supports_thinking && matches!(config.thinking, ThinkingConfig::Adaptive | ThinkingConfig::Enabled { .. }) {
+    if supports_thinking
+        && matches!(
+            config.thinking,
+            ThinkingConfig::Adaptive | ThinkingConfig::Enabled { .. }
+        )
+    {
         body["context_management"] = json!({
             "edits": [
                 {
@@ -269,48 +274,76 @@ impl ApiClient {
             }
         }
 
-        let (header_name, header_value) = self.auth.to_header();
+        for has_retried_after_401 in [false, true] {
+            let auth = match (&self.auth, has_retried_after_401) {
+                (AuthMethod::OAuthToken(_), true) => {
+                    crate::auth::resolve::resolve_stored_oauth_token(false)
+                        .await?
+                        .map(AuthMethod::OAuthToken)
+                        .unwrap_or_else(|| self.auth.clone())
+                }
+                _ => self.auth.clone(),
+            };
+            let (header_name, header_value) = auth.to_header();
 
-        let mut request = self
-            .http
-            .post(&url)
-            .header("anthropic-version", &self.config.api_version)
-            .header("content-type", "application/json")
-            .header("accept", "application/json")
-            .header("user-agent", "claude-cli/2.1.88 (external, cli)")
-            .header("x-stainless-lang", "js")
-            .header("x-stainless-package-version", "2.2.0")
-            .header("x-stainless-runtime", "node")
-            .header("x-stainless-retry-count", "0")
-            .header(header_name, header_value);
+            let mut request = self
+                .http
+                .post(&url)
+                .header("anthropic-version", &self.config.api_version)
+                .header("content-type", "application/json")
+                .header("accept", "application/json")
+                .header("user-agent", "claude-cli/2.1.88 (external, cli)")
+                .header("x-stainless-lang", "js")
+                .header("x-stainless-package-version", "2.2.0")
+                .header("x-stainless-runtime", "node")
+                .header("x-stainless-retry-count", "0")
+                .header(header_name, header_value);
 
-        // Build anthropic-beta header (matches TS betas.ts constants)
-        let mut betas = vec![
-            "claude-code-20250219",
-            "interleaved-thinking-2025-05-14",
-            "context-management-2025-06-27",
-            "prompt-caching-scope-2026-01-05",
-            "effort-2025-11-24",
-            "web-search-2025-03-05",
-            "token-efficient-tools-2026-03-28",
-        ];
-        if self.auth.is_oauth() {
-            betas.push("oauth-2025-04-20");
-        }
-        request = request
-            .header("anthropic-beta", betas.join(","))
-            .header("anthropic-dangerous-direct-browser-access", "true")
-            .header("x-app", "cli");
+            let mut betas = vec![
+                "claude-code-20250219",
+                "interleaved-thinking-2025-05-14",
+                "context-management-2025-06-27",
+                "prompt-caching-scope-2026-01-05",
+                "effort-2025-11-24",
+                "web-search-2025-03-05",
+                "token-efficient-tools-2026-03-28",
+            ];
+            if auth.is_oauth() {
+                betas.push("oauth-2025-04-20");
+            }
+            request = request
+                .header("anthropic-beta", betas.join(","))
+                .header("anthropic-dangerous-direct-browser-access", "true")
+                .header("x-app", "cli");
 
-        let response = request.json(&body).send().await?;
+            let response = request.json(&body).send().await?;
 
-        if !response.status().is_success() {
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
             let status = response.status().as_u16();
+            if status == 401 && !has_retried_after_401 {
+                if let AuthMethod::OAuthToken(failed_token) = &auth {
+                    if crate::auth::resolve::handle_oauth_401_error(failed_token).await? {
+                        continue;
+                    }
+                }
+            }
+
             let err_body = response.text().await.unwrap_or_default();
-            tracing::error!("API error {}: {}", status, &err_body[..err_body.len().min(500)]);
-            anyhow::bail!("API error {}: {}", status, &err_body[..err_body.len().min(500)]);
+            tracing::error!(
+                "API error {}: {}",
+                status,
+                &err_body[..err_body.len().min(500)]
+            );
+            anyhow::bail!(
+                "API error {}: {}",
+                status,
+                &err_body[..err_body.len().min(500)]
+            );
         }
 
-        Ok(response)
+        anyhow::bail!("unreachable API retry state")
     }
 }
