@@ -709,8 +709,17 @@ impl<'a> Widget for MessageListWidget<'a> {
 
         let end = total_lines.min(scroll + visible_height);
         let visible = &all_lines[scroll..end];
+
+        // Pin content to bottom: if fewer lines than area, offset from top
+        // so messages hug the prompt bar (matching TS behavior).
+        let top_offset = if visible.len() < visible_height {
+            (visible_height - visible.len()) as u16
+        } else {
+            0
+        };
+
         for (i, line) in visible.iter().enumerate() {
-            let y = area.y + i as u16;
+            let y = area.y + top_offset + i as u16;
             if y >= area.y + area.height {
                 break;
             }
