@@ -50,13 +50,9 @@ pub async fn build_system_prompt(
 
     // 1. Base system prompt
     parts.push(base_system_prompt());
-
-    // 2. Model identity (matches TS: "You are powered by the model named X")
-    let marketing_name = model_marketing_name(model);
-    parts.push(format!(
-        "You are powered by the model named {}. The exact model ID is {}.",
-        marketing_name, model
-    ));
+    // Model identity is injected dynamically in build_request_body
+    // so it always reflects the current model (even after /model switch).
+    let _ = model; // used by callers, identity injected at API layer
 
     // 2. Tool descriptions
     if !tool_descriptions.is_empty() {

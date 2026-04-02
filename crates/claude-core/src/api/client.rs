@@ -144,6 +144,18 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     std::cmp::min(default_tokens, CAPPED_DEFAULT_MAX_TOKENS)
 }
 
+/// Map model ID to marketing name (matches TS getPublicModelDisplayName).
+fn model_marketing_name(model: &str) -> &str {
+    if model.contains("opus-4-6") { "Opus 4.6" }
+    else if model.contains("opus-4-5") { "Opus 4.5" }
+    else if model.contains("opus-4-1") { "Opus 4.1" }
+    else if model.contains("sonnet-4-6") { "Sonnet 4.6" }
+    else if model.contains("sonnet-4-5") { "Sonnet 4.5" }
+    else if model.contains("haiku-4-5") { "Haiku 4.5" }
+    else if model.contains("claude-3-7-sonnet") { "Sonnet 3.7" }
+    else { model }
+}
+
 // ── Tool definition (for the request body) ───────────────────────────────────
 
 /// A tool definition sent to the API.
@@ -207,9 +219,18 @@ pub fn build_request_body(
         };
     }
 
-    // System prompt (only include if non-empty).
+    // System prompt — prepend model identity so it's always current.
     if !system.is_empty() {
-        body["system"] = serde_json::to_value(system).unwrap_or(Value::Null);
+        let marketing = model_marketing_name(&config.model);
+        let model_identity = ContentBlock::Text {
+            text: format!(
+                "You are powered by the model named {}. The exact model ID is {}.",
+                marketing, config.model
+            ),
+        };
+        let mut full_system = vec![model_identity];
+        full_system.extend_from_slice(system);
+        body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
     }
 
     // Tools (only include if non-empty).
