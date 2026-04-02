@@ -342,6 +342,20 @@ impl ApiClient {
         _event_tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<Response> {
         let url = format!("{}/v1/messages", self.config.base_url);
+        // When using OAuth, prepend the billing attribution header to the system
+        // prompt so the API applies the correct rate-limit tier.
+        let system_with_attribution;
+        let system = if self.auth.is_oauth() {
+            let mut blocks = vec![ContentBlock::Text {
+                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
+                    .to_string(),
+            }];
+            blocks.extend_from_slice(system);
+            system_with_attribution = blocks;
+            &system_with_attribution
+        } else {
+            system
+        };
         let body = build_request_body(&self.config, messages, system, tools);
         let minimal_transport = minimal_transport_enabled();
 
