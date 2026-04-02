@@ -108,12 +108,47 @@ pub fn light_theme() -> Theme {
 }
 
 pub fn detect_theme() -> Theme {
-    // Check COLORFGBG env var, default to dark
-    if let Ok(val) = std::env::var("COLORFGBG") {
-        if val.ends_with(";15") || val.ends_with(";7") {
-            return light_theme();
+    // 1. Explicit override
+    if let Ok(val) = std::env::var("CLAUDE_THEME") {
+        match val.to_lowercase().as_str() {
+            "light" => return light_theme(),
+            "dark" => return dark_theme(),
+            _ => {}
         }
     }
+
+    // 2. Check COLORFGBG (set by many terminals: xterm, iTerm2, etc.)
+    //    Format: "fg;bg" — high bg value (>=8) means light background
+    if let Ok(val) = std::env::var("COLORFGBG") {
+        if let Some(bg) = val.rsplit(';').next().and_then(|s| s.parse::<u32>().ok()) {
+            if bg >= 8 {
+                return light_theme();
+            } else {
+                return dark_theme();
+            }
+        }
+    }
+
+    // 3. Check macOS dark mode via "defaults read"
+    if cfg!(target_os = "macos") {
+        if let Ok(output) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.trim().eq_ignore_ascii_case("dark") {
+                return dark_theme();
+            }
+            // If command succeeds but doesn't say "Dark", it's light
+            if output.status.success() {
+                return light_theme();
+            }
+            // If command fails (key doesn't exist), macOS is in light mode
+            // but most terminals use dark backgrounds anyway
+        }
+    }
+
+    // 4. Default to dark (most developer terminals are dark)
     dark_theme()
 }
 

@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthStr;
 
 use crate::ansi::parse_ansi;
 use crate::links;
@@ -168,37 +169,108 @@ impl<'a> MessageListWidget<'a> {
     }
 }
 
-/// Word-wrap a line of text to fit within `max_width` columns.
+/// Word-wrap a plain text string to fit within `max_width` display columns.
+/// Uses `textwrap` for proper word-boundary wrapping with Unicode width awareness.
 fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
-    if max_width == 0 || text.len() <= max_width {
+    if max_width == 0 {
+        return vec![text.to_string()];
+    }
+    let width = UnicodeWidthStr::width(text);
+    if width <= max_width {
         return vec![text.to_string()];
     }
 
-    let mut lines = Vec::new();
-    let mut current = String::new();
+    let options = textwrap::Options::new(max_width)
+        .break_words(true)
+        .word_splitter(textwrap::WordSplitter::NoHyphenation);
+    let wrapped = textwrap::wrap(text, &options);
+    wrapped.into_iter().map(|cow| cow.into_owned()).collect()
+}
 
-    for word in text.split_inclusive(' ') {
-        if current.len() + word.len() > max_width && !current.is_empty() {
-            lines.push(current.trim_end().to_string());
-            current = String::new();
+/// Wrap a `Line` of styled `Span`s so that no output line exceeds `max_width`
+/// display columns. Continuation lines are prefixed with `indent` spaces.
+/// Each span's style is preserved across the wrap boundary.
+fn wrap_spans(line: &Line<'static>, max_width: usize, indent: usize) -> Vec<Line<'static>> {
+    if max_width == 0 {
+        return vec![line.clone()];
+    }
+
+    // Fast path: check if the line already fits.
+    let total_width: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+    if total_width <= max_width {
+        return vec![line.clone()];
+    }
+
+    // Flatten all spans into a list of (char, style) preserving styled regions,
+    // then re-wrap at word boundaries.
+    let mut chars_styles: Vec<(char, Style)> = Vec::new();
+    for span in &line.spans {
+        for ch in span.content.chars() {
+            chars_styles.push((ch, span.style));
         }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current.trim_end().to_string());
     }
 
-    if lines.is_empty() {
-        // Fallback: hard-wrap if no word boundaries
-        let mut pos = 0;
-        while pos < text.len() {
-            let end = (pos + max_width).min(text.len());
-            lines.push(text[pos..end].to_string());
-            pos = end;
+    // Build the plain text to wrap.
+    let plain: String = chars_styles.iter().map(|(c, _)| *c).collect();
+    let wrapped_lines = word_wrap(&plain, max_width);
+
+    let mut result = Vec::new();
+    let mut char_offset = 0;
+    for (line_idx, wrapped_text) in wrapped_lines.iter().enumerate() {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // Add indent for continuation lines.
+        if line_idx > 0 && indent > 0 {
+            spans.push(Span::raw(" ".repeat(indent)));
         }
+
+        let mut current_text = String::new();
+        let mut current_style: Option<Style> = None;
+
+        for ch in wrapped_text.chars() {
+            if char_offset < chars_styles.len() {
+                let (_, style) = chars_styles[char_offset];
+                if current_style.map_or(false, |s| s != style) {
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(current_text.clone(), current_style.unwrap()));
+                        current_text.clear();
+                    }
+                }
+                current_style = Some(style);
+                current_text.push(ch);
+                char_offset += 1;
+            }
+        }
+        if !current_text.is_empty() {
+            spans.push(Span::styled(
+                current_text,
+                current_style.unwrap_or_default(),
+            ));
+        }
+
+        result.push(Line::from(spans));
     }
 
-    lines
+    if result.is_empty() {
+        vec![line.clone()]
+    } else {
+        result
+    }
+}
+
+/// Wrap a sequence of rendered markdown `Line`s to fit within `max_width`.
+/// The `indent` is added to continuation lines (e.g., 2 for assistant text).
+fn wrap_md_lines(
+    md_lines: Vec<Line<'static>>,
+    max_width: usize,
+    indent: usize,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for line in &md_lines {
+        let wrapped = wrap_spans(line, max_width, indent);
+        out.extend(wrapped);
+    }
+    out
 }
 
 fn looks_like_diff(text: &str) -> bool {
@@ -210,62 +282,78 @@ fn contains_ansi(text: &str) -> bool {
     text.contains('\x1b')
 }
 
-fn render_tool_output_line(line_text: &str, theme: &Theme) -> Line<'static> {
-    // Tool result lines are prefixed with the ⎿ indicator (dim)
-    // Content is also dimmed like the original
+/// Width of the tool result prefix "  ⎿  " in display columns.
+const TOOL_RESULT_PREFIX_WIDTH: usize = 5;
+
+fn render_tool_output_lines(line_text: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    // Tool result lines are prefixed with the ⎿ indicator (dim).
+    // Content wraps within (width - prefix_width).
+    let content_width = width.saturating_sub(TOOL_RESULT_PREFIX_WIDTH);
+    let dim_style = Style::default()
+        .fg(theme.inactive)
+        .add_modifier(Modifier::DIM);
+    let prefix_span = Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style);
+    let cont_prefix = Span::styled("     ".to_string(), dim_style); // 5 spaces for continuation
+
     if contains_ansi(line_text) {
-        let mut spans = vec![Span::styled(
-            TOOL_RESULT_PREFIX.to_string(),
-            Style::default()
-                .fg(theme.inactive)
-                .add_modifier(Modifier::DIM),
-        )];
+        let mut spans = vec![prefix_span];
         spans.extend(parse_ansi(line_text));
-        Line::from(spans)
+        // ANSI lines are already formatted; just return as-is.
+        vec![Line::from(spans)]
     } else {
         let paths = links::find_file_paths(line_text);
-        if paths.is_empty() {
-            Line::from(Span::styled(
-                format!("{}{}", TOOL_RESULT_PREFIX, line_text),
-                Style::default()
-                    .fg(theme.inactive)
-                    .add_modifier(Modifier::DIM),
-            ))
-        } else {
-            let mut spans: Vec<Span<'static>> = vec![Span::styled(
-                TOOL_RESULT_PREFIX.to_string(),
-                Style::default()
-                    .fg(theme.inactive)
-                    .add_modifier(Modifier::DIM),
-            )];
-            let mut last_end = 0;
-            for (start, end) in &paths {
-                if *start > last_end {
-                    spans.push(Span::styled(
-                        line_text[last_end..*start].to_string(),
-                        Style::default()
-                            .fg(theme.inactive)
-                            .add_modifier(Modifier::DIM),
-                    ));
+        // Word-wrap the text content first.
+        let wrapped = word_wrap(line_text, content_width.max(10));
+        let mut result = Vec::new();
+        for (i, wrapped_line) in wrapped.iter().enumerate() {
+            let pfx = if i == 0 {
+                prefix_span.clone()
+            } else {
+                cont_prefix.clone()
+            };
+
+            if paths.is_empty() {
+                result.push(Line::from(vec![
+                    pfx,
+                    Span::styled(wrapped_line.clone(), dim_style),
+                ]));
+            } else {
+                // Re-check paths within this wrapped segment.
+                let seg_paths = links::find_file_paths(wrapped_line);
+                if seg_paths.is_empty() {
+                    result.push(Line::from(vec![
+                        pfx,
+                        Span::styled(wrapped_line.clone(), dim_style),
+                    ]));
+                } else {
+                    let mut spans: Vec<Span<'static>> = vec![pfx];
+                    let mut last_end = 0;
+                    for (start, end) in &seg_paths {
+                        if *start > last_end {
+                            spans.push(Span::styled(
+                                wrapped_line[last_end..*start].to_string(),
+                                dim_style,
+                            ));
+                        }
+                        spans.push(Span::styled(
+                            wrapped_line[*start..*end].to_string(),
+                            Style::default()
+                                .fg(Color::Rgb(0, 204, 204))
+                                .add_modifier(Modifier::UNDERLINED),
+                        ));
+                        last_end = *end;
+                    }
+                    if last_end < wrapped_line.len() {
+                        spans.push(Span::styled(
+                            wrapped_line[last_end..].to_string(),
+                            dim_style,
+                        ));
+                    }
+                    result.push(Line::from(spans));
                 }
-                spans.push(Span::styled(
-                    line_text[*start..*end].to_string(),
-                    Style::default()
-                        .fg(Color::Rgb(0, 204, 204)) // Bright cyan for links
-                        .add_modifier(Modifier::UNDERLINED),
-                ));
-                last_end = *end;
             }
-            if last_end < line_text.len() {
-                spans.push(Span::styled(
-                    line_text[last_end..].to_string(),
-                    Style::default()
-                        .fg(theme.inactive)
-                        .add_modifier(Modifier::DIM),
-                ));
-            }
-            Line::from(spans)
         }
+        result
     }
 }
 
@@ -366,12 +454,14 @@ fn render_message(
             // backgroundColor=userMessageBackground filling the full width.
             lines.push(Line::from(""));
             let content_width = width as usize;
+            // Wrap at (width - 2) to leave 1 col padding on left, 1 spare
+            let wrap_at = content_width.saturating_sub(2).max(1);
             for line in text.lines() {
-                // Word-wrap long lines
-                for wrapped in word_wrap(line, content_width.saturating_sub(2)) {
-                    // Pad to full width so background fills the entire line
+                for wrapped in word_wrap(line, wrap_at) {
+                    // Pad to full width so background fills the entire row.
                     let display = format!(" {}", wrapped);
-                    let pad = content_width.saturating_sub(display.len());
+                    let display_w = UnicodeWidthStr::width(display.as_str());
+                    let pad = content_width.saturating_sub(display_w);
                     lines.push(Line::from(vec![Span::styled(
                         format!("{}{}", display, " ".repeat(pad)),
                         Style::default().bg(theme.user_message_bg),
@@ -380,14 +470,19 @@ fn render_message(
             }
         }
         MessageEntry::Assistant { text } => {
-            // Original: marginTop=1 (blank line), then BLACK_CIRCLE in
-            // minWidth=2 followed by markdown content.
-            // The dot is in the 'text' color (white on dark).
+            // Original TS: marginTop=1 (blank line), then BLACK_CIRCLE in
+            // minWidth=2 followed by markdown content. The circle prefix is 2
+            // columns wide ("⏺ "), so content wraps at (width - 2).
             lines.push(Line::from(""));
 
+            let prefix_width: usize = 2; // "⏺ " = 2 display columns
+            let wrap_width = (width as usize).saturating_sub(prefix_width).max(1);
+
             let md_lines = render_markdown(text);
-            let wrap_width = (width as usize).saturating_sub(2); // account for "  " prefix
-            for (i, md_line) in md_lines.iter().enumerate() {
+            // Wrap all markdown lines to fit within the content area.
+            let wrapped_md = wrap_md_lines(md_lines, wrap_width, prefix_width);
+
+            for (i, md_line) in wrapped_md.iter().enumerate() {
                 let prefix = if i == 0 {
                     Span::styled(
                         format!("{} ", BLACK_CIRCLE),
@@ -397,24 +492,9 @@ fn render_message(
                     Span::raw("  ".to_string())
                 };
 
-                // Check if the line content is too long and needs wrapping
-                let line_text: String = md_line.spans.iter().map(|s| s.content.as_ref()).collect();
-                if line_text.len() > wrap_width && md_line.spans.len() == 1 {
-                    // Simple single-span line: word wrap it
-                    for (j, wrapped) in word_wrap(&line_text, wrap_width).iter().enumerate() {
-                        let pfx = if j == 0 {
-                            prefix.clone()
-                        } else {
-                            Span::raw("  ".to_string())
-                        };
-                        let style = md_line.spans.first().map(|s| s.style).unwrap_or_default();
-                        lines.push(Line::from(vec![pfx, Span::styled(wrapped.clone(), style)]));
-                    }
-                } else {
-                    let mut spans = vec![prefix];
-                    spans.extend(md_line.spans.clone());
-                    lines.push(Line::from(spans));
-                }
+                let mut spans = vec![prefix];
+                spans.extend(md_line.spans.clone());
+                lines.push(Line::from(spans));
             }
         }
         MessageEntry::ToolUse {
@@ -424,55 +504,92 @@ fn render_message(
             // Original: colored circle + bold tool name + (summary)
             // Circle color: yellow/orange while executing (shown before result arrives)
             let circle_color = Color::Rgb(215, 119, 87); // Claude orange for in-progress
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{} ", BLACK_CIRCLE),
-                    Style::default().fg(circle_color),
-                ),
-                Span::styled(
-                    name.clone(),
-                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                ),
-                if input_summary.is_empty() {
-                    Span::raw("")
-                } else {
+            let prefix_width: usize = 2; // "⏺ "
+            let content_width = (width as usize).saturating_sub(prefix_width).max(1);
+
+            let summary_text = if input_summary.is_empty() {
+                name.clone()
+            } else {
+                format!("{} ({})", name, input_summary)
+            };
+
+            // Wrap the summary if it's too long.
+            let wrapped = word_wrap(&summary_text, content_width);
+            for (i, wline) in wrapped.iter().enumerate() {
+                let pfx = if i == 0 {
                     Span::styled(
-                        format!(" ({})", input_summary),
-                        Style::default().fg(theme.inactive),
+                        format!("{} ", BLACK_CIRCLE),
+                        Style::default().fg(circle_color),
                     )
-                },
-            ]));
+                } else {
+                    Span::raw("  ".to_string())
+                };
+                // The first wrapped line has the bold name; continuation is inactive.
+                if i == 0 {
+                    // Split into name part and rest.
+                    if wline.len() > name.len() && wline.starts_with(name.as_str()) {
+                        lines.push(Line::from(vec![
+                            pfx,
+                            Span::styled(
+                                name.clone(),
+                                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                wline[name.len()..].to_string(),
+                                Style::default().fg(theme.inactive),
+                            ),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            pfx,
+                            Span::styled(
+                                wline.clone(),
+                                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
+                    }
+                } else {
+                    lines.push(Line::from(vec![
+                        pfx,
+                        Span::styled(wline.clone(), Style::default().fg(theme.inactive)),
+                    ]));
+                }
+            }
         }
         MessageEntry::ToolResult {
             name: _,
             output,
             is_error,
         } => {
+            let w = width as usize;
             // Tool results show with "  ⎿  " prefix.
             // The ToolUse entry above already has the colored circle.
             if *is_error {
-                // Error: show error indicator with ⎿ prefix
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        TOOL_RESULT_PREFIX.to_string(),
-                        Style::default()
-                            .fg(theme.inactive)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(
-                        output.lines().next().unwrap_or("Error").to_string(),
-                        Style::default().fg(theme.error),
-                    ),
-                ]));
-                // Show remaining error lines
-                for line in output.lines().skip(1).take(5) {
-                    lines.push(Line::from(Span::styled(
-                        format!("{}{}", TOOL_RESULT_PREFIX, line),
-                        Style::default().fg(theme.error),
-                    )));
+                // Error: show error indicator with ⎿ prefix, word-wrapped.
+                let error_width = w.saturating_sub(TOOL_RESULT_PREFIX_WIDTH).max(10);
+                let dim_style = Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM);
+                let prefix_span = Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style);
+                let cont_prefix = Span::styled("     ".to_string(), dim_style);
+
+                for (line_idx, err_line) in output.lines().take(6).enumerate() {
+                    let wrapped = word_wrap(err_line, error_width);
+                    for (j, wl) in wrapped.iter().enumerate() {
+                        let pfx = if line_idx == 0 && j == 0 {
+                            prefix_span.clone()
+                        } else {
+                            cont_prefix.clone()
+                        };
+                        lines.push(Line::from(vec![
+                            pfx,
+                            Span::styled(wl.clone(), Style::default().fg(theme.error)),
+                        ]));
+                    }
                 }
             } else if looks_like_diff(output) {
-                let diff_lines = diff_view::diff_to_lines(output, width.saturating_sub(6));
+                let diff_lines =
+                    diff_view::diff_to_lines(output, width.saturating_sub(TOOL_RESULT_PREFIX_WIDTH as u16));
                 for dl in diff_lines {
                     let mut spans = vec![Span::styled(
                         TOOL_RESULT_PREFIX.to_string(),
@@ -486,7 +603,7 @@ fn render_message(
             } else {
                 let max_preview_lines = 6;
                 for line in output.lines().take(max_preview_lines) {
-                    lines.push(render_tool_output_line(line, theme));
+                    lines.extend(render_tool_output_lines(line, w, theme));
                 }
                 let output_line_count = output.lines().count();
                 if output_line_count > max_preview_lines {
@@ -515,16 +632,19 @@ fn render_message(
                         .add_modifier(Modifier::DIM | Modifier::ITALIC),
                 )]));
                 // Content indented by 2 (paddingLeft=2 in original)
+                let think_width = (width as usize).saturating_sub(2).max(1);
                 for line in text.lines() {
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            line.to_string(),
-                            Style::default()
-                                .fg(theme.thinking)
-                                .add_modifier(Modifier::DIM),
-                        ),
-                    ]));
+                    for wrapped in word_wrap(line, think_width) {
+                        lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                wrapped,
+                                Style::default()
+                                    .fg(theme.thinking)
+                                    .add_modifier(Modifier::DIM),
+                            ),
+                        ]));
+                    }
                 }
             } else {
                 lines.push(Line::from(vec![
@@ -544,12 +664,15 @@ fn render_message(
             }
         }
         MessageEntry::System { text } => {
-            // System messages: plain text in inactive/muted color, split on newlines
+            // System messages: plain text in inactive/muted color, word-wrapped.
+            let sys_width = (width as usize).max(1);
             for line_text in text.split('\n') {
-                lines.push(Line::from(vec![Span::styled(
-                    line_text.to_string(),
-                    Style::default().fg(theme.inactive),
-                )]));
+                for wrapped in word_wrap(line_text, sys_width) {
+                    lines.push(Line::from(vec![Span::styled(
+                        wrapped,
+                        Style::default().fg(theme.inactive),
+                    )]));
+                }
             }
         }
     }
@@ -697,5 +820,134 @@ mod tests {
         let text: String = lines.iter().map(|l| l.to_string()).collect();
         assert!(text.contains("Thinking"));
         assert!(text.contains("let me think about this"));
+    }
+
+    #[test]
+    fn word_wrap_short_text_stays_single_line() {
+        let result = word_wrap("hello world", 80);
+        assert_eq!(result, vec!["hello world"]);
+    }
+
+    #[test]
+    fn word_wrap_long_text_wraps_at_boundary() {
+        // 30 cols: "This is a long sentence that" wraps
+        let result = word_wrap("This is a long sentence that should wrap at word boundaries", 30);
+        assert!(result.len() >= 2);
+        for line in &result {
+            assert!(
+                UnicodeWidthStr::width(line.as_str()) <= 30,
+                "Line '{}' exceeds 30 cols (got {})",
+                line,
+                UnicodeWidthStr::width(line.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn assistant_message_wraps_at_width() {
+        let theme = crate::theme::dark_theme();
+        let long_text = "This is a very long assistant message that should definitely wrap when the terminal width is narrow, like 40 columns wide.";
+        let lines = render_message(
+            &MessageEntry::Assistant {
+                text: long_text.to_string(),
+            },
+            40,
+            false,
+            &theme,
+        );
+        // Skip blank line at index 0; all content lines should fit in 40 cols.
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            let text = line.to_string();
+            let w = UnicodeWidthStr::width(text.as_str());
+            assert!(
+                w <= 40,
+                "Assistant line {} '{}' exceeds 40 cols (got {})",
+                i, text, w
+            );
+        }
+    }
+
+    #[test]
+    fn user_message_wraps_at_width() {
+        let theme = crate::theme::dark_theme();
+        let long_text = "Please explain what this project does in detail with lots of examples and code snippets showing usage.";
+        let lines = render_message(
+            &MessageEntry::User {
+                text: long_text.to_string(),
+            },
+            50,
+            false,
+            &theme,
+        );
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            let text = line.to_string();
+            let w = UnicodeWidthStr::width(text.as_str());
+            assert!(
+                w <= 50,
+                "User line {} '{}' exceeds 50 cols (got {})",
+                i, text, w
+            );
+        }
+    }
+
+    #[test]
+    fn tool_result_wraps_at_width() {
+        let theme = crate::theme::dark_theme();
+        let long_output = "This is a very long tool output line that contains a lot of text and should definitely wrap properly within the terminal.";
+        let lines = render_message(
+            &MessageEntry::ToolResult {
+                name: "Read".to_string(),
+                output: long_output.to_string(),
+                is_error: false,
+            },
+            50,
+            false,
+            &theme,
+        );
+        for (i, line) in lines.iter().enumerate() {
+            let text = line.to_string();
+            let w = UnicodeWidthStr::width(text.as_str());
+            assert!(
+                w <= 50,
+                "Tool result line {} '{}' exceeds 50 cols (got {})",
+                i, text, w
+            );
+        }
+    }
+
+    #[test]
+    fn system_message_wraps_at_width() {
+        let theme = crate::theme::dark_theme();
+        let long_text = "A system notification that is very long and needs to be wrapped properly when displayed in a narrow terminal window.";
+        let lines = render_message(
+            &MessageEntry::System {
+                text: long_text.to_string(),
+            },
+            40,
+            false,
+            &theme,
+        );
+        for (i, line) in lines.iter().enumerate() {
+            let text = line.to_string();
+            let w = UnicodeWidthStr::width(text.as_str());
+            assert!(
+                w <= 40,
+                "System line {} '{}' exceeds 40 cols (got {})",
+                i, text, w
+            );
+        }
+    }
+
+    #[test]
+    fn wrap_spans_preserves_style() {
+        let styled_line = Line::from(vec![
+            Span::styled("Hello ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("world this is a long text that needs wrapping"),
+        ]);
+        let result = wrap_spans(&styled_line, 20, 0);
+        assert!(result.len() >= 2, "Expected wrapping, got {} lines", result.len());
+        // First line's first span should be bold
+        assert!(result[0].spans[0].style.add_modifier == Modifier::BOLD
+                || result[0].spans.iter().any(|s| s.style.add_modifier == Modifier::BOLD));
     }
 }
