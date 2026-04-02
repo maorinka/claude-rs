@@ -283,7 +283,7 @@ async fn main() -> Result<()> {
         .map(|t| (t.name().to_string(), format!("Tool: {}", t.name())))
         .collect();
     let system_prompt_values =
-        claude_core::context::system_prompt::build_system_prompt(&project_root, &tool_descriptions)
+        claude_core::context::system_prompt::build_system_prompt(&project_root, &tool_descriptions, &model)
             .await?;
 
     // Convert Vec<Value> to Vec<ContentBlock> for the engine

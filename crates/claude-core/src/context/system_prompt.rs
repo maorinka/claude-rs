@@ -44,11 +44,19 @@ const MEMORY_INSTRUCTION_PROMPT: &str =
 pub async fn build_system_prompt(
     project_root: &Path,
     tool_descriptions: &[(String, String)], // (name, description)
+    model: &str,
 ) -> Result<Vec<Value>> {
     let mut parts: Vec<String> = Vec::new();
 
     // 1. Base system prompt
     parts.push(base_system_prompt());
+
+    // 2. Model identity (matches TS: "You are powered by the model named X")
+    let marketing_name = model_marketing_name(model);
+    parts.push(format!(
+        "You are powered by the model named {}. The exact model ID is {}.",
+        marketing_name, model
+    ));
 
     // 2. Tool descriptions
     if !tool_descriptions.is_empty() {
@@ -88,6 +96,19 @@ pub async fn build_system_prompt(
         .collect();
 
     Ok(blocks)
+}
+
+/// Map model ID to a human-readable marketing name (matches TS getPublicModelDisplayName).
+fn model_marketing_name(model: &str) -> &str {
+    if model.contains("opus-4-6") { "Opus 4.6" }
+    else if model.contains("opus-4-5") { "Opus 4.5" }
+    else if model.contains("opus-4-1") { "Opus 4.1" }
+    else if model.contains("sonnet-4-6") { "Sonnet 4.6" }
+    else if model.contains("sonnet-4-5") { "Sonnet 4.5" }
+    else if model.contains("haiku-4-5") { "Haiku 4.5" }
+    else if model.contains("claude-3-7-sonnet") { "Sonnet 3.7" }
+    else if model.contains("claude-3-5-sonnet") { "Sonnet 3.5" }
+    else { model }
 }
 
 fn base_system_prompt() -> String {
