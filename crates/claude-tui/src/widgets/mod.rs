@@ -11,4 +11,5 @@ pub mod permission_dialog;
 pub mod prompt_input;
 pub mod spinner;
 pub mod task_list;
+pub mod theme_picker;
 pub mod trust_dialog;

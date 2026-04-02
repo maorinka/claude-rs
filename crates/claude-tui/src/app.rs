@@ -31,7 +31,7 @@ use claude_core::plugins::types::Skill;
 
 use std::sync::{Arc, Mutex};
 
-use crate::theme::{detect_theme, Theme};
+use crate::theme::{detect_theme, resolve_theme, Theme, ThemeSetting};
 use crate::widgets::ask_user_dialog::AskUserDialog;
 use crate::widgets::command_picker::{CommandPicker, CommandPickerEntry, CommandPickerWidget};
 use crate::widgets::message_list::{MessageEntry, MessageList, MessageListWidget};
@@ -39,6 +39,7 @@ use crate::widgets::model_picker::{ModelPicker, ModelPickerWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
 use crate::widgets::prompt_input::{InputAction, PromptInput};
 use crate::widgets::spinner::{SpinnerMode, SpinnerState};
+use crate::widgets::theme_picker::{ThemePicker, ThemePickerWidget};
 
 /// Token budget warning thresholds.
 const TOKEN_WARNING_THRESHOLD: f64 = 0.80; // Yellow warning at 80%
@@ -70,6 +71,11 @@ pub enum AppEvent {
     AskUserResponse(String),
     /// Fired when a background `engine.run_turn()` completes.
     TurnComplete(Result<TurnResult, anyhow::Error>),
+    /// Fired when a background tool execution completes.
+    ToolExecutionComplete {
+        tool_idx: usize,
+        result: Result<ToolResultData, String>,
+    },
 }
 
 /// Commands sent to the dedicated engine task via a channel.
@@ -121,6 +127,10 @@ pub struct App {
     command_picker: CommandPicker,
     /// Model picker overlay (shown on `/model`)
     model_picker: ModelPicker,
+    /// Theme picker overlay (shown on `/theme`)
+    theme_picker: ThemePicker,
+    /// Current theme setting (auto, dark, light, etc.)
+    theme_setting: ThemeSetting,
     /// Command registry for slash commands
     command_registry: CommandRegistry,
     /// Discovered skills
@@ -155,6 +165,8 @@ impl App {
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
             model_picker: ModelPicker::new(),
+            theme_picker: ThemePicker::new(),
+            theme_setting: ThemeSetting::Auto,
             command_registry,
             skills: Vec::new(),
             shared_state: Arc::new(Mutex::new(SharedCommandState::default())),
@@ -281,15 +293,12 @@ impl App {
                     self.model_name = state.model.clone();
                     self.cost_tracker = CostTracker::new(&state.model);
                 }
-                // Theme change
-                if state.dark_theme
-                    != (matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255)))
-                {
-                    self.theme = if state.dark_theme {
-                        crate::theme::dark_theme()
-                    } else {
-                        crate::theme::light_theme()
-                    };
+                // Theme change: check if shared state has a new theme_setting
+                if let Ok(new_setting) = state.theme_setting.parse::<ThemeSetting>() {
+                    if new_setting != self.theme_setting {
+                        self.theme_setting = new_setting;
+                        self.theme = resolve_theme(new_setting);
+                    }
                 }
             }
 
@@ -528,9 +537,17 @@ impl App {
             };
             if let Ok(mut state) = self.shared_state.lock() {
                 state.permission_mode = mode_str.to_string();
-                // Detect initial theme from current app state
-                state.dark_theme =
-                    matches!(self.theme.fg, ratatui::style::Color::Rgb(255, 255, 255));
+                // Sync initial theme setting
+                state.theme_setting = self.theme_setting.to_string();
+                state.dark_theme = matches!(
+                    self.theme_setting,
+                    ThemeSetting::Auto
+                        | ThemeSetting::Named(
+                            crate::theme::ThemeName::Dark
+                                | crate::theme::ThemeName::DarkDaltonized
+                                | crate::theme::ThemeName::DarkAnsi
+                        )
+                );
             }
         }
 
@@ -633,6 +650,38 @@ impl App {
                                         .unwrap_or_default();
                                     self.message_list.push(MessageEntry::System {
                                         text: format!("Set model to {}{}", display, effort_str),
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else if self.theme_picker.visible {
+                        // Route keys to theme picker: ↑↓ navigate, Enter confirm, Esc cancel
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.theme_picker.close();
+                            }
+                            KeyCode::Up => self.theme_picker.prev(),
+                            KeyCode::Down => self.theme_picker.next(),
+                            KeyCode::Enter => {
+                                if let Some(setting) = self.theme_picker.confirm() {
+                                    self.theme_setting = setting;
+                                    self.theme = resolve_theme(setting);
+                                    if let Ok(mut state) = self.shared_state.lock() {
+                                        state.theme_setting = setting.to_string();
+                                        // Keep dark_theme in sync for legacy consumers
+                                        state.dark_theme = matches!(
+                                            setting,
+                                            ThemeSetting::Auto
+                                                | ThemeSetting::Named(
+                                                    crate::theme::ThemeName::Dark
+                                                        | crate::theme::ThemeName::DarkDaltonized
+                                                        | crate::theme::ThemeName::DarkAnsi
+                                                )
+                                        );
+                                    }
+                                    self.message_list.push(MessageEntry::System {
+                                        text: format!("Theme set to {}", setting),
                                     });
                                 }
                             }
@@ -777,10 +826,55 @@ impl App {
                         continue;
                     }
 
+                    // Intercept /theme to open interactive picker
+                    if text.trim() == "/theme" || text.trim().starts_with("/theme ") {
+                        let args = text.trim().strip_prefix("/theme").unwrap_or("").trim();
+                        if args.is_empty() {
+                            // No args: open interactive picker
+                            self.prompt.clear();
+                            self.theme_picker.open(self.theme_setting);
+                            continue;
+                        }
+                        // Has args: set theme directly via ThemeSetting
+                        if let Ok(setting) = args.parse::<ThemeSetting>() {
+                            self.theme_setting = setting;
+                            self.theme = resolve_theme(setting);
+                            if let Ok(mut state) = self.shared_state.lock() {
+                                state.theme_setting = setting.to_string();
+                                state.dark_theme = matches!(
+                                    setting,
+                                    ThemeSetting::Auto
+                                        | ThemeSetting::Named(
+                                            crate::theme::ThemeName::Dark
+                                                | crate::theme::ThemeName::DarkDaltonized
+                                                | crate::theme::ThemeName::DarkAnsi
+                                        )
+                                );
+                            }
+                            self.message_list.push(MessageEntry::System {
+                                text: format!("Theme set to {}", setting),
+                            });
+                        } else {
+                            self.message_list.push(MessageEntry::System {
+                                text: format!(
+                                    "Unknown theme '{}'. Valid: auto, dark, light, dark-daltonized, light-daltonized, dark-ansi, light-ansi",
+                                    args
+                                ),
+                            });
+                        }
+                        continue;
+                    }
+
                     // Try to handle as a slash command first
                     if text.starts_with('/') {
                         match self.try_execute_command(&text) {
                             Some(CommandAction::Display(output)) => {
+                                // Check if it's the special theme-picker signal
+                                if output == "__open_theme_picker__" {
+                                    self.prompt.clear();
+                                    self.theme_picker.open(self.theme_setting);
+                                    continue;
+                                }
                                 // Action-type command: show output as system message
                                 self.message_list
                                     .push(MessageEntry::System { text: output });
@@ -917,121 +1011,40 @@ impl App {
 
                     match response.as_str() {
                         "allow" | "always" => {
-                            // Execute this tool
+                            // Execute this tool in background to keep UI responsive
                             let info = &pending_tools[tool_idx].info;
                             self.spinner.start(SpinnerMode::Tool {
                                 name: info.name.clone(),
                             });
-                            let tool_result = execute_tool(
-                                &tools,
-                                &info.name,
-                                &info.input,
-                                &cwd,
-                                cancel.clone(),
-                                read_file_state.clone(),
-                            )
-                            .await;
-                            self.spinner.stop();
-
-                            // Update working directory when entering/exiting a worktree.
-                            // EnterWorktree returns { worktreePath } on success — switch cwd.
-                            // ExitWorktree success means we return to the original directory.
-                            if let Ok(ref data) = tool_result {
-                                if !data.is_error {
-                                    match info.name.as_str() {
-                                        "EnterWorktree" => {
-                                            if let Some(path) = data.data["worktreePath"].as_str() {
-                                                cwd = PathBuf::from(path);
-                                                tracing::info!("Session cwd switched to worktree: {}", path);
-                                            }
-                                        }
-                                        "ExitWorktree" => {
-                                            cwd = original_cwd.clone();
-                                            tracing::info!(
-                                                "Session cwd restored to: {}",
-                                                original_cwd.display()
-                                            );
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-
-                            // Detect AskUserQuestionTool awaiting_input signal
-                            let awaiting = tool_result
-                                .as_ref()
-                                .ok()
-                                .and_then(|d| d.data["awaiting_input"].as_bool())
-                                .unwrap_or(false);
-
-                            if awaiting {
-                                // Don't feed result back yet — show dialog instead.
-                                let question = tool_result
-                                    .as_ref()
-                                    .ok()
-                                    .and_then(|d| d.data["question"].as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let opts: Vec<String> = tool_result
-                                    .as_ref()
-                                    .ok()
-                                    .and_then(|d| d.data["options"].as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                            .collect()
+                            let tool_name = info.name.clone();
+                            let tool_input = info.input.clone();
+                            let tools_clone = tools.clone();
+                            let cwd_clone = cwd.clone();
+                            let cancel_clone = cancel.clone();
+                            let rfs_clone = read_file_state.clone();
+                            let tx_tool = tx.clone();
+                            let tidx = tool_idx;
+                            tokio::spawn(async move {
+                                let result = execute_tool(
+                                    &tools_clone,
+                                    &tool_name,
+                                    &tool_input,
+                                    &cwd_clone,
+                                    cancel_clone,
+                                    rfs_clone,
+                                )
+                                .await;
+                                let mapped = result.map_err(|e| e.to_string());
+                                let _ = tx_tool
+                                    .send(AppEvent::ToolExecutionComplete {
+                                        tool_idx: tidx,
+                                        result: mapped,
                                     })
-                                    .unwrap_or_default();
-                                let tool_id = info.id.clone();
-                                let tx2 = tx.clone();
-                                tokio::spawn(async move {
-                                    let _ = tx2
-                                        .send(AppEvent::ShowAskUserDialog {
-                                            tool_use_id: tool_id,
-                                            question,
-                                            options: opts,
-                                        })
-                                        .await;
-                                });
-                            } else {
-                                let (result_text, is_error) = match &tool_result {
-                                    Ok(data) => (
-                                        data.data
-                                            .as_str()
-                                            .unwrap_or(&data.data.to_string())
-                                            .to_string(),
-                                        data.is_error,
-                                    ),
-                                    Err(e) => (format!("Error: {}", e), true),
-                                };
-                                let _ = engine_tx.send(EngineCommand::AddToolResult {
-                                    id: info.id.clone(),
-                                    content: result_text.clone(),
-                                    is_error,
-                                }).await;
-                                self.message_list.push(MessageEntry::ToolResult {
-                                    name: info.name.clone(),
-                                    output: truncate_result(&result_text),
-                                    is_error,
-                                });
+                                    .await;
+                            });
+                            // Don't block — continue event loop. Result comes via ToolExecutionComplete.
 
-                                // Check next tool or continue turn
-                                if pending_tool_index < pending_tools.len() {
-                                    self.check_next_tool_permission(
-                                        &pending_tools,
-                                        &mut pending_tool_index,
-                                        &perm_ctx,
-                                        &tools,
-                                        &tx,
-                                    );
-                                } else {
-                                    // All tools done — fire ContinueTurn to re-enter the engine
-                                    let tx2 = tx.clone();
-                                    tokio::spawn(async move {
-                                        let _ = tx2.send(AppEvent::ContinueTurn).await;
-                                    });
-                                }
-                            }
+                            // Tool executes in background — result arrives via ToolExecutionComplete
                         }
                         "deny" => {
                             let info = &pending_tools[tool_idx].info;
@@ -1109,6 +1122,88 @@ impl App {
                     self.message_list.push(MessageEntry::System {
                         text: format!("Your answer: {}", answer),
                     });
+                }
+
+                AppEvent::ToolExecutionComplete { tool_idx, result } => {
+                    self.spinner.stop();
+
+                    if tool_idx >= pending_tools.len() {
+                        continue;
+                    }
+                    let info = &pending_tools[tool_idx].info;
+
+                    // Update working directory for worktree tools
+                    if let Ok(ref data) = result {
+                        if !data.is_error {
+                            match info.name.as_str() {
+                                "EnterWorktree" => {
+                                    if let Some(path) = data.data["worktreePath"].as_str() {
+                                        cwd = PathBuf::from(path);
+                                    }
+                                }
+                                "ExitWorktree" => {
+                                    cwd = original_cwd.clone();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // Check for AskUserQuestion awaiting_input
+                    let awaiting = result
+                        .as_ref()
+                        .ok()
+                        .and_then(|d| d.data["awaiting_input"].as_bool())
+                        .unwrap_or(false);
+
+                    if awaiting {
+                        let question = result.as_ref().ok()
+                            .and_then(|d| d.data["question"].as_str())
+                            .unwrap_or("").to_string();
+                        let opts: Vec<String> = result.as_ref().ok()
+                            .and_then(|d| d.data["options"].as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                        let tool_id = info.id.clone();
+                        let tx2 = tx.clone();
+                        tokio::spawn(async move {
+                            let _ = tx2.send(AppEvent::ShowAskUserDialog {
+                                tool_use_id: tool_id, question, options: opts,
+                            }).await;
+                        });
+                    } else {
+                        let (result_text, is_error) = match &result {
+                            Ok(data) => (
+                                data.data.as_str().unwrap_or(&data.data.to_string()).to_string(),
+                                data.is_error,
+                            ),
+                            Err(e) => (format!("Error: {}", e), true),
+                        };
+                        let _ = engine_tx.send(EngineCommand::AddToolResult {
+                            id: info.id.clone(),
+                            content: result_text.clone(),
+                            is_error,
+                        }).await;
+                        self.message_list.push(MessageEntry::ToolResult {
+                            name: info.name.clone(),
+                            output: truncate_result(&result_text),
+                            is_error,
+                        });
+
+                        // Check next tool or continue turn
+                        pending_tool_index = tool_idx + 1;
+                        if pending_tool_index < pending_tools.len() {
+                            self.check_next_tool_permission(
+                                &pending_tools, &mut pending_tool_index,
+                                &perm_ctx, &tools, &tx,
+                            );
+                        } else {
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx2.send(AppEvent::ContinueTurn).await;
+                            });
+                        }
+                    }
                 }
 
                 AppEvent::TurnComplete(result) => {
@@ -1363,6 +1458,7 @@ impl App {
         let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
         let model_picker = &self.model_picker;
+        let theme_picker = &self.theme_picker;
         let model_name = &self.model_name;
         let cost_header = self.cost_tracker.header_display();
         let context_pct = self.context_percentage();
@@ -1533,6 +1629,19 @@ impl App {
                     picker_height,
                 );
                 let picker_widget = ModelPickerWidget::new(model_picker);
+                frame.render_widget(picker_widget, picker_area);
+            }
+
+            // Theme picker — rendered inline above the prompt (same pattern as model picker)
+            if theme_picker.visible {
+                let picker_height = theme_picker.height().min(area.height.saturating_sub(4));
+                let picker_area = Rect::new(
+                    area.x,
+                    chunks[2].y.saturating_sub(picker_height),
+                    area.width,
+                    picker_height,
+                );
+                let picker_widget = ThemePickerWidget::new(theme_picker);
                 frame.render_widget(picker_widget, picker_area);
             }
 

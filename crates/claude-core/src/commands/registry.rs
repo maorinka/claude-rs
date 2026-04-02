@@ -51,6 +51,9 @@ pub struct SharedCommandState {
     pub effort_level: String,
     /// Whether the current theme is dark (true) or light (false)
     pub dark_theme: bool,
+    /// Theme setting name (e.g. "auto", "dark", "light-daltonized").
+    /// Used by the TUI to resolve the active theme via ThemeSetting::from_str.
+    pub theme_setting: String,
     /// Context window size in tokens
     pub context_window: u64,
     /// Whether conversation was cleared (signal to the TUI)
@@ -86,6 +89,7 @@ impl Default for SharedCommandState {
             brief_mode: false,
             effort_level: "medium".to_string(),
             dark_theme: true,
+            theme_setting: "auto".to_string(),
             context_window: 200_000,
             clear_requested: false,
             fork_requested: false,

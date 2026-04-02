@@ -125,6 +125,7 @@ pub trait ToolExecutor: Send + Sync {
     }
 }
 
+#[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn ToolExecutor>>,
     aliases: HashMap<String, String>,

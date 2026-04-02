@@ -38,7 +38,7 @@ impl CommandHandler for HelpHandler {
              /resume        - Resume a previous session\n\
              /fork          - Fork the current session\n\
              /context       - Show context window usage\n\
-             /theme         - Toggle light/dark theme\n\
+             /theme         - Change color theme\n\
              /fast          - Toggle fast mode\n\
              /brief         - Toggle brief mode\n\
              /effort        - Set effort level\n\
@@ -384,17 +384,47 @@ impl CommandHandler for ContextHandler {
 
 pub struct ThemeHandler;
 impl CommandHandler for ThemeHandler {
-    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
-        if let Some(ref shared) = ctx.shared {
-            if let Ok(mut state) = shared.lock() {
-                state.dark_theme = !state.dark_theme;
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let args = args.trim();
+
+        // If args are provided, set the theme directly
+        if !args.is_empty() {
+            let valid = [
+                "auto",
+                "dark",
+                "light",
+                "dark-daltonized",
+                "light-daltonized",
+                "dark-ansi",
+                "light-ansi",
+            ];
+            if valid.contains(&args.to_lowercase().as_str()) {
+                if let Some(ref shared) = ctx.shared {
+                    if let Ok(mut state) = shared.lock() {
+                        state.theme_setting = args.to_lowercase();
+                        // Keep dark_theme in sync for any legacy consumers
+                        state.dark_theme = matches!(
+                            args.to_lowercase().as_str(),
+                            "dark" | "dark-daltonized" | "dark-ansi" | "auto"
+                        );
+                    }
+                }
                 return Ok(CommandResult::Action(format!(
-                    "Theme switched to {}.",
-                    if state.dark_theme { "dark" } else { "light" }
+                    "Theme set to {}",
+                    args.to_lowercase()
+                )));
+            } else {
+                return Ok(CommandResult::Error(format!(
+                    "Unknown theme '{}'. Valid themes: {}",
+                    args,
+                    valid.join(", ")
                 )));
             }
         }
-        Ok(CommandResult::Action("Theme toggled.".to_string()))
+
+        // No args: signal the TUI to open the picker.
+        // Return a special action string the TUI can intercept.
+        Ok(CommandResult::Action("__open_theme_picker__".to_string()))
     }
 }
 
@@ -2164,7 +2194,7 @@ pub fn build_default_commands() -> CommandRegistry {
         Action,
         ContextHandler
     );
-    register!("theme", "Toggle light/dark theme", Action, ThemeHandler);
+    register!("theme", "Change color theme", Action, ThemeHandler);
     register!("fast", "Toggle fast mode", Action, FastHandler);
     register!("brief", "Toggle brief mode", Action, BriefHandler);
     register!("effort", "Set effort level", Action, EffortHandler);
