@@ -431,7 +431,9 @@ async fn main() -> Result<()> {
         use std::path::PathBuf;
         use tokio::sync::mpsc;
 
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // Remember the original directory so ExitWorktree can restore it.
+        let original_cwd = cwd.clone();
         let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         ));
@@ -514,6 +516,30 @@ async fn main() -> Result<()> {
                                             .await
                                         {
                                             Ok(data) => {
+                                                // Update cwd when entering/exiting a worktree.
+                                                if !data.is_error {
+                                                    match tool_info.name.as_str() {
+                                                        "EnterWorktree" => {
+                                                            if let Some(path) =
+                                                                data.data["worktreePath"].as_str()
+                                                            {
+                                                                cwd = PathBuf::from(path);
+                                                                tracing::info!(
+                                                                    "Session cwd switched to worktree: {}",
+                                                                    path
+                                                                );
+                                                            }
+                                                        }
+                                                        "ExitWorktree" => {
+                                                            cwd = original_cwd.clone();
+                                                            tracing::info!(
+                                                                "Session cwd restored to: {}",
+                                                                original_cwd.display()
+                                                            );
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
                                                 let text = data
                                                     .data
                                                     .as_str()

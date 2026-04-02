@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
-    KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
@@ -316,7 +315,6 @@ impl App {
         execute!(
             io::stdout(),
             EnterAlternateScreen,
-            EnableMouseCapture,
             cursor::Hide
         )?;
 
@@ -390,7 +388,6 @@ impl App {
         terminal::disable_raw_mode()?;
         execute!(
             io::stdout(),
-            DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
         )?;
@@ -409,7 +406,6 @@ impl App {
         execute!(
             io::stdout(),
             EnterAlternateScreen,
-            EnableMouseCapture,
             cursor::Hide
         )?;
 
@@ -469,7 +465,9 @@ impl App {
             }
         });
 
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // Remember the original directory so ExitWorktree can restore it.
+        let original_cwd = cwd.clone();
 
         // Shared read-file state for staleness tracking across tool calls
         let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
@@ -904,6 +902,30 @@ impl App {
                             .await;
                             self.spinner.stop();
 
+                            // Update working directory when entering/exiting a worktree.
+                            // EnterWorktree returns { worktreePath } on success — switch cwd.
+                            // ExitWorktree success means we return to the original directory.
+                            if let Ok(ref data) = tool_result {
+                                if !data.is_error {
+                                    match info.name.as_str() {
+                                        "EnterWorktree" => {
+                                            if let Some(path) = data.data["worktreePath"].as_str() {
+                                                cwd = PathBuf::from(path);
+                                                tracing::info!("Session cwd switched to worktree: {}", path);
+                                            }
+                                        }
+                                        "ExitWorktree" => {
+                                            cwd = original_cwd.clone();
+                                            tracing::info!(
+                                                "Session cwd restored to: {}",
+                                                original_cwd.display()
+                                            );
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
                             // Detect AskUserQuestionTool awaiting_input signal
                             let awaiting = tool_result
                                 .as_ref()
@@ -1101,7 +1123,6 @@ impl App {
         terminal::disable_raw_mode()?;
         execute!(
             io::stdout(),
-            DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
         )?;
@@ -1518,7 +1539,6 @@ impl Drop for App {
         let _ = terminal::disable_raw_mode();
         let _ = execute!(
             io::stdout(),
-            DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
         );
