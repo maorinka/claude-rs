@@ -219,6 +219,23 @@ pub fn parse_callback_params(request_line: &str) -> Result<(String, String)> {
     Ok((code, state))
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Write all bytes to a tokio TcpStream, handling WouldBlock.
+async fn write_all_to_stream(stream: &tokio::net::TcpStream, data: &[u8]) {
+    let mut written = 0;
+    while written < data.len() {
+        match stream.writable().await {
+            Ok(()) => match stream.try_write(&data[written..]) {
+                Ok(n) => written += n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => break,
+            },
+            Err(_) => break,
+        }
+    }
+}
+
 // ── Token exchange ───────────────────────────────────────────────────────────
 
 /// Exchange an authorization code for OAuth tokens via POST to the token endpoint.
@@ -403,15 +420,32 @@ async fn install_oauth_tokens(
         })?;
     }
 
-    // 3. Save OAuth tokens to secure storage
-    store_tokens(tokens).await?;
+    // 3. Save OAuth tokens to secure storage.
+    //    Matches TS `saveOAuthTokensIfNeeded()` in `src/utils/auth.ts`:
+    //    - Skip for non-Claude.ai auth (Console users don't persist OAuth tokens)
+    //    - Skip for inference-only tokens (no refresh token / no expiry)
+    if is_claude_ai_auth(&tokens.scopes)
+        && tokens.refresh_token.is_some()
+        && tokens.expires_at.is_some()
+    {
+        store_tokens(tokens).await?;
+    }
 
     // 4. Fetch and store user roles (non-critical, log errors)
     if let Err(e) = fetch_and_store_user_roles(&tokens.access_token).await {
         tracing::debug!("Failed to fetch user roles: {}", e);
     }
 
-    // 5. For Console users (no user:inference scope), create an API key
+    // 5. For Claude.ai subscribers, fetch the first-token date (non-critical).
+    //    Matches TS `fetchAndStoreClaudeCodeFirstTokenDate()` in
+    //    `src/services/api/firstTokenDate.ts`.
+    if is_claude_ai_auth(&tokens.scopes) {
+        if let Err(e) = fetch_and_store_first_token_date(&tokens.access_token).await {
+            tracing::debug!("Failed to fetch first token date: {}", e);
+        }
+    }
+
+    // 6. For Console users (no user:inference scope), create an API key
     if !is_claude_ai_auth(&tokens.scopes) {
         tracing::info!("Console login detected — creating API key");
         match create_and_store_api_key(&tokens.access_token).await {
@@ -451,6 +485,60 @@ async fn perform_logout() {
         config.primary_api_key = None;
         config
     }).ok();
+}
+
+/// Fetch and store the organization's first Claude Code token date.
+///
+/// Matches TS `fetchAndStoreClaudeCodeFirstTokenDate()` in
+/// `src/services/api/firstTokenDate.ts`.
+///
+/// - Early-returns if the date is already cached in global config.
+/// - Stores `null` (as `None`) if the API returns no date.
+/// - Validates the date string before saving.
+async fn fetch_and_store_first_token_date(access_token: &str) -> Result<()> {
+    // Check if already cached
+    let config = crate::config::global::load_global_config()?;
+    if config.extra.contains_key("claudeCodeFirstTokenDate") {
+        return Ok(());
+    }
+
+    let url = "https://api.anthropic.com/api/organization/claude_code_first_token_date";
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("anthropic-beta", OAUTH_BETA_HEADER)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .context("failed to fetch first token date")?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("first token date endpoint returned {}", resp.status());
+    }
+
+    let data: serde_json::Value = resp.json().await?;
+    let first_token_date = data.get("first_token_date").cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    // Validate date string if not null (matching TS validation)
+    if let Some(date_str) = first_token_date.as_str() {
+        if chrono::DateTime::parse_from_rfc3339(date_str).is_err()
+            && chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").is_err()
+        {
+            anyhow::bail!("invalid first_token_date from API: {}", date_str);
+        }
+    }
+
+    save_global_config(|mut config| {
+        config.extra.insert(
+            "claudeCodeFirstTokenDate".to_string(),
+            first_token_date,
+        );
+        config
+    })?;
+
+    Ok(())
 }
 
 /// Create an API key via the Console OAuth endpoint (for Console users).
@@ -542,13 +630,25 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
     println!("If the browser didn't open, visit: {}", manual_url);
     let _ = open::that(&auto_url);
 
-    // Wait for the callback request
+    // Wait for the callback request.
+    // Matches TS `AuthCodeListener` in `src/services/oauth/auth-code-listener.ts`.
     let (stream, _) = listener.accept().await?;
-    stream.readable().await?;
 
-    // Read the HTTP request from the callback
+    // Read the HTTP request — loop to handle spurious WouldBlock from tokio
     let mut buf = vec![0u8; 4096];
-    let n = stream.try_read(&mut buf).unwrap_or(0);
+    let n = loop {
+        stream.readable().await?;
+        match stream.try_read(&mut buf) {
+            Ok(n) => break n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) => anyhow::bail!("failed to read callback request: {}", e),
+        }
+    };
+
+    if n == 0 {
+        anyhow::bail!("empty callback request from browser");
+    }
+
     let request = String::from_utf8_lossy(&buf[..n]).to_string();
 
     // Extract the first line (request line)
@@ -563,8 +663,8 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
 
     // Validate state parameter (CSRF protection)
     if received_state != state {
-        let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nInvalid state parameter";
-        let _ = stream.try_write(response.as_bytes());
+        let response = b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nInvalid state parameter";
+        write_all_to_stream(&stream, response).await;
         anyhow::bail!("OAuth state mismatch: possible CSRF attack");
     }
 
@@ -586,7 +686,7 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
         "HTTP/1.1 302 Found\r\nLocation: {}\r\n\r\n",
         success_url
     );
-    let _ = stream.try_write(response.as_bytes());
+    write_all_to_stream(&stream, response.as_bytes()).await;
     drop(stream);
 
     // Post-login setup: store account info, roles, API key

@@ -23,8 +23,9 @@ fn is_token_expired(expires_at: Option<u64>) -> bool {
 ///
 /// Checks in order (matching the TS `getAuthTokenSource` / `getAnthropicClient`):
 /// 1. ANTHROPIC_API_KEY env var -> ApiKey
-/// 2. CLAUDE_CODE_OAUTH_TOKEN env var -> OAuthToken (inference-only)
-/// 3. Stored OAuth tokens from keychain/file -> OAuthToken (with refresh if expired)
+/// 2. ANTHROPIC_AUTH_TOKEN env var -> OAuthToken (Bearer token)
+/// 3. CLAUDE_CODE_OAUTH_TOKEN env var -> OAuthToken (inference-only)
+/// 4. Stored OAuth tokens from keychain/file -> OAuthToken (with refresh if expired)
 ///
 /// For Claude.ai subscribers (scopes include `user:inference`):
 ///   - Uses `authToken` (sent as `Authorization: Bearer <token>`)
@@ -39,14 +40,21 @@ pub async fn resolve_auth() -> Result<AuthMethod> {
         }
     }
 
-    // 2. Check for OAuth token from env var (inference-only, e.g. from CCD/CCR)
+    // 2. Check ANTHROPIC_AUTH_TOKEN env var (Bearer token, matching TS getAuthTokenSource)
+    if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
+        if !token.is_empty() {
+            return Ok(AuthMethod::OAuthToken(token));
+        }
+    }
+
+    // 3. Check for OAuth token from env var (inference-only, e.g. from CCD/CCR)
     if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
         if !token.is_empty() {
             return Ok(AuthMethod::OAuthToken(token));
         }
     }
 
-    // 3. Read stored OAuth tokens from keychain and refresh if needed
+    // 4. Read stored OAuth tokens from keychain and refresh if needed
     if let Some(tokens) = super::storage::load_tokens().await? {
         // Check if this is a Claude.ai subscriber
         if is_claude_ai_auth(&tokens.scopes) {
