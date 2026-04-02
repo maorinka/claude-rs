@@ -42,67 +42,71 @@ pub struct Theme {
 }
 
 /// Dark theme using exact RGB values from the original Claude Code dark theme.
+/// Designed for dark terminal backgrounds (black/dark gray).
+/// Text is bright/white, accents are vivid.
 pub fn dark_theme() -> Theme {
     Theme {
-        bg: Color::Reset,
-        fg: Color::Rgb(255, 255, 255),
+        bg: Color::Reset, // Let terminal handle background
+        fg: Color::Reset, // Let terminal handle default foreground
 
         claude: Color::Rgb(215, 119, 87), // Claude orange
         claude_shimmer: Color::Rgb(235, 159, 127),
 
         prompt_border: Color::Rgb(136, 136, 136), // Medium gray
 
-        error: Color::Rgb(255, 107, 128),  // Bright red
-        warning: Color::Rgb(255, 193, 7),  // Bright amber
-        success: Color::Rgb(78, 186, 101), // Bright green
+        error: Color::Rgb(255, 107, 128),     // Bright red — visible on dark bg
+        warning: Color::Rgb(255, 193, 7),     // Bright amber
+        success: Color::Rgb(78, 186, 101),    // Bright green
 
-        text: Color::Rgb(255, 255, 255),     // White
-        inverse_text: Color::Rgb(0, 0, 0),   // Black
-        inactive: Color::Rgb(153, 153, 153), // Light gray
-        subtle: Color::Rgb(80, 80, 80),      // Dark gray
-        muted: Color::Rgb(153, 153, 153),    // Same as inactive
+        text: Color::Reset,                      // Terminal default (bright on dark terminals)
+        inverse_text: Color::Rgb(0, 0, 0),       // Black — for colored backgrounds
+        inactive: Color::DarkGray,               // Terminal dark gray
+        subtle: Color::Rgb(80, 80, 80),          // Very dark gray
+        muted: Color::DarkGray,                  // Terminal dark gray
 
-        user_message_bg: Color::Rgb(55, 55, 55), // Lighter grey for user msgs
-        tool_name: Color::Rgb(255, 255, 255),    // Tool names are bold white (default text)
-        thinking: Color::Rgb(153, 153, 153),     // Dim/inactive
+        user_message_bg: Color::Rgb(40, 40, 40), // Slightly lighter than terminal bg
+        tool_name: Color::Reset,                  // Terminal default text
+        thinking: Color::DarkGray,               // Dim
 
         diff_added: Color::Rgb(34, 92, 43),
         diff_removed: Color::Rgb(122, 41, 54),
 
-        border: Color::Rgb(136, 136, 136), // Same as prompt_border
+        border: Color::DarkGray,
         permission: Color::Rgb(177, 185, 249), // Light blue-purple
     }
 }
 
 /// Light theme using exact RGB values from the original Claude Code light theme.
+/// Designed for light terminal backgrounds (white/light gray).
+/// Text is dark/black, accents are muted.
 pub fn light_theme() -> Theme {
     Theme {
-        bg: Color::Reset,
-        fg: Color::Rgb(0, 0, 0),
+        bg: Color::Reset, // Let terminal handle background
+        fg: Color::Reset, // Let terminal handle default foreground
 
         claude: Color::Rgb(215, 119, 87), // Claude orange
         claude_shimmer: Color::Rgb(245, 149, 117),
 
         prompt_border: Color::Rgb(153, 153, 153), // Medium gray
 
-        error: Color::Rgb(171, 43, 63),    // Red
-        warning: Color::Rgb(150, 108, 30), // Amber
-        success: Color::Rgb(44, 122, 57),  // Green
+        error: Color::Rgb(171, 43, 63),       // Dark red — visible on light bg
+        warning: Color::Rgb(150, 108, 30),    // Dark amber
+        success: Color::Rgb(44, 122, 57),     // Dark green
 
-        text: Color::Rgb(0, 0, 0),               // Black
-        inverse_text: Color::Rgb(255, 255, 255), // White
-        inactive: Color::Rgb(102, 102, 102),     // Dark gray
+        text: Color::Reset,                      // Terminal default (dark on light terminals)
+        inverse_text: Color::Rgb(255, 255, 255), // White — for colored backgrounds
+        inactive: Color::Gray,                   // Terminal gray
         subtle: Color::Rgb(175, 175, 175),       // Light gray
-        muted: Color::Rgb(102, 102, 102),        // Same as inactive
+        muted: Color::Gray,                      // Terminal gray
 
-        user_message_bg: Color::Rgb(240, 240, 240),
-        tool_name: Color::Rgb(0, 0, 0), // Bold black
-        thinking: Color::Rgb(102, 102, 102),
+        user_message_bg: Color::Rgb(240, 240, 240), // Slightly darker than terminal bg
+        tool_name: Color::Reset,                     // Terminal default text
+        thinking: Color::Gray,                       // Dim
 
         diff_added: Color::Rgb(105, 219, 124),
         diff_removed: Color::Rgb(255, 168, 180),
 
-        border: Color::Rgb(153, 153, 153),
+        border: Color::Gray,
         permission: Color::Rgb(87, 105, 247),
     }
 }
