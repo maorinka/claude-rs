@@ -88,6 +88,11 @@ impl CommandPicker {
         !self.filtered.is_empty()
     }
 
+    /// Number of filtered entries (for dynamic sizing).
+    pub fn filtered_count(&self) -> usize {
+        self.filtered.len()
+    }
+
     fn refilter(&mut self) {
         let q = self.query.to_lowercase();
         self.filtered = self
@@ -98,11 +103,25 @@ impl CommandPicker {
                 if q.is_empty() {
                     true
                 } else {
-                    e.name.to_lowercase().contains(&q) || e.description.to_lowercase().contains(&q)
+                    // Match by command name starting with query (like TS)
+                    // Then fuzzy match name contains, then description contains
+                    e.name.to_lowercase().starts_with(&q)
                 }
             })
             .map(|(i, _)| i)
             .collect();
+
+        // If no prefix matches, fall back to substring match on name only
+        if self.filtered.is_empty() && !q.is_empty() {
+            self.filtered = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.name.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect();
+        }
+
         // Keep selected in bounds
         if self.selected >= self.filtered.len() {
             self.selected = 0;

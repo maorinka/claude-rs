@@ -547,11 +547,13 @@ fn render_message(
             }
         }
         MessageEntry::System { text } => {
-            // System messages: plain text in inactive/muted color
-            lines.push(Line::from(vec![Span::styled(
-                text.clone(),
-                Style::default().fg(theme.inactive),
-            )]));
+            // System messages: plain text in inactive/muted color, split on newlines
+            for line_text in text.split('\n') {
+                lines.push(Line::from(vec![Span::styled(
+                    line_text.to_string(),
+                    Style::default().fg(theme.inactive),
+                )]));
+            }
         }
     }
 

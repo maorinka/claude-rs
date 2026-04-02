@@ -2,9 +2,11 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use reqwest::Response;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
 use crate::auth::login::{debug_http_client, proxy_url};
 use crate::types::content::ContentBlock;
+use crate::types::events::StreamEvent;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -109,6 +111,16 @@ pub fn get_session_id() -> &'static String {
     &PROCESS_SESSION_ID
 }
 
+pub fn minimal_transport_enabled() -> bool {
+    matches!(
+        std::env::var("CLAUDE_RS_TRANSPORT_MODE").ok().as_deref(),
+        Some("minimal")
+    ) || matches!(
+        std::env::var("CLAUDE_RS_MINIMAL_TRANSPORT").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
 pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
     let default_tokens = if lower.contains("opus-4-1") || lower.contains("opus-4") {
@@ -157,6 +169,10 @@ pub fn build_request_body(
     system: &[ContentBlock],
     tools: &[ToolDefinition],
 ) -> Value {
+    if minimal_transport_enabled() {
+        return build_minimal_request_body(config, messages, system, tools);
+    }
+
     let mut body = json!({
         "model": config.model,
         "max_tokens": config.max_tokens,
@@ -234,6 +250,30 @@ pub fn build_request_body(
     body
 }
 
+fn build_minimal_request_body(
+    config: &ApiConfig,
+    messages: &[Value],
+    system: &[ContentBlock],
+    tools: &[ToolDefinition],
+) -> Value {
+    let mut body = json!({
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "stream": true,
+        "messages": messages,
+    });
+
+    if !system.is_empty() {
+        body["system"] = serde_json::to_value(system).unwrap_or(Value::Null);
+    }
+
+    if !tools.is_empty() {
+        body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
+    }
+
+    body
+}
+
 /// Get or create a persistent device ID (matches TS `getOrCreateUserID()`).
 fn get_or_create_device_id() -> String {
     let config_dir = std::env::var("HOME")
@@ -289,8 +329,21 @@ impl ApiClient {
         system: &[ContentBlock],
         tools: &[ToolDefinition],
     ) -> Result<Response> {
+        self.stream_request_with_events(messages, system, tools, None)
+            .await
+    }
+
+    /// POST a streaming request with optional event feedback.
+    pub async fn stream_request_with_events(
+        &self,
+        messages: &[Value],
+        system: &[ContentBlock],
+        tools: &[ToolDefinition],
+        _event_tx: Option<&mpsc::Sender<StreamEvent>>,
+    ) -> Result<Response> {
         let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools);
+        let minimal_transport = minimal_transport_enabled();
 
         // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
         if std::env::var("CLAUDE_RS_DEBUG").as_deref() == Ok("1") {
@@ -300,119 +353,57 @@ impl ApiClient {
             }
         }
 
-        // Retry configuration matching TS withRetry defaults:
-        // - Max 8 attempts for transient errors (429/529)
-        // - Exponential backoff starting at 1s, max 60s
-        // - One 401 refresh retry
-        const MAX_RETRIES: u32 = 8;
-        const BASE_DELAY_MS: u64 = 1000;
-        const MAX_DELAY_MS: u64 = 60_000;
+        let (header_name, header_value) = self.auth.to_header();
 
-        let mut has_retried_after_401 = false;
-        let mut retry_count: u32 = 0;
+        let mut request = self
+            .http
+            .post(&url)
+            .header("anthropic-version", &self.config.api_version)
+            .header("content-type", "application/json")
+            .header(header_name, header_value);
 
-        loop {
-            let auth = if has_retried_after_401 {
-                if let AuthMethod::OAuthToken(_) = &self.auth {
-                    crate::auth::resolve::resolve_stored_oauth_token(false)
-                        .await?
-                        .map(AuthMethod::OAuthToken)
-                        .unwrap_or_else(|| self.auth.clone())
-                } else {
-                    self.auth.clone()
-                }
-            } else {
-                self.auth.clone()
-            };
-            let (header_name, header_value) = auth.to_header();
-
-            let mut request = self
-                .http
-                .post(&url)
-                .header("anthropic-version", &self.config.api_version)
-                .header("content-type", "application/json")
+        if minimal_transport {
+            if self.auth.is_oauth() {
+                request = request.header("anthropic-beta", "oauth-2025-04-20");
+            }
+        } else {
+            request = request
                 .header("accept", "application/json")
                 .header("user-agent", "claude-cli/2.1.88 (external, cli)")
                 .header("x-claude-code-session-id", &self.config.session_id)
                 .header("x-stainless-lang", "js")
                 .header("x-stainless-package-version", "2.2.0")
                 .header("x-stainless-runtime", "node")
-                .header("x-stainless-retry-count", retry_count.to_string())
-                .header(header_name, header_value);
+                .header("x-stainless-retry-count", "0");
 
-            // Beta headers matching TS getAllModelBetas() for firstParty + OAuth:
             let mut betas = vec![
                 "claude-code-20250219",
                 "interleaved-thinking-2025-05-14",
                 "context-management-2025-06-27",
                 "prompt-caching-scope-2026-01-05",
             ];
-            if auth.is_oauth() {
+            if self.auth.is_oauth() {
                 betas.push("oauth-2025-04-20");
             }
             request = request
                 .header("anthropic-beta", betas.join(","))
                 .header("anthropic-dangerous-direct-browser-access", "true")
                 .header("x-app", "cli");
-
-            let response = request.json(&body).send().await?;
-
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            let status = response.status().as_u16();
-
-            // 401: try refreshing OAuth token once (matching TS handleOAuth401Error)
-            if status == 401 && !has_retried_after_401 {
-                has_retried_after_401 = true;
-                if let AuthMethod::OAuthToken(failed_token) = &auth {
-                    if crate::auth::resolve::handle_oauth_401_error(failed_token).await? {
-                        tracing::info!("OAuth token refreshed after 401, retrying");
-                        continue;
-                    }
-                }
-            }
-
-            // 429 or 529: retry with exponential backoff (matching TS withRetry)
-            if (status == 429 || status == 529) && retry_count < MAX_RETRIES {
-                retry_count += 1;
-
-                // Parse retry-after header if present, otherwise use exponential backoff
-                let delay_ms = response
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .map(|secs| secs * 1000)
-                    .unwrap_or_else(|| {
-                        let exp = BASE_DELAY_MS * 2u64.pow(retry_count - 1);
-                        exp.min(MAX_DELAY_MS)
-                    });
-
-                tracing::warn!(
-                    "Rate limited ({}), retry {}/{} after {}ms",
-                    status,
-                    retry_count,
-                    MAX_RETRIES,
-                    delay_ms
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                continue;
-            }
-
-            let err_body = response.text().await.unwrap_or_default();
-            tracing::error!(
-                "API error {}: {}",
-                status,
-                &err_body[..err_body.len().min(500)]
-            );
-            anyhow::bail!(
-                "API error {}: {}",
-                status,
-                &err_body[..err_body.len().min(500)]
-            );
         }
+
+        let response = request.json(&body).send().await?;
+
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let status = response.status().as_u16();
+        let err_body = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "API error {}: {}",
+            status,
+            &err_body[..err_body.len().min(500)]
+        );
     }
 }
 
@@ -445,5 +436,20 @@ mod tests {
         let parsed: Value = serde_json::from_str(user_id).unwrap();
         assert_eq!(parsed["session_id"], "session-123");
         assert_eq!(parsed["account_uuid"], "account-456");
+    }
+
+    #[test]
+    fn minimal_transport_body_strips_metadata_and_context_management() {
+        std::env::set_var("CLAUDE_RS_MINIMAL_TRANSPORT", "1");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[]);
+        assert!(body.get("metadata").is_none());
+        assert!(body.get("context_management").is_none());
+        assert!(body.get("thinking").is_none());
+        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
     }
 }

@@ -1,0 +1,12 @@
+[build]
+# sccache for shared compilation cache (big speedup on rebuilds)
+rustc-wrapper = "sccache"
+
+[target.aarch64-apple-darwin]
+# Faster debug builds: split debuginfo for faster linking
+rustflags = ["-C", "split-debuginfo=unpacked"]
+
+[profile.dev]
+# Faster dev builds
+# opt-level 0 is default, keep it
+# debug = "line-tables-only"  # uncomment for faster builds with less debug info

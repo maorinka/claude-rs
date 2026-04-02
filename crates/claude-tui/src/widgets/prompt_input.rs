@@ -44,6 +44,11 @@ impl PromptInput {
         self.text.is_empty()
     }
 
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> InputAction {
         match (key.modifiers, key.code) {
             // Submit on Enter

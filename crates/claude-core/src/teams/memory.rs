@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::path::PathBuf;
 
 pub struct TeamMemorySync {
@@ -21,12 +21,25 @@ impl TeamMemorySync {
         Ok(Self { team_dir: dir })
     }
 
+    /// Validate that a memory key does not contain path traversal sequences.
+    fn validate_key(key: &str) -> Result<()> {
+        if key.contains("..") || key.contains('/') || key.contains('\\') || key.contains('\0') {
+            bail!(
+                "invalid memory key {:?}: must not contain '..', '/', '\\', or null bytes",
+                key
+            );
+        }
+        Ok(())
+    }
+
     pub fn write_memory(&self, key: &str, value: &str) -> Result<()> {
+        Self::validate_key(key)?;
         std::fs::write(self.team_dir.join(format!("{}.md", key)), value)?;
         Ok(())
     }
 
     pub fn read_memory(&self, key: &str) -> Result<Option<String>> {
+        Self::validate_key(key)?;
         let path = self.team_dir.join(format!("{}.md", key));
         if path.exists() {
             Ok(Some(std::fs::read_to_string(path)?))
@@ -136,5 +149,26 @@ mod tests {
 
         let keys = sync.list_memories().unwrap();
         assert_eq!(keys.len(), 5);
+    }
+
+    #[test]
+    fn test_write_memory_rejects_path_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let sync = make_sync(&tmp);
+
+        assert!(sync.write_memory("../etc/passwd", "bad").is_err());
+        assert!(sync.write_memory("foo/bar", "bad").is_err());
+        assert!(sync.write_memory("foo\\bar", "bad").is_err());
+        assert!(sync.write_memory("foo\0bar", "bad").is_err());
+    }
+
+    #[test]
+    fn test_read_memory_rejects_path_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let sync = make_sync(&tmp);
+
+        assert!(sync.read_memory("../../secret").is_err());
+        assert!(sync.read_memory("a/b").is_err());
+        assert!(sync.read_memory("a\\b").is_err());
     }
 }

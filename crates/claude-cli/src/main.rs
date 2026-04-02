@@ -415,7 +415,7 @@ async fn main() -> Result<()> {
 
     // Determine permission mode
     let permission_mode = if cli.dangerously_skip_permissions {
-        claude_core::permissions::types::PermissionMode::Bypass
+        claude_core::permissions::types::PermissionMode::BypassPermissions
     } else {
         claude_core::permissions::types::PermissionMode::Default
     };
@@ -423,7 +423,7 @@ async fn main() -> Result<()> {
     // Handle non-interactive prompt mode
     if let Some(prompt) = cli.prompt {
         // If using OAuth proxy, delegate to real claude binary
-        use claude_core::permissions::evaluator::evaluate_permission_sync;
+        use claude_core::permissions::evaluator::{evaluate_permission, SimpleToolPermissions};
         use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
         use claude_core::query::engine::TurnResult;
         use claude_core::types::events::StreamEvent;
@@ -494,15 +494,13 @@ async fn main() -> Result<()> {
                             .map(|t| t.is_read_only(&tool_info.input))
                             .unwrap_or(false);
 
-                        let decision = evaluate_permission_sync(
-                            &tool_info.name,
-                            &tool_info.input,
-                            &perm_ctx,
-                            is_read_only,
-                        );
+                        let decision = {
+                            let tool_perms = SimpleToolPermissions::new(&tool_info.name, is_read_only);
+                            evaluate_permission(&tool_perms, &tool_info.input, &perm_ctx)
+                        };
 
                         let (result_text, is_error) = match decision {
-                            PermissionDecision::Allow | PermissionDecision::Ask { .. } => {
+                            PermissionDecision::Allow(_) | PermissionDecision::Ask(_) => {
                                 // In non-interactive mode, auto-allow (user passed a prompt)
                                 let executor = tools.get(&tool_info.name);
                                 match executor {
@@ -529,8 +527,8 @@ async fn main() -> Result<()> {
                                     None => (format!("Unknown tool: {}", tool_info.name), true),
                                 }
                             }
-                            PermissionDecision::Deny { message } => {
-                                (format!("Permission denied: {}", message), true)
+                            PermissionDecision::Deny(deny) => {
+                                (format!("Permission denied: {}", deny.message), true)
                             }
                         };
 

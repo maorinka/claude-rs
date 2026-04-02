@@ -16,7 +16,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use claude_core::permissions::evaluator::evaluate_permission_sync;
+use claude_core::permissions::evaluator::evaluate_permission;
 use claude_core::permissions::types::{PermissionDecision, PermissionMode, ToolPermissionContext};
 use claude_core::query::engine::{QueryEngine, ToolUseInfo, TurnResult};
 use claude_core::types::events::{StreamEvent, ToolResultData};
@@ -36,6 +36,7 @@ use crate::theme::{detect_theme, Theme};
 use crate::widgets::ask_user_dialog::AskUserDialog;
 use crate::widgets::command_picker::{CommandPicker, CommandPickerEntry, CommandPickerWidget};
 use crate::widgets::message_list::{MessageEntry, MessageList, MessageListWidget};
+use crate::widgets::model_picker::{ModelPicker, ModelPickerWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
 use crate::widgets::prompt_input::{InputAction, PromptInput};
 use crate::widgets::spinner::{SpinnerMode, SpinnerState};
@@ -68,6 +69,8 @@ pub enum AppEvent {
     },
     /// Fired when the user submits their answer in the AskUser dialog.
     AskUserResponse(String),
+    /// Fired when a background `engine.run_turn()` completes.
+    TurnComplete(Result<TurnResult, anyhow::Error>),
 }
 
 /// Pending tool that needs permission before execution.
@@ -103,6 +106,8 @@ pub struct App {
     cost_tracker: CostTracker,
     /// Command picker overlay (shown on `/` at start of input)
     command_picker: CommandPicker,
+    /// Model picker overlay (shown on `/model`)
+    model_picker: ModelPicker,
     /// Command registry for slash commands
     command_registry: CommandRegistry,
     /// Discovered skills
@@ -136,6 +141,7 @@ impl App {
             total_tokens: 0,
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
+            model_picker: ModelPicker::new(),
             command_registry,
             skills: Vec::new(),
             shared_state: Arc::new(Mutex::new(SharedCommandState::default())),
@@ -394,7 +400,7 @@ impl App {
     /// Run the TUI wired to the QueryEngine.
     pub async fn run_with_engine(
         &mut self,
-        mut engine: QueryEngine,
+        engine: QueryEngine,
         tools: ToolRegistry,
         cancel: CancellationToken,
         permission_mode: PermissionMode,
@@ -408,6 +414,9 @@ impl App {
         )?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
+
+        // Wrap engine in Arc<Mutex> so run_turn can be spawned without blocking the event loop
+        let engine = Arc::new(tokio::sync::Mutex::new(engine));
 
         // Spawn input reader
         let tx_input = tx.clone();
@@ -470,9 +479,13 @@ impl App {
         // Set permission mode in shared state
         {
             let mode_str = match &permission_mode {
-                PermissionMode::Bypass => "bypass",
-                PermissionMode::InteractiveOnly => "interactive-only",
+                PermissionMode::BypassPermissions => "bypass",
+                PermissionMode::Auto => "auto",
                 PermissionMode::Default => "default",
+                PermissionMode::AcceptEdits => "accept-edits",
+                PermissionMode::Plan => "plan",
+                PermissionMode::DontAsk => "dont-ask",
+                PermissionMode::Bubble => "bubble",
             };
             if let Ok(mut state) = self.shared_state.lock() {
                 state.permission_mode = mode_str.to_string();
@@ -559,6 +572,33 @@ impl App {
                             }
                             _ => {}
                         }
+                    } else if self.model_picker.visible {
+                        // Route keys to model picker: ↑↓ model, ←→ effort, Enter confirm, Esc cancel
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.model_picker.close();
+                            }
+                            KeyCode::Up => self.model_picker.prev(),
+                            KeyCode::Down => self.model_picker.next(),
+                            KeyCode::Left => self.model_picker.effort_left(),
+                            KeyCode::Right => self.model_picker.effort_right(),
+                            KeyCode::Enter => {
+                                if let Some((model, effort)) = self.model_picker.confirm() {
+                                    let display = claude_core::commands::builtin::render_model_name(&model);
+                                    self.model_name = model.clone();
+                                    if let Ok(mut state) = self.shared_state.lock() {
+                                        state.model = model;
+                                    }
+                                    let effort_str = effort
+                                        .map(|e| format!(" with {} effort", e.as_str()))
+                                        .unwrap_or_default();
+                                    self.message_list.push(MessageEntry::System {
+                                        text: format!("Set model to {}{}", display, effort_str),
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
                     } else if self.command_picker.visible {
                         // Route keys to command picker
                         match k.code {
@@ -590,14 +630,18 @@ impl App {
                                     self.command_picker.set_query(query);
                                 }
                             }
-                            KeyCode::Char(c)
+                            KeyCode::Char(_)
                                 if k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT =>
                             {
+                                // Forward keystroke to prompt so text updates
                                 self.prompt.handle_key(k);
-                                let text = self.prompt.text().to_string();
-                                let query = text.strip_prefix('/').unwrap_or("");
-                                self.command_picker.set_query(query);
-                                let _ = c;
+                                // Read updated text and filter picker
+                                let full_text = self.prompt.text().to_string();
+                                if let Some(q) = full_text.strip_prefix('/') {
+                                    self.command_picker.set_query(q);
+                                } else {
+                                    self.command_picker.close();
+                                }
                             }
                             _ => {}
                         }
@@ -647,10 +691,19 @@ impl App {
                                 let _ = tx.send(AppEvent::SubmitPrompt(text)).await;
                             }
                             InputAction::None => {
-                                // Check if user just typed `/` at start of input
-                                if self.prompt.text() == "/" {
-                                    let entries = self.build_picker_entries();
-                                    self.command_picker.open(entries);
+                                let text = self.prompt.text().to_string();
+                                if text.starts_with('/') {
+                                    if !self.command_picker.visible {
+                                        // Open picker on first `/`
+                                        let entries = self.build_picker_entries();
+                                        self.command_picker.open(entries);
+                                    }
+                                    // Update filter with text after `/`
+                                    let query = &text[1..];
+                                    self.command_picker.set_query(query);
+                                } else if self.command_picker.visible {
+                                    // Close picker if `/` was deleted
+                                    self.command_picker.close();
                                 }
                             }
                         }
@@ -658,6 +711,30 @@ impl App {
                 }
                 AppEvent::SubmitPrompt(text) => {
                     if self.engine_busy || text.trim().is_empty() {
+                        continue;
+                    }
+
+                    // Intercept /model to open interactive picker
+                    if text.trim() == "/model" || text.trim().starts_with("/model ") {
+                        let args = text.trim().strip_prefix("/model").unwrap_or("").trim();
+                        if args.is_empty() {
+                            // No args: open interactive picker
+                            self.prompt.clear();
+                            self.model_picker.open(&self.model_name);
+                            continue;
+                        }
+                        // Has args: set model directly
+                        let new_model = claude_core::commands::builtin::parse_user_specified_model(args);
+                        let display = claude_core::commands::builtin::render_model_name(&new_model);
+                        self.model_name = new_model.clone();
+                        if let Some(ref shared) = Some(&self.shared_state) {
+                            if let Ok(mut state) = shared.lock() {
+                                state.model = new_model;
+                            }
+                        }
+                        self.message_list.push(MessageEntry::System {
+                            text: format!("Set model to {}", display),
+                        });
                         continue;
                     }
 
@@ -673,7 +750,7 @@ impl App {
                                 if let Ok(mut state) = self.shared_state.lock() {
                                     if state.clear_requested {
                                         state.clear_requested = false;
-                                        engine.load_messages(Vec::new());
+                                        engine.lock().await.load_messages(Vec::new());
                                         self.message_list = MessageList::new();
                                         self.total_tokens = 0;
                                         self.cost_tracker = CostTracker::new(&self.model_name);
@@ -697,7 +774,7 @@ impl App {
                                 // Prompt-type command: inject as user message
                                 self.message_list
                                     .push(MessageEntry::User { text: text.clone() });
-                                engine.add_user_message(&prompt_text);
+                                engine.lock().await.add_user_message(&prompt_text);
                                 self.engine_busy = true;
                                 self.spinner.start(SpinnerMode::Thinking);
 
@@ -712,42 +789,13 @@ impl App {
                                     }
                                 });
 
-                                match engine.run_turn(&stream_tx).await {
-                                    Ok(TurnResult::Done(_stop_reason)) => {
-                                        self.spinner.stop();
-                                        self.engine_busy = false;
-                                    }
-                                    Ok(TurnResult::ToolUse(tool_uses)) => {
-                                        pending_tools = tool_uses
-                                            .into_iter()
-                                            .map(|info| PendingTool { info })
-                                            .collect();
-                                        pending_tool_index = 0;
-                                        self.check_next_tool_permission(
-                                            &pending_tools,
-                                            &mut pending_tool_index,
-                                            &perm_ctx,
-                                            &tools,
-                                            &tx,
-                                        );
-                                    }
-                                    Ok(TurnResult::ContinueRecovery) => {
-                                        self.message_list.push(MessageEntry::System {
-                                            text: "Continuing (max tokens recovery)...".to_string(),
-                                        });
-                                        let tx2 = tx.clone();
-                                        tokio::spawn(async move {
-                                            let _ = tx2.send(AppEvent::ContinueTurn).await;
-                                        });
-                                    }
-                                    Err(e) => {
-                                        self.spinner.stop();
-                                        self.engine_busy = false;
-                                        self.message_list.push(MessageEntry::System {
-                                            text: format!("Error: {}", e),
-                                        });
-                                    }
-                                }
+                                let engine_clone = engine.clone();
+                                let tx_result = tx.clone();
+                                tokio::spawn(async move {
+                                    let mut eng = engine_clone.lock().await;
+                                    let result = eng.run_turn(&stream_tx).await;
+                                    let _ = tx_result.send(AppEvent::TurnComplete(result.map_err(|e| e.into()))).await;
+                                });
                                 continue;
                             }
                             None => {
@@ -802,7 +850,7 @@ impl App {
                         .push(MessageEntry::User { text: text.clone() });
 
                     // Add to engine
-                    engine.add_user_message(&text);
+                    engine.lock().await.add_user_message(&text);
                     self.engine_busy = true;
                     self.spinner.start(SpinnerMode::Thinking);
 
@@ -819,45 +867,13 @@ impl App {
                         }
                     });
 
-                    match engine.run_turn(&stream_tx).await {
-                        Ok(TurnResult::Done(_stop_reason)) => {
-                            self.spinner.stop();
-                            self.engine_busy = false;
-                        }
-                        Ok(TurnResult::ToolUse(tool_uses)) => {
-                            // Start processing tool uses
-                            pending_tools = tool_uses
-                                .into_iter()
-                                .map(|info| PendingTool { info })
-                                .collect();
-                            pending_tool_index = 0;
-                            // Kick off permission check for first tool
-                            self.check_next_tool_permission(
-                                &pending_tools,
-                                &mut pending_tool_index,
-                                &perm_ctx,
-                                &tools,
-                                &tx,
-                            );
-                        }
-                        Ok(TurnResult::ContinueRecovery) => {
-                            // Re-run the turn for max_tokens recovery via ContinueTurn event
-                            self.message_list.push(MessageEntry::System {
-                                text: "Continuing (max tokens recovery)...".to_string(),
-                            });
-                            let tx2 = tx.clone();
-                            tokio::spawn(async move {
-                                let _ = tx2.send(AppEvent::ContinueTurn).await;
-                            });
-                        }
-                        Err(e) => {
-                            self.spinner.stop();
-                            self.engine_busy = false;
-                            self.message_list.push(MessageEntry::System {
-                                text: format!("Error: {}", e),
-                            });
-                        }
-                    }
+                    let engine_clone = engine.clone();
+                    let tx_result = tx.clone();
+                    tokio::spawn(async move {
+                        let mut eng = engine_clone.lock().await;
+                        let result = eng.run_turn(&stream_tx).await;
+                        let _ = tx_result.send(AppEvent::TurnComplete(result.map_err(|e| e.into()))).await;
+                    });
                 }
                 AppEvent::Stream(stream_event) => {
                     self.handle_stream_event(stream_event);
@@ -935,7 +951,7 @@ impl App {
                                     ),
                                     Err(e) => (format!("Error: {}", e), true),
                                 };
-                                engine.add_tool_result(&info.id, &result_text, is_error);
+                                engine.lock().await.add_tool_result(&info.id, &result_text, is_error);
                                 self.message_list.push(MessageEntry::ToolResult {
                                     name: info.name.clone(),
                                     output: truncate_result(&result_text),
@@ -962,7 +978,7 @@ impl App {
                         }
                         "deny" => {
                             let info = &pending_tools[tool_idx].info;
-                            engine.add_tool_result(&info.id, "Permission denied by user", true);
+                            engine.lock().await.add_tool_result(&info.id, "Permission denied by user", true);
                             self.message_list.push(MessageEntry::ToolResult {
                                 name: info.name.clone(),
                                 output: "Permission denied".to_string(),
@@ -1004,45 +1020,13 @@ impl App {
                         }
                     });
 
-                    match engine.run_turn(&stream_tx).await {
-                        Ok(TurnResult::Done(_)) => {
-                            self.spinner.stop();
-                            self.engine_busy = false;
-                        }
-                        Ok(TurnResult::ContinueRecovery) => {
-                            self.message_list.push(MessageEntry::System {
-                                text: "Continuing (max tokens recovery)...".to_string(),
-                            });
-                            // Fire another ContinueTurn to keep going
-                            let tx2 = tx.clone();
-                            tokio::spawn(async move {
-                                let _ = tx2.send(AppEvent::ContinueTurn).await;
-                            });
-                        }
-                        Ok(TurnResult::ToolUse(tool_uses)) => {
-                            // Another round of tool use — re-enter the permission/execute cycle
-                            pending_tools = tool_uses
-                                .into_iter()
-                                .map(|info| PendingTool { info })
-                                .collect();
-                            pending_tool_index = 0;
-                            self.spinner.stop();
-                            self.check_next_tool_permission(
-                                &pending_tools,
-                                &mut pending_tool_index,
-                                &perm_ctx,
-                                &tools,
-                                &tx,
-                            );
-                        }
-                        Err(e) => {
-                            self.spinner.stop();
-                            self.engine_busy = false;
-                            self.message_list.push(MessageEntry::System {
-                                text: format!("Error: {}", e),
-                            });
-                        }
-                    }
+                    let engine_clone = engine.clone();
+                    let tx_result = tx.clone();
+                    tokio::spawn(async move {
+                        let mut eng = engine_clone.lock().await;
+                        let result = eng.run_turn(&stream_tx).await;
+                        let _ = tx_result.send(AppEvent::TurnComplete(result.map_err(|e| e.into()))).await;
+                    });
                 }
 
                 AppEvent::ShowAskUserDialog {
@@ -1069,6 +1053,46 @@ impl App {
                     self.message_list.push(MessageEntry::System {
                         text: format!("Your answer: {}", answer),
                     });
+                }
+
+                AppEvent::TurnComplete(result) => {
+                    match result {
+                        Ok(TurnResult::Done(_stop_reason)) => {
+                            self.spinner.stop();
+                            self.engine_busy = false;
+                        }
+                        Ok(TurnResult::ToolUse(tool_uses)) => {
+                            pending_tools = tool_uses
+                                .into_iter()
+                                .map(|info| PendingTool { info })
+                                .collect();
+                            pending_tool_index = 0;
+                            self.spinner.stop();
+                            self.check_next_tool_permission(
+                                &pending_tools,
+                                &mut pending_tool_index,
+                                &perm_ctx,
+                                &tools,
+                                &tx,
+                            );
+                        }
+                        Ok(TurnResult::ContinueRecovery) => {
+                            self.message_list.push(MessageEntry::System {
+                                text: "Continuing (max tokens recovery)...".to_string(),
+                            });
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx2.send(AppEvent::ContinueTurn).await;
+                            });
+                        }
+                        Err(e) => {
+                            self.spinner.stop();
+                            self.engine_busy = false;
+                            self.message_list.push(MessageEntry::System {
+                                text: format!("Error: {}", e),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1106,11 +1130,14 @@ impl App {
                 .map(|t| t.is_read_only(&info.input))
                 .unwrap_or(false);
 
-            let decision =
-                evaluate_permission_sync(&info.name, &info.input, perm_ctx, is_read_only);
+            let decision = {
+                use claude_core::permissions::evaluator::SimpleToolPermissions;
+                let tool_perms = SimpleToolPermissions::new(&info.name, is_read_only);
+                evaluate_permission(&tool_perms, &info.input, perm_ctx)
+            };
 
             match decision {
-                PermissionDecision::Allow => {
+                PermissionDecision::Allow(_) => {
                     // Auto-execute: we need to send an event to trigger execution
                     // For simplicity, send an "allow" permission response immediately
                     let tx2 = tx.clone();
@@ -1121,17 +1148,18 @@ impl App {
                     });
                     return;
                 }
-                PermissionDecision::Ask { message } => {
+                PermissionDecision::Ask(ask) => {
                     let input_preview = serde_json::to_string_pretty(&info.input)
                         .unwrap_or_else(|_| info.input.to_string());
                     self.permission_dialog = Some(PermissionDialog::new(
                         info.name.clone(),
-                        message,
+                        ask.message,
                         input_preview,
                     ));
                     return;
                 }
-                PermissionDecision::Deny { message } => {
+                PermissionDecision::Deny(deny) => {
+                    let message = deny.message;
                     // Auto-deny, send deny response
                     let tx2 = tx.clone();
                     tokio::spawn(async move {
@@ -1279,6 +1307,7 @@ impl App {
         let permission_dialog = &self.permission_dialog;
         let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
+        let model_picker = &self.model_picker;
         let model_name = &self.model_name;
         let cost_header = self.cost_tracker.header_display();
         let context_pct = self.context_percentage();
@@ -1424,8 +1453,11 @@ impl App {
             }
 
             // Command picker overlay (positioned above the input area)
-            if command_picker.visible {
-                let picker_height = 20u16.min(area.height * 2 / 3);
+            if command_picker.visible && command_picker.has_entries() {
+                // +2 for border top/bottom
+                let picker_height = ((command_picker.filtered_count() as u16) + 2)
+                    .max(3)
+                    .min(area.height * 2 / 3);
                 let picker_area = Rect::new(
                     area.x + 1,
                     chunks[2].y.saturating_sub(picker_height),
@@ -1433,6 +1465,19 @@ impl App {
                     picker_height,
                 );
                 let picker_widget = CommandPickerWidget::new(command_picker);
+                frame.render_widget(picker_widget, picker_area);
+            }
+
+            // Model picker — rendered inline above the prompt
+            if model_picker.visible {
+                let picker_height = model_picker.height().min(area.height.saturating_sub(4));
+                let picker_area = Rect::new(
+                    area.x,
+                    chunks[2].y.saturating_sub(picker_height),
+                    area.width,
+                    picker_height,
+                );
+                let picker_widget = ModelPickerWidget::new(model_picker);
                 frame.render_widget(picker_widget, picker_area);
             }
 

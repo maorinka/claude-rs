@@ -5,6 +5,7 @@ pub mod context_view;
 pub mod diff_view;
 pub mod feedback_dialog;
 pub mod message_list;
+pub mod model_picker;
 pub mod onboarding;
 pub mod permission_dialog;
 pub mod prompt_input;

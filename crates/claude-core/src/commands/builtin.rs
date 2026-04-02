@@ -124,24 +124,100 @@ impl CommandHandler for ClearHandler {
 }
 
 pub struct ModelHandler;
+
+/// Model aliases matching TS MODEL_ALIASES
+pub const MODEL_ALIASES: &[&str] = &["sonnet", "opus", "haiku", "best", "sonnet[1m]", "opus[1m]", "opusplan"];
+
+/// Resolve a model alias to a canonical model name.
+/// Matches TS parseUserSpecifiedModel() behavior.
+pub fn parse_user_specified_model(input: &str) -> String {
+    let trimmed = input.trim();
+    let normalized = trimmed.to_lowercase();
+    let has_1m = normalized.ends_with("[1m]");
+    let base = if has_1m {
+        normalized.trim_end_matches("[1m]").trim().to_string()
+    } else {
+        normalized.clone()
+    };
+    let suffix = if has_1m { "[1m]" } else { "" };
+
+    match base.as_str() {
+        "sonnet" => format!("claude-sonnet-4-6{}", suffix),
+        "opus" => format!("claude-opus-4-6{}", suffix),
+        "haiku" => format!("claude-haiku-4-5-20251001{}", suffix),
+        "best" => "claude-opus-4-6".to_string(),
+        "opusplan" => format!("claude-sonnet-4-6{}", suffix), // Sonnet default, Opus in plan mode
+        _ => {
+            // Preserve original case for custom model names
+            if has_1m {
+                format!("{}[1m]", trimmed.trim_end_matches("[1m]").trim_end_matches("[1M]").trim())
+            } else {
+                trimmed.to_string()
+            }
+        }
+    }
+}
+
+/// Get public display name for a model. Matches TS getPublicModelDisplayName().
+pub fn render_model_name(model: &str) -> String {
+    match model {
+        "claude-opus-4-6" => "Opus 4.6".to_string(),
+        "claude-opus-4-6[1m]" => "Opus 4.6 (1M context)".to_string(),
+        "claude-opus-4-5-20250918" => "Opus 4.5".to_string(),
+        "claude-opus-4-1-20250620" => "Opus 4.1".to_string(),
+        "claude-sonnet-4-6" => "Sonnet 4.6".to_string(),
+        "claude-sonnet-4-6[1m]" => "Sonnet 4.6 (1M context)".to_string(),
+        "claude-sonnet-4-5-20250929" => "Sonnet 4.5".to_string(),
+        "claude-sonnet-4-5-20250929[1m]" => "Sonnet 4.5 (1M context)".to_string(),
+        "claude-haiku-4-5-20251001" => "Haiku 4.5".to_string(),
+        "claude-3-7-sonnet-20250219" => "Sonnet 3.7".to_string(),
+        "claude-3-5-sonnet-20241022" => "Sonnet 3.5".to_string(),
+        "claude-3-5-haiku-20241022" => "Haiku 3.5".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Available model options shown in /model picker.
+/// Matches the TS ModelPicker component's model list.
+const MODEL_OPTIONS: &[(&str, &str, &str)] = &[
+    // (alias/id, display_name, description)
+    ("opus", "Opus 4.6", "Most capable for complex work"),
+    ("opus[1m]", "Opus 4.6 (1M)", "Most capable, extended context"),
+    ("sonnet", "Sonnet 4.6", "Best for everyday tasks"),
+    ("sonnet[1m]", "Sonnet 4.6 (1M)", "Everyday tasks, extended context"),
+    ("haiku", "Haiku 4.5", "Fastest, cheapest"),
+    ("opusplan", "Opus in plan, Sonnet otherwise", "Smart planning, fast execution"),
+    ("claude-sonnet-4-5-20250929", "Sonnet 4.5", "Previous generation"),
+    ("claude-opus-4-1-20250620", "Opus 4.1", "Previous generation"),
+];
+
 impl CommandHandler for ModelHandler {
     fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
         if args.trim().is_empty() {
-            Ok(CommandResult::Action(format!(
-                "Current model: {}",
-                ctx.model
-            )))
+            let current_display = render_model_name(&ctx.model);
+            let mut output = format!("Current model: {}\n\nAvailable models:\n", current_display);
+            for (alias, display, desc) in MODEL_OPTIONS {
+                let resolved = parse_user_specified_model(alias);
+                let marker = if ctx.model == resolved || ctx.model == *alias {
+                    " ← current"
+                } else {
+                    ""
+                };
+                output.push_str(&format!("  {:<12} {:<25} {}{}\n", alias, display, desc, marker));
+            }
+            output.push_str("\nUsage: /model <name>  (e.g. /model sonnet, /model opus[1m])");
+            output.push_str("\n\nYou can also use full model IDs (e.g. /model claude-sonnet-4-6)");
+            Ok(CommandResult::Action(output))
         } else {
-            let new_model = args.trim().to_string();
+            let input = args.trim();
+            let new_model = parse_user_specified_model(input);
+            let display = render_model_name(&new_model);
             if let Some(ref shared) = ctx.shared {
                 if let Ok(mut state) = shared.lock() {
                     state.model = new_model.clone();
                 }
             }
-            Ok(CommandResult::Action(format!(
-                "Model changed to: {}",
-                new_model
-            )))
+            Ok(CommandResult::Action(format!("Set model to {}", display)))
         }
     }
 }

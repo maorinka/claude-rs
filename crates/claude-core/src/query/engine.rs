@@ -174,7 +174,12 @@ impl QueryEngine {
 
         let response = self
             .api_client
-            .stream_request(&self.messages, &self.system_prompt, &self.tool_schemas)
+            .stream_request_with_events(
+                &self.messages,
+                &self.system_prompt,
+                &self.tool_schemas,
+                Some(event_tx),
+            )
             .await?;
 
         self.state = QueryState::Streaming;
