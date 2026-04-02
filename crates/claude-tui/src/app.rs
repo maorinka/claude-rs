@@ -1172,21 +1172,33 @@ impl App {
                             }).await;
                         });
                     } else {
-                        let (result_text, is_error) = match &result {
-                            Ok(data) => (
-                                data.data.as_str().unwrap_or(&data.data.to_string()).to_string(),
-                                data.is_error,
-                            ),
-                            Err(e) => (format!("Error: {}", e), true),
+                        let (result_text, display_text, is_error) = match &result {
+                            Ok(data) => {
+                                let raw = data.data.as_str()
+                                    .unwrap_or(&data.data.to_string())
+                                    .to_string();
+                                // For Edit/Write tools, format as colored diff
+                                let display = if info.name == "Edit" || info.name == "Write" {
+                                    format_edit_result(&data.data)
+                                        .unwrap_or_else(|| raw.clone())
+                                } else {
+                                    raw.clone()
+                                };
+                                (raw, display, data.is_error)
+                            }
+                            Err(e) => {
+                                let msg = format!("Error: {}", e);
+                                (msg.clone(), msg, true)
+                            }
                         };
                         let _ = engine_tx.send(EngineCommand::AddToolResult {
                             id: info.id.clone(),
-                            content: result_text.clone(),
+                            content: result_text,
                             is_error,
                         }).await;
                         self.message_list.push(MessageEntry::ToolResult {
                             name: info.name.clone(),
-                            output: truncate_result(&result_text),
+                            output: truncate_result(&display_text),
                             is_error,
                         });
 
@@ -1705,6 +1717,49 @@ async fn execute_tool(
         read_file_state,
     };
     executor.call(input, &ctx, cancel, None).await
+}
+
+/// Convert Edit/Write tool JSON result into a readable diff string.
+/// Returns None if the data isn't an edit result.
+fn format_edit_result(data: &serde_json::Value) -> Option<String> {
+    let file_path = data["filePath"].as_str()?;
+    let old_string = data["oldString"].as_str().unwrap_or("");
+    let new_string = data["newString"].as_str().unwrap_or("");
+
+    if old_string.is_empty() && new_string.is_empty() {
+        return None;
+    }
+
+    let mut output = format!("--- {}\n+++ {}\n", file_path, file_path);
+
+    // Generate unified diff from old/new strings
+    let old_lines: Vec<&str> = if old_string.is_empty() {
+        Vec::new()
+    } else {
+        old_string.lines().collect()
+    };
+    let new_lines: Vec<&str> = if new_string.is_empty() {
+        Vec::new()
+    } else {
+        new_string.lines().collect()
+    };
+
+    output.push_str(&format!(
+        "@@ -{},{} +{},{} @@\n",
+        1,
+        old_lines.len(),
+        1,
+        new_lines.len()
+    ));
+
+    for line in &old_lines {
+        output.push_str(&format!("-{}\n", line));
+    }
+    for line in &new_lines {
+        output.push_str(&format!("+{}\n", line));
+    }
+
+    Some(output)
 }
 
 /// Truncate long tool results for display.
