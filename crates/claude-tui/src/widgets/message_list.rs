@@ -421,20 +421,18 @@ fn render_message(
             name,
             input_summary,
         } => {
-            // Original: BLACK_CIRCLE (or ToolUseLoader dot) + bold tool name + (summary)
-            // marginTop=1 if addMargin. Tool name is bold, summary in parens.
+            // Original: colored circle + bold tool name + (summary)
+            // Circle color: yellow/orange while executing (shown before result arrives)
+            let circle_color = Color::Rgb(215, 119, 87); // Claude orange for in-progress
             lines.push(Line::from(vec![
-                // Circle indicator
                 Span::styled(
                     format!("{} ", BLACK_CIRCLE),
-                    Style::default().fg(theme.text),
+                    Style::default().fg(circle_color),
                 ),
-                // Bold tool name
                 Span::styled(
                     name.clone(),
                     Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                 ),
-                // Input summary in parentheses
                 if input_summary.is_empty() {
                     Span::raw("")
                 } else {
@@ -450,9 +448,8 @@ fn render_message(
             output,
             is_error,
         } => {
-            // Original: MessageResponse renders "  ⎿  " prefix (dim) then content.
-            // Success results show tool output dimmed.
-            // Error results show the error text in error color.
+            // Tool results show with "  ⎿  " prefix.
+            // The ToolUse entry above already has the colored circle.
             if *is_error {
                 // Error: show error indicator with ⎿ prefix
                 lines.push(Line::from(vec![
