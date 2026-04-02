@@ -70,6 +70,16 @@ pub enum SubCommand {
     },
 }
 
+/// Resolve short model names to full API model IDs.
+fn normalize_model_name(name: &str) -> String {
+    match name {
+        "opus" => "claude-opus-4-6".into(),
+        "sonnet" => "claude-sonnet-4-6".into(),
+        "haiku" => "claude-haiku-4-5".into(),
+        other => other.into(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -220,9 +230,11 @@ async fn main() -> Result<()> {
         tracing::info!(count = skills.len(), "Discovered skills");
     }
 
-    let model = cli.model
-        .or_else(|| settings.model.clone())
-        .unwrap_or_else(|| "claude-sonnet-4-6".into());
+    let model = normalize_model_name(
+        &cli.model
+            .or_else(|| settings.model.clone())
+            .unwrap_or_else(|| "claude-sonnet-4-6".into()),
+    );
 
     tracing::info!(
         "claude-rs initialized: model={}, tools={}, mcp_servers={}, skills={}, project={}",

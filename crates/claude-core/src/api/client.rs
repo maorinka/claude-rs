@@ -126,13 +126,19 @@ pub fn build_request_body(
     });
 
     // Thinking configuration.
-    let thinking_obj = match &config.thinking {
-        ThinkingConfig::Disabled => None,
-        ThinkingConfig::Enabled { budget_tokens } => Some(json!({
-            "type": "enabled",
-            "budget_tokens": budget_tokens,
-        })),
-        ThinkingConfig::Adaptive => Some(json!({ "type": "adaptive" })),
+    // Haiku does not support adaptive thinking — only send for Sonnet/Opus.
+    let supports_thinking = !config.model.contains("haiku");
+    let thinking_obj = if supports_thinking {
+        match &config.thinking {
+            ThinkingConfig::Disabled => None,
+            ThinkingConfig::Enabled { budget_tokens } => Some(json!({
+                "type": "enabled",
+                "budget_tokens": budget_tokens,
+            })),
+            ThinkingConfig::Adaptive => Some(json!({ "type": "adaptive" })),
+        }
+    } else {
+        None
     };
     if let Some(thinking) = thinking_obj {
         body["thinking"] = thinking;
