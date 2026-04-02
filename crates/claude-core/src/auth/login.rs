@@ -86,7 +86,9 @@ pub fn proxy_url(original: &str) -> String {
 /// Build a reqwest::Client that adds `x-client-tag: RS` when the debug proxy
 /// is active, so the proxy can distinguish Rust traffic from TS traffic.
 pub fn debug_http_client() -> reqwest::Client {
-    let mut builder = reqwest::Client::builder();
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(300)); // 5 min max per request
     if is_debug_proxy_active() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("x-client-tag", "RS".parse().unwrap());
