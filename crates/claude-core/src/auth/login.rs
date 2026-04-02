@@ -692,9 +692,18 @@ pub async fn login_with_options(opts: LoginOptions) -> Result<()> {
 
     let (code, mut pending_stream) = await_authorization_code(&listener, &state).await?;
 
+    // When manual input was used (no pending_stream), the redirect_uri must
+    // match what was in the authorize URL — MANUAL_REDIRECT_URL, not localhost.
+    // Matches TS `exchangeCodeForTokens(code, state, verifier, port, !isAutomaticFlow)`.
+    let effective_redirect = if pending_stream.is_some() {
+        &redirect_uri
+    } else {
+        MANUAL_REDIRECT_URL
+    };
+
     // Exchange authorization code for tokens
     let (mut tokens, token_account) =
-        exchange_code_for_tokens(&code, &redirect_uri, &verifier, &state).await?;
+        exchange_code_for_tokens(&code, effective_redirect, &verifier, &state).await?;
 
     // Fetch profile info (subscription type, rate limit tier, etc.)
     let profile_info = fetch_profile_info(&tokens.access_token).await;
