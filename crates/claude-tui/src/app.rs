@@ -72,6 +72,20 @@ pub enum AppEvent {
     TurnComplete(Result<TurnResult, anyhow::Error>),
 }
 
+/// Commands sent to the dedicated engine task via a channel.
+/// The engine owns the `QueryEngine` exclusively; all interaction goes through
+/// these non-blocking sends so the event loop never awaits the engine.
+enum EngineCommand {
+    AddUserMessage(String),
+    AddToolResult {
+        id: String,
+        content: String,
+        is_error: bool,
+    },
+    RunTurn(mpsc::Sender<StreamEvent>),
+    LoadMessages(Vec<serde_json::Value>),
+}
+
 /// Pending tool that needs permission before execution.
 struct PendingTool {
     info: ToolUseInfo,
@@ -411,8 +425,35 @@ impl App {
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
 
-        // Wrap engine in Arc<Mutex> so run_turn can be spawned without blocking the event loop
-        let engine = Arc::new(tokio::sync::Mutex::new(engine));
+        // Channel-based engine: the engine lives in its own task and receives
+        // commands via `engine_tx`.  Sends are non-blocking so the event loop
+        // never awaits anything that depends on the engine.
+        let (engine_tx, mut engine_rx) = mpsc::channel::<EngineCommand>(32);
+        {
+            let app_tx = tx.clone();
+            let mut engine = engine;
+            tokio::spawn(async move {
+                while let Some(cmd) = engine_rx.recv().await {
+                    match cmd {
+                        EngineCommand::AddUserMessage(text) => {
+                            engine.add_user_message(&text);
+                        }
+                        EngineCommand::AddToolResult { id, content, is_error } => {
+                            engine.add_tool_result(&id, &content, is_error);
+                        }
+                        EngineCommand::RunTurn(stream_tx) => {
+                            let result = engine.run_turn(&stream_tx).await;
+                            let _ = app_tx
+                                .send(AppEvent::TurnComplete(result.map_err(Into::into)))
+                                .await;
+                        }
+                        EngineCommand::LoadMessages(msgs) => {
+                            engine.load_messages(msgs);
+                        }
+                    }
+                }
+            });
+        }
 
         // Spawn input reader
         let tx_input = tx.clone();
@@ -748,7 +789,7 @@ impl App {
                                 if let Ok(mut state) = self.shared_state.lock() {
                                     if state.clear_requested {
                                         state.clear_requested = false;
-                                        engine.lock().await.load_messages(Vec::new());
+                                        let _ = engine_tx.send(EngineCommand::LoadMessages(Vec::new())).await;
                                         self.message_list = MessageList::new();
                                         self.total_tokens = 0;
                                         self.cost_tracker = CostTracker::new(&self.model_name);
@@ -772,7 +813,7 @@ impl App {
                                 // Prompt-type command: inject as user message
                                 self.message_list
                                     .push(MessageEntry::User { text: text.clone() });
-                                engine.lock().await.add_user_message(&prompt_text);
+                                let _ = engine_tx.send(EngineCommand::AddUserMessage(prompt_text)).await;
                                 self.engine_busy = true;
                                 self.spinner.start(SpinnerMode::Thinking);
 
@@ -787,13 +828,7 @@ impl App {
                                     }
                                 });
 
-                                let engine_clone = engine.clone();
-                                let tx_result = tx.clone();
-                                tokio::spawn(async move {
-                                    let mut eng = engine_clone.lock().await;
-                                    let result = eng.run_turn(&stream_tx).await;
-                                    let _ = tx_result.send(AppEvent::TurnComplete(result.map_err(|e| e.into()))).await;
-                                });
+                                let _ = engine_tx.send(EngineCommand::RunTurn(stream_tx)).await;
                                 continue;
                             }
                             None => {
@@ -847,12 +882,12 @@ impl App {
                     self.message_list
                         .push(MessageEntry::User { text: text.clone() });
 
-                    // Add to engine
-                    engine.lock().await.add_user_message(&text);
+                    // Add to engine (non-blocking channel send)
+                    let _ = engine_tx.send(EngineCommand::AddUserMessage(text)).await;
                     self.engine_busy = true;
                     self.spinner.start(SpinnerMode::Thinking);
 
-                    // Run turn
+                    // Run turn — stream events are forwarded to the main event loop
                     let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
                     let tx_forward = tx.clone();
 
@@ -865,13 +900,9 @@ impl App {
                         }
                     });
 
-                    let engine_clone = engine.clone();
-                    let tx_result = tx.clone();
-                    tokio::spawn(async move {
-                        let mut eng = engine_clone.lock().await;
-                        let result = eng.run_turn(&stream_tx).await;
-                        let _ = tx_result.send(AppEvent::TurnComplete(result.map_err(|e| e.into()))).await;
-                    });
+                    // Tell the engine task to run the turn; the engine task will
+                    // send TurnComplete back via app_tx when done.
+                    let _ = engine_tx.send(EngineCommand::RunTurn(stream_tx)).await;
                 }
                 AppEvent::Stream(stream_event) => {
                     self.handle_stream_event(stream_event);
@@ -973,7 +1004,11 @@ impl App {
                                     ),
                                     Err(e) => (format!("Error: {}", e), true),
                                 };
-                                engine.lock().await.add_tool_result(&info.id, &result_text, is_error);
+                                let _ = engine_tx.send(EngineCommand::AddToolResult {
+                                    id: info.id.clone(),
+                                    content: result_text.clone(),
+                                    is_error,
+                                }).await;
                                 self.message_list.push(MessageEntry::ToolResult {
                                     name: info.name.clone(),
                                     output: truncate_result(&result_text),
@@ -1000,7 +1035,11 @@ impl App {
                         }
                         "deny" => {
                             let info = &pending_tools[tool_idx].info;
-                            engine.lock().await.add_tool_result(&info.id, "Permission denied by user", true);
+                            let _ = engine_tx.send(EngineCommand::AddToolResult {
+                                id: info.id.clone(),
+                                content: "Permission denied by user".to_string(),
+                                is_error: true,
+                            }).await;
                             self.message_list.push(MessageEntry::ToolResult {
                                 name: info.name.clone(),
                                 output: "Permission denied".to_string(),
@@ -1042,13 +1081,8 @@ impl App {
                         }
                     });
 
-                    let engine_clone = engine.clone();
-                    let tx_result = tx.clone();
-                    tokio::spawn(async move {
-                        let mut eng = engine_clone.lock().await;
-                        let result = eng.run_turn(&stream_tx).await;
-                        let _ = tx_result.send(AppEvent::TurnComplete(result.map_err(|e| e.into()))).await;
-                    });
+                    // Tell the engine task to run the next turn
+                    let _ = engine_tx.send(EngineCommand::RunTurn(stream_tx)).await;
                 }
 
                 AppEvent::ShowAskUserDialog {
