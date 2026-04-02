@@ -1,4 +1,4 @@
-use super::login::{build_token_refresh_body, is_claude_ai_auth, TOKEN_URL};
+use super::login::{build_token_refresh_body, is_claude_ai_auth, proxy_url, TOKEN_URL};
 use crate::api::client::AuthMethod;
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
@@ -185,9 +185,10 @@ async fn refresh_oauth_token(refresh_token: &str, stored_scopes: &[String]) -> R
 
     let body = build_token_refresh_body(refresh_token, scopes);
 
-    let client = reqwest::Client::new();
+    let token_url = proxy_url(TOKEN_URL);
+    let client = super::login::debug_http_client();
     let resp = client
-        .post(TOKEN_URL)
+        .post(&token_url)
         .header("Content-Type", "application/json")
         .json(&body)
         .timeout(std::time::Duration::from_secs(15))

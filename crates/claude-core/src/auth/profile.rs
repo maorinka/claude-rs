@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::login::OAUTH_BETA_HEADER;
+use super::login::{proxy_url, OAUTH_BETA_HEADER};
 use crate::config::global::{save_global_config, AccountInfo};
 
 // ── Profile endpoint URLs ───────────────────────────────────────────────────
@@ -16,7 +16,7 @@ const ROLES_URL: &str = "https://api.anthropic.com/api/oauth/claude_cli/roles";
 
 /// CLI profile endpoint (API key).
 fn cli_profile_url() -> String {
-    format!("{}/api/claude_cli_profile", BASE_API_URL)
+    proxy_url(&format!("{}/api/claude_cli_profile", BASE_API_URL))
 }
 
 // ── Profile response types (matching TS OAuthProfileResponse) ───────────────
@@ -89,9 +89,10 @@ pub struct ProfileInfo {
 pub async fn fetch_profile_from_oauth_token(
     access_token: &str,
 ) -> Result<Option<OAuthProfileResponse>> {
-    let client = reqwest::Client::new();
+    let profile_url = proxy_url(PROFILE_URL);
+    let client = super::login::debug_http_client();
     let resp = client
-        .get(PROFILE_URL)
+        .get(&profile_url)
         .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(10))
@@ -122,7 +123,7 @@ pub async fn fetch_profile_from_api_key(
     api_key: &str,
     account_uuid: &str,
 ) -> Result<Option<OAuthProfileResponse>> {
-    let client = reqwest::Client::new();
+    let client = super::login::debug_http_client();
     let resp = client
         .get(&cli_profile_url())
         .header("x-api-key", api_key)
@@ -182,9 +183,10 @@ pub async fn fetch_profile_info(access_token: &str) -> ProfileInfo {
 ///
 /// Matches TS `fetchAndStoreUserRoles()` in `src/services/oauth/client.ts`.
 pub async fn fetch_and_store_user_roles(access_token: &str) -> Result<()> {
-    let client = reqwest::Client::new();
+    let roles_url = proxy_url(ROLES_URL);
+    let client = super::login::debug_http_client();
     let resp = client
-        .get(ROLES_URL)
+        .get(&roles_url)
         .header("Authorization", format!("Bearer {}", access_token))
         .timeout(std::time::Duration::from_secs(10))
         .send()

@@ -84,6 +84,23 @@ fn normalize_model_name(name: &str) -> String {
     }
 }
 
+fn resolve_max_output_tokens(
+    model: &str,
+    settings: &claude_core::config::settings::Settings,
+) -> u64 {
+    if let Ok(value) = std::env::var("CLAUDE_CODE_MAX_OUTPUT_TOKENS") {
+        if let Ok(parsed) = value.trim().parse::<u64>() {
+            return parsed;
+        }
+    }
+
+    if let Some(max_tokens) = settings.max_tokens {
+        return u64::from(max_tokens);
+    }
+
+    claude_core::api::client::get_max_output_tokens_for_model(model)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -283,7 +300,18 @@ async fn main() -> Result<()> {
 
     // Create API client
     let model_display = model.clone();
+    let account_uuid = if matches!(&auth, claude_core::api::client::AuthMethod::OAuthToken(_)) {
+        claude_core::config::global::load_global_config()
+            .ok()
+            .and_then(|config| config.oauth_account.map(|account| account.account_uuid))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let api_config = claude_core::api::client::ApiConfig {
+        max_tokens: resolve_max_output_tokens(&model, &settings),
+        session_id: claude_core::api::client::get_session_id().clone(),
+        account_uuid,
         model,
         ..Default::default()
     };

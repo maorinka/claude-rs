@@ -1,7 +1,9 @@
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use reqwest::Response;
 use serde_json::{json, Value};
 
+use crate::auth::login::{debug_http_client, proxy_url};
 use crate::types::content::ContentBlock;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -78,6 +80,10 @@ pub struct ApiConfig {
     pub speed: Option<Speed>,
     /// Anthropic API version header value.
     pub api_version: String,
+    /// Stable process-scoped session id, matching TS bootstrap session behavior.
+    pub session_id: String,
+    /// OAuth account UUID when available.
+    pub account_uuid: String,
 }
 
 impl Default for ApiConfig {
@@ -85,12 +91,45 @@ impl Default for ApiConfig {
         Self {
             base_url: "https://api.anthropic.com".into(),
             model: "claude-opus-4-6".into(),
-            max_tokens: 64000,
+            max_tokens: get_max_output_tokens_for_model("claude-opus-4-6"),
             thinking: ThinkingConfig::Adaptive,
             speed: None,
             api_version: "2023-06-01".into(),
+            session_id: get_session_id().clone(),
+            account_uuid: String::new(),
         }
     }
+}
+
+const CAPPED_DEFAULT_MAX_TOKENS: u64 = 8_192;
+
+static PROCESS_SESSION_ID: Lazy<String> = Lazy::new(|| uuid::Uuid::new_v4().to_string());
+
+pub fn get_session_id() -> &'static String {
+    &PROCESS_SESSION_ID
+}
+
+pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
+    let lower = model.to_ascii_lowercase();
+    let default_tokens = if lower.contains("opus-4-1") || lower.contains("opus-4") {
+        32_000
+    } else if lower.contains("claude-3-opus") {
+        4_096
+    } else if lower.contains("claude-3-sonnet") {
+        8_192
+    } else if lower.contains("claude-3-haiku") {
+        4_096
+    } else if lower.contains("3-5-sonnet") || lower.contains("3-5-haiku") {
+        8_192
+    } else if lower.contains("3-7-sonnet") {
+        32_000
+    } else {
+        32_000
+    };
+
+    // Match TS slot-reservation cap: normal requests default to 8k unless the
+    // model's native default is lower.
+    std::cmp::min(default_tokens, CAPPED_DEFAULT_MAX_TOKENS)
 }
 
 // ── Tool definition (for the request body) ───────────────────────────────────
@@ -179,11 +218,10 @@ pub fn build_request_body(
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
     // containing device_id, account_uuid, and session_id.
     let device_id = get_or_create_device_id();
-    let session_id = uuid::Uuid::new_v4().to_string();
     let user_id_obj = json!({
         "device_id": device_id,
-        "account_uuid": "",
-        "session_id": session_id,
+        "account_uuid": config.account_uuid,
+        "session_id": config.session_id,
     });
     body["metadata"] = json!({
         "user_id": user_id_obj.to_string(),
@@ -206,9 +244,6 @@ pub fn build_request_body(
             ]
         });
     }
-
-    // output_config: empty object matches TS behaviour when no effort/budget is set.
-    body["output_config"] = json!({});
 
     body
 }
@@ -246,17 +281,22 @@ pub struct ApiClient {
 
 impl ApiClient {
     /// Create a new `ApiClient` with the given configuration and auth method.
-    pub fn new(config: ApiConfig, auth: AuthMethod) -> Self {
+    pub fn new(mut config: ApiConfig, auth: AuthMethod) -> Self {
+        config.base_url = proxy_url(&config.base_url);
         Self {
             config,
             auth,
-            http: reqwest::Client::new(),
+            http: debug_http_client(),
         }
     }
 
     /// POST a streaming request to `/v1/messages` and return the raw response.
     ///
-    /// The caller is responsible for reading the SSE stream from the response body.
+    /// Includes retry logic matching the TS `withRetry()` in
+    /// `src/services/api/withRetry.ts`:
+    /// - 429 (rate limit) and 529 (overloaded): retry with exponential backoff
+    /// - 401 (unauthorized): refresh OAuth token and retry once
+    /// - Other errors: fail immediately
     pub async fn stream_request(
         &self,
         messages: &[Value],
@@ -274,15 +314,29 @@ impl ApiClient {
             }
         }
 
-        for has_retried_after_401 in [false, true] {
-            let auth = match (&self.auth, has_retried_after_401) {
-                (AuthMethod::OAuthToken(_), true) => {
+        // Retry configuration matching TS withRetry defaults:
+        // - Max 8 attempts for transient errors (429/529)
+        // - Exponential backoff starting at 1s, max 60s
+        // - One 401 refresh retry
+        const MAX_RETRIES: u32 = 8;
+        const BASE_DELAY_MS: u64 = 1000;
+        const MAX_DELAY_MS: u64 = 60_000;
+
+        let mut has_retried_after_401 = false;
+        let mut retry_count: u32 = 0;
+
+        loop {
+            let auth = if has_retried_after_401 {
+                if let AuthMethod::OAuthToken(_) = &self.auth {
                     crate::auth::resolve::resolve_stored_oauth_token(false)
                         .await?
                         .map(AuthMethod::OAuthToken)
                         .unwrap_or_else(|| self.auth.clone())
+                } else {
+                    self.auth.clone()
                 }
-                _ => self.auth.clone(),
+            } else {
+                self.auth.clone()
             };
             let (header_name, header_value) = auth.to_header();
 
@@ -293,20 +347,19 @@ impl ApiClient {
                 .header("content-type", "application/json")
                 .header("accept", "application/json")
                 .header("user-agent", "claude-cli/2.1.88 (external, cli)")
+                .header("x-claude-code-session-id", &self.config.session_id)
                 .header("x-stainless-lang", "js")
                 .header("x-stainless-package-version", "2.2.0")
                 .header("x-stainless-runtime", "node")
-                .header("x-stainless-retry-count", "0")
+                .header("x-stainless-retry-count", retry_count.to_string())
                 .header(header_name, header_value);
 
+            // Beta headers matching TS getAllModelBetas() for firstParty + OAuth:
             let mut betas = vec![
                 "claude-code-20250219",
                 "interleaved-thinking-2025-05-14",
                 "context-management-2025-06-27",
                 "prompt-caching-scope-2026-01-05",
-                "effort-2025-11-24",
-                "web-search-2025-03-05",
-                "token-efficient-tools-2026-03-28",
             ];
             if auth.is_oauth() {
                 betas.push("oauth-2025-04-20");
@@ -323,12 +376,43 @@ impl ApiClient {
             }
 
             let status = response.status().as_u16();
+
+            // 401: try refreshing OAuth token once (matching TS handleOAuth401Error)
             if status == 401 && !has_retried_after_401 {
+                has_retried_after_401 = true;
                 if let AuthMethod::OAuthToken(failed_token) = &auth {
                     if crate::auth::resolve::handle_oauth_401_error(failed_token).await? {
+                        tracing::info!("OAuth token refreshed after 401, retrying");
                         continue;
                     }
                 }
+            }
+
+            // 429 or 529: retry with exponential backoff (matching TS withRetry)
+            if (status == 429 || status == 529) && retry_count < MAX_RETRIES {
+                retry_count += 1;
+
+                // Parse retry-after header if present, otherwise use exponential backoff
+                let delay_ms = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(|secs| secs * 1000)
+                    .unwrap_or_else(|| {
+                        let exp = BASE_DELAY_MS * 2u64.pow(retry_count - 1);
+                        exp.min(MAX_DELAY_MS)
+                    });
+
+                tracing::warn!(
+                    "Rate limited ({}), retry {}/{} after {}ms",
+                    status,
+                    retry_count,
+                    MAX_RETRIES,
+                    delay_ms
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue;
             }
 
             let err_body = response.text().await.unwrap_or_default();
@@ -343,7 +427,37 @@ impl ApiClient {
                 &err_body[..err_body.len().min(500)]
             );
         }
+    }
+}
 
-        anyhow::bail!("unreachable API retry state")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_output_tokens_match_ts_slot_reservation_cap() {
+        assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 8_192);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-6"), 8_192);
+        assert_eq!(get_max_output_tokens_for_model("claude-haiku-4-5"), 8_192);
+        assert_eq!(
+            get_max_output_tokens_for_model("claude-3-opus-20240229"),
+            4_096
+        );
+    }
+
+    #[test]
+    fn request_metadata_uses_stable_session_and_account_uuid() {
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            session_id: "session-123".into(),
+            account_uuid: "account-456".into(),
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[]);
+        let user_id = body["metadata"]["user_id"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(user_id).unwrap();
+        assert_eq!(parsed["session_id"], "session-123");
+        assert_eq!(parsed["account_uuid"], "account-456");
     }
 }

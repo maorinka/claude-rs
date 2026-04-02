@@ -10,6 +10,12 @@ use anyhow::{Context, Result};
 use tokio::io::AsyncBufReadExt;
 
 // ── OAuth constants matching the real Claude Code (src/constants/oauth.ts) ────
+//
+// All URL constants support env var overrides via CLAUDE_DEBUG_PROXY_BASE.
+// When set, all URLs are rewritten to go through the proxy:
+//   CLAUDE_DEBUG_PROXY_BASE=http://localhost:8888
+//   platform.claude.com/v1/oauth/token → localhost:8888/platform/v1/oauth/token
+//   api.anthropic.com/api/oauth/profile → localhost:8888/api/api/oauth/profile
 
 /// Console (API) authorization URL.
 pub const CONSOLE_AUTHORIZE_URL: &str = "https://platform.claude.com/oauth/authorize";
@@ -39,6 +45,55 @@ pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 /// OAuth beta header value — required for Bearer OAuth on API routes.
 pub const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+
+/// Rewrite a URL through the debug proxy if CLAUDE_DEBUG_PROXY_BASE is set.
+///
+/// Maps:
+///   https://platform.claude.com/path → {base}/platform/path
+///   https://api.anthropic.com/path   → {base}/api/path
+///   https://claude.com/cai/path      → {base}/cai/path
+/// Returns true when traffic is being routed through the debug proxy.
+pub fn is_debug_proxy_active() -> bool {
+    std::env::var("CLAUDE_DEBUG_PROXY_BASE")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+}
+
+/// Rewrite a URL through the debug proxy if CLAUDE_DEBUG_PROXY_BASE is set.
+///
+/// Maps:
+///   https://platform.claude.com/path → {base}/platform/path
+///   https://api.anthropic.com/path   → {base}/api/path
+///   https://claude.com/cai/path      → {base}/cai/path
+pub fn proxy_url(original: &str) -> String {
+    let base = match std::env::var("CLAUDE_DEBUG_PROXY_BASE") {
+        Ok(b) if !b.is_empty() => b.trim_end_matches('/').to_string(),
+        _ => return original.to_string(),
+    };
+
+    if let Some(rest) = original.strip_prefix("https://platform.claude.com") {
+        return format!("{}/platform{}", base, rest);
+    }
+    if let Some(rest) = original.strip_prefix("https://api.anthropic.com") {
+        return format!("{}/api{}", base, rest);
+    }
+    if let Some(rest) = original.strip_prefix("https://claude.com/cai") {
+        return format!("{}/cai{}", base, rest);
+    }
+    original.to_string()
+}
+
+/// Build a reqwest::Client that adds `x-client-tag: RS` when the debug proxy
+/// is active, so the proxy can distinguish Rust traffic from TS traffic.
+pub fn debug_http_client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if is_debug_proxy_active() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-client-tag", "RS".parse().unwrap());
+        builder = builder.default_headers(headers);
+    }
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
 
 // ── OAuth scope constants matching TS (src/constants/oauth.ts) ───────────────
 
@@ -284,9 +339,12 @@ async fn exchange_code_for_tokens(
 ) -> Result<(OAuthStoredTokens, Option<TokenAccountInfo>)> {
     let body = build_token_exchange_body(code, redirect_uri, code_verifier, state);
 
-    let client = reqwest::Client::new();
+    let token_url = proxy_url(TOKEN_URL);
+    tracing::debug!("Token exchange POST → {}", token_url);
+
+    let client = debug_http_client();
     let resp = client
-        .post(TOKEN_URL)
+        .post(&token_url)
         .header("Content-Type", "application/json")
         .json(&body)
         .timeout(std::time::Duration::from_secs(15))
@@ -375,9 +433,10 @@ async fn refresh_for_login(
 )> {
     let body = build_token_refresh_body(refresh_token, Some(scopes));
 
-    let client = reqwest::Client::new();
+    let token_url = proxy_url(TOKEN_URL);
+    let client = debug_http_client();
     let resp = client
-        .post(TOKEN_URL)
+        .post(&token_url)
         .header("Content-Type", "application/json")
         .json(&body)
         .timeout(std::time::Duration::from_secs(15))
@@ -558,10 +617,10 @@ async fn fetch_and_store_first_token_date(access_token: &str) -> Result<()> {
         return Ok(());
     }
 
-    let url = "https://api.anthropic.com/api/organization/claude_code_first_token_date";
-    let client = reqwest::Client::new();
+    let url = proxy_url("https://api.anthropic.com/api/organization/claude_code_first_token_date");
+    let client = debug_http_client();
     let resp = client
-        .get(url)
+        .get(&url)
         .header("Authorization", format!("Bearer {}", access_token))
         .header("anthropic-beta", OAUTH_BETA_HEADER)
         .timeout(std::time::Duration::from_secs(10))
@@ -602,9 +661,10 @@ async fn fetch_and_store_first_token_date(access_token: &str) -> Result<()> {
 ///
 /// Matches the TS `createAndStoreApiKey()` in `src/services/oauth/client.ts`.
 async fn create_and_store_api_key(access_token: &str) -> Result<Option<String>> {
-    let client = reqwest::Client::new();
+    let api_key_url = proxy_url(API_KEY_URL);
+    let client = debug_http_client();
     let resp = client
-        .post(API_KEY_URL)
+        .post(&api_key_url)
         .header("Authorization", format!("Bearer {}", access_token))
         .timeout(std::time::Duration::from_secs(15))
         .send()
