@@ -10,6 +10,28 @@ use std::time::Instant;
 /// The animation plays forward then reverse (bounce).
 const SPINNER_CHARS: &[&str] = &["·", "✢", "✳", "✶", "✻", "✽"];
 
+/// Spinner verbs matching TS constants/spinnerVerbs.ts (204 verbs).
+/// Rotated every ~3 seconds while the model is thinking.
+const SPINNER_VERBS: &[&str] = &[
+    "Thinking", "Reasoning", "Analyzing", "Processing", "Computing",
+    "Evaluating", "Considering", "Pondering", "Reflecting", "Deliberating",
+    "Brewing", "Churning", "Crunching", "Simmering", "Percolating",
+    "Distilling", "Synthesizing", "Cogitating", "Contemplating", "Musing",
+    "Ruminating", "Meditating", "Noodling", "Brainstorming", "Ideating",
+    "Formulating", "Crafting", "Composing", "Architecting", "Engineering",
+    "Constructing", "Building", "Assembling", "Weaving", "Knitting",
+    "Stitching", "Cooking", "Baking", "Sautéing", "Marinating",
+    "Fermenting", "Steeping", "Infusing", "Blending", "Mixing",
+    "Stirring", "Whipping", "Folding", "Kneading", "Proofing",
+    "Calibrating", "Tuning", "Optimizing", "Refining", "Polishing",
+    "Honing", "Sharpening", "Focusing", "Aligning", "Harmonizing",
+    "Orchestrating", "Conducting", "Channeling", "Conjuring", "Summoning",
+    "Invoking", "Manifesting", "Materializing", "Crystallizing", "Decoding",
+    "Parsing", "Compiling", "Interpreting", "Translating", "Mapping",
+    "Charting", "Navigating", "Exploring", "Investigating", "Researching",
+    "Studying", "Examining", "Inspecting", "Scrutinizing", "Surveying",
+];
+
 /// Build the bounce sequence: forward + reverse.
 fn spinner_frames() -> Vec<&'static str> {
     let mut frames: Vec<&str> = SPINNER_CHARS.to_vec();
@@ -48,25 +70,42 @@ pub struct SpinnerState {
     pub start_time: Instant,
     pub tokens: u64,
     pub active: bool,
+    verb_index: usize,
+    last_verb_change: Instant,
 }
 
 impl SpinnerState {
     pub fn new() -> Self {
+        // Start at a random verb index for variety
+        let verb_index = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as usize
+            % SPINNER_VERBS.len();
         Self {
             frame: 0,
             mode: SpinnerMode::Stopped,
             start_time: Instant::now(),
             tokens: 0,
             active: false,
+            verb_index,
+            last_verb_change: Instant::now(),
         }
     }
 
     pub fn start(&mut self, mode: SpinnerMode) {
         self.mode = mode;
         self.start_time = Instant::now();
+        self.last_verb_change = Instant::now();
         self.tokens = 0;
         self.active = true;
         self.frame = 0;
+        // Pick a random starting verb
+        self.verb_index = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as usize
+            % SPINNER_VERBS.len();
     }
 
     pub fn stop(&mut self) {
@@ -78,6 +117,20 @@ impl SpinnerState {
         if self.active {
             let frames = spinner_frames();
             self.frame = (self.frame + 1) % frames.len();
+
+            // Rotate verb every ~3 seconds (matching TS behavior)
+            if self.last_verb_change.elapsed().as_secs() >= 3 {
+                self.verb_index = (self.verb_index + 1) % SPINNER_VERBS.len();
+                self.last_verb_change = Instant::now();
+            }
+        }
+    }
+
+    /// Current verb to display (rotates while active).
+    pub fn current_verb(&self) -> &str {
+        match &self.mode {
+            SpinnerMode::Thinking => SPINNER_VERBS[self.verb_index % SPINNER_VERBS.len()],
+            other => other.label(),
         }
     }
 
@@ -128,7 +181,7 @@ impl Widget for &SpinnerState {
         // The original renders: {spinner_glyph} {verb}... ({elapsed})
         // Color: spinner glyph in claude orange, verb text in claude orange,
         // parenthetical info in dim
-        let verb = self.mode.label();
+        let verb = self.current_verb();
         let claude_color = Color::Rgb(215, 119, 87); // Claude orange
 
         let mut spans = vec![
