@@ -84,7 +84,7 @@ impl Default for ApiConfig {
     fn default() -> Self {
         Self {
             base_url: "https://api.anthropic.com".into(),
-            model: "claude-sonnet-4-6".into(),
+            model: "claude-opus-4-6".into(),
             max_tokens: 64000,
             thinking: ThinkingConfig::Adaptive,
             speed: None,
