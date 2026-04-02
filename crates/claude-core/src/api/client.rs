@@ -191,7 +191,7 @@ pub fn build_request_body(
 
     // context_management: mirrors TS getAPIContextManagement().
     // For adaptive thinking, send clear_thinking strategy keeping all turns.
-    if matches!(config.thinking, ThinkingConfig::Adaptive | ThinkingConfig::Enabled { .. }) {
+    if supports_thinking && matches!(config.thinking, ThinkingConfig::Adaptive | ThinkingConfig::Enabled { .. }) {
         body["context_management"] = json!({
             "edits": [
                 {
