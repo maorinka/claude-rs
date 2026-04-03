@@ -90,6 +90,7 @@ enum EngineCommand {
     },
     RunTurn(mpsc::Sender<StreamEvent>),
     LoadMessages(Vec<serde_json::Value>),
+    SetModel(String),
 }
 
 /// Pending tool that needs permission before execution.
@@ -459,6 +460,9 @@ impl App {
                         EngineCommand::LoadMessages(msgs) => {
                             engine.load_messages(msgs);
                         }
+                        EngineCommand::SetModel(model) => {
+                            engine.set_model(model);
+                        }
                     }
                 }
             });
@@ -642,6 +646,7 @@ impl App {
                                 if let Some((model, effort)) = self.model_picker.confirm() {
                                     let display = claude_core::commands::builtin::render_model_name(&model);
                                     self.model_name = model.clone();
+                                    let _ = engine_tx.send(EngineCommand::SetModel(model.clone())).await;
                                     if let Ok(mut state) = self.shared_state.lock() {
                                         state.model = model;
                                     }
@@ -815,6 +820,7 @@ impl App {
                         let new_model = claude_core::commands::builtin::parse_user_specified_model(args);
                         let display = claude_core::commands::builtin::render_model_name(&new_model);
                         self.model_name = new_model.clone();
+                        let _ = engine_tx.send(EngineCommand::SetModel(new_model.clone())).await;
                         if let Some(ref shared) = Some(&self.shared_state) {
                             if let Ok(mut state) = shared.lock() {
                                 state.model = new_model;

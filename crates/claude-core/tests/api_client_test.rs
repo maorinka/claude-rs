@@ -31,7 +31,7 @@ fn test_build_request_body() {
         thinking: ThinkingConfig::Adaptive,
         ..Default::default()
     };
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
     assert_eq!(body["model"], "claude-sonnet-4-6");
     assert_eq!(body["max_tokens"], 8000);
     assert_eq!(body["stream"], true);
@@ -47,7 +47,7 @@ fn test_build_request_body_thinking_enabled() {
         },
         ..Default::default()
     };
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["thinking"]["budget_tokens"], 10000);
 }
@@ -59,14 +59,14 @@ fn test_build_request_body_with_speed() {
         speed: Some(Speed::Fast),
         ..Default::default()
     };
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
     assert_eq!(body["speed"], "fast");
 }
 
 #[test]
 fn test_build_request_body_includes_web_search_server_tool() {
     let config = ApiConfig::default();
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
 
     // The tools array should contain the web_search server tool definition
     let tools = body["tools"].as_array().expect("tools should be an array");
@@ -90,7 +90,7 @@ fn test_build_request_body_web_search_appended_to_existing_tools() {
         description: "A tool".to_string(),
         input_schema: serde_json::json!({"type": "object"}),
     }];
-    let body = build_request_body(&config, &[], &[], &tools);
+    let body = build_request_body(&config, &[], &[], &tools, false);
 
     let tools_arr = body["tools"].as_array().expect("tools should be an array");
     // Should have the regular tool + web_search server tool

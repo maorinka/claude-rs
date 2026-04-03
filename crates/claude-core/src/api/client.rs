@@ -180,9 +180,10 @@ pub fn build_request_body(
     messages: &[Value],
     system: &[ContentBlock],
     tools: &[ToolDefinition],
+    is_oauth: bool,
 ) -> Value {
     if minimal_transport_enabled() {
-        return build_minimal_request_body(config, messages, system, tools);
+        return build_minimal_request_body(config, messages, system, tools, is_oauth);
     }
 
     let mut body = json!({
@@ -219,16 +220,31 @@ pub fn build_request_body(
         };
     }
 
-    // System prompt — prepend model identity so it's always current.
+    // System prompt assembly. Order matters:
+    //
+    // WARNING: The billing attribution block MUST be the very first content
+    // block in the system prompt array when using OAuth. The Anthropic API
+    // uses it to identify the request as a Claude Code client and apply the
+    // correct rate-limit tier. Without it, OAuth requests are immediately
+    // rejected with 429. If it is not the first block (e.g. model identity
+    // is prepended before it), the server won't find it and you get 429s.
+    //
+    // Order: [attribution (OAuth only)] -> [model identity] -> [user system blocks]
     if !system.is_empty() {
+        let mut full_system: Vec<ContentBlock> = Vec::new();
+        if is_oauth {
+            full_system.push(ContentBlock::Text {
+                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
+                    .to_string(),
+            });
+        }
         let marketing = model_marketing_name(&config.model);
-        let model_identity = ContentBlock::Text {
+        full_system.push(ContentBlock::Text {
             text: format!(
                 "You are powered by the model named {}. The exact model ID is {}.",
                 marketing, config.model
             ),
-        };
-        let mut full_system = vec![model_identity];
+        });
         full_system.extend_from_slice(system);
         body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
     }
@@ -276,6 +292,7 @@ fn build_minimal_request_body(
     messages: &[Value],
     system: &[ContentBlock],
     tools: &[ToolDefinition],
+    is_oauth: bool,
 ) -> Value {
     let mut body = json!({
         "model": config.model,
@@ -284,8 +301,18 @@ fn build_minimal_request_body(
         "messages": messages,
     });
 
-    if !system.is_empty() {
-        body["system"] = serde_json::to_value(system).unwrap_or(Value::Null);
+    // See the comment in build_request_body() — billing attribution MUST be
+    // the first system prompt block for OAuth, or the API returns 429.
+    if !system.is_empty() || is_oauth {
+        let mut full_system: Vec<ContentBlock> = Vec::new();
+        if is_oauth {
+            full_system.push(ContentBlock::Text {
+                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
+                    .to_string(),
+            });
+        }
+        full_system.extend_from_slice(system);
+        body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
     }
 
     if !tools.is_empty() {
@@ -363,21 +390,7 @@ impl ApiClient {
         _event_tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<Response> {
         let url = format!("{}/v1/messages", self.config.base_url);
-        // When using OAuth, prepend the billing attribution header to the system
-        // prompt so the API applies the correct rate-limit tier.
-        let system_with_attribution;
-        let system = if self.auth.is_oauth() {
-            let mut blocks = vec![ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
-                    .to_string(),
-            }];
-            blocks.extend_from_slice(system);
-            system_with_attribution = blocks;
-            &system_with_attribution
-        } else {
-            system
-        };
-        let body = build_request_body(&self.config, messages, system, tools);
+        let body = build_request_body(&self.config, messages, system, tools, self.auth.is_oauth());
         let minimal_transport = minimal_transport_enabled();
 
         // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
@@ -466,7 +479,7 @@ mod tests {
             account_uuid: "account-456".into(),
             ..Default::default()
         };
-        let body = build_request_body(&config, &[], &[], &[]);
+        let body = build_request_body(&config, &[], &[], &[], false);
         let user_id = body["metadata"]["user_id"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(user_id).unwrap();
         assert_eq!(parsed["session_id"], "session-123");
@@ -481,7 +494,7 @@ mod tests {
             max_tokens: 8_192,
             ..Default::default()
         };
-        let body = build_request_body(&config, &[], &[], &[]);
+        let body = build_request_body(&config, &[], &[], &[], false);
         assert!(body.get("metadata").is_none());
         assert!(body.get("context_management").is_none());
         assert!(body.get("thinking").is_none());

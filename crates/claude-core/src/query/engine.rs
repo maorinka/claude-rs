@@ -54,6 +54,11 @@ impl QueryEngine {
         self.max_turns = Some(max);
     }
 
+    /// Update the model used for API requests (e.g. after /model switch).
+    pub fn set_model(&mut self, model: String) {
+        self.api_client.config.model = model;
+    }
+
     /// Load messages from a previous session transcript to resume a conversation.
     /// Each value should be a JSON message object with "role" and "content" fields.
     pub fn load_messages(&mut self, messages: Vec<serde_json::Value>) {
