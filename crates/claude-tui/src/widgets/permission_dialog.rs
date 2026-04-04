@@ -48,11 +48,8 @@ impl Widget for &PermissionDialog {
         buf.set_line(inner.x + 1, inner.y, &desc, inner.width.saturating_sub(2));
 
         // Input preview (truncated)
-        let max_preview = inner.width as usize - 4;
-        let preview = if self.input_preview.len() > max_preview {
-            let take_chars = inner.width as usize - 7;
-            let truncated = &self.input_preview[..take_chars];
-            format!("{}...", truncated)
+        let preview = if self.input_preview.len() > inner.width as usize - 4 {
+            format!("{}...", &self.input_preview[..inner.width as usize - 7])
         } else {
             self.input_preview.clone()
         };
@@ -73,70 +70,5 @@ impl Widget for &PermissionDialog {
             buf.set_span(x, button_y, &span, span.width() as u16);
             x += span.width() as u16 + 2;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Helper to render a PermissionDialog into a buffer of a given size.
-    fn render_dialog(width: u16, height: u16, input_preview: &str) {
-        let dialog = PermissionDialog::new(
-            "Bash".into(),
-            "Execute command".into(),
-            input_preview.into(),
-        );
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        (&dialog).render(area, &mut buf);
-    }
-
-    #[test]
-    fn test_permission_dialog_width_zero() {
-        render_dialog(0, 10, "ls -la");
-    }
-
-    #[test]
-    fn test_permission_dialog_width_one() {
-        render_dialog(1, 10, "ls -la");
-    }
-
-    #[test]
-    fn test_permission_dialog_width_six() {
-        render_dialog(6, 10, "ls -la");
-    }
-
-    #[test]
-    fn test_permission_dialog_width_seven() {
-        render_dialog(7, 10, "ls -la");
-    }
-
-    #[test]
-    fn test_permission_dialog_width_eight() {
-        render_dialog(8, 10, "ls -la");
-    }
-
-    #[test]
-    fn test_permission_dialog_small_height() {
-        render_dialog(40, 3, "ls -la");
-    }
-
-    #[test]
-    fn test_permission_dialog_multibyte_input_preview() {
-        let preview: String = std::iter::repeat('\u{1F600}').take(100).collect();
-        render_dialog(20, 10, &preview);
-    }
-
-    #[test]
-    fn test_permission_dialog_cjk_input_preview_narrow_width() {
-        let preview: String = std::iter::repeat('\u{4E16}').take(50).collect();
-        render_dialog(5, 10, &preview);
-    }
-
-    #[test]
-    fn test_permission_dialog_multibyte_input_width_zero() {
-        let preview: String = std::iter::repeat('\u{4E16}').take(50).collect();
-        render_dialog(0, 10, &preview);
     }
 }

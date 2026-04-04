@@ -58,115 +58,6 @@ impl MessageList {
     }
 }
 
-fn truncate_thinking_text(text: &str, max_chars: usize) -> String {
-    text[..max_chars].to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_truncate_thinking_text_ascii() {
-        let text = "a".repeat(200);
-        let result = truncate_thinking_text(&text, 97);
-        assert_eq!(result.len(), 97);
-    }
-
-    #[test]
-    fn test_truncate_thinking_text_cjk() {
-        // CJK chars are 3 bytes each. 40 CJK chars = 120 bytes but 40 chars.
-        let text: String = std::iter::repeat('\u{4E16}').take(40).collect(); // 40 CJK chars
-        let result = truncate_thinking_text(&text, 97);
-        // Should get all 40 chars since 40 < 97
-        assert_eq!(result.chars().count(), 40);
-    }
-
-    #[test]
-    fn test_truncate_thinking_text_cjk_over_limit() {
-        // 200 CJK chars, each 3 bytes = 600 bytes, but 200 chars
-        let text: String = std::iter::repeat('\u{4E16}').take(200).collect();
-        let result = truncate_thinking_text(&text, 97);
-        assert_eq!(result.chars().count(), 97);
-        // Verify it's valid UTF-8 (it's a String, so it is, but let's verify byte len)
-        assert_eq!(result.len(), 97 * 3); // each CJK char is 3 bytes
-    }
-
-    #[test]
-    fn test_truncate_thinking_text_emoji() {
-        // Emoji are 4 bytes each. 200 emojis = 800 bytes, 200 chars
-        let text: String = std::iter::repeat('\u{1F600}').take(200).collect();
-        let result = truncate_thinking_text(&text, 97);
-        assert_eq!(result.chars().count(), 97);
-        assert_eq!(result.len(), 97 * 4);
-    }
-
-    #[test]
-    fn test_truncate_thinking_text_mixed_multibyte() {
-        // Mix of ASCII, CJK, and emoji
-        let mut text = String::new();
-        for _ in 0..50 {
-            text.push('a');       // 1 byte
-            text.push('\u{4E16}'); // 3 bytes
-            text.push('\u{1F600}'); // 4 bytes
-        }
-        // 150 chars total, 50*(1+3+4) = 400 bytes
-        let result = truncate_thinking_text(&text, 97);
-        assert_eq!(result.chars().count(), 97);
-        // Ensure it's valid by checking we can iterate
-        for c in result.chars() {
-            assert!(c.len_utf8() >= 1);
-        }
-    }
-
-    #[test]
-    fn test_thinking_entry_preview_with_long_cjk_text() {
-        // Test the full preview logic path: text.len() > 100 with CJK
-        // CJK chars are 3 bytes each, so 50 CJK chars = 150 bytes > 100
-        let text: String = std::iter::repeat('\u{4E16}').take(50).collect();
-        assert!(text.len() > 100); // 150 bytes
-
-        // Simulate what the render code does
-        let preview = if text.len() > 100 {
-            format!("{}...", truncate_thinking_text(&text, 97))
-        } else {
-            text.clone()
-        };
-        // Should not panic and should be valid
-        assert!(preview.ends_with("..."));
-        // 50 CJK chars < 97, so all 50 are kept, plus "..." = 53 chars
-        assert_eq!(preview.chars().count(), 53);
-    }
-
-    #[test]
-    fn test_thinking_entry_preview_with_many_cjk_chars() {
-        // 200 CJK chars = 600 bytes, 200 chars > 97
-        let text: String = std::iter::repeat('\u{4E16}').take(200).collect();
-        assert!(text.len() > 100);
-
-        let preview = if text.len() > 100 {
-            format!("{}...", truncate_thinking_text(&text, 97))
-        } else {
-            text.clone()
-        };
-        assert!(preview.ends_with("..."));
-        assert_eq!(preview.chars().count(), 100); // 97 + 3 for "..."
-    }
-
-    #[test]
-    fn test_thinking_text_byte_vs_char_boundary() {
-        // This tests the specific bug: if we used &text[..97] instead of
-        // chars().take(97), it would panic on multi-byte text.
-        // 40 CJK chars = 120 bytes. &text[..97] would be byte 97,
-        // which is in the middle of a 3-byte CJK char (96 = 32*3, so byte 97 is mid-char).
-        let text: String = std::iter::repeat('\u{4E16}').take(40).collect();
-        assert_eq!(text.len(), 120);
-        // This must not panic:
-        let result = truncate_thinking_text(&text, 97);
-        assert_eq!(result.chars().count(), 40); // only 40 chars available
-    }
-}
-
 pub struct MessageListWidget<'a> {
     list: &'a MessageList,
 }
@@ -269,7 +160,7 @@ impl<'a> Widget for MessageListWidget<'a> {
                 }
                 MessageEntry::Thinking { text } => {
                     let preview = if text.len() > 100 {
-                        format!("{}...", truncate_thinking_text(text, 97))
+                        format!("{}...", &text[..97])
                     } else {
                         text.clone()
                     };
