@@ -60,3 +60,74 @@ fn test_accumulate_multiple_blocks() {
     assert!(matches!(b0, ContentBlock::Text { .. }));
     assert!(matches!(b1, ContentBlock::ToolUse { .. }));
 }
+
+/// Bug #21: Non-object JSON types should be rejected as tool input.
+#[test]
+fn test_tool_input_array_rejected() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(0, ContentBlockStart::ToolUse { id: "tu_1".into(), name: "Bash".into() });
+    acc.on_delta(0, ContentDelta::InputJsonDelta { partial_json: r#"[1, 2, 3]"#.into() });
+    let result = acc.on_stop(0);
+    assert!(result.is_err(), "Array JSON should be rejected as tool input");
+    assert!(
+        result.unwrap_err().to_string().contains("Tool input must be a JSON object"),
+        "Error message should mention JSON object requirement"
+    );
+}
+
+/// Bug #21: String JSON should be rejected as tool input.
+#[test]
+fn test_tool_input_string_rejected() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(0, ContentBlockStart::ToolUse { id: "tu_1".into(), name: "Bash".into() });
+    acc.on_delta(0, ContentDelta::InputJsonDelta { partial_json: r#""just a string""#.into() });
+    let result = acc.on_stop(0);
+    assert!(result.is_err(), "String JSON should be rejected as tool input");
+}
+
+/// Bug #21: Number JSON should be rejected as tool input.
+#[test]
+fn test_tool_input_number_rejected() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(0, ContentBlockStart::ToolUse { id: "tu_1".into(), name: "Bash".into() });
+    acc.on_delta(0, ContentDelta::InputJsonDelta { partial_json: "42".into() });
+    let result = acc.on_stop(0);
+    assert!(result.is_err(), "Number JSON should be rejected as tool input");
+}
+
+/// Bug #21: Null JSON should be rejected as tool input.
+#[test]
+fn test_tool_input_null_rejected() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(0, ContentBlockStart::ToolUse { id: "tu_1".into(), name: "Bash".into() });
+    acc.on_delta(0, ContentDelta::InputJsonDelta { partial_json: "null".into() });
+    let result = acc.on_stop(0);
+    assert!(result.is_err(), "Null JSON should be rejected as tool input");
+}
+
+/// Bug #21: Valid object JSON should still be accepted.
+#[test]
+fn test_tool_input_object_accepted() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(0, ContentBlockStart::ToolUse { id: "tu_1".into(), name: "Bash".into() });
+    acc.on_delta(0, ContentDelta::InputJsonDelta { partial_json: r#"{"key": "value"}"#.into() });
+    let result = acc.on_stop(0);
+    assert!(result.is_ok(), "Object JSON should be accepted as tool input");
+}
+
+/// Bug #21: Empty tool input should default to empty object.
+#[test]
+fn test_tool_input_empty_defaults_to_object() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(0, ContentBlockStart::ToolUse { id: "tu_1".into(), name: "Bash".into() });
+    // No deltas — empty input_json
+    let result = acc.on_stop(0);
+    assert!(result.is_ok(), "Empty input should default to empty object");
+    match result.unwrap() {
+        ContentBlock::ToolUse { input, .. } => {
+            assert!(input.is_object(), "Default input should be an object");
+            assert!(input.as_object().unwrap().is_empty(), "Default input should be empty object");
+        }
+        _ => panic!("Expected ToolUse block"),
+    }
+}

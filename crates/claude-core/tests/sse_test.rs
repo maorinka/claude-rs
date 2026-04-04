@@ -126,3 +126,46 @@ fn test_parse_multiple_sse_events() {
     assert!(matches!(events[1], SseEvent::ContentBlockStart { .. }));
     assert!(matches!(events[2], SseEvent::Ping));
 }
+
+// === Bug #18 tests: malformed SSE events should be skipped but not panic ===
+
+#[test]
+fn test_parse_sse_stream_skips_malformed_events() {
+    // An event with valid event type but invalid JSON data should be skipped
+    let raw = "event: message_start\ndata: {not valid json}\n\nevent: ping\ndata: {}\n\n";
+    let events = parse_sse_stream(raw);
+    // The malformed message_start should be skipped, ping should still parse
+    assert_eq!(events.len(), 1, "Malformed event should be skipped");
+    assert!(matches!(events[0], SseEvent::Ping));
+}
+
+#[test]
+fn test_parse_sse_stream_skips_incomplete_blocks() {
+    // A block with only event: but no data: should be skipped
+    let raw = "event: message_start\n\nevent: ping\ndata: {}\n\n";
+    let events = parse_sse_stream(raw);
+    assert_eq!(events.len(), 1, "Incomplete block should be skipped");
+    assert!(matches!(events[0], SseEvent::Ping));
+}
+
+#[test]
+fn test_parse_sse_stream_skips_data_only_block() {
+    // A block with only data: but no event: should be skipped
+    let raw = "data: {\"foo\":\"bar\"}\n\nevent: ping\ndata: {}\n\n";
+    let events = parse_sse_stream(raw);
+    assert_eq!(events.len(), 1, "Data-only block should be skipped");
+    assert!(matches!(events[0], SseEvent::Ping));
+}
+
+#[test]
+fn test_parse_sse_stream_empty_input() {
+    let events = parse_sse_stream("");
+    assert!(events.is_empty(), "Empty input should produce no events");
+}
+
+#[test]
+fn test_parse_sse_stream_all_malformed() {
+    let raw = "event: message_start\ndata: INVALID\n\nevent: also_bad\ndata: {{{}\n\n";
+    let events = parse_sse_stream(raw);
+    assert!(events.is_empty(), "All malformed events should be skipped");
+}
