@@ -1037,6 +1037,13 @@ impl App {
                     self.permission_dialog = None;
 
                     if pending_tool_index == 0 || pending_tool_index > pending_tools.len() {
+                        // Safety: if we get a stale/orphan permission response,
+                        // recover by clearing engine_busy so the user isn't stuck.
+                        if self.engine_busy && pending_tools.is_empty() {
+                            tracing::warn!("Orphan PermissionResponse with no pending tools — recovering");
+                            self.spinner.stop();
+                            self.engine_busy = false;
+                        }
                         continue;
                     }
                     let tool_idx = pending_tool_index - 1; // We already advanced past it
@@ -1162,6 +1169,11 @@ impl App {
                     self.spinner.stop();
 
                     if tool_idx >= pending_tools.len() {
+                        // Safety: stale tool completion — recover
+                        tracing::warn!(tool_idx, "ToolExecutionComplete for unknown tool_idx — recovering");
+                        if self.engine_busy {
+                            self.engine_busy = false;
+                        }
                         continue;
                     }
                     let info = &pending_tools[tool_idx].info;

@@ -136,6 +136,67 @@ impl QueryEngine {
         }));
     }
 
+    /// Repair orphaned tool_use blocks that lack corresponding tool_result messages.
+    ///
+    /// Scans the message history for assistant messages containing `tool_use` blocks
+    /// and ensures each has a corresponding `tool_result` in a subsequent user message.
+    /// Missing results get a placeholder error result so the API doesn't reject the request.
+    fn repair_orphaned_tool_uses(&mut self) {
+        // Collect all tool_use IDs from assistant messages
+        let mut tool_use_ids: Vec<String> = Vec::new();
+        let mut tool_result_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for msg in &self.messages {
+            let role = msg["role"].as_str().unwrap_or("");
+            if let Some(content) = msg["content"].as_array() {
+                for block in content {
+                    let block_type = block["type"].as_str().unwrap_or("");
+                    match (role, block_type) {
+                        ("assistant", "tool_use") => {
+                            if let Some(id) = block["id"].as_str() {
+                                tool_use_ids.push(id.to_string());
+                            }
+                        }
+                        ("user", "tool_result") => {
+                            if let Some(id) = block["tool_use_id"].as_str() {
+                                tool_result_ids.insert(id.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Find orphaned tool_use IDs (those without a matching tool_result)
+        let orphans: Vec<String> = tool_use_ids
+            .into_iter()
+            .filter(|id| !tool_result_ids.contains(id))
+            .collect();
+
+        if !orphans.is_empty() {
+            tracing::warn!(
+                count = orphans.len(),
+                "Repairing orphaned tool_use blocks without tool_result"
+            );
+            // Add placeholder tool_results for each orphan
+            let mut result_blocks: Vec<serde_json::Value> = Vec::new();
+            for id in &orphans {
+                result_blocks.push(serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": [{"type": "text", "text": "Tool execution was interrupted or failed silently."}],
+                    "is_error": true,
+                }));
+            }
+            self.messages.push(serde_json::json!({
+                "role": "user",
+                "content": result_blocks,
+            }));
+        }
+    }
+
     /// Add the raw assistant message from the API response
     pub fn add_assistant_message(&mut self, content: Vec<serde_json::Value>) {
         self.messages.push(serde_json::json!({
@@ -222,6 +283,11 @@ impl QueryEngine {
                 request_id: format!("turn_{}", self.turn_count),
             })
             .await;
+
+        // Repair orphaned tool_use blocks: if the last assistant message has tool_use
+        // blocks without corresponding tool_result messages, add placeholder results.
+        // This can happen if a tool execution fails silently or the event flow is interrupted.
+        self.repair_orphaned_tool_uses();
 
         // Build dynamic user context prepend (Issue 25).
         // Mirrors TS prependUserContext() — injects currentDate as a <system-reminder>.
