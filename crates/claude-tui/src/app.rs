@@ -121,6 +121,8 @@ pub struct App {
     ask_user_dialog: Option<AskUserDialog>,
     /// True while the engine is processing (prevents double-submit)
     engine_busy: bool,
+    /// Message queued while engine was busy — sent after current turn completes
+    queued_message: Option<String>,
     /// Model name for display in the header
     model_name: String,
     /// Running total of tokens used in this session
@@ -164,6 +166,7 @@ impl App {
             permission_dialog: None,
             ask_user_dialog: None,
             engine_busy: false,
+            queued_message: None,
             model_name: "claude-sonnet-4-6".to_string(),
             total_tokens: 0,
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
@@ -756,6 +759,21 @@ impl App {
                                 self.message_list.push(MessageEntry::System {
                                     text: "[Request interrupted by user]".to_string(),
                                 });
+
+                                // Add error tool_results for any pending tools so the
+                                // message history stays valid for the API.
+                                for pt in &pending_tools {
+                                    let _ = engine_tx
+                                        .send(EngineCommand::AddToolResult {
+                                            id: pt.info.id.clone(),
+                                            content: "Interrupted by user".to_string(),
+                                            is_error: true,
+                                        })
+                                        .await;
+                                }
+                                pending_tools.clear();
+                                pending_tool_index = 0;
+
                                 // Replace the exhausted token so the next turn can be cancelled.
                                 cancel = CancellationToken::new();
                                 let _ = engine_tx
@@ -829,7 +847,16 @@ impl App {
                     }
                 }
                 AppEvent::SubmitPrompt(text) => {
-                    if self.engine_busy || text.trim().is_empty() {
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    if self.engine_busy {
+                        // Queue the message — it will be sent after the current turn completes
+                        self.queued_message = Some(text);
+                        self.prompt.clear();
+                        self.message_list.push(MessageEntry::System {
+                            text: "(message queued — will send after current turn)".to_string(),
+                        });
                         continue;
                     }
 
@@ -1269,6 +1296,14 @@ impl App {
                         Ok(TurnResult::Done(_stop_reason)) => {
                             self.spinner.stop();
                             self.engine_busy = false;
+
+                            // Dispatch any message that was queued while busy
+                            if let Some(queued) = self.queued_message.take() {
+                                let tx2 = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                                });
+                            }
                         }
                         Ok(TurnResult::ToolUse(tool_uses)) => {
                             pending_tools = tool_uses
@@ -1300,6 +1335,14 @@ impl App {
                             self.message_list.push(MessageEntry::System {
                                 text: format!("Error: {}", e),
                             });
+
+                            // Dispatch any message that was queued while busy
+                            if let Some(queued) = self.queued_message.take() {
+                                let tx2 = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                                });
+                            }
                         }
                     }
                 }
