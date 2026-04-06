@@ -121,8 +121,9 @@ pub struct App {
     ask_user_dialog: Option<AskUserDialog>,
     /// True while the engine is processing (prevents double-submit)
     engine_busy: bool,
-    /// Message queued while engine was busy — sent after current turn completes
-    queued_message: Option<String>,
+    /// Messages queued while engine was busy — sent FIFO after turns complete.
+    /// Matches TS commandQueue (messageQueueManager.ts).
+    message_queue: Vec<String>,
     /// Model name for display in the header
     model_name: String,
     /// Running total of tokens used in this session
@@ -166,7 +167,7 @@ impl App {
             permission_dialog: None,
             ask_user_dialog: None,
             engine_busy: false,
-            queued_message: None,
+            message_queue: Vec::new(),
             model_name: "claude-sonnet-4-6".to_string(),
             total_tokens: 0,
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
@@ -588,8 +589,9 @@ impl App {
                     // Reactive queue drain — mirrors TS useQueueProcessor:
                     // when engine becomes idle and there's a queued message, dispatch it.
                     if !self.engine_busy {
-                        if let Some(queued) = self.queued_message.take() {
-                            self.spinner.queued_count = 0;
+                        if let Some(queued) = self.message_queue.first().cloned() {
+                            self.message_queue.remove(0);
+                            self.spinner.queued_count = self.message_queue.len();
                             let tx2 = tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -773,7 +775,9 @@ impl App {
                                 });
 
                                 // Dispatch queued message if any
-                                if let Some(queued) = self.queued_message.take() {
+                                if let Some(queued) = self.message_queue.first().cloned() {
+                                    self.message_queue.remove(0);
+                                    self.spinner.queued_count = self.message_queue.len();
                                     let tx2 = tx.clone();
                                     tokio::spawn(async move {
                                         let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -873,9 +877,9 @@ impl App {
                     if self.engine_busy {
                         // TS behavior (handlePromptSubmit.ts:336): enqueue and clear
                         // input. Show hint on spinner line so user sees it was accepted.
-                        self.queued_message = Some(text);
+                        self.message_queue.push(text);
                         self.prompt.clear();
-                        self.spinner.queued_count += 1;
+                        self.spinner.queued_count = self.message_queue.len();
                         continue;
                     }
 
@@ -1090,7 +1094,9 @@ impl App {
                             self.spinner.stop();
                             self.spinner.queued_count = 0;
                             self.engine_busy = false;
-                            if let Some(queued) = self.queued_message.take() {
+                            if let Some(queued) = self.message_queue.first().cloned() {
+                                self.message_queue.remove(0);
+                                self.spinner.queued_count = self.message_queue.len();
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1227,7 +1233,9 @@ impl App {
                         if self.engine_busy {
                             self.engine_busy = false;
                             self.spinner.queued_count = 0;
-                            if let Some(queued) = self.queued_message.take() {
+                            if let Some(queued) = self.message_queue.first().cloned() {
+                                self.message_queue.remove(0);
+                                self.spinner.queued_count = self.message_queue.len();
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1328,7 +1336,9 @@ impl App {
                             self.engine_busy = false;
 
                             // Dispatch any message that was queued while busy
-                            if let Some(queued) = self.queued_message.take() {
+                            if let Some(queued) = self.message_queue.first().cloned() {
+                                self.message_queue.remove(0);
+                                self.spinner.queued_count = self.message_queue.len();
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1368,7 +1378,9 @@ impl App {
                             });
 
                             // Dispatch any message that was queued while busy
-                            if let Some(queued) = self.queued_message.take() {
+                            if let Some(queued) = self.message_queue.first().cloned() {
+                                self.message_queue.remove(0);
+                                self.spinner.queued_count = self.message_queue.len();
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
