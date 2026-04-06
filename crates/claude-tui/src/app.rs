@@ -730,6 +730,7 @@ impl App {
                                 if let Some(name) = self.command_picker.selected_name() {
                                     let cmd_text = format!("/{}", name);
                                     self.command_picker.close();
+                                    self.prompt.clear();
                                     let _ = tx.send(AppEvent::SubmitPrompt(cmd_text)).await;
                                 } else {
                                     self.command_picker.close();
