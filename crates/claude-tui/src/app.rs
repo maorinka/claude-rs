@@ -756,9 +756,18 @@ impl App {
                                 // message list (appended incrementally by TextDelta handlers).
                                 self.engine_busy = false;
                                 self.spinner.stop();
+                                self.spinner.queued_count = 0;
                                 self.message_list.push(MessageEntry::System {
                                     text: "[Request interrupted by user]".to_string(),
                                 });
+
+                                // Dispatch queued message if any
+                                if let Some(queued) = self.queued_message.take() {
+                                    let tx2 = tx.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                                    });
+                                }
 
                                 // Add error tool_results for any pending tools so the
                                 // message history stays valid for the API.
@@ -1068,7 +1077,14 @@ impl App {
                         if self.engine_busy && pending_tools.is_empty() {
                             tracing::warn!("Orphan PermissionResponse with no pending tools — recovering");
                             self.spinner.stop();
+                            self.spinner.queued_count = 0;
                             self.engine_busy = false;
+                            if let Some(queued) = self.queued_message.take() {
+                                let tx2 = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                                });
+                            }
                         }
                         continue;
                     }
@@ -1199,6 +1215,13 @@ impl App {
                         tracing::warn!(tool_idx, "ToolExecutionComplete for unknown tool_idx — recovering");
                         if self.engine_busy {
                             self.engine_busy = false;
+                            self.spinner.queued_count = 0;
+                            if let Some(queued) = self.queued_message.take() {
+                                let tx2 = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                                });
+                            }
                         }
                         continue;
                     }
