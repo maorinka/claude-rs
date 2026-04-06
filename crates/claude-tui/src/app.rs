@@ -1283,13 +1283,9 @@ impl App {
                                 let raw = data.data.as_str()
                                     .unwrap_or(&data.data.to_string())
                                     .to_string();
-                                // For Edit/Write tools, format as colored diff
-                                let display = if info.name == "Edit" || info.name == "Write" {
-                                    format_edit_result(&data.data)
-                                        .unwrap_or_else(|| raw.clone())
-                                } else {
-                                    raw.clone()
-                                };
+                                let display = format_tool_result_display(
+                                    &info.name, &data.data, &raw,
+                                );
                                 (raw, display, data.is_error)
                             }
                             Err(e) => {
@@ -1865,6 +1861,134 @@ async fn execute_tool(
         permission_mode,
     };
     executor.call(input, &ctx, cancel, None).await
+}
+
+/// Format a tool result for display, extracting relevant content per tool.
+/// Mirrors TS per-tool renderToolResultMessage() functions.
+fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &str) -> String {
+    match tool_name {
+        "Bash" | "PowerShell" => {
+            // TS BashToolResultMessage: shows stdout, stderr separately
+            let stdout = data["stdout"].as_str().unwrap_or("");
+            let stderr = data["stderr"].as_str().unwrap_or("");
+            let code = data["code"].as_i64().unwrap_or(0);
+            let mut parts = Vec::new();
+            if !stdout.is_empty() {
+                parts.push(stdout.to_string());
+            }
+            if !stderr.is_empty() {
+                parts.push(format!("stderr: {}", stderr));
+            }
+            if parts.is_empty() {
+                if code != 0 {
+                    format!("(exit code {})", code)
+                } else {
+                    "(no output)".to_string()
+                }
+            } else {
+                parts.join("\n")
+            }
+        }
+        "Read" => {
+            // TS: "Read N lines"
+            if let Some(content) = data["file"].as_object() {
+                if let Some(n) = content.get("numLines").and_then(|v| v.as_u64()) {
+                    return format!("Read {} {}", n, if n == 1 { "line" } else { "lines" });
+                }
+                if let Some(content_str) = content.get("content").and_then(|v| v.as_str()) {
+                    let n = content_str.lines().count();
+                    return format!("Read {} {}", n, if n == 1 { "line" } else { "lines" });
+                }
+            }
+            // Fallback: count lines in raw content
+            if let Some(content) = data.as_str() {
+                let n = content.lines().count();
+                format!("Read {} {}", n, if n == 1 { "line" } else { "lines" })
+            } else {
+                raw.to_string()
+            }
+        }
+        "Edit" | "Write" => {
+            format_edit_result(data).unwrap_or_else(|| raw.to_string())
+        }
+        "Glob" => {
+            // TS: show file count and list
+            if let Some(files) = data["filenames"].as_array() {
+                let truncated = data["truncated"].as_bool().unwrap_or(false);
+                let suffix = if truncated { "+" } else { "" };
+                format!("{}{} files", files.len(), suffix)
+            } else {
+                raw.to_string()
+            }
+        }
+        "Grep" => {
+            // TS: show file count or match count
+            if let Some(files) = data["filenames"].as_array() {
+                let mode = data["mode"].as_str().unwrap_or("files_with_matches");
+                match mode {
+                    "count" => format!("{} files with matches", files.len()),
+                    "content" => {
+                        if let Some(content) = data["content"].as_str() {
+                            content.to_string()
+                        } else {
+                            format!("{} files", files.len())
+                        }
+                    }
+                    _ => format!("{} files", files.len()),
+                }
+            } else {
+                raw.to_string()
+            }
+        }
+        "Agent" => {
+            // TS: shows agent result summary
+            if let Some(result) = data["result"].as_str() {
+                result.to_string()
+            } else {
+                raw.to_string()
+            }
+        }
+        "TodoWrite" => {
+            // Show a clean confirmation
+            if let Some(msg) = data["message"].as_str() {
+                msg.to_string()
+            } else {
+                "Todos updated".to_string()
+            }
+        }
+        "REPL" => {
+            // Show stdout from REPL execution
+            let stdout = data["stdout"].as_str().unwrap_or("");
+            let stderr = data["stderr"].as_str().unwrap_or("");
+            if !stdout.is_empty() {
+                stdout.to_string()
+            } else if !stderr.is_empty() {
+                stderr.to_string()
+            } else {
+                "(no output)".to_string()
+            }
+        }
+        "AskUserQuestion" | "AskUser" => {
+            // Don't show raw JSON for AskUser
+            if let Some(q) = data["question"].as_str() {
+                q.to_string()
+            } else {
+                raw.to_string()
+            }
+        }
+        _ => {
+            // Default: if it's a JSON object, try to extract a "result" or "message" field
+            if let Some(msg) = data["message"].as_str() {
+                msg.to_string()
+            } else if let Some(result) = data["result"].as_str() {
+                result.to_string()
+            } else if data.is_string() {
+                data.as_str().unwrap_or(raw).to_string()
+            } else {
+                raw.to_string()
+            }
+        }
+    }
 }
 
 /// Format a tool use input into a clean summary like the TS UI.
