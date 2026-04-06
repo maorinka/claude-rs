@@ -139,6 +139,103 @@ pub fn matches_pattern(match_query: &str, matcher: &str) -> bool {
 }
 
 // ============================================================================
+// `if` condition evaluation
+// ============================================================================
+
+/// Evaluate a hook `if` condition against the current hook event and input.
+///
+/// The `if` condition uses permission rule syntax: "ToolName" or "ToolName(ruleContent)".
+/// Only supported for tool-based events (PreToolUse, PostToolUse, PostToolUseFailure,
+/// PermissionRequest). For all other events the hook is skipped (fail-safe to match TS).
+///
+/// Returns `true` if the hook should run, `false` if it should be skipped.
+pub fn evaluate_if_condition(
+    if_condition: &str,
+    event: &HookEvent,
+    hook_input: &serde_json::Value,
+) -> bool {
+    use crate::permissions::types::PermissionRuleValue;
+
+    let is_tool_event = matches!(
+        event,
+        HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure
+            | HookEvent::PermissionRequest
+    );
+
+    if !is_tool_event {
+        debug!(
+            "Hook if condition {:?} cannot be evaluated for non-tool event {}; skipping hook",
+            if_condition, event
+        );
+        return false;
+    }
+
+    let tool_name = match hook_input.get("tool_name").and_then(|v| v.as_str()) {
+        Some(n) => n,
+        None => return false,
+    };
+
+    let parsed = PermissionRuleValue::from_string(if_condition);
+
+    // Tool name must match (PermissionRuleValue::from_string already normalises legacy names)
+    if parsed.tool_name != tool_name {
+        return false;
+    }
+
+    // No rule content -> tool-level match is sufficient
+    let rule_content = match parsed.rule_content {
+        Some(ref c) => c.clone(),
+        None => return true,
+    };
+
+    // Extract the primary input string for this tool.
+    // Bash uses "command"; file tools use "file_path"; fall back to JSON dump.
+    let tool_input = hook_input.get("tool_input");
+    let command_str: Option<String> = tool_input.and_then(|inp| {
+        inp.get("command")
+            .or_else(|| inp.get("file_path"))
+            .or_else(|| inp.get("path"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| inp.as_str().map(|s| s.to_string()))
+    });
+
+    let command_str = match command_str {
+        // Fail-safe: if we cannot extract a command, run the hook (matches TS "too complex" path)
+        None => return true,
+        Some(s) => s,
+    };
+
+    // For compound shell commands split on common operators and check if ANY
+    // sub-command matches. This mirrors the TS "fail-safe: run hook if too complex" logic.
+    command_str
+        .split(|c: char| c == ';' || c == '&' || c == '|')
+        .any(|part| glob_match(&rule_content, part.trim()))
+}
+
+/// Simple glob pattern matching: `*` matches any sequence of characters.
+/// Handles single `*` wildcards. Mirrors TS permission rule content matching.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    if pattern == "*" || pattern.is_empty() {
+        return true;
+    }
+    if !pattern.contains('*') {
+        // Prefix match: "git " matches "git status", etc.
+        return text.starts_with(pattern) || text == pattern;
+    }
+    // Split on the first `*` only (common case: "git *", "npm *")
+    let parts: Vec<&str> = pattern.splitn(2, '*').collect();
+    match parts.as_slice() {
+        [prefix, suffix] => {
+            text.starts_with(prefix) && (suffix.is_empty() || text.ends_with(suffix))
+        }
+        _ => text == pattern,
+    }
+}
+
+// ============================================================================
 // Get matching hooks from settings
 // ============================================================================
 
@@ -240,6 +337,22 @@ pub fn get_matching_hooks(
             unique_hooks.push(matched.clone());
         }
     }
+
+    // Filter hooks by their `if` condition (permission rule syntax, e.g. "Bash(git *)").
+    unique_hooks.retain(|matched| {
+        if let Some(cond) = matched.hook.if_condition() {
+            let keep = evaluate_if_condition(cond, event, hook_input);
+            if !keep {
+                debug!(
+                    "Skipping hook due to if condition {:?} not matching",
+                    cond
+                );
+            }
+            keep
+        } else {
+            true
+        }
+    });
 
     // Filter out HTTP hooks for SessionStart/Setup events
     // (HTTP hooks deadlock in headless mode for these events)

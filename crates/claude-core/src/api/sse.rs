@@ -222,8 +222,14 @@ pub fn parse_sse_stream(raw: &str) -> Vec<SseEvent> {
         }
 
         if let (Some(et), Some(d)) = (event_type, data) {
-            if let Ok(event) = parse_sse_event(et, d) {
-                events.push(event);
+            match parse_sse_event(et, d) {
+                Ok(event) => events.push(event),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse SSE event (type={:?}): {}",
+                        et, e
+                    );
+                }
             }
         }
     }

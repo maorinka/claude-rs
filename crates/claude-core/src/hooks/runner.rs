@@ -626,7 +626,27 @@ async fn exec_http_hook(
     json_input: &str,
     timeout_ms: u64,
 ) -> Result<HookResult> {
+    use super::ssrf::ssrf_check;
+
     debug!("Executing HTTP hook for {}: {}", hook_name, hook.url);
+
+    // ── SSRF guard ────────────────────────────────────────────────────────────
+    // Resolve the hostname and reject private/link-local ranges before making
+    // any network connection. This mirrors TS's ssrfGuardedLookup.
+    let parsed_url = url::Url::parse(&hook.url).map_err(|e| {
+        anyhow::anyhow!("HTTP hook has invalid URL '{}': {}", hook.url, e)
+    })?;
+    let host = parsed_url.host_str().unwrap_or("");
+    let port = parsed_url.port_or_known_default().unwrap_or(80);
+
+    if let Err(ssrf_msg) = ssrf_check(host, port).await {
+        return Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: ssrf_msg,
+            ..Default::default()
+        });
+    }
+    // ── end SSRF guard ────────────────────────────────────────────────────────
 
     let effective_timeout = hook
         .timeout
@@ -643,7 +663,7 @@ async fn exec_http_hook(
         .header("Content-Type", "application/json")
         .body(json_input.to_string());
 
-    // Interpolate headers with env vars.
+    // Interpolate headers with env vars and apply CRLF sanitization.
     if let Some(ref headers) = hook.headers {
         let allowed_vars: std::collections::HashSet<&str> = hook
             .allowed_env_vars
@@ -653,7 +673,8 @@ async fn exec_http_hook(
 
         for (key, value_template) in headers {
             let resolved = interpolate_env_vars(value_template, &allowed_vars);
-            request = request.header(key, resolved);
+            let sanitized = sanitize_header_value(&resolved);
+            request = request.header(key, sanitized);
         }
     }
 
@@ -1067,6 +1088,15 @@ fn process_hook_json_output(
 // ============================================================================
 // Utility functions
 // ============================================================================
+
+/// Strip CR, LF, NUL from a header value to prevent CRLF injection
+/// (mirrors TS sanitizeHeaderValue).
+fn sanitize_header_value(value: &str) -> String {
+    value
+        .chars()
+        .filter(|&c| c != '\r' && c != '\n' && c != '\0')
+        .collect()
+}
 
 /// Interpolate environment variables in a header value string.
 ///

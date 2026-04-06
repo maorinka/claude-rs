@@ -11,6 +11,7 @@ fn make_ctx(dir: &TempDir) -> ToolUseContext {
         read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         )),
+        permission_mode: claude_tools::registry::PermissionMode::Default,
     }
 }
 
@@ -36,7 +37,7 @@ async fn test_edit_replace_string() {
     ctx.read_file_state
         .lock()
         .unwrap()
-        .record_read(file_path.to_str().unwrap(), false);
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     let result = call_tool(
         &tool,
@@ -78,7 +79,7 @@ async fn test_edit_replace_all() {
     ctx.read_file_state
         .lock()
         .unwrap()
-        .record_read(file_path.to_str().unwrap(), false);
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     let result = call_tool(
         &tool,
@@ -117,7 +118,7 @@ async fn test_edit_error_on_ambiguous_match() {
     ctx.read_file_state
         .lock()
         .unwrap()
-        .record_read(file_path.to_str().unwrap(), false);
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     let result = call_tool(
         &tool,
@@ -147,7 +148,7 @@ async fn test_edit_string_not_found() {
     ctx.read_file_state
         .lock()
         .unwrap()
-        .record_read(file_path.to_str().unwrap(), false);
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     let result = call_tool(
         &tool,

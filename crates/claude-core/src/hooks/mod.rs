@@ -1,6 +1,7 @@
 pub mod aggregation;
 pub mod matching;
 pub mod runner;
+pub mod ssrf;
 pub mod tool_hooks;
 pub mod types;
 

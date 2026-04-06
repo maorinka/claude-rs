@@ -199,10 +199,15 @@ pub fn build_request_body(
     let thinking_obj = if supports_thinking {
         match &config.thinking {
             ThinkingConfig::Disabled => None,
-            ThinkingConfig::Enabled { budget_tokens } => Some(json!({
-                "type": "enabled",
-                "budget_tokens": budget_tokens,
-            })),
+            ThinkingConfig::Enabled { budget_tokens } => {
+                // API constraint: thinking.budget_tokens must be < max_tokens.
+                // Mirrors TS: Math.min(maxOutputTokens - 1, thinkingBudget).
+                let clamped = (*budget_tokens).min(config.max_tokens.saturating_sub(1));
+                Some(json!({
+                    "type": "enabled",
+                    "budget_tokens": clamped,
+                }))
+            }
             ThinkingConfig::Adaptive => Some(json!({ "type": "adaptive" })),
         }
     } else {
@@ -447,6 +452,17 @@ impl ApiClient {
 
         let status = response.status().as_u16();
         let err_body = response.text().await.unwrap_or_default();
+
+        // Return a typed error for prompt-too-long so the engine can
+        // attempt reactive compaction before surfacing the error.
+        if status == 413 || err_body.contains("prompt_too_long") {
+            return Err(anyhow::Error::new(
+                crate::types::error::PromptTooLongError {
+                    body: err_body,
+                },
+            ));
+        }
+
         anyhow::bail!(
             "API error {}: {}",
             status,
@@ -458,6 +474,10 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize tests that touch environment variables to avoid races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn max_output_tokens_match_ts_slot_reservation_cap() {
@@ -472,6 +492,7 @@ mod tests {
 
     #[test]
     fn request_metadata_uses_stable_session_and_account_uuid() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -488,6 +509,7 @@ mod tests {
 
     #[test]
     fn minimal_transport_body_strips_metadata_and_context_management() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("CLAUDE_RS_MINIMAL_TRANSPORT", "1");
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),

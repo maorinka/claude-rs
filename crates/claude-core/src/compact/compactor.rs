@@ -204,7 +204,7 @@ pub async fn compact_conversation(
     let summary = format_compact_summary(&summary);
 
     // Build compacted messages: just the summary as a user message
-    let compact_user_msg = super::prompt::format_compact_user_message(&summary);
+    let compact_user_msg = super::prompt::format_compact_user_message_simple(&summary);
 
     Ok(vec![json!({
         "role": "user",

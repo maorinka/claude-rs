@@ -212,6 +212,7 @@ mod tests {
                 read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
                     crate::registry::ReadFileState::new(),
                 )),
+                permission_mode: crate::registry::PermissionMode::Default,
             };
             let cancel = CancellationToken::new();
 
@@ -267,6 +268,7 @@ mod tests {
                 read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
                     crate::registry::ReadFileState::new(),
                 )),
+                permission_mode: crate::registry::PermissionMode::Default,
             };
             let cancel = CancellationToken::new();
 

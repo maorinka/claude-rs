@@ -91,6 +91,9 @@ enum EngineCommand {
     RunTurn(mpsc::Sender<StreamEvent>),
     LoadMessages(Vec<serde_json::Value>),
     SetModel(String),
+    /// Replace the cancellation token after an Escape-cancel so the next turn
+    /// can be independently cancelled.
+    SetCancelToken(CancellationToken),
 }
 
 /// Pending tool that needs permission before execution.
@@ -423,7 +426,7 @@ impl App {
         &mut self,
         engine: QueryEngine,
         tools: ToolRegistry,
-        cancel: CancellationToken,
+        mut cancel: CancellationToken,
         permission_mode: PermissionMode,
     ) -> Result<()> {
         terminal::enable_raw_mode()?;
@@ -462,6 +465,9 @@ impl App {
                         }
                         EngineCommand::SetModel(model) => {
                             engine.set_model(model);
+                        }
+                        EngineCommand::SetCancelToken(token) => {
+                            engine.set_cancel_token(token);
                         }
                     }
                 }
@@ -556,7 +562,7 @@ impl App {
         }
 
         let perm_ctx = ToolPermissionContext {
-            mode: permission_mode,
+            mode: permission_mode.clone(),
             ..Default::default()
         };
 
@@ -739,6 +745,26 @@ impl App {
                             _ => {}
                         }
                     } else {
+                        // Escape: cancel in-progress response (does not quit).
+                        if k.code == KeyCode::Esc && k.modifiers.is_empty() {
+                            if self.engine_busy {
+                                cancel.cancel();
+                                // Preserve any partial streaming text already in the
+                                // message list (appended incrementally by TextDelta handlers).
+                                self.engine_busy = false;
+                                self.spinner.stop();
+                                self.message_list.push(MessageEntry::System {
+                                    text: "[Request interrupted by user]".to_string(),
+                                });
+                                // Replace the exhausted token so the next turn can be cancelled.
+                                cancel = CancellationToken::new();
+                                let _ = engine_tx
+                                    .send(EngineCommand::SetCancelToken(cancel.clone()))
+                                    .await;
+                            }
+                            continue;
+                        }
+
                         // Scroll keyboard shortcuts (take priority over prompt)
                         match (k.modifiers, k.code) {
                             (KeyModifiers::NONE, KeyCode::PageUp) => {
@@ -1028,6 +1054,7 @@ impl App {
                             let cwd_clone = cwd.clone();
                             let cancel_clone = cancel.clone();
                             let rfs_clone = read_file_state.clone();
+                            let perm_mode_clone = permission_mode.clone();
                             let tx_tool = tx.clone();
                             let tidx = tool_idx;
                             tokio::spawn(async move {
@@ -1038,6 +1065,7 @@ impl App {
                                     &cwd_clone,
                                     cancel_clone,
                                     rfs_clone,
+                                    perm_mode_clone,
                                 )
                                 .await;
                                 let mapped = result.map_err(|e| e.to_string());
@@ -1582,30 +1610,41 @@ impl App {
                         ratatui::style::Style::default()
                     };
 
-                    let prompt_line = ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled("\u{276F} ", prompt_style),
-                        ratatui::text::Span::raw(prompt.text().to_string()),
-                    ]);
-                    buf.set_line(
-                        input_area.x,
-                        input_area.y + 1,
-                        &prompt_line,
-                        input_area.width,
-                    );
+                    // Multi-line aware rendering: split on '\n' and render each line.
+                    let text_str = prompt.text().to_string();
+                    let lines: Vec<&str> = text_str.split('\n').collect();
+                    let max_visible = (input_area.height.saturating_sub(2)) as usize; // leave room for borders
+                    let visible_lines = if lines.len() > max_visible && max_visible > 0 {
+                        &lines[lines.len() - max_visible..]
+                    } else {
+                        &lines[..]
+                    };
+                    for (i, line_text) in visible_lines.iter().enumerate() {
+                        let prefix = if i == 0 { "\u{276F} " } else { "  " };
+                        let line = ratatui::text::Line::from(vec![
+                            ratatui::text::Span::styled(prefix, prompt_style),
+                            ratatui::text::Span::raw(line_text.to_string()),
+                        ]);
+                        let y = input_area.y + 1 + i as u16;
+                        if y < input_area.y + input_area.height.saturating_sub(1) {
+                            buf.set_line(input_area.x, y, &line, input_area.width);
+                        }
+                    }
 
                     // Bottom border
+                    let bottom_y = input_area.y + input_area.height.saturating_sub(1);
                     let bottom_line = ratatui::text::Line::from(ratatui::text::Span::styled(
                         "\u{2500}".repeat(input_area.width as usize),
                         ratatui::style::Style::default().fg(border_color),
                     ));
                     buf.set_line(
                         input_area.x,
-                        input_area.y + 2,
+                        bottom_y,
                         &bottom_line,
                         input_area.width,
                     );
                 } else {
-                    // Minimal: prompt line only
+                    // Minimal: show only the last line of multi-line input
                     let prompt_style = if engine_busy {
                         ratatui::style::Style::default()
                             .fg(border_color)
@@ -1613,9 +1652,11 @@ impl App {
                     } else {
                         ratatui::style::Style::default()
                     };
+                    let text_str = prompt.text().to_string();
+                    let last_line = text_str.split('\n').last().unwrap_or("");
                     let prompt_line = ratatui::text::Line::from(vec![
                         ratatui::text::Span::styled("\u{276F} ", prompt_style),
-                        ratatui::text::Span::raw(prompt.text().to_string()),
+                        ratatui::text::Span::raw(last_line.to_string()),
                     ]);
                     buf.set_line(input_area.x, input_area.y, &prompt_line, input_area.width);
                 }
@@ -1675,13 +1716,27 @@ impl App {
                 frame.render_widget(ask_dialog, dialog_area);
             }
 
-            // Show cursor at input position when no dialog is active
+            // Show cursor at input position when no dialog is active.
+            // Multi-line aware: compute row/col from cursor byte offset.
             if permission_dialog.is_none() && ask_user_dialog.is_none() && !engine_busy {
-                // Cursor position: prompt char "❯ " is 2 display columns,
-                // then the text up to cursor position
-                let cursor_display_col = prompt.text()[..prompt.cursor()].chars().count() as u16;
-                let cursor_x = input_area.x + 2 + cursor_display_col; // 2 = "❯ "
-                let cursor_y = input_area.y + 1; // input is on row 1 of input_area
+                let text_before_cursor = &prompt.text()[..prompt.cursor()];
+                let lines_before: Vec<&str> = text_before_cursor.split('\n').collect();
+                let cursor_row = lines_before.len().saturating_sub(1);
+                let cursor_col_chars = lines_before.last().map_or(0, |l| l.chars().count());
+
+                // Account for visible line scrolling (same logic as render)
+                let text_str = prompt.text().to_string();
+                let total_lines = text_str.split('\n').count();
+                let max_visible = (input_area.height.saturating_sub(2)) as usize;
+                let scroll_offset = if total_lines > max_visible && max_visible > 0 {
+                    total_lines - max_visible
+                } else {
+                    0
+                };
+                let visible_row = cursor_row.saturating_sub(scroll_offset);
+
+                let cursor_x = input_area.x + 2 + cursor_col_chars as u16; // 2 = "❯ " or "  "
+                let cursor_y = input_area.y + 1 + visible_row as u16;
                 if cursor_x < input_area.x + input_area.width && cursor_y < area.y + area.height {
                     frame.set_cursor_position((cursor_x, cursor_y));
                 }
@@ -1714,6 +1769,7 @@ async fn execute_tool(
     cwd: &std::path::Path,
     cancel: CancellationToken,
     read_file_state: std::sync::Arc<std::sync::Mutex<claude_tools::registry::ReadFileState>>,
+    permission_mode: PermissionMode,
 ) -> Result<ToolResultData> {
     let executor = tools
         .get(name)
@@ -1721,6 +1777,7 @@ async fn execute_tool(
     let ctx = ToolUseContext {
         working_directory: cwd.to_path_buf(),
         read_file_state,
+        permission_mode,
     };
     executor.call(input, &ctx, cancel, None).await
 }

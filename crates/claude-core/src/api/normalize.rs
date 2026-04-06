@@ -21,6 +21,18 @@ pub fn normalize_messages(messages: &[Value]) -> Vec<Value> {
             continue;
         }
 
+        // Merge with the previous message if it has the same role.
+        // Matches TS normalizeMessagesForAPI: "Merge consecutive user messages
+        // because Bedrock doesn't support multiple user messages in a row;
+        // 1P API does and merges them into a single user turn."
+        // We apply the same logic to assistant messages for safety.
+        if let Some(last) = normalized.last_mut() {
+            if last["role"].as_str() == Some(role) {
+                merge_message_content(last, msg);
+                continue;
+            }
+        }
+
         normalized.push(msg.clone());
     }
 
@@ -28,6 +40,32 @@ pub fn normalize_messages(messages: &[Value]) -> Vec<Value> {
     repair_tool_pairing(&mut normalized);
 
     normalized
+}
+
+/// Merge the content of `src` into `dst`, concatenating their content arrays.
+/// If either content is a plain string, it is wrapped in a text block first.
+fn merge_message_content(dst: &mut Value, src: &Value) {
+    let src_content = &src["content"];
+    let src_blocks: Vec<Value> = match src_content {
+        Value::Array(arr) => arr.clone(),
+        Value::String(s) => vec![serde_json::json!({"type": "text", "text": s})],
+        _ => return,
+    };
+
+    match &mut dst["content"] {
+        Value::Array(ref mut dst_blocks) => {
+            dst_blocks.extend(src_blocks);
+        }
+        Value::String(s) => {
+            let text_block = serde_json::json!({"type": "text", "text": s.clone()});
+            dst["content"] = Value::Array(
+                std::iter::once(text_block)
+                    .chain(src_blocks)
+                    .collect(),
+            );
+        }
+        _ => {}
+    }
 }
 
 /// Ensure every tool_use has a matching tool_result and vice versa.

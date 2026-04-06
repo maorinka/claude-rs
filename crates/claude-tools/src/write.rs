@@ -65,6 +65,20 @@ pub fn check_file_staleness(
                 .unwrap_or_default()
                 .as_millis() as u64;
             if mtime_ms > entry.timestamp {
+                // mtime changed — for full reads, compare content as a fallback.
+                // Antivirus/cloud-sync can touch mtime without actually changing content.
+                // Mirrors TS FileWriteTool.ts:282-294.
+                if let Some(ref stored_content) = entry.content {
+                    if let Ok(current_content) = std::fs::read_to_string(path) {
+                        // Normalize CRLF -> LF for comparison (matches TS normalisation).
+                        let normalized_current = current_content.replace("\r\n", "\n");
+                        let normalized_stored = stored_content.replace("\r\n", "\n");
+                        if normalized_current == normalized_stored {
+                            // Content unchanged — mtime touch was harmless, allow write.
+                            return Ok(());
+                        }
+                    }
+                }
                 return Err(
                     "File has been modified since read, either by the user or by a linter. \
                      Read it again before attempting to write it."
@@ -234,7 +248,7 @@ mod tests {
         state
             .lock()
             .unwrap()
-            .record_read(path.to_str().unwrap(), false);
+            .record_read(path.to_str().unwrap(), false, None);
 
         let result = check_file_staleness(path.to_str().unwrap(), path, &state);
         assert!(result.is_ok());
@@ -255,6 +269,7 @@ mod tests {
                 crate::registry::ReadFileEntry {
                     timestamp: 1000, // very old timestamp
                     is_partial_view: false,
+                    content: None,
                 },
             );
         }
@@ -276,7 +291,7 @@ mod tests {
         state
             .lock()
             .unwrap()
-            .record_read(path.to_str().unwrap(), true);
+            .record_read(path.to_str().unwrap(), true, None);
 
         let result = check_file_staleness(path.to_str().unwrap(), path, &state);
         assert!(result.is_err());

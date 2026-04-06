@@ -95,6 +95,17 @@ Usage:
 
         let path = std::path::Path::new(file_path);
 
+        // Guard: refuse to raw-edit Jupyter notebook files. Raw string replacement
+        // inside notebook JSON can corrupt cell metadata, output arrays, and the
+        // nbformat schema. Mirrors TS FileEditTool lines 266-273.
+        if path.extension().map_or(false, |ext| ext == "ipynb") {
+            return Ok(error_result(
+                "File is a Jupyter Notebook (.ipynb). Use the NotebookEdit tool to edit \
+                 notebook cells instead. Raw string replacement in notebook JSON can \
+                 corrupt cell metadata and break the notebook format.",
+            ));
+        }
+
         // If old_string is non-empty and the file doesn't exist -> error
         if !path.exists() {
             if old_string.is_empty() {

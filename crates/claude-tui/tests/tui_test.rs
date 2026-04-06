@@ -4,9 +4,9 @@ use claude_tui::widgets::spinner::*;
 #[test]
 fn test_dark_theme_colors() {
     let t = dark_theme();
-    // Dark theme uses RGB white for text
-    assert_eq!(t.fg, ratatui::style::Color::Rgb(255, 255, 255));
-    // Error is bright red (original: rgb(255,107,128))
+    // Dark theme uses Reset for fg (terminal default)
+    assert_eq!(t.fg, ratatui::style::Color::Reset);
+    // Error is bright red
     assert_eq!(t.error, ratatui::style::Color::Rgb(255, 107, 128));
     // Claude orange
     assert_eq!(t.claude, ratatui::style::Color::Rgb(215, 119, 87));
@@ -15,8 +15,8 @@ fn test_dark_theme_colors() {
 #[test]
 fn test_light_theme_colors() {
     let t = light_theme();
-    // Light theme uses RGB black for text
-    assert_eq!(t.fg, ratatui::style::Color::Rgb(0, 0, 0));
+    // Light theme uses Reset for fg (terminal default)
+    assert_eq!(t.fg, ratatui::style::Color::Reset);
     // Light error color
     assert_eq!(t.error, ratatui::style::Color::Rgb(171, 43, 63));
 }

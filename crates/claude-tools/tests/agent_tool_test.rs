@@ -75,6 +75,76 @@ fn test_agent_tool_has_alias() {
 }
 
 #[test]
+fn test_agent_tool_full_prompt_content() {
+    let reg = build_default_registry();
+    let agent = reg.get("Agent").expect("Agent tool should be registered");
+    let desc = agent.description();
+
+    // Verify the prompt has all key sections from the TS getPrompt()
+    assert!(
+        desc.contains("Launch a new agent to handle complex, multi-step tasks autonomously."),
+        "Should have the shared core intro"
+    );
+    assert!(
+        desc.contains("Available agent types and the tools they have access to:"),
+        "Should have the agent list section"
+    );
+    assert!(
+        desc.contains("general-purpose"),
+        "Should list the general-purpose agent"
+    );
+    assert!(
+        desc.contains("Explore"),
+        "Should list the Explore agent"
+    );
+    assert!(
+        desc.contains("Plan"),
+        "Should list the Plan agent"
+    );
+    assert!(
+        desc.contains("When NOT to use the Agent tool:"),
+        "Should have the 'when not to use' section"
+    );
+    assert!(
+        desc.contains("## Writing the prompt"),
+        "Should have the 'writing the prompt' section"
+    );
+    assert!(
+        desc.contains("Never delegate understanding."),
+        "Should have the delegation warning"
+    );
+    assert!(
+        desc.contains("Usage notes:"),
+        "Should have usage notes"
+    );
+    assert!(
+        desc.contains("Foreground vs background"),
+        "Should have foreground/background guidance"
+    );
+    assert!(
+        desc.contains("run_in_background"),
+        "Should mention background parameter"
+    );
+    assert!(
+        desc.contains("isolation: \"worktree\""),
+        "Should mention worktree isolation"
+    );
+    assert!(
+        desc.contains("SendMessage"),
+        "Should mention SendMessage for continuing agents"
+    );
+    assert!(
+        desc.contains("<example>"),
+        "Should have examples"
+    );
+    assert!(
+        desc.len() > 2000,
+        "Full prompt should be substantial (got {} chars)",
+        desc.len()
+    );
+}
+
+#[test]
 fn test_team_create_tool_schema() {
     let reg = build_default_registry();
     let tool = reg

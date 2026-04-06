@@ -67,9 +67,7 @@ impl ToolExecutor for AskUserQuestionTool {
     }
 
     fn description(&self) -> String {
-        "Ask the user a question and wait for their response. Use this when you need \
-         clarification or a decision from the user before proceeding. The tool blocks \
-         until the user provides an answer via the TUI dialog."
+        "Asks the user multiple choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices."
             .to_string()
     }
 
@@ -235,6 +233,7 @@ mod tests {
             read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::registry::ReadFileState::new(),
             )),
+            permission_mode: crate::registry::PermissionMode::Default,
         }
     }
 

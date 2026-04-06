@@ -384,10 +384,10 @@ fn test_toggle_commands_actually_toggle() {
     cmd.handler.execute("", &ctx).unwrap();
     assert!(shared.lock().unwrap().verbose_mode);
 
-    // Theme
+    // Theme — with arg "light" toggles dark_theme to false
     let cmd = registry.get("theme").unwrap();
-    cmd.handler.execute("", &ctx).unwrap();
-    assert!(!shared.lock().unwrap().dark_theme); // was true, now false
+    cmd.handler.execute("light", &ctx).unwrap();
+    assert!(!shared.lock().unwrap().dark_theme); // was true (dark), now false (light)
 
     // Effort
     let cmd = registry.get("effort").unwrap();

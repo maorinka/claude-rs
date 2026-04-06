@@ -226,6 +226,10 @@ impl ToolExecutor for GrepTool {
         // Use -e for pattern to handle dash-prefixed patterns safely
         cmd.arg("-e").arg(&pattern);
 
+        // Always search hidden files and directories (.env, .github/, .claude/, etc.)
+        // Matches TS GrepTool.ts line 330: `const args = ['--hidden']`
+        cmd.arg("--hidden");
+
         // Output mode flags
         match output_mode {
             "content" => {
@@ -253,7 +257,10 @@ impl ToolExecutor for GrepTool {
             cmd.arg("--ignore-case");
         }
 
-        if input["-n"].as_bool().unwrap_or(false) {
+        // -n defaults to true in content mode (mirrors TS default: show_line_numbers = true).
+        // Only applies in content mode — TS also gates this on output_mode === 'content'.
+        let show_line_numbers = input["-n"].as_bool().unwrap_or(true);
+        if show_line_numbers && output_mode == "content" {
             cmd.arg("--line-number");
         }
 

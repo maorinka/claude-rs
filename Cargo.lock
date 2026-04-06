@@ -293,6 +293,7 @@ dependencies = [
  "base64",
  "chrono",
  "claude-core",
+ "dirs",
  "glob",
  "once_cell",
  "regex-lite",

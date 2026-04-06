@@ -10,6 +10,7 @@ fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
         read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         )),
+        permission_mode: claude_tools::registry::PermissionMode::Default,
     }
 }
 
@@ -95,7 +96,7 @@ async fn test_write_overwrites_existing() {
     ctx.read_file_state
         .lock()
         .unwrap()
-        .record_read(&file_path, false);
+        .record_read(&file_path, false, None);
 
     let result = call_tool(
         &tool,

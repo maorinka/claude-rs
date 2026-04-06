@@ -56,6 +56,10 @@ pub enum StopReason {
     ToolUse,
     MaxTokens,
     StopSequence,
+    /// The model's context window was exceeded (treated like MaxTokens).
+    ModelContextWindowExceeded,
+    /// The model paused the turn (e.g. for tool confirmation).
+    PauseTurn,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

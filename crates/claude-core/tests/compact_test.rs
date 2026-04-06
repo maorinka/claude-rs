@@ -29,9 +29,25 @@ fn test_compact_prompt_not_empty() {
 
 #[test]
 fn test_format_compact_user_message() {
-    let msg = format_compact_user_message("Test summary content");
+    let msg = format_compact_user_message_simple("Test summary content");
     assert!(msg.contains("Test summary content"));
     assert!(msg.contains("continued from a previous conversation"));
+}
+
+#[test]
+fn test_format_compact_user_message_with_options() {
+    let msg = format_compact_user_message(&CompactUserMessageOptions {
+        summary: "Test summary",
+        transcript_path: Some("/tmp/transcript.jsonl"),
+        recent_messages_preserved: true,
+        suppress_follow_up_questions: true,
+        proactive_mode: true,
+    });
+    assert!(msg.contains("Test summary"));
+    assert!(msg.contains("/tmp/transcript.jsonl"));
+    assert!(msg.contains("Recent messages are preserved verbatim"));
+    assert!(msg.contains("Resume directly"));
+    assert!(msg.contains("autonomous/proactive mode"));
 }
 
 #[test]

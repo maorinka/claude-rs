@@ -10,6 +10,7 @@ fn make_ctx(dir: PathBuf) -> ToolUseContext {
         read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         )),
+        permission_mode: claude_tools::registry::PermissionMode::Default,
     }
 }
 
@@ -85,7 +86,8 @@ async fn test_bash_cancellation() {
     let cancel = CancellationToken::new();
     // Cancel before running
     cancel.cancel();
-    let input = json!({ "command": "sleep 10" });
+    // Use sleep 1 (< 2s) so detect_blocked_sleep_pattern allows it through.
+    let input = json!({ "command": "sleep 1" });
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
     assert!(!result.is_error);
     let interrupted = result.data["interrupted"].as_bool().unwrap();

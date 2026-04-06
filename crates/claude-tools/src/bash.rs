@@ -117,11 +117,50 @@ impl Default for BashTool {
 }
 
 fn truncate(s: String) -> String {
-    if s.len() <= MAX_OUTPUT_CHARS {
-        s
-    } else {
-        s[..MAX_OUTPUT_CHARS].to_string()
+    // Use char_indices to find a safe byte boundary — slicing by bytes would
+    // panic if a multibyte UTF-8 character (CJK, emoji, etc.) straddles the limit.
+    match s.char_indices().nth(MAX_OUTPUT_CHARS) {
+        None => s, // fewer than MAX_OUTPUT_CHARS chars — return as-is
+        Some((byte_offset, _)) => s[..byte_offset].to_string(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sleep pattern detection
+// ---------------------------------------------------------------------------
+
+/// Detect a standalone `sleep N` command where N >= 2 seconds.
+///
+/// Mirrors TS `detectBlockedSleepPattern` in `BashTool.tsx:322-337`.
+/// Returns an error message string if the pattern is matched, or `None` otherwise.
+///
+/// Only the *first* segment of a compound command is examined (split on `&`, `;`, `|`).
+/// This blocks `sleep 5` and `sleep 10` but allows `sleep 1` (single-second sleeps
+/// are assumed to be polling micro-waits rather than blocking pauses).
+fn detect_blocked_sleep_pattern(command: &str) -> Option<String> {
+    // Take the first segment before any compound operators
+    let first_segment = command
+        .split(|c: char| c == '&' || c == ';' || c == '|')
+        .next()
+        .unwrap_or(command)
+        .trim();
+
+    let re = regex_lite::Regex::new(r"^sleep\s+(\d+(?:\.\d+)?)\s*$").unwrap();
+    if let Some(caps) = re.captures(first_segment) {
+        if let Some(n_str) = caps.get(1) {
+            if let Ok(secs) = n_str.as_str().parse::<f64>() {
+                if secs >= 2.0 {
+                    return Some(format!(
+                        "The Bash tool does not allow standalone `sleep {}` commands >= 2s. \
+                         Use `run_in_background=true` to run a long-running process in the \
+                         background, or use a polling command instead.",
+                        n_str.as_str()
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +461,20 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'command' field"))?
             .to_string();
+
+        // Detect blocked sleep patterns (e.g. `sleep 5`) before executing.
+        // Mirrors TS `detectBlockedSleepPattern` in BashTool.tsx:322-337.
+        if let Some(msg) = detect_blocked_sleep_pattern(&command) {
+            return Ok(ToolResultData {
+                data: json!({
+                    "stdout": "",
+                    "stderr": msg,
+                    "code": 1,
+                    "interrupted": false
+                }),
+                is_error: true,
+            });
+        }
 
         // Parse timeout: use provided value clamped to max, or default.
         // Matches TS: `const timeoutMs = timeout || getDefaultTimeoutMs()`
@@ -878,6 +931,7 @@ mod tests {
             read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::registry::ReadFileState::new(),
             )),
+            permission_mode: crate::registry::PermissionMode::Default,
         }
     }
 
@@ -904,7 +958,9 @@ mod tests {
         let tool = BashTool::new();
         // sleep 60 should be killed well before it completes
         let input = json!({
-            "command": "sleep 60",
+            // Use a duration < 2 so detect_blocked_sleep_pattern allows it through;
+            // the 200ms timeout will then kill the process as intended.
+            "command": "sleep 1",
             "timeout": 200  // 200ms -- very short
         });
         let start = std::time::Instant::now();
@@ -972,7 +1028,9 @@ mod tests {
     async fn test_bash_run_in_background_returns_immediately() {
         let tool = BashTool::new();
         let input = json!({
-            "command": "sleep 30",
+            // Use a duration < 2 so detect_blocked_sleep_pattern allows it through.
+            // This process runs in background so the test completes before it finishes.
+            "command": "sleep 1",
             "run_in_background": true
         });
         let start = std::time::Instant::now();
@@ -1044,7 +1102,8 @@ mod tests {
     #[tokio::test]
     async fn test_bash_cancellation_kills_command() {
         let tool = BashTool::new();
-        let input = json!({"command": "sleep 60"});
+        // Use a duration < 2 so detect_blocked_sleep_pattern allows it through.
+        let input = json!({"command": "sleep 1"});
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
@@ -1066,7 +1125,8 @@ mod tests {
         // The TS uses semanticNumber which allows float values
         let tool = BashTool::new();
         let input = json!({
-            "command": "sleep 60",
+            // Use a duration < 2 so detect_blocked_sleep_pattern allows it through.
+            "command": "sleep 1",
             "timeout": 200.5  // float timeout
         });
         let start = std::time::Instant::now();

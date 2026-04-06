@@ -491,6 +491,7 @@ mod tests {
         let ctx = ToolUseContext {
             working_directory: PathBuf::from("/tmp"),
             read_file_state: Arc::new(Mutex::new(ReadFileState::new())),
+            permission_mode: crate::registry::PermissionMode::Default,
         };
         let cancel = CancellationToken::new();
 
@@ -522,6 +523,7 @@ mod tests {
         let ctx = ToolUseContext {
             working_directory: PathBuf::from("/tmp"),
             read_file_state: Arc::new(Mutex::new(ReadFileState::new())),
+            permission_mode: crate::registry::PermissionMode::Default,
         };
         let cancel = CancellationToken::new();
 
@@ -541,6 +543,7 @@ mod tests {
         let ctx = ToolUseContext {
             working_directory: PathBuf::from("/tmp"),
             read_file_state: Arc::new(Mutex::new(ReadFileState::new())),
+            permission_mode: crate::registry::PermissionMode::Default,
         };
         let cancel = CancellationToken::new();
 

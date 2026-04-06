@@ -11,6 +11,7 @@ fn make_ctx(dir: &TempDir) -> ToolUseContext {
         read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         )),
+        permission_mode: claude_tools::registry::PermissionMode::Default,
     }
 }
 

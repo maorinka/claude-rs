@@ -8,6 +8,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+/// Re-export PermissionMode so callers only need to import from this crate.
+pub use claude_core::permissions::types::PermissionMode;
+
 pub type ProgressSender = mpsc::Sender<ToolProgressData>;
 
 /// Metadata recorded when a file is read. Used by Write/Edit tools
@@ -16,8 +19,12 @@ pub type ProgressSender = mpsc::Sender<ToolProgressData>;
 pub struct ReadFileEntry {
     /// Milliseconds since UNIX epoch when the read was performed.
     pub timestamp: u64,
-    /// Whether this was a partial view (offset/limit supplied).
+    /// Whether this was a partial view (offset/limit supplied explicitly).
     pub is_partial_view: bool,
+    /// For full reads, the file content at read time. Used as a content-comparison
+    /// fallback when mtime has changed but the file was not actually modified
+    /// (e.g. antivirus scan, cloud-sync metadata touch).
+    pub content: Option<String>,
 }
 
 /// Shared state tracking which files have been read and when.
@@ -37,7 +44,11 @@ impl ReadFileState {
     }
 
     /// Record that a file was read at the current time.
-    pub fn record_read(&mut self, path: &str, is_partial_view: bool) {
+    ///
+    /// `content` should be `Some(file_content)` for full reads and `None` for partial
+    /// reads (offset/limit supplied). Stored content enables content-comparison fallback
+    /// in `check_file_staleness` to distinguish harmless mtime touches from real edits.
+    pub fn record_read(&mut self, path: &str, is_partial_view: bool, content: Option<String>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -47,6 +58,8 @@ impl ReadFileState {
             ReadFileEntry {
                 timestamp: now,
                 is_partial_view,
+                // Store content only for full reads; partial reads never need it.
+                content: if is_partial_view { None } else { content },
             },
         );
     }
@@ -63,6 +76,7 @@ impl ReadFileState {
             ReadFileEntry {
                 timestamp: now,
                 is_partial_view: false,
+                content: None,
             },
         );
     }
@@ -90,6 +104,9 @@ impl ReadFileState {
 pub struct ToolUseContext {
     pub working_directory: PathBuf,
     pub read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
+    /// The current permission mode of the parent session.
+    /// Propagated to sub-agents to avoid unconditionally granting bypass.
+    pub permission_mode: PermissionMode,
 }
 
 #[async_trait]

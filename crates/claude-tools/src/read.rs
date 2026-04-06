@@ -525,6 +525,12 @@ impl FileReadTool {
         input: &Value,
         ctx: &ToolUseContext,
     ) -> Result<ToolResultData> {
+        // Track whether offset/limit were explicitly supplied by the caller.
+        // is_partial should only be true when the user explicitly bounded the read.
+        // Mirrors TS: FileReadTool stores `offset`/`limit` as undefined when not provided,
+        // and isPartialView is only set by auto-injection paths, not normal reads.
+        let explicit_offset = input.get("offset").and_then(|v| v.as_u64()).is_some();
+        let explicit_limit = input.get("limit").and_then(|v| v.as_u64()).is_some();
         let offset = input["offset"].as_u64().unwrap_or(0) as usize;
         let limit = input["limit"].as_u64().unwrap_or(DEFAULT_LINE_LIMIT) as usize;
 
@@ -572,9 +578,15 @@ impl FileReadTool {
         };
 
         // Record this read in the shared state for staleness tracking.
-        let is_partial = offset > 0 || (limit as u64) < DEFAULT_LINE_LIMIT;
+        // is_partial is only true when the caller explicitly provided offset or limit;
+        // a default read (no args) is never partial, even if the file has fewer lines
+        // than DEFAULT_LINE_LIMIT. Mirrors TS: isPartialView is only set for bounded reads.
+        let is_partial = explicit_offset || explicit_limit;
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            state.record_read(file_path, is_partial);
+            // Pass file content for full reads so write/edit can do content-comparison
+            // fallback when mtime changes (antivirus/cloud-sync harmless touch).
+            let stored_content = if is_partial { None } else { Some(raw.clone()) };
+            state.record_read(file_path, is_partial, stored_content);
         }
 
         // Split into lines.
@@ -740,6 +752,7 @@ mod tests {
         ToolUseContext {
             working_directory: PathBuf::from("/tmp"),
             read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            permission_mode: crate::registry::PermissionMode::Default,
         }
     }
 

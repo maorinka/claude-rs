@@ -51,6 +51,12 @@ impl PromptInput {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> InputAction {
         match (key.modifiers, key.code) {
+            // Shift+Enter or Alt+Enter: insert newline at cursor (multi-line input)
+            (KeyModifiers::SHIFT, KeyCode::Enter) | (KeyModifiers::ALT, KeyCode::Enter) => {
+                self.text.insert(self.cursor, '\n');
+                self.cursor += '\n'.len_utf8();
+                return InputAction::None;
+            }
             // Submit on Enter
             (_, KeyCode::Enter) if !self.text.is_empty() => {
                 let submitted = self.text.clone();
@@ -309,61 +315,61 @@ impl<'a> Widget for PromptInputWidget<'a> {
         // Render: top rounded border, then prompt line, then bottom rounded border.
         let border_style = Style::default().fg(self.border_color);
 
-        if area.height >= 3 {
-            // Top border: ╭─────╮ but left/right borders are removed,
-            // so it's just ─────── across the full width
-            let top_border = format!("{}", "─".repeat(area.width as usize));
-            buf.set_string(area.x, area.y, &top_border, border_style);
+        let prompt_style = if self.is_loading {
+            Style::default()
+                .fg(self.border_color)
+                .add_modifier(Modifier::DIM)
+        } else {
+            Style::default()
+        };
 
-            // Prompt line: ❯ {text}
-            let prompt_style = if self.is_loading {
-                Style::default()
-                    .fg(self.border_color)
-                    .add_modifier(Modifier::DIM)
-            } else {
-                Style::default()
-            };
+        // Split the text into visual lines for multi-line display.
+        // The first line gets the prompt character; subsequent lines are indented.
+        let text_lines: Vec<&str> = self.input.text.split('\n').collect();
+        let text_line_count = text_lines.len().max(1);
 
-            let line = Line::from(vec![
-                Span::styled(format!("{} ", PROMPT_CHAR), prompt_style),
-                Span::raw(&self.input.text),
-            ]);
-            buf.set_line(area.x, area.y + 1, &line, area.width);
-
-            // Bottom border
-            let bottom_border = "─".repeat(area.width as usize);
-            buf.set_string(area.x, area.y + 2, &bottom_border, border_style);
-        } else if area.height >= 2 {
-            // Compact: top border + prompt
+        if area.height >= 2 {
+            // Top border
             let top_border = "─".repeat(area.width as usize);
             buf.set_string(area.x, area.y, &top_border, border_style);
 
-            let prompt_style = if self.is_loading {
-                Style::default()
-                    .fg(self.border_color)
-                    .add_modifier(Modifier::DIM)
-            } else {
-                Style::default()
-            };
+            // Render text lines — first line has prompt char, rest are indented
+            let prompt_prefix = format!("{} ", PROMPT_CHAR);
+            let indent_width = prompt_prefix.chars().count();
+            let indent = " ".repeat(indent_width);
+            // How many rows are available between the two borders
+            let content_rows = (area.height as usize).saturating_sub(2).max(1);
+            // Show only the last `content_rows` lines so the active line stays visible
+            let start = text_line_count.saturating_sub(content_rows);
+            for (i, text_slice) in text_lines[start..].iter().enumerate() {
+                let row = area.y + 1 + i as u16;
+                if row + 1 >= area.y + area.height {
+                    break; // leave room for bottom border
+                }
+                if start + i == 0 {
+                    let line = Line::from(vec![
+                        Span::styled(prompt_prefix.clone(), prompt_style),
+                        Span::raw(*text_slice),
+                    ]);
+                    buf.set_line(area.x, row, &line, area.width);
+                } else {
+                    let line = Line::from(vec![
+                        Span::raw(indent.clone()),
+                        Span::raw(*text_slice),
+                    ]);
+                    buf.set_line(area.x, row, &line, area.width);
+                }
+            }
 
-            let line = Line::from(vec![
-                Span::styled(format!("{} ", PROMPT_CHAR), prompt_style),
-                Span::raw(&self.input.text),
-            ]);
-            buf.set_line(area.x, area.y + 1, &line, area.width);
+            // Bottom border
+            let bottom_border = "─".repeat(area.width as usize);
+            buf.set_string(area.x, area.y + area.height - 1, &bottom_border, border_style);
         } else {
-            // Minimal: just the prompt line
-            let prompt_style = if self.is_loading {
-                Style::default()
-                    .fg(self.border_color)
-                    .add_modifier(Modifier::DIM)
-            } else {
-                Style::default()
-            };
-
+            // Minimal (height == 1): just the last line of text with prompt character
+            let last_line = text_lines.last().copied().unwrap_or("");
             let line = Line::from(vec![
                 Span::styled(format!("{} ", PROMPT_CHAR), prompt_style),
-                Span::raw(&self.input.text),
+                Span::raw(last_line),
             ]);
             buf.set_line(area.x, area.y, &line, area.width);
         }

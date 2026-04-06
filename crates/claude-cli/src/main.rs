@@ -280,7 +280,7 @@ async fn main() -> Result<()> {
     let tool_descriptions: Vec<(String, String)> = tools
         .all()
         .iter()
-        .map(|t| (t.name().to_string(), format!("Tool: {}", t.name())))
+        .map(|t| (t.name().to_string(), t.description()))
         .collect();
     let system_prompt_values =
         claude_core::context::system_prompt::build_system_prompt(&project_root, &tool_descriptions, &model)
@@ -413,9 +413,19 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Determine permission mode
+    // Append --append-system-prompt text (M2: was parsed but never applied)
+    if let Some(ref extra) = cli.append_system_prompt {
+        query_engine.append_system_prompt(extra.clone());
+    }
+
+    // Determine permission mode.
+    // Priority: CLI flag > CLAUDE_PERMISSION_MODE env var > Default.
+    // The env var is set by agent_tool.rs when spawning sub-agents to
+    // propagate the parent's permission mode.
     let permission_mode = if cli.dangerously_skip_permissions {
         claude_core::permissions::types::PermissionMode::BypassPermissions
+    } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
+        claude_core::permissions::types::PermissionMode::from_string(&mode_str)
     } else {
         claude_core::permissions::types::PermissionMode::Default
     };
@@ -438,7 +448,7 @@ async fn main() -> Result<()> {
             claude_tools::registry::ReadFileState::new(),
         ));
         let perm_ctx = ToolPermissionContext {
-            mode: permission_mode,
+            mode: permission_mode.clone(),
             ..Default::default()
         };
 
@@ -502,14 +512,25 @@ async fn main() -> Result<()> {
                         };
 
                         let (result_text, is_error) = match decision {
-                            PermissionDecision::Allow(_) | PermissionDecision::Ask(_) => {
-                                // In non-interactive mode, auto-allow (user passed a prompt)
+                            PermissionDecision::Ask(ask) => {
+                                // In non-interactive / headless mode, Ask decisions are DENIED
+                                // (matching TS headless behavior). Auto-allowing would bypass
+                                // permission semantics when running unattended.
+                                tracing::warn!(
+                                    tool = %tool_info.name,
+                                    reason = %ask.message,
+                                    "Non-interactive mode: denying tool requiring user confirmation"
+                                );
+                                (format!("Permission denied (non-interactive): {}", ask.message), true)
+                            }
+                            PermissionDecision::Allow(_) => {
                                 let executor = tools.get(&tool_info.name);
                                 match executor {
                                     Some(exec) => {
                                         let ctx = ToolUseContext {
                                             working_directory: cwd.clone(),
                                             read_file_state: read_file_state.clone(),
+                                            permission_mode: permission_mode.clone(),
                                         };
                                         match exec
                                             .call(&tool_info.input, &ctx, cancel.clone(), None)

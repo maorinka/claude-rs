@@ -859,53 +859,47 @@ impl CommandHandler for FilesHandler {
 }
 
 pub struct InitHandler;
+
+/// INIT_PROMPT matches the TS OLD_INIT_PROMPT for legacy CLAUDE.md initialization.
+const INIT_PROMPT: &str = "\
+Please analyze this codebase and create a CLAUDE.md file, which will be given to future instances of Claude Code to operate in this repository.
+
+What to add:
+1. Commands that will be commonly used, such as how to build, lint, and run tests. Include the necessary commands to develop in this codebase, such as how to run a single test.
+2. High-level code architecture and structure so that future instances can be productive more quickly. Focus on the \"big picture\" architecture that requires reading multiple files to understand.
+
+Usage notes:
+- If there's already a CLAUDE.md, suggest improvements to it.
+- When you make the initial CLAUDE.md, do not repeat yourself and do not include obvious instructions like \"Provide helpful error messages to users\", \"Write unit tests for all new utilities\", \"Never include sensitive information (API keys, tokens) in code or commits\".
+- Avoid listing every component or file structure that can be easily discovered.
+- Don't include generic development practices.
+- If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (in .github/copilot-instructions.md), make sure to include the important parts.
+- If there is a README.md, make sure to include the important parts.
+- Do not make up information such as \"Common Development Tasks\", \"Tips for Development\", \"Support and Documentation\" unless this is expressly included in other files that you read.
+- Be sure to prefix the file with the following text:
+
+```
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+```";
+
 impl CommandHandler for InitHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        // Ensure .claude/ directory exists
         let claude_dir = ctx.working_directory.join(".claude");
-        let settings_file = claude_dir.join("settings.json");
-        let claude_md = ctx.working_directory.join("CLAUDE.md");
-
-        let mut actions = Vec::new();
-
         if !claude_dir.exists() {
-            match std::fs::create_dir_all(&claude_dir) {
-                Ok(()) => actions.push(format!("Created {}", claude_dir.display())),
-                Err(e) => {
-                    return Ok(CommandResult::Error(format!(
-                        "Failed to create .claude/ directory: {}",
-                        e
-                    )));
-                }
-            }
-        } else {
-            actions.push(format!("{} already exists", claude_dir.display()));
+            let _ = std::fs::create_dir_all(&claude_dir);
         }
 
+        // Ensure .claude/settings.json exists
+        let settings_file = claude_dir.join("settings.json");
         if !settings_file.exists() {
-            match std::fs::write(&settings_file, "{}") {
-                Ok(()) => actions.push(format!("Created {}", settings_file.display())),
-                Err(e) => actions.push(format!("Failed to create settings.json: {}", e)),
-            }
-        } else {
-            actions.push(format!("{} already exists", settings_file.display()));
+            let _ = std::fs::write(&settings_file, "{}");
         }
 
-        if !claude_md.exists() {
-            let template = "# CLAUDE.md\n\n\
-                            This file provides guidance to Claude Code (claude.ai/code) \
-                            when working with code in this repository.\n";
-            match std::fs::write(&claude_md, template) {
-                Ok(()) => actions.push(format!("Created {}", claude_md.display())),
-                Err(e) => actions.push(format!("Failed to create CLAUDE.md: {}", e)),
-            }
-        } else {
-            actions.push(format!("{} already exists", claude_md.display()));
-        }
-
-        Ok(CommandResult::Action(format!(
-            "=== Project Initialized ===\n\n{}",
-            actions.join("\n")
-        )))
+        // Return the init prompt so the model can analyze the codebase
+        Ok(CommandResult::Message(INIT_PROMPT.to_string()))
     }
 }
 
@@ -1152,8 +1146,33 @@ pub struct CommitHandler;
 impl CommandHandler for CommitHandler {
     fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
         Ok(CommandResult::Message(
-            "Generate a git commit message for the currently staged changes. \
-             Run `git diff --cached` first to see what's staged."
+            "## Context\n\n\
+             - Current git status: !`git status`\n\
+             - Current git diff (staged and unstaged changes): !`git diff HEAD`\n\
+             - Current branch: !`git branch --show-current`\n\
+             - Recent commits: !`git log --oneline -10`\n\n\
+             ## Git Safety Protocol\n\n\
+             - NEVER update the git config\n\
+             - NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it\n\
+             - CRITICAL: ALWAYS create NEW commits. NEVER use git commit --amend, unless the user explicitly requests it\n\
+             - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files\n\
+             - If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit\n\
+             - Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported\n\n\
+             ## Your task\n\n\
+             Based on the above changes, create a single git commit:\n\n\
+             1. Analyze all staged changes and draft a commit message:\n\
+                - Look at the recent commits above to follow this repository's commit message style\n\
+                - Summarize the nature of the changes (new feature, enhancement, bug fix, refactoring, test, docs, etc.)\n\
+                - Ensure the message accurately reflects the changes and their purpose (i.e. \"add\" means a wholly new feature, \"update\" means an enhancement to an existing feature, \"fix\" means a bug fix, etc.)\n\
+                - Draft a concise (1-2 sentences) commit message that focuses on the \"why\" rather than the \"what\"\n\n\
+             2. Stage relevant files and create the commit using HEREDOC syntax:\n\
+             ```\n\
+             git commit -m \"$(cat <<'EOF'\n\
+             Commit message here.\n\
+             EOF\n\
+             )\"\n\
+             ```\n\n\
+             You have the capability to call multiple tools in a single response. Stage and create the commit using a single message. Do not use any other tools or do anything else. Do not send any other text or messages besides these tool calls."
                 .to_string(),
         ))
     }
@@ -1165,15 +1184,44 @@ impl CommandHandler for ReviewHandler {
         let target = args.trim();
         if target.is_empty() {
             Ok(CommandResult::Message(
-                "Review the current code changes by running `git diff`. Provide a thorough \
-                 code review covering correctness, style, potential bugs, and suggestions \
-                 for improvement."
+                "You are an expert code reviewer. Follow these steps:\n\n\
+                 1. If no PR number is provided in the args, run `gh pr list` to show open PRs\n\
+                 2. If a PR number is provided, run `gh pr view <number>` to get PR details\n\
+                 3. Run `gh pr diff <number>` to get the diff\n\
+                 4. Analyze the changes and provide a thorough code review that includes:\n\
+                    - Overview of what the PR does\n\
+                    - Analysis of code quality and style\n\
+                    - Specific suggestions for improvements\n\
+                    - Any potential issues or risks\n\n\
+                 Keep your review concise but thorough. Focus on:\n\
+                 - Code correctness\n\
+                 - Following project conventions\n\
+                 - Performance implications\n\
+                 - Test coverage\n\
+                 - Security considerations\n\n\
+                 Format your review with clear sections and bullet points.\n\n\
+                 PR number: (none provided — list open PRs)"
                     .to_string(),
             ))
         } else {
             Ok(CommandResult::Message(format!(
-                "Review the following code changes or file, providing a thorough code review \
-                 covering correctness, style, potential bugs, and suggestions for improvement: {}",
+                "You are an expert code reviewer. Follow these steps:\n\n\
+                 1. If no PR number is provided in the args, run `gh pr list` to show open PRs\n\
+                 2. If a PR number is provided, run `gh pr view <number>` to get PR details\n\
+                 3. Run `gh pr diff <number>` to get the diff\n\
+                 4. Analyze the changes and provide a thorough code review that includes:\n\
+                    - Overview of what the PR does\n\
+                    - Analysis of code quality and style\n\
+                    - Specific suggestions for improvements\n\
+                    - Any potential issues or risks\n\n\
+                 Keep your review concise but thorough. Focus on:\n\
+                 - Code correctness\n\
+                 - Following project conventions\n\
+                 - Performance implications\n\
+                 - Test coverage\n\
+                 - Security considerations\n\n\
+                 Format your review with clear sections and bullet points.\n\n\
+                 PR number: {}",
                 target
             )))
         }
@@ -1336,17 +1384,33 @@ impl CommandHandler for PrCommentsHandler {
         let extra = if args.trim().is_empty() {
             String::new()
         } else {
-            format!("\n\nAdditional context: {}", args.trim())
+            format!("\nAdditional user input: {}", args.trim())
         };
         Ok(CommandResult::Message(format!(
-            "Fetch and analyze the PR comments for the current branch.\n\n\
-             Steps:\n\
-             1. Use `gh pr view --json number,headRepository` to get PR info\n\
-             2. Use `gh api` to fetch PR-level and review comments\n\
-             3. Parse and format all comments showing author, file, line, diff hunk, and comment text\n\
-             4. Suggest responses or actions for each comment thread\n\
-             5. If there are no comments, report that{}",
-            extra
+            "You are an AI assistant integrated into a git-based version control system. Your task is to fetch and display comments from a GitHub pull request.\n\n\
+             Follow these steps:\n\n\
+             1. Use `gh pr view --json number,headRepository` to get the PR number and repository info\n\
+             2. Use `gh api /repos/{{owner}}/{{repo}}/issues/{{number}}/comments` to get PR-level comments\n\
+             3. Use `gh api /repos/{{owner}}/{{repo}}/pulls/{{number}}/comments` to get review comments. Pay particular attention to the following fields: `body`, `diff_hunk`, `path`, `line`, etc. If the comment references some code, consider fetching it using eg `gh api /repos/{{owner}}/{{repo}}/contents/{{path}}?ref={{branch}} | jq .content -r | base64 -d`\n\
+             4. Parse and format all comments in a readable way\n\
+             5. Return ONLY the formatted comments, with no additional text\n\n\
+             Format the comments as:\n\n\
+             ## Comments\n\n\
+             [For each comment thread:]\n\
+             - @author file.ts#line:\n\
+               ```diff\n\
+               [diff_hunk from the API response]\n\
+               ```\n\
+               > quoted comment text\n\n\
+               [any replies indented]\n\n\
+             If there are no comments, return \"No comments found.\"\n\n\
+             Remember:\n\
+             1. Only show the actual comments, no explanatory text\n\
+             2. Include both PR-level and code review comments\n\
+             3. Preserve the threading/nesting of comment replies\n\
+             4. Show the file and line number context for code review comments\n\
+             5. Use jq to parse the JSON responses from the GitHub API\n\
+             {extra}",
         )))
     }
 }
@@ -1946,35 +2010,52 @@ impl CommandHandler for CommitPushPrHandler {
             )
         };
 
+        // Gather context similar to the TS implementation
+        let safe_user = std::env::var("SAFEUSER").unwrap_or_default();
+        let username = std::env::var("USER").unwrap_or_default();
+        let default_branch = "main";
+
         Ok(CommandResult::Message(format!(
-            "Analyze all staged and unstaged changes, then perform these steps in order:\n\n\
-             1. Create a new branch if on main/master (use the format `username/feature-name`)\n\
-             2. Stage all relevant changes with `git add`\n\
-             3. Create a single commit with an appropriate message using heredoc syntax:\n\
+            "## Context\n\n\
+             - `SAFEUSER`: {safe_user}\n\
+             - `whoami`: {username}\n\
+             - `git status`: !`git status`\n\
+             - `git diff HEAD`: !`git diff HEAD`\n\
+             - `git branch --show-current`: !`git branch --show-current`\n\
+             - `git diff {default_branch}...HEAD`: !`git diff {default_branch}...HEAD`\n\
+             - `gh pr view --json number 2>/dev/null || true`: !`gh pr view --json number 2>/dev/null || true`\n\n\
+             ## Git Safety Protocol\n\n\
+             - NEVER update the git config\n\
+             - NEVER run destructive/irreversible git commands (like push --force, hard reset, etc) unless the user explicitly requests them\n\
+             - NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it\n\
+             - NEVER run force push to main/master, warn the user if they request it\n\
+             - Do not commit files that likely contain secrets (.env, credentials.json, etc)\n\
+             - Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported\n\n\
+             ## Your task\n\n\
+             Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request from the git diff {default_branch}...HEAD output above).\n\n\
+             Based on the above changes:\n\
+             1. Create a new branch if on {default_branch} (use SAFEUSER from context above for the branch name prefix, falling back to whoami if SAFEUSER is empty, e.g., `username/feature-name`)\n\
+             2. Create a single commit with an appropriate message using heredoc syntax:\n\
              ```\n\
              git commit -m \"$(cat <<'EOF'\n\
              Commit message here.\n\
              EOF\n\
              )\"\n\
              ```\n\
-             4. Push the branch to origin with `git push -u origin <branch>`\n\
-             5. If a PR already exists (check with `gh pr view`), update it with `gh pr edit`. \
-                Otherwise create one with `gh pr create`:\n\
+             3. Push the branch to origin\n\
+             4. If a PR already exists for this branch (check the gh pr view output above), update the PR title and body using `gh pr edit` to reflect the current diff. Otherwise, create a pull request using `gh pr create` with heredoc syntax for the body.\n\
+                - IMPORTANT: Keep PR titles short (under 70 characters). Use the body for details.\n\
              ```\n\
-             gh pr create --title \"Short title\" --body \"$(cat <<'EOF'\n\
+             gh pr create --title \"Short, descriptive title\" --body \"$(cat <<'EOF'\n\
              ## Summary\n\
-             <bullet points>\n\n\
+             <1-3 bullet points>\n\n\
              ## Test plan\n\
-             <checklist>\n\
+             [Bulleted markdown checklist of TODOs for testing the pull request...]\n\
              EOF\n\
              )\"\n\
              ```\n\n\
-             IMPORTANT:\n\
-             - Keep PR titles under 70 characters\n\
-             - NEVER force push or skip hooks\n\
-             - Do not commit files containing secrets (.env, credentials, etc.)\n\
-             - Return the PR URL when done{}",
-            extra
+             You have the capability to call multiple tools in a single response. You MUST do all of the above in a single message.\n\n\
+             Return the PR URL when you're done, so the user can see it.{extra}",
         )))
     }
 }
@@ -2010,7 +2091,11 @@ impl CommandHandler for SecurityReviewHandler {
              Only report findings with >80% confidence of actual exploitability.\n\
              Output findings in markdown with file, line, severity, description, exploit scenario, and fix.\n\n\
              EXCLUSIONS: Skip DoS, rate limiting, secrets on disk, resource exhaustion, \
-             test-only files, and theoretical issues.",
+             test-only files, and theoretical issues.\n\n\
+             Begin your analysis now. Do this in 3 steps:\n\
+             1. Use a sub-task to identify vulnerabilities.\n\
+             2. Then for each vulnerability identified by the above sub-task, create a new sub-task to filter out false-positives. Launch these sub-tasks as parallel sub-tasks.\n\
+             3. Filter out any vulnerabilities where the sub-task reported a confidence less than 8.",
             scope
         )))
     }
@@ -2227,7 +2312,7 @@ pub fn build_default_commands() -> CommandRegistry {
     register!(
         "init",
         "Initialize Claude Code in project",
-        Action,
+        Prompt,
         InitHandler
     );
     register!("stats", "Show usage statistics", Action, StatsHandler);
@@ -2566,19 +2651,19 @@ mod tests {
     }
 
     #[test]
-    fn test_init_creates_claude_directory() {
+    fn test_init_creates_claude_directory_and_returns_prompt() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = test_ctx_with_dir(tmp.path());
         let handler = InitHandler;
         let result = handler.execute("", &ctx).unwrap();
         match result {
-            CommandResult::Action(text) => {
-                assert!(text.contains("Project Initialized"));
+            CommandResult::Message(text) => {
+                assert!(text.contains("analyze this codebase"));
+                assert!(text.contains("CLAUDE.md"));
                 assert!(tmp.path().join(".claude").exists());
                 assert!(tmp.path().join(".claude/settings.json").exists());
-                assert!(tmp.path().join("CLAUDE.md").exists());
             }
-            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+            other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
 
@@ -2590,10 +2675,11 @@ mod tests {
         handler.execute("", &ctx).unwrap();
         let result = handler.execute("", &ctx).unwrap();
         match result {
-            CommandResult::Action(text) => {
-                assert!(text.contains("already exists"));
+            CommandResult::Message(text) => {
+                // Should still return the prompt even if files already exist
+                assert!(text.contains("analyze this codebase"));
             }
-            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+            other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
 
@@ -2746,8 +2832,9 @@ mod tests {
         let result = handler.execute("", &ctx).unwrap();
         match result {
             CommandResult::Message(text) => {
-                assert!(text.contains("PR comments"));
+                assert!(text.contains("pull request"));
                 assert!(text.contains("gh pr view"));
+                assert!(text.contains("gh api"));
             }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
