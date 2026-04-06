@@ -6,6 +6,7 @@ use anyhow::Result;
 use crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
 };
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
@@ -345,6 +346,7 @@ impl App {
         execute!(
             io::stdout(),
             EnterAlternateScreen,
+            EnableMouseCapture,
             cursor::Hide
         )?;
 
@@ -418,6 +420,7 @@ impl App {
         terminal::disable_raw_mode()?;
         execute!(
             io::stdout(),
+            DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
         )?;
@@ -436,6 +439,7 @@ impl App {
         execute!(
             io::stdout(),
             EnterAlternateScreen,
+            EnableMouseCapture,
             cursor::Hide
         )?;
 
@@ -1377,6 +1381,7 @@ impl App {
         terminal::disable_raw_mode()?;
         execute!(
             io::stdout(),
+            DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
         )?;
