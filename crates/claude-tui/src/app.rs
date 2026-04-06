@@ -585,6 +585,17 @@ impl App {
 
             match event {
                 AppEvent::Tick => {
+                    // Reactive queue drain — mirrors TS useQueueProcessor:
+                    // when engine becomes idle and there's a queued message, dispatch it.
+                    if !self.engine_busy {
+                        if let Some(queued) = self.queued_message.take() {
+                            self.spinner.queued_count = 0;
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                            });
+                        }
+                    }
                     self.render()?;
                 }
                 AppEvent::SpinnerTick => {
