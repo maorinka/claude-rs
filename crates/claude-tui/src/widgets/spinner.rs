@@ -70,6 +70,8 @@ pub struct SpinnerState {
     pub start_time: Instant,
     pub tokens: u64,
     pub active: bool,
+    /// Number of queued user messages (shown as hint after elapsed time).
+    pub queued_count: usize,
     verb_index: usize,
     last_verb_change: Instant,
 }
@@ -88,6 +90,7 @@ impl SpinnerState {
             start_time: Instant::now(),
             tokens: 0,
             active: false,
+            queued_count: 0,
             verb_index,
             last_verb_change: Instant::now(),
         }
@@ -196,6 +199,12 @@ impl Widget for &SpinnerState {
         let mut info_parts = vec![elapsed];
         if self.tokens > 0 {
             info_parts.push(format!("{} tokens", format_tokens(self.tokens)));
+        }
+        if self.queued_count > 0 {
+            info_parts.push(format!(
+                "{} queued",
+                self.queued_count
+            ));
         }
         spans.push(Span::styled(
             format!(" ({})", info_parts.join(" · ")),

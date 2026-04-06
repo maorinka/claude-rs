@@ -851,16 +851,11 @@ impl App {
                         continue;
                     }
                     if self.engine_busy {
-                        // TS behavior: enqueue the message and let the current turn
-                        // finish naturally. The queue is drained in TurnComplete(Done)
-                        // and the Err handler (mirrors useQueueProcessor).
-                        self.queued_message = Some(text.clone());
+                        // TS behavior (handlePromptSubmit.ts:336): enqueue and clear
+                        // input. Show hint on spinner line so user sees it was accepted.
+                        self.queued_message = Some(text);
                         self.prompt.clear();
-                        // Show the queued message in chat so the user sees it was accepted
-                        self.message_list.push(MessageEntry::User { text });
-                        self.message_list.push(MessageEntry::System {
-                            text: "(queued — will run after current turn)".to_string(),
-                        });
+                        self.spinner.queued_count += 1;
                         continue;
                     }
 
@@ -1299,6 +1294,7 @@ impl App {
                     match result {
                         Ok(TurnResult::Done(_stop_reason)) => {
                             self.spinner.stop();
+                            self.spinner.queued_count = 0;
                             self.engine_busy = false;
 
                             // Dispatch any message that was queued while busy
@@ -1335,6 +1331,7 @@ impl App {
                         }
                         Err(e) => {
                             self.spinner.stop();
+                            self.spinner.queued_count = 0;
                             self.engine_busy = false;
                             self.message_list.push(MessageEntry::System {
                                 text: format!("Error: {}", e),
