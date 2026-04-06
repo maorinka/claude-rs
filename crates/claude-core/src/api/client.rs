@@ -8,6 +8,24 @@ use crate::auth::login::{debug_http_client, proxy_url};
 use crate::types::content::ContentBlock;
 use crate::types::events::StreamEvent;
 
+// ── Model normalization (mirrors TS utils/model/model.ts) ────────────────────
+
+/// Strip `[1m]`/`[2m]` context window suffixes before sending to the API.
+/// Mirrors TS `normalizeModelStringForAPI()`: `model.replace(/\[(1|2)m\]/gi, '')`
+fn normalize_model_for_api(model: &str) -> String {
+    model
+        .replace("[1m]", "")
+        .replace("[1M]", "")
+        .replace("[2m]", "")
+        .replace("[2M]", "")
+}
+
+/// Check if a model string has the `[1m]` context window suffix.
+/// Mirrors TS `has1mContext()`: `/\[1m\]/i.test(model)`
+fn has_1m_context(model: &str) -> bool {
+    model.contains("[1m]") || model.contains("[1M]")
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Authentication method for the Anthropic API.
@@ -186,8 +204,12 @@ pub fn build_request_body(
         return build_minimal_request_body(config, messages, system, tools, is_oauth);
     }
 
+    // Strip [1m]/[2m] context window suffix before sending to the API.
+    // Mirrors TS normalizeModelStringForAPI(): model.replace(/\[(1|2)m\]/gi, '')
+    let api_model = normalize_model_for_api(&config.model);
+
     let mut body = json!({
-        "model": config.model,
+        "model": api_model,
         "max_tokens": config.max_tokens,
         "stream": true,
         "messages": messages,
@@ -299,8 +321,10 @@ fn build_minimal_request_body(
     tools: &[ToolDefinition],
     is_oauth: bool,
 ) -> Value {
+    let api_model = normalize_model_for_api(&config.model);
+
     let mut body = json!({
-        "model": config.model,
+        "model": api_model,
         "max_tokens": config.max_tokens,
         "stream": true,
         "messages": messages,
@@ -437,6 +461,9 @@ impl ApiClient {
             ];
             if self.auth.is_oauth() {
                 betas.push("oauth-2025-04-20");
+            }
+            if has_1m_context(&self.config.model) {
+                betas.push("context-1m-2025-08-07");
             }
             request = request
                 .header("anthropic-beta", betas.join(","))
