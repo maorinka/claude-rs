@@ -1482,12 +1482,7 @@ impl App {
                 name,
                 input,
             } => {
-                let summary = serde_json::to_string(&input).unwrap_or_else(|_| input.to_string());
-                let summary = if summary.len() > 120 {
-                    format!("{}...", &summary[..117])
-                } else {
-                    summary
-                };
+                let summary = format_tool_use_summary(&name, &input);
                 self.message_list.push(MessageEntry::ToolUse {
                     name: name.clone(),
                     input_summary: summary,
@@ -1864,6 +1859,95 @@ async fn execute_tool(
         permission_mode,
     };
     executor.call(input, &ctx, cancel, None).await
+}
+
+/// Format a tool use input into a clean summary like the TS UI.
+/// e.g., Read(file_path · lines 10-20) instead of raw JSON.
+fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "Read" => {
+            let path = input["file_path"].as_str().unwrap_or("?");
+            let display = shorten_path(path);
+            let mut parts = vec![display.to_string()];
+            if let Some(offset) = input["offset"].as_u64() {
+                if let Some(limit) = input["limit"].as_u64() {
+                    parts.push(format!("lines {}-{}", offset, offset + limit - 1));
+                } else {
+                    parts.push(format!("from line {}", offset));
+                }
+            }
+            if let Some(pages) = input["pages"].as_str() {
+                parts.push(format!("pages {}", pages));
+            }
+            parts.join(" · ")
+        }
+        "Edit" => {
+            let path = input["file_path"].as_str().unwrap_or("?");
+            shorten_path(path).to_string()
+        }
+        "Write" => {
+            let path = input["file_path"].as_str().unwrap_or("?");
+            shorten_path(path).to_string()
+        }
+        "Bash" => {
+            let cmd = input["command"].as_str().unwrap_or("?");
+            if cmd.len() > 100 {
+                format!("{}...", &cmd[..97])
+            } else {
+                cmd.to_string()
+            }
+        }
+        "Glob" => {
+            let pattern = input["pattern"].as_str().unwrap_or("?");
+            pattern.to_string()
+        }
+        "Grep" => {
+            let pattern = input["pattern"].as_str().unwrap_or("?");
+            let path = input["path"].as_str().unwrap_or("");
+            if path.is_empty() {
+                format!("\"{}\"", pattern)
+            } else {
+                format!("\"{}\" in {}", pattern, shorten_path(path))
+            }
+        }
+        "Agent" => {
+            let desc = input["description"].as_str().unwrap_or("");
+            let subtype = input["subagent_type"].as_str().unwrap_or("");
+            if !desc.is_empty() {
+                desc.to_string()
+            } else if !subtype.is_empty() {
+                subtype.to_string()
+            } else {
+                let prompt = input["prompt"].as_str().unwrap_or("?");
+                if prompt.len() > 80 {
+                    format!("{}...", &prompt[..77])
+                } else {
+                    prompt.to_string()
+                }
+            }
+        }
+        _ => {
+            // Fallback: compact JSON, truncated
+            let s = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+            if s.len() > 120 {
+                format!("{}...", &s[..117])
+            } else {
+                s
+            }
+        }
+    }
+}
+
+/// Shorten a file path by keeping only the last 2 components.
+fn shorten_path(path: &str) -> &str {
+    let parts: Vec<&str> = path.rsplitn(3, '/').collect();
+    if parts.len() >= 2 {
+        // rsplitn gives [filename, parent, rest...], we want parent/filename
+        let start = path.len() - parts[0].len() - parts[1].len() - 1;
+        &path[start..]
+    } else {
+        path
+    }
 }
 
 /// Convert Edit/Write tool JSON result into a readable diff string.

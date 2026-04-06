@@ -295,6 +295,10 @@ fn render_tool_output_lines(line_text: &str, width: usize, theme: &Theme) -> Vec
     let prefix_span = Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style);
     let cont_prefix = Span::styled("     ".to_string(), dim_style); // 5 spaces for continuation
 
+    // Content uses normal text style (not dim) — only the ⎿ prefix is dim.
+    // This matches the TS MessageResponse which renders children normally.
+    let content_style = Style::default().fg(theme.inactive);
+
     if contains_ansi(line_text) {
         let mut spans = vec![prefix_span];
         spans.extend(parse_ansi(line_text));
@@ -315,7 +319,7 @@ fn render_tool_output_lines(line_text: &str, width: usize, theme: &Theme) -> Vec
             if paths.is_empty() {
                 result.push(Line::from(vec![
                     pfx,
-                    Span::styled(wrapped_line.clone(), dim_style),
+                    Span::styled(wrapped_line.clone(), content_style),
                 ]));
             } else {
                 // Re-check paths within this wrapped segment.
@@ -323,7 +327,7 @@ fn render_tool_output_lines(line_text: &str, width: usize, theme: &Theme) -> Vec
                 if seg_paths.is_empty() {
                     result.push(Line::from(vec![
                         pfx,
-                        Span::styled(wrapped_line.clone(), dim_style),
+                        Span::styled(wrapped_line.clone(), content_style),
                     ]));
                 } else {
                     let mut spans: Vec<Span<'static>> = vec![pfx];
@@ -332,7 +336,7 @@ fn render_tool_output_lines(line_text: &str, width: usize, theme: &Theme) -> Vec
                         if *start > last_end {
                             spans.push(Span::styled(
                                 wrapped_line[last_end..*start].to_string(),
-                                dim_style,
+                                content_style,
                             ));
                         }
                         spans.push(Span::styled(
@@ -346,7 +350,7 @@ fn render_tool_output_lines(line_text: &str, width: usize, theme: &Theme) -> Vec
                     if last_end < wrapped_line.len() {
                         spans.push(Span::styled(
                             wrapped_line[last_end..].to_string(),
-                            dim_style,
+                            content_style,
                         ));
                     }
                     result.push(Line::from(spans));
