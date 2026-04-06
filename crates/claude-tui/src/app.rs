@@ -1158,6 +1158,7 @@ impl App {
                                 name: info.name.clone(),
                                 output: "Permission denied".to_string(),
                                 is_error: true,
+                                tool_use_id: info.id.clone(),
                             });
 
                             // Check next tool or continue turn
@@ -1311,6 +1312,7 @@ impl App {
                             name: info.name.clone(),
                             output: truncate_result(&display_text),
                             is_error,
+                            tool_use_id: info.id.clone(),
                         });
 
                         // Check next tool or continue turn
@@ -1493,7 +1495,7 @@ impl App {
                 }
             }
             StreamEvent::ToolStart {
-                tool_use_id: _,
+                tool_use_id,
                 name,
                 input,
             } => {
@@ -1501,11 +1503,12 @@ impl App {
                 self.message_list.push(MessageEntry::ToolUse {
                     name: name.clone(),
                     input_summary: summary,
+                    tool_use_id,
                 });
                 self.spinner.start(SpinnerMode::Tool { name });
             }
             StreamEvent::ToolResult {
-                tool_use_id: _,
+                tool_use_id,
                 result,
             } => {
                 self.message_list.push(MessageEntry::ToolResult {
@@ -1514,6 +1517,7 @@ impl App {
                         result.data.as_str().unwrap_or(&result.data.to_string()),
                     ),
                     is_error: result.is_error,
+                    tool_use_id,
                 });
             }
             StreamEvent::Done { stop_reason: _ } => {

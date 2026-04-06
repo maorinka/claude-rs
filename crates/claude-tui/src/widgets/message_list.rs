@@ -42,11 +42,15 @@ pub enum MessageEntry {
     ToolUse {
         name: String,
         input_summary: String,
+        /// Tool use ID for pairing with ToolResult
+        tool_use_id: String,
     },
     ToolResult {
         name: String,
         output: String,
         is_error: bool,
+        /// Tool use ID this result belongs to
+        tool_use_id: String,
     },
     Thinking {
         text: String,
@@ -78,11 +82,27 @@ impl MessageList {
     }
 
     pub fn push(&mut self, msg: MessageEntry) {
+        // For ToolResult, insert right after its matching ToolUse (not at end)
+        if let MessageEntry::ToolResult { ref tool_use_id, .. } = msg {
+            if let Some(pos) = self.messages.iter().rposition(|m| {
+                matches!(m, MessageEntry::ToolUse { tool_use_id: ref id, .. } if id == tool_use_id)
+            }) {
+                // Insert after the ToolUse (and after any existing ToolResult for it)
+                let mut insert_at = pos + 1;
+                while insert_at < self.messages.len() {
+                    if matches!(&self.messages[insert_at], MessageEntry::ToolResult { tool_use_id: ref id, .. } if id == tool_use_id) {
+                        insert_at += 1;
+                    } else {
+                        break;
+                    }
+                }
+                self.messages.insert(insert_at, msg);
+                self.height_cache.insert(insert_at, None);
+                return;
+            }
+        }
         self.messages.push(msg);
         self.height_cache.push(None);
-        if self.sticky_bottom {
-            // Auto-scroll will be handled in render
-        }
     }
 
     pub fn messages(&self) -> &[MessageEntry] {
@@ -504,6 +524,7 @@ fn render_message(
         MessageEntry::ToolUse {
             name,
             input_summary,
+            tool_use_id: _,
         } => {
             // Original: colored circle + bold tool name + (summary)
             // Circle color: yellow/orange while executing (shown before result arrives)
@@ -564,6 +585,7 @@ fn render_message(
             name: _,
             output,
             is_error,
+            tool_use_id: _,
         } => {
             let w = width as usize;
             // Tool results show with "  ⎿  " prefix.
@@ -792,6 +814,7 @@ mod tests {
             &MessageEntry::ToolUse {
                 name: "Read".to_string(),
                 input_summary: "/foo.rs".to_string(),
+                tool_use_id: "test".to_string(),
             },
             80,
             false,
@@ -912,6 +935,7 @@ mod tests {
                 name: "Read".to_string(),
                 output: long_output.to_string(),
                 is_error: false,
+                tool_use_id: "test".to_string(),
             },
             50,
             false,
