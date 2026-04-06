@@ -136,16 +136,14 @@ impl QueryEngine {
         }));
     }
 
-    /// Repair orphaned tool_use blocks that lack corresponding tool_result messages.
-    ///
-    /// Scans the message history for assistant messages containing `tool_use` blocks
-    /// and ensures each has a corresponding `tool_result` in a subsequent user message.
-    /// Missing results get a placeholder error result so the API doesn't reject the request.
-    fn repair_orphaned_tool_uses(&mut self) {
-        // Collect all tool_use IDs from assistant messages
+    /// Repair message history to satisfy API constraints:
+    /// 1. Each tool_use must have exactly one tool_result (add missing, remove duplicates)
+    /// 2. No orphaned tool_use blocks without results
+    fn repair_tool_use_results(&mut self) {
+        // Pass 1: collect all tool_use IDs and count tool_results per ID
         let mut tool_use_ids: Vec<String> = Vec::new();
-        let mut tool_result_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut result_count: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for msg in &self.messages {
             let role = msg["role"].as_str().unwrap_or("");
@@ -160,7 +158,7 @@ impl QueryEngine {
                         }
                         ("user", "tool_result") => {
                             if let Some(id) = block["tool_use_id"].as_str() {
-                                tool_result_ids.insert(id.to_string());
+                                *result_count.entry(id.to_string()).or_insert(0) += 1;
                             }
                         }
                         _ => {}
@@ -169,18 +167,58 @@ impl QueryEngine {
             }
         }
 
-        // Find orphaned tool_use IDs (those without a matching tool_result)
+        // Pass 2: remove duplicate tool_results (keep first, remove rest)
+        let duplicates: Vec<String> = result_count
+            .iter()
+            .filter(|(_, count)| **count > 1)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if !duplicates.is_empty() {
+            tracing::warn!(
+                count = duplicates.len(),
+                "Removing duplicate tool_result blocks"
+            );
+            let mut seen: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for msg in &mut self.messages {
+                if msg["role"].as_str() != Some("user") {
+                    continue;
+                }
+                if let Some(content) = msg["content"].as_array_mut() {
+                    content.retain(|block| {
+                        if block["type"].as_str() == Some("tool_result") {
+                            if let Some(id) = block["tool_use_id"].as_str() {
+                                if duplicates.contains(&id.to_string()) {
+                                    // Keep first occurrence, remove rest
+                                    return seen.insert(id.to_string());
+                                }
+                            }
+                        }
+                        true // keep non-tool_result blocks
+                    });
+                }
+                // Remove empty user messages left after dedup
+                if msg["content"].as_array().map(|a| a.is_empty()).unwrap_or(false) {
+                    *msg = serde_json::json!(null);
+                }
+            }
+            self.messages.retain(|m| !m.is_null());
+        }
+
+        // Pass 3: add placeholder results for orphaned tool_use blocks
+        let result_ids: std::collections::HashSet<String> =
+            result_count.keys().cloned().collect();
         let orphans: Vec<String> = tool_use_ids
             .into_iter()
-            .filter(|id| !tool_result_ids.contains(id))
+            .filter(|id| !result_ids.contains(id))
             .collect();
 
         if !orphans.is_empty() {
             tracing::warn!(
                 count = orphans.len(),
-                "Repairing orphaned tool_use blocks without tool_result"
+                "Adding placeholder tool_results for orphaned tool_use blocks"
             );
-            // Add placeholder tool_results for each orphan
             let mut result_blocks: Vec<serde_json::Value> = Vec::new();
             for id in &orphans {
                 result_blocks.push(serde_json::json!({
@@ -287,7 +325,7 @@ impl QueryEngine {
         // Repair orphaned tool_use blocks: if the last assistant message has tool_use
         // blocks without corresponding tool_result messages, add placeholder results.
         // This can happen if a tool execution fails silently or the event flow is interrupted.
-        self.repair_orphaned_tool_uses();
+        self.repair_tool_use_results();
 
         // Build dynamic user context prepend (Issue 25).
         // Mirrors TS prependUserContext() — injects currentDate as a <system-reminder>.
