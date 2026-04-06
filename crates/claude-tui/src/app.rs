@@ -851,42 +851,16 @@ impl App {
                         continue;
                     }
                     if self.engine_busy {
-                        // TS behavior: queue the message and interrupt the current turn.
-                        // The queued message will be sent after the interrupted turn settles.
-                        self.queued_message = Some(text);
+                        // TS behavior: enqueue the message and let the current turn
+                        // finish naturally. The queue is drained in TurnComplete(Done)
+                        // and the Err handler (mirrors useQueueProcessor).
+                        self.queued_message = Some(text.clone());
                         self.prompt.clear();
-
-                        // Interrupt the current operation (same as Escape but preserves queue)
-                        cancel.cancel();
-                        self.engine_busy = false;
-                        self.spinner.stop();
-
-                        // Add error tool_results for any pending tools
-                        for pt in &pending_tools {
-                            let _ = engine_tx
-                                .send(EngineCommand::AddToolResult {
-                                    id: pt.info.id.clone(),
-                                    content: "Interrupted by new user message".to_string(),
-                                    is_error: true,
-                                })
-                                .await;
-                        }
-                        pending_tools.clear();
-                        pending_tool_index = 0;
-
-                        // Replace the exhausted cancel token
-                        cancel = CancellationToken::new();
-                        let _ = engine_tx
-                            .send(EngineCommand::SetCancelToken(cancel.clone()))
-                            .await;
-
-                        // Dispatch the queued message immediately
-                        if let Some(queued) = self.queued_message.take() {
-                            let tx2 = tx.clone();
-                            tokio::spawn(async move {
-                                let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
-                            });
-                        }
+                        // Show the queued message in chat so the user sees it was accepted
+                        self.message_list.push(MessageEntry::User { text });
+                        self.message_list.push(MessageEntry::System {
+                            text: "(queued — will run after current turn)".to_string(),
+                        });
                         continue;
                     }
 
