@@ -11,6 +11,7 @@ pub mod constants;
 pub mod context;
 pub mod cost;
 pub mod file_history;
+pub mod frontmatter;
 pub mod hooks;
 pub mod keybindings;
 pub mod lsp;
