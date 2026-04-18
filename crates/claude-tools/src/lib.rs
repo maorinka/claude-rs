@@ -9,6 +9,7 @@ pub mod cron_tool;
 pub mod destructive_command_warning;
 pub mod ctx_inspect_tool;
 pub mod edit;
+pub mod edit_quote_style;
 pub mod glob_tool;
 pub mod grep;
 pub mod list_peers_tool;
