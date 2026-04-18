@@ -393,7 +393,13 @@ impl QueryEngine {
                             .await;
                         return Ok(TurnResult::Done(StopReason::EndTurn));
                     }
-                    // Non-prompt-too-long errors: propagate to caller.
+                    // Non-prompt-too-long errors: fire StopFailure hook (if a
+                    // runner is installed) so user-configured hooks see the
+                    // failure, then propagate to the caller. Mirrors TS
+                    // executeStopFailureHooks invocation. Fire-and-drop: the
+                    // hook feedback is logged but does not change propagation.
+                    let err_text = format!("{:#}", e);
+                    let _ = crate::hooks::fire_stop_failure(&err_text).await;
                     return Err(e);
                 }
             }

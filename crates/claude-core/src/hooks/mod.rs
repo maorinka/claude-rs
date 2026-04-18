@@ -30,6 +30,32 @@ pub fn get_global_runner() -> Option<Arc<runner::HookRunner>> {
     GLOBAL_RUNNER.get().cloned()
 }
 
+/// Fire a `StopFailure` hook via the global runner, if one is installed.
+/// Logs blocking errors via tracing and returns the joined error message.
+/// Returns `None` if no runner is installed, no hooks matched, or no hook
+/// produced a blocking error.
+///
+/// Mirrors TS `executeStopFailureHooks` entry behaviour (without the full
+/// lastMessage plumbing — callers pass the error string directly).
+pub async fn fire_stop_failure(reason: &str) -> Option<String> {
+    let runner = get_global_runner()?;
+    let extra = serde_json::json!({ "error": reason });
+    let result = runner
+        .run_hooks(&types::HookEvent::StopFailure, extra, None, None, None, None)
+        .await;
+    if result.blocking_errors.is_empty() {
+        return None;
+    }
+    let msg = result
+        .blocking_errors
+        .iter()
+        .map(|e| runner::get_stop_hook_message(e))
+        .collect::<Vec<_>>()
+        .join("\n");
+    tracing::warn!("StopFailure hook feedback: {}", msg);
+    Some(msg)
+}
+
 // Re-export the most commonly used types at the module level.
 pub use aggregation::aggregate_hook_results;
 pub use matching::{get_matching_hooks, matches_pattern, resolve_match_query, MatchedHook};
