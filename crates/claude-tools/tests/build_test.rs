@@ -68,7 +68,8 @@ fn test_gated_tools_hidden_by_default() {
         "ListPeers",
         "Workflow",
         "VerifyPlanExecution",
-        "ScheduleCron",
+        "ScheduleCron", // alias — both paths must resolve to None when gate off
+        "CronCreate",   // canonical name (matches TS)
         "CronDelete",
         "CronList",
         "RemoteTrigger",

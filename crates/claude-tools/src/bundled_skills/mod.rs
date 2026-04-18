@@ -38,8 +38,8 @@
 //!    `auto_memory_enabled()` gate so the skill is hidden when
 //!    auto-memory is off — matches TS `remember.ts:71`.
 
+use crate::cron_tool::is_kairos_cron_enabled;
 use crate::skill_tool::{register_skill_full, register_skill_with_arg_header};
-use claude_core::errors_util::is_env_truthy;
 use claude_core::memdir::auto_memory_enabled;
 use claude_core::user_type;
 
@@ -131,7 +131,7 @@ pub fn register_remember_skill() {
 /// - `${DEFAULT_INTERVAL}` → `10m`
 /// - `${DEFAULT_MAX_AGE_DAYS}` → `30`
 pub fn register_loop_skill() {
-    if !is_env_truthy("AGENT_TRIGGERS") {
+    if !is_kairos_cron_enabled() {
         return;
     }
     register_skill_full(
@@ -279,23 +279,54 @@ mod tests {
     }
 
     #[test]
-    fn loop_gated_on_agent_triggers() {
+    fn loop_gated_on_agent_triggers_and_disable_cron() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
         // Absent: hidden.
         clear_skills();
         std::env::remove_var("AGENT_TRIGGERS");
+        std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
         register_loop_skill();
         assert!(!list_skills().iter().any(|s| s.name == "loop"));
 
-        // Truthy: registered.
+        // AGENT_TRIGGERS truthy + DISABLE_CRON truthy: hidden
+        // (codex CR: local kill-switch must be honored).
         clear_skills();
         std::env::set_var("AGENT_TRIGGERS", "1");
+        std::env::set_var("CLAUDE_CODE_DISABLE_CRON", "true");
+        register_loop_skill();
+        assert!(
+            !list_skills().iter().any(|s| s.name == "loop"),
+            "loop must not register when CLAUDE_CODE_DISABLE_CRON is truthy"
+        );
+
+        // AGENT_TRIGGERS truthy + DISABLE_CRON unset: registered.
+        clear_skills();
+        std::env::set_var("AGENT_TRIGGERS", "1");
+        std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
         register_loop_skill();
         assert!(list_skills().iter().any(|s| s.name == "loop"));
 
         std::env::remove_var("AGENT_TRIGGERS");
+        std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
         clear_skills();
+    }
+
+    /// Prompt text in loop.md references `CronCreate`; the tool
+    /// must actually be registered under that exact name (aliases
+    /// are fine). This test catches the regression codex CR
+    /// flagged — earlier the Rust tool reported
+    /// `"ScheduleCron"` and the prompt pointed the model at a
+    /// non-existent tool.
+    #[test]
+    fn loop_prompt_tool_name_matches_registered_tool() {
+        let tool = crate::cron_tool::ScheduleCronTool;
+        assert_eq!(
+            crate::registry::ToolExecutor::name(&tool),
+            "CronCreate",
+            "loop.md hard-codes `CronCreate`; rename is not allowed"
+        );
+        assert!(LOOP_PROMPT.contains("CronCreate"));
     }
 
     #[test]
@@ -303,6 +334,7 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_skills();
         std::env::set_var("AGENT_TRIGGERS", "1");
+        std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
 
         register_loop_skill();
         let l = list_skills().into_iter().find(|s| s.name == "loop").unwrap();

@@ -4,9 +4,26 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use claude_core::errors_util::is_env_truthy;
 use claude_core::types::events::ToolResultData;
 
 const MAX_JOBS: usize = 50;
+
+/// Shared gate used by both the cron tool registry and the
+/// `/loop` bundled skill. Matches TS `isKairosCronEnabled` at
+/// `src/tools/ScheduleCronTool/prompt.ts:36`:
+/// - `feature('AGENT_TRIGGERS')` must be on (Rust: env truthy).
+/// - `CLAUDE_CODE_DISABLE_CRON` must NOT be truthy (local kill-
+///   switch; codex CR on commit 880d530f flagged the missing
+///   check).
+///
+/// NOT ported: the GrowthBook `tengu_kairos_cron` flag. TS
+/// treats it as a fleet-wide default-true kill-switch; Rust
+/// keeps the local-only gate and leaves GrowthBook plumbing for
+/// a later phase.
+pub fn is_kairos_cron_enabled() -> bool {
+    is_env_truthy("AGENT_TRIGGERS") && !is_env_truthy("CLAUDE_CODE_DISABLE_CRON")
+}
 
 /// Verbatim port of TS ScheduleCronTool/prompt.ts
 /// `buildCronCreatePrompt(durableEnabled=true)`. TS branches on a
@@ -71,7 +88,17 @@ fn validate_cron_expression(expr: &str) -> bool {
 #[async_trait]
 impl ToolExecutor for ScheduleCronTool {
     fn name(&self) -> &str {
-        "ScheduleCron"
+        // Matches TS `CRON_CREATE_TOOL_NAME` constant + the Rust
+        // `tool_names::CRON_CREATE_TOOL_NAME`. The `/loop` bundled
+        // skill hard-codes this exact string; earlier the tool
+        // reported `"ScheduleCron"` which silently broke `/loop`
+        // (codex CR on commit 880d530f). `ScheduleCron` stays an
+        // alias below so existing callers still resolve.
+        "CronCreate"
+    }
+
+    fn aliases(&self) -> &[&str] {
+        &["ScheduleCron"]
     }
 
     fn description(&self) -> String {

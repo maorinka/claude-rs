@@ -124,8 +124,10 @@ pub fn build_default_registry() -> ToolRegistry {
         ));
     }
 
-    // ── Cron / agent-trigger gated (TS: feature('AGENT_TRIGGERS')) ───────────
-    if feature_enabled("AGENT_TRIGGERS") {
+    // ── Cron / agent-trigger gated. See cron_tool::is_kairos_cron_enabled
+    // for the combined AGENT_TRIGGERS + CLAUDE_CODE_DISABLE_CRON gate
+    // (matches TS `isKairosCronEnabled`).
+    if cron_tool::is_kairos_cron_enabled() {
         reg.register(Arc::new(cron_tool::ScheduleCronTool));
         reg.register(Arc::new(cron_tool::CronDeleteTool));
         reg.register(Arc::new(cron_tool::CronListTool));
