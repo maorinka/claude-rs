@@ -5,6 +5,7 @@ pub mod bash;
 pub mod bash_security;
 pub mod brief_tool;
 pub mod config_tool;
+pub mod command_semantics;
 pub mod cron_tool;
 pub mod destructive_command_warning;
 pub mod ctx_inspect_tool;
