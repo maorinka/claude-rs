@@ -32,6 +32,7 @@ pub mod sandbox;
 pub mod secondary_model;
 pub mod secret_scanner;
 pub mod session;
+pub mod session_memory;
 pub mod settings_sync;
 pub mod teams;
 pub mod tips;
