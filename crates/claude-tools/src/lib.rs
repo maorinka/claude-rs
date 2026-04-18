@@ -24,6 +24,7 @@ pub mod push_notification_tool;
 pub mod read;
 pub mod read_only_validation;
 pub mod registry;
+pub mod sed_validation;
 pub mod remote_trigger;
 pub mod repl_tool;
 pub mod send_message;
