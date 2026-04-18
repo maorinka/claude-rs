@@ -27,6 +27,7 @@ pub mod remote_managed_settings;
 pub mod sandbox;
 pub mod secondary_model;
 pub mod session;
+pub mod settings_sync;
 pub mod teams;
 pub mod tips;
 pub mod tool_use_summary;
