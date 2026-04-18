@@ -3,6 +3,7 @@ pub mod agents;
 pub mod ask_user;
 pub mod bash;
 pub mod bash_commands;
+pub mod bash_sandbox_prompt;
 pub mod bash_security;
 pub mod brief_tool;
 pub mod config_tool;
