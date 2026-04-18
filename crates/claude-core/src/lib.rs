@@ -38,6 +38,7 @@ pub mod secret_scanner;
 pub mod session;
 pub mod session_memory;
 pub mod settings_sync;
+pub mod shell_quote;
 pub mod string_utils;
 pub mod task_types;
 pub mod teams;
