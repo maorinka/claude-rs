@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use claude_core::hooks::{get_global_runner, types::HookEvent};
 use claude_core::types::events::ToolResultData;
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
@@ -160,16 +161,47 @@ impl ToolExecutor for TaskCreateTool {
         let id = new_task_id();
         let entry = TaskEntry {
             id: id.clone(),
-            subject,
-            description,
+            subject: subject.clone(),
+            description: description.clone(),
             status: "pending".to_string(),
             created_at: now_iso(),
             output: None,
             pid: None,
         };
 
-        let mut store = TASK_STORE.lock().unwrap();
-        store.insert(id.clone(), entry.clone());
+        {
+            let mut store = TASK_STORE.lock().unwrap();
+            store.insert(id.clone(), entry.clone());
+        }
+
+        // Fire TaskCreated hooks if a runner has been installed. Ports TS
+        // TaskCreateTool.ts lines 93-113 (executeTaskCreatedHooks). If a hook
+        // returns a blocking error we delete the task and surface the message,
+        // matching the TS `deleteTask(...); throw new Error(blockingErrors)`
+        // path.
+        if let Some(runner) = get_global_runner() {
+            let extra = json!({
+                "task_id": id,
+                "task_subject": subject,
+                "task_description": description,
+            });
+            let aggregated = runner
+                .run_hooks(&HookEvent::TaskCreated, extra, None, None, None, None)
+                .await;
+            if !aggregated.blocking_errors.is_empty() {
+                // Roll the task back so failed hooks don't leave a dangling entry.
+                TASK_STORE.lock().unwrap().remove(&id);
+                let msg = aggregated
+                    .blocking_errors
+                    .iter()
+                    .map(|e| {
+                        claude_core::hooks::get_task_created_hook_message(e)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Ok(error_result(msg));
+            }
+        }
 
         Ok(ToolResultData {
             data: entry.to_json(),
