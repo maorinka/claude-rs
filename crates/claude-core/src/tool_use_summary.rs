@@ -102,7 +102,16 @@ pub async fn generate_tool_use_summary(
         user = user_prompt,
     );
 
-    let summary = model.summarize(&full_prompt, cancel).await?;
+    let summary = model
+        .summarize(&full_prompt, cancel)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "errorId={}: {}",
+                E_TOOL_USE_SUMMARY_GENERATION_FAILED,
+                e
+            )
+        })?;
     let summary = summary.trim();
     if summary.is_empty() {
         Ok(None)
