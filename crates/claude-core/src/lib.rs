@@ -24,6 +24,7 @@ pub mod mcp;
 pub mod memdir;
 pub mod migrations;
 pub mod output_styles;
+pub mod path_utils;
 pub mod permissions;
 pub mod plugins;
 pub mod policy_limits;
