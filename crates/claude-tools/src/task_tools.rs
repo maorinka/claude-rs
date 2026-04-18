@@ -10,6 +10,15 @@ use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::hooks::{get_global_runner, types::HookEvent};
 use claude_core::types::events::ToolResultData;
 
+// Verbatim ports of TS tools/Task{Create,Get,List,Update}Tool/prompt.ts.
+// TS TaskCreate + TaskList branch on `isAgentSwarmsEnabled()`; the
+// embedded Rust port has teams always enabled, so the "teammate"
+// paragraphs are baked in.
+pub const TASK_CREATE_PROMPT: &str = include_str!("prompts/task_create.md");
+pub const TASK_GET_PROMPT: &str = include_str!("prompts/task_get.md");
+pub const TASK_LIST_PROMPT: &str = include_str!("prompts/task_list.md");
+pub const TASK_UPDATE_PROMPT: &str = include_str!("prompts/task_update.md");
+
 // ─── Shared state ─────────────────────────────────────────────────────────────
 
 /// A task entry with optional real process tracking.
@@ -115,7 +124,7 @@ impl ToolExecutor for TaskCreateTool {
     }
 
     fn description(&self) -> String {
-        "Create a new background task with a subject and description.".to_string()
+        TASK_CREATE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -221,7 +230,7 @@ impl ToolExecutor for TaskListTool {
     }
 
     fn description(&self) -> String {
-        "List all tasks, optionally filtered by status.".to_string()
+        TASK_LIST_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -273,7 +282,7 @@ impl ToolExecutor for TaskUpdateTool {
     }
 
     fn description(&self) -> String {
-        "Update the status or description of an existing task.".to_string()
+        TASK_UPDATE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -355,7 +364,7 @@ impl ToolExecutor for TaskGetTool {
     }
 
     fn description(&self) -> String {
-        "Get the details of a specific task by its ID.".to_string()
+        TASK_GET_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

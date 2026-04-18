@@ -55,6 +55,12 @@ pub struct TodoWriteTool;
 /// Default session key used when no agent context is available.
 const DEFAULT_SESSION_KEY: &str = "default";
 
+/// Verbatim port of TS `TodoWriteTool/prompt.ts` PROMPT. The
+/// TS `${FILE_EDIT_TOOL_NAME}` interpolation resolves to `Edit`
+/// at runtime; baked in as a literal so this stays a static
+/// `&str` the prompt cache can key on.
+pub const TODO_WRITE_PROMPT: &str = include_str!("prompts/todo_write.md");
+
 #[async_trait]
 impl ToolExecutor for TodoWriteTool {
     fn name(&self) -> &str {
@@ -62,11 +68,7 @@ impl ToolExecutor for TodoWriteTool {
     }
 
     fn description(&self) -> String {
-        "Update the todo list for the current session. To be used proactively and often to \
-         track progress and pending tasks. Make sure that at least one task is in_progress \
-         at all times. Always provide both content (imperative) and activeForm (present \
-         continuous) for each task."
-            .to_string()
+        TODO_WRITE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
