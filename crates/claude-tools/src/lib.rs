@@ -40,6 +40,7 @@ pub mod tool_search;
 pub mod verify_plan_tool;
 pub mod web_browser_tool;
 pub mod web_fetch;
+pub mod web_fetch_preapproved;
 pub mod web_search;
 pub mod workflow_tool;
 pub mod worktree_tools;

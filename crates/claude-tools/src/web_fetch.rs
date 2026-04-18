@@ -304,7 +304,10 @@ impl ToolExecutor for WebFetchTool {
         // no secondary model is registered, echo the prompt back in the
         // result so the primary model can apply it to the raw content
         // itself — this is strictly better than silently discarding it.
-        match apply_prompt_to_markdown(&prompt, &result_text, false, cancel.clone()).await {
+        // The is_preapproved flag relaxes the quoting guidelines applied
+        // to the secondary-model prompt (TS makeSecondaryModelPrompt).
+        let is_preapproved = crate::web_fetch_preapproved::is_preapproved_url(&url);
+        match apply_prompt_to_markdown(&prompt, &result_text, is_preapproved, cancel.clone()).await {
             Ok(Some(summary)) => Ok(ToolResultData {
                 data: json!({
                     "bytes": bytes,
