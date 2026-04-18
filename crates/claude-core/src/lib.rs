@@ -35,6 +35,7 @@ pub mod secret_scanner;
 pub mod session;
 pub mod session_memory;
 pub mod settings_sync;
+pub mod string_utils;
 pub mod teams;
 pub mod tips;
 pub mod tool_use_summary;
