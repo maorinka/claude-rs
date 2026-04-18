@@ -28,6 +28,7 @@ pub mod path_utils;
 pub mod permissions;
 pub mod plugins;
 pub mod policy_limits;
+pub mod privacy_level;
 pub mod query;
 pub mod remote;
 pub mod remote_managed_settings;
