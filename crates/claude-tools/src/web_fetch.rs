@@ -182,6 +182,9 @@ fn strip_html(html: &str) -> String {
     out.trim().to_string()
 }
 
+/// Verbatim port of TS WebFetchTool/prompt.ts DESCRIPTION.
+pub const WEB_FETCH_PROMPT: &str = include_str!("prompts/web_fetch.md");
+
 #[async_trait]
 impl ToolExecutor for WebFetchTool {
     fn name(&self) -> &str {
@@ -189,7 +192,7 @@ impl ToolExecutor for WebFetchTool {
     }
 
     fn description(&self) -> String {
-        "Fetch the contents of a URL and return the text content. Supports HTML pages (converted to text), JSON, and plain text responses.".to_string()
+        WEB_FETCH_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

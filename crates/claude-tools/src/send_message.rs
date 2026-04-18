@@ -14,6 +14,11 @@ use uuid::Uuid;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
+/// Verbatim port of TS SendMessageTool/prompt.ts `getPrompt()` with
+/// UDS_INBOX branches inlined (Rust port always has inbox routing
+/// support).
+pub const SEND_MESSAGE_PROMPT: &str = include_str!("prompts/send_message.md");
+
 // ---------------------------------------------------------------------------
 // Mailbox data types
 // ---------------------------------------------------------------------------
@@ -224,11 +229,7 @@ impl ToolExecutor for SendMessageTool {
     }
 
     fn description(&self) -> String {
-        "Send a message to another agent via a file-based mailbox at \
-         ~/.claude/mailboxes/<agent_id>/. Each message is written as \
-         msg_<uuid>.json. The recipient polls its mailbox periodically \
-         for new messages. Returns {success, message, to} on success."
-            .to_string()
+        SEND_MESSAGE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

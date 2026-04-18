@@ -60,6 +60,11 @@ pub fn get_pending_question() -> Option<PendingQuestion> {
 
 pub struct AskUserQuestionTool;
 
+/// Verbatim port of TS AskUserQuestionTool/prompt.ts
+/// `ASK_USER_QUESTION_TOOL_PROMPT`. TS `${EXIT_PLAN_MODE_TOOL_NAME}`
+/// resolves to `ExitPlanMode` at runtime; baked in as a literal.
+pub const ASK_USER_PROMPT: &str = include_str!("prompts/ask_user.md");
+
 #[async_trait]
 impl ToolExecutor for AskUserQuestionTool {
     fn name(&self) -> &str {
@@ -67,8 +72,7 @@ impl ToolExecutor for AskUserQuestionTool {
     }
 
     fn description(&self) -> String {
-        "Asks the user multiple choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices."
-            .to_string()
+        ASK_USER_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

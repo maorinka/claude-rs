@@ -1,5 +1,17 @@
 use serde_json::{json, Value};
 
+/// Verbatim port of TS WebSearchTool/prompt.ts `getWebSearchPrompt()`.
+/// The TS side splices this into the system prompt as behavioural
+/// guidance (mandatory "Sources:" section, current-year search
+/// queries, US-only note). Consumed by the system-prompt builder,
+/// not by the tool registry — web_search is server-side.
+///
+/// TS interpolates `${currentMonthYear}` computed at call time; the
+/// literal month shifts daily, so the Rust port keeps the "current
+/// year" guidance generic — callers that want month-year
+/// specificity should format it in at splice time.
+pub const WEB_SEARCH_PROMPT: &str = include_str!("prompts/web_search.md");
+
 /// WebSearchTool is a **server-side** tool.
 ///
 /// Unlike regular client-side tools, web search is handled by Anthropic's API
