@@ -2,6 +2,7 @@ pub mod analytics;
 pub mod api;
 pub mod auth;
 pub mod bridge;
+pub mod buddy;
 pub mod commands;
 pub mod compact;
 pub mod config;
