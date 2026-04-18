@@ -11,6 +11,7 @@ pub mod file_history;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;
+pub mod memdir;
 pub mod migrations;
 pub mod output_styles;
 pub mod permissions;
