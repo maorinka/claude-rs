@@ -526,7 +526,7 @@ impl ToolExecutor for TaskOutputTool {
     }
 
     fn description(&self) -> String {
-        "Get the output of a completed or running task by its ID.".to_string()
+        "[Deprecated] — prefer Read on the task output file path".to_string()
     }
 
     fn input_schema(&self) -> Value {

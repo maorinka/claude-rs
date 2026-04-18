@@ -8,6 +8,13 @@ use claude_core::types::events::ToolResultData;
 
 const MAX_JOBS: usize = 50;
 
+/// Verbatim port of TS ScheduleCronTool/prompt.ts
+/// `buildCronCreatePrompt(durableEnabled=true)`. TS branches on a
+/// durableEnabled runtime flag; Rust port embeds the
+/// durable-enabled variant since .claude/scheduled_tasks.json
+/// persistence is the default on the Rust side.
+pub const CRON_CREATE_PROMPT: &str = include_str!("prompts/cron_create.md");
+
 pub struct ScheduleCronTool;
 
 /// Validate a 5-field cron expression: M H DoM Mon DoW
@@ -68,14 +75,7 @@ impl ToolExecutor for ScheduleCronTool {
     }
 
     fn description(&self) -> String {
-        r#"Schedule a recurring or one-shot cron task. Persists configuration to ~/.claude/cron/.
-
-Parameters:
-- cron (required): Standard 5-field cron expression in local time: "M H DoM Mon DoW" (e.g. "*/5 * * * *" = every 5 minutes).
-- prompt (required): The prompt to enqueue at each fire time.
-- name (optional): A name for the cron job. If not provided, a UUID is generated.
-- recurring (optional, default true): true = fire on every cron match; false = fire once then auto-delete."#
-            .to_string()
+        CRON_CREATE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
