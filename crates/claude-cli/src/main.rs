@@ -219,6 +219,14 @@ async fn main() -> Result<()> {
     // Build tool registry
     let mut tools = claude_tools::build_default_registry();
 
+    // Register bundled skills (simplify, stuck, remember, …).
+    // Each skill's registrar applies its own TS-parity gate
+    // (user-type, feature flag) so calling this unconditionally
+    // at startup is safe. Matches TS setup.ts which calls each
+    // registerXxxSkill() at startup and lets the skill choose
+    // whether to register.
+    claude_tools::bundled_skills::register_bundled_skills();
+
     // --- MCP server wiring ---
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));

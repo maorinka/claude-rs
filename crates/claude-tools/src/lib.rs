@@ -6,6 +6,7 @@ pub mod bash_commands;
 pub mod bash_sandbox_prompt;
 pub mod bash_security;
 pub mod brief_tool;
+pub mod bundled_skills;
 pub mod config_tool;
 pub mod command_semantics;
 pub mod cron_tool;
