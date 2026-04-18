@@ -315,6 +315,43 @@ async fn main() -> Result<()> {
         model,
         ..Default::default()
     };
+    // Install a Haiku-backed secondary model so WebFetchTool and other tools
+    // that need cheap post-processing can actually call the API. Without this
+    // the prompt param on WebFetch is preserved in the result payload but no
+    // summarisation happens.
+    {
+        let haiku = std::sync::Arc::new(
+            claude_core::secondary_model::HaikuSecondaryModel::new(
+                auth.clone(),
+                api_config.base_url.clone(),
+                api_config.session_id.clone(),
+            ),
+        );
+        claude_core::secondary_model::set_global(haiku);
+    }
+
+    // Install a HookRunner so TaskCreateTool (and future hook sites) can fire
+    // user-configured hooks. We serialise the typed Settings to a JSON Value
+    // so HookRunner::from_settings can pick the "hooks" subtree out of it.
+    // If the user has no hooks configured the runner is a no-op.
+    {
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let session_id = api_config.session_id.clone();
+        let settings_value = serde_json::to_value(settings).unwrap_or(serde_json::Value::Null);
+        let runner = std::sync::Arc::new(
+            claude_core::hooks::HookRunner::from_settings(
+                &settings_value,
+                cwd,
+                session_id,
+                String::new(),
+            ),
+        );
+        claude_core::hooks::set_global_runner(runner);
+    }
+
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth);
 
     // Create cancellation token
