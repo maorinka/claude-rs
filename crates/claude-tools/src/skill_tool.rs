@@ -28,6 +28,12 @@ pub struct SkillEntry {
     /// uses `## User-provided context`, `remember.ts` uses
     /// `## Additional context from user`.
     pub argument_header: Option<String>,
+    /// Optional message to return INSTEAD OF the main content when
+    /// invoked with empty or missing args. Matches TS skills that
+    /// short-circuit on empty input — e.g. `loop.ts` returns its
+    /// USAGE_MESSAGE, `batch.ts` returns MISSING_INSTRUCTION_MESSAGE.
+    /// When `None`, the tool always returns the main `content`.
+    pub empty_args_message: Option<String>,
 }
 
 static SKILL_STORE: Lazy<Mutex<HashMap<String, SkillEntry>>> =
@@ -39,7 +45,7 @@ static SKILL_STORE: Lazy<Mutex<HashMap<String, SkillEntry>>> =
 /// Use [`register_skill_with_arg_header`] for TS-equivalent
 /// per-skill headers (`## Additional Focus`, etc.).
 pub fn register_skill(name: &str, description: &str, content: &str) {
-    register_skill_with_arg_header(name, description, content, None);
+    register_skill_full(name, description, content, None, None);
 }
 
 /// Register a skill with a custom header for user-supplied args.
@@ -51,6 +57,24 @@ pub fn register_skill_with_arg_header(
     content: &str,
     argument_header: Option<&str>,
 ) {
+    register_skill_full(name, description, content, argument_header, None);
+}
+
+/// Full registration form — content + optional per-skill arg
+/// header + optional empty-args fallback.
+///
+/// `empty_args_message`: when set, the SkillTool returns this text
+/// (instead of the main `content`) when the user invokes the skill
+/// with no args. Matches TS skills that short-circuit on empty
+/// input — see `loop.ts` USAGE_MESSAGE + `batch.ts`
+/// MISSING_INSTRUCTION_MESSAGE.
+pub fn register_skill_full(
+    name: &str,
+    description: &str,
+    content: &str,
+    argument_header: Option<&str>,
+    empty_args_message: Option<&str>,
+) {
     let mut store = SKILL_STORE.lock().unwrap();
     store.insert(
         name.to_string(),
@@ -59,6 +83,7 @@ pub fn register_skill_with_arg_header(
             description: description.to_string(),
             content: content.to_string(),
             argument_header: argument_header.map(|s| s.to_string()),
+            empty_args_message: empty_args_message.map(|s| s.to_string()),
         },
     );
 }
@@ -160,18 +185,33 @@ Important:
 
         match skill {
             Some(entry) => {
-                let mut content = entry.content.clone();
-                if let Some(a) = args {
-                    content = match &entry.argument_header {
-                        Some(header) => {
-                            // Matches TS per-skill appenders —
-                            // e.g. simplify.ts appends
-                            // "## Additional Focus\n\n{args}".
-                            format!("{}\n\n## {}\n\n{}", content, header, a)
+                // Args are treated as "empty" when missing, or
+                // present-but-trimmed-to-zero-length. TS normalises
+                // via `args.trim()` before the empty branch —
+                // e.g. `loop.ts` does `if (!args.trim()) return USAGE_MESSAGE`.
+                let trimmed_args: Option<&str> = args.map(str::trim).filter(|s| !s.is_empty());
+
+                // Empty-args short-circuit: if the skill declares a
+                // dedicated empty_args_message, return it verbatim
+                // instead of the main content.
+                let content = match (&entry.empty_args_message, trimmed_args) {
+                    (Some(msg), None) => msg.clone(),
+                    _ => {
+                        let mut body = entry.content.clone();
+                        if let Some(a) = trimmed_args {
+                            body = match &entry.argument_header {
+                                Some(header) => {
+                                    // Matches TS per-skill appenders —
+                                    // e.g. simplify.ts appends
+                                    // "## Additional Focus\n\n{args}".
+                                    format!("{}\n\n## {}\n\n{}", body, header, a)
+                                }
+                                None => format!("{}\n\nArguments: {}", body, a),
+                            };
                         }
-                        None => format!("{}\n\nArguments: {}", content, a),
-                    };
-                }
+                        body
+                    }
+                };
 
                 Ok(ToolResultData {
                     data: json!({
@@ -291,6 +331,69 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Arguments:"));
+
+        clear_skills();
+    }
+
+    #[tokio::test]
+    async fn skill_tool_empty_args_returns_empty_args_message() {
+        clear_skills();
+        register_skill_full(
+            "loop-test",
+            "Schedule",
+            "MAIN PROMPT BODY",
+            Some("Input"),
+            Some("USAGE: /loop <prompt>"),
+        );
+
+        let tool = SkillTool;
+        let ctx = make_ctx();
+
+        // Missing args field entirely → usage message.
+        let r1 = tool
+            .call(&json!({ "skill": "loop-test" }), &ctx, CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(r1.data["content"].as_str().unwrap(), "USAGE: /loop <prompt>");
+
+        // Empty string args → usage message (TS normalises via trim).
+        let r2 = tool
+            .call(
+                &json!({ "skill": "loop-test", "args": "" }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r2.data["content"].as_str().unwrap(), "USAGE: /loop <prompt>");
+
+        // Whitespace-only args → usage message.
+        let r3 = tool
+            .call(
+                &json!({ "skill": "loop-test", "args": "   " }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r3.data["content"].as_str().unwrap(), "USAGE: /loop <prompt>");
+
+        // Real args → main body + header + args (NOT the usage message).
+        let r4 = tool
+            .call(
+                &json!({ "skill": "loop-test", "args": "5m /standup" }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let out = r4.data["content"].as_str().unwrap();
+        assert!(out.starts_with("MAIN PROMPT BODY"));
+        assert!(out.contains("## Input"));
+        assert!(out.contains("5m /standup"));
 
         clear_skills();
     }

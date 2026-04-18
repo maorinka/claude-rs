@@ -15,7 +15,9 @@
 //! Each registrar below is gated on its TS-equivalent condition:
 //! - `simplify` — unconditional (all user types)
 //! - `stuck`    — ant-only (`USER_TYPE === 'ant'`)
-//! - `remember` — ant-only
+//! - `remember` — ant-only + `auto_memory_enabled()`
+//! - `loop`     — `AGENT_TRIGGERS` env flag (matches TS
+//!   `isKairosCronEnabled`'s `feature('AGENT_TRIGGERS')` gate)
 //!
 //! ## TS parity notes
 //!
@@ -36,13 +38,16 @@
 //!    `auto_memory_enabled()` gate so the skill is hidden when
 //!    auto-memory is off — matches TS `remember.ts:71`.
 
-use crate::skill_tool::register_skill_with_arg_header;
+use crate::skill_tool::{register_skill_full, register_skill_with_arg_header};
+use claude_core::errors_util::is_env_truthy;
 use claude_core::memdir::auto_memory_enabled;
 use claude_core::user_type;
 
 const SIMPLIFY_PROMPT: &str = include_str!("simplify.md");
 const STUCK_PROMPT: &str = include_str!("stuck.md");
 const REMEMBER_PROMPT: &str = include_str!("remember.md");
+const LOOP_PROMPT: &str = include_str!("loop.md");
+const LOOP_USAGE: &str = include_str!("loop_usage.md");
 
 /// Register every bundled skill whose gate passes for the current
 /// user type. Idempotent: `register_skill` replaces by name, so
@@ -51,6 +56,7 @@ pub fn register_bundled_skills() {
     register_simplify_skill();
     register_stuck_skill();
     register_remember_skill();
+    register_loop_skill();
 }
 
 /// Port of TS `registerSimplifySkill`. Reviews changed files for
@@ -102,6 +108,38 @@ pub fn register_remember_skill() {
         "Review auto-memory entries and propose promotions to CLAUDE.md, CLAUDE.local.md, or shared memory. Also detects outdated, conflicting, and duplicate entries across memory layers.",
         REMEMBER_PROMPT,
         Some("Additional context from user"),
+    );
+}
+
+/// Port of TS `registerLoopSkill`. Runs a prompt or slash command
+/// on a recurring interval via CronCreate. Empty-args short-
+/// circuits to a usage message; non-empty args get appended under
+/// the `## Input` header so the model parses them as in TS
+/// `buildPrompt(args)`.
+///
+/// Gate: `isKairosCronEnabled` in TS requires the
+/// `feature('AGENT_TRIGGERS')` build flag + a GrowthBook flag.
+/// Rust has the same AGENT_TRIGGERS env gate on the cron tool
+/// registry (see `claude-tools/src/lib.rs`). We reuse it here so
+/// `/loop` and the `CronCreate` tool it references show up
+/// together — registering `/loop` without the cron tools would
+/// give the model a broken reference.
+///
+/// TS interpolations baked into loop.md as literals:
+/// - `${CRON_CREATE_TOOL_NAME}` → `CronCreate`
+/// - `${CRON_DELETE_TOOL_NAME}` → `CronDelete`
+/// - `${DEFAULT_INTERVAL}` → `10m`
+/// - `${DEFAULT_MAX_AGE_DAYS}` → `30`
+pub fn register_loop_skill() {
+    if !is_env_truthy("AGENT_TRIGGERS") {
+        return;
+    }
+    register_skill_full(
+        "loop",
+        "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo, defaults to 10m)",
+        LOOP_PROMPT,
+        Some("Input"),
+        Some(LOOP_USAGE),
     );
 }
 
@@ -236,5 +274,47 @@ mod tests {
         assert!(SIMPLIFY_PROMPT.contains("# Simplify"));
         assert!(STUCK_PROMPT.contains("/stuck"));
         assert!(REMEMBER_PROMPT.contains("# Memory Review"));
+        assert!(LOOP_PROMPT.contains("/loop"));
+        assert!(LOOP_USAGE.contains("Usage: /loop"));
+    }
+
+    #[test]
+    fn loop_gated_on_agent_triggers() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Absent: hidden.
+        clear_skills();
+        std::env::remove_var("AGENT_TRIGGERS");
+        register_loop_skill();
+        assert!(!list_skills().iter().any(|s| s.name == "loop"));
+
+        // Truthy: registered.
+        clear_skills();
+        std::env::set_var("AGENT_TRIGGERS", "1");
+        register_loop_skill();
+        assert!(list_skills().iter().any(|s| s.name == "loop"));
+
+        std::env::remove_var("AGENT_TRIGGERS");
+        clear_skills();
+    }
+
+    #[test]
+    fn loop_carries_input_header_and_usage_fallback() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_skills();
+        std::env::set_var("AGENT_TRIGGERS", "1");
+
+        register_loop_skill();
+        let l = list_skills().into_iter().find(|s| s.name == "loop").unwrap();
+        assert_eq!(l.argument_header.as_deref(), Some("Input"));
+        assert!(l.empty_args_message.as_deref().is_some());
+        assert!(l
+            .empty_args_message
+            .as_deref()
+            .unwrap()
+            .contains("Usage: /loop"));
+
+        std::env::remove_var("AGENT_TRIGGERS");
+        clear_skills();
     }
 }
