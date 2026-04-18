@@ -1,10 +1,12 @@
 pub mod agent_summary;
 pub mod analytics;
 pub mod api;
+pub mod argument_substitution;
 pub mod auth;
 pub mod auto_dream;
 pub mod bridge;
 pub mod buddy;
+pub mod circular_buffer;
 pub mod commands;
 pub mod compact;
 pub mod config;
