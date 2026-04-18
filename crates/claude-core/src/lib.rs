@@ -39,6 +39,7 @@ pub mod settings_sync;
 pub mod string_utils;
 pub mod teams;
 pub mod tips;
+pub mod tool_names;
 pub mod tool_use_summary;
 pub mod types;
 pub mod vcr;
