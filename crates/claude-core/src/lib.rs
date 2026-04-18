@@ -2,6 +2,7 @@ pub mod agent_summary;
 pub mod analytics;
 pub mod api;
 pub mod auth;
+pub mod auto_dream;
 pub mod bridge;
 pub mod buddy;
 pub mod commands;
