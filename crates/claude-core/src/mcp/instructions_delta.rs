@@ -68,7 +68,7 @@ pub fn is_mcp_instructions_delta_enabled() -> bool {
     // Default branch: on for ant users, off otherwise. The TS version
     // ALSO consults a GrowthBook flag (tengu_basalt_3kr); Rust hasn't
     // ported GrowthBook so we conservatively stay off for externals.
-    std::env::var("USER_TYPE").map(|v| v == "ant").unwrap_or(false)
+    crate::user_type::is_ant()
 }
 
 /// Compute the delta between `previously_announced` server names

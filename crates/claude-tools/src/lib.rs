@@ -63,18 +63,14 @@ use std::sync::Arc;
 /// (including unset) is false. Mirrors the behaviour of TS `feature('X')`
 /// + `isEnvTruthy(process.env.X)` in `tools.ts`.
 fn feature_enabled(name: &str) -> bool {
-    match std::env::var(name) {
-        Ok(v) => {
-            let v = v.to_lowercase();
-            matches!(v.as_str(), "1" | "true" | "yes" | "on")
-        }
-        Err(_) => false,
-    }
+    claude_core::errors_util::is_env_truthy(name)
 }
 
 /// Internal/Anthropic user build, matching TS `process.env.USER_TYPE === 'ant'`.
+/// Thin wrapper over the shared reader so the registry bootstrap stays
+/// single-call-site.
 fn is_ant_user() -> bool {
-    std::env::var("USER_TYPE").map(|v| v == "ant").unwrap_or(false)
+    claude_core::user_type::is_ant()
 }
 
 pub fn build_default_registry() -> ToolRegistry {

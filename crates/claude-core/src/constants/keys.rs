@@ -4,20 +4,12 @@
 //! runtime. We do the same so developer and external builds hit
 //! separate GrowthBook environments.
 
-fn is_env_truthy(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref().map(|s| s.to_ascii_lowercase()),
-        Some(s) if matches!(s.as_str(), "1" | "true" | "yes" | "on")
-    )
-}
-
-fn is_ant_user() -> bool {
-    std::env::var("USER_TYPE").map(|v| v == "ant").unwrap_or(false)
-}
+use crate::errors_util::is_env_truthy;
+use crate::user_type;
 
 /// Return the GrowthBook client SDK key for the current user type.
 pub fn get_growthbook_client_key() -> &'static str {
-    if is_ant_user() {
+    if user_type::is_ant() {
         if is_env_truthy("ENABLE_GROWTHBOOK_DEV") {
             "sdk-yZQvlplybuXjYh6L"
         } else {

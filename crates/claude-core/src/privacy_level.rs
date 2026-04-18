@@ -117,9 +117,7 @@ pub fn is_first_party_anthropic_base_url() -> bool {
     if host == "api.anthropic.com" {
         return true;
     }
-    if std::env::var("USER_TYPE").map(|v| v == "ant").unwrap_or(false)
-        && host == "api-staging.anthropic.com"
-    {
+    if crate::user_type::is_ant() && host == "api-staging.anthropic.com" {
         return true;
     }
     false

@@ -28,6 +28,7 @@ pub struct MigrationContext {
     pub is_max: bool,
     pub is_team_premium: bool,
     /// USER_TYPE=ant check; matches TS `process.env.USER_TYPE === 'ant'`.
+    /// Callers should populate via [`crate::user_type::is_ant`].
     pub is_ant_user: bool,
 }
 

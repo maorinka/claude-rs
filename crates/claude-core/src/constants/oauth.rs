@@ -57,16 +57,8 @@ pub struct OauthConfig {
     pub mcp_proxy_path: String,
 }
 
-fn is_env_truthy(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref().map(|v| v.to_ascii_lowercase()),
-        Some(s) if matches!(s.as_str(), "1" | "true" | "yes" | "on")
-    )
-}
-
-fn is_ant_user() -> bool {
-    std::env::var("USER_TYPE").map(|v| v == "ant").unwrap_or(false)
-}
+use crate::errors_util::is_env_truthy;
+use crate::user_type;
 
 fn prod_oauth_config() -> OauthConfig {
     OauthConfig {
@@ -156,7 +148,7 @@ pub enum OauthConfigType {
 }
 
 fn get_oauth_config_type() -> OauthConfigType {
-    if is_ant_user() {
+    if user_type::is_ant() {
         if is_env_truthy("USE_LOCAL_OAUTH") {
             return OauthConfigType::Local;
         }
