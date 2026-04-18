@@ -9,6 +9,7 @@ pub mod context;
 pub mod cost;
 pub mod file_history;
 pub mod hooks;
+pub mod keybindings;
 pub mod lsp;
 pub mod mcp;
 pub mod memdir;
