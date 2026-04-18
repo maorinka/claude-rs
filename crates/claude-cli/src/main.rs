@@ -194,6 +194,22 @@ async fn main() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let project_root = claude_core::config::paths::detect_project_root(&cwd);
 
+    // Prime the undercover repo-class cache early so `is_undercover()`
+    // can resolve against a concrete classification before the first
+    // tool description or commit prompt is rendered. Matches TS
+    // setup.ts which calls isInternalModelRepo() at startup. Ant-only:
+    // for other user types the reader short-circuits so the subprocess
+    // cost is wasted — gate here. Fire-and-forget: `prime_repo_class
+    // _from_remote` is idempotent and the conservative-safe default
+    // (undercover ON when unprimed) covers the race if anything reads
+    // the cache before this task completes.
+    if claude_core::user_type::is_ant() {
+        let prime_root = project_root.clone();
+        tokio::task::spawn_blocking(move || {
+            claude_core::undercover::prime_repo_class_from_remote(&prime_root);
+        });
+    }
+
     // Load settings from ~/.claude/settings.json
     let settings = match claude_core::config::paths::user_settings_path() {
         Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
