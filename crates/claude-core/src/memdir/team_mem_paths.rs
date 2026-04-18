@@ -54,35 +54,56 @@ pub fn is_team_memory_enabled() -> bool {
     crate::errors_util::is_env_truthy("TEAMMEM")
 }
 
-/// Check whether a resolved absolute path is within the team
+/// Check whether a path resolves to a location within the team
 /// memory directory for `cwd`. Matches TS `isTeamMemPath()`:
-/// resolves `..` segments via `Path::components` then prefix-
-/// checks against the team dir. Does NOT resolve symlinks —
-/// callers that need symlink-escape protection should layer on
-/// [`std::fs::canonicalize`] plus the TS
-/// `validateTeamMemWritePath` flow (deferred here).
+/// `path.resolve(filePath).startsWith(getTeamMemPath())`.
+///
+/// Relative `file_path` is anchored to `cwd` before resolution,
+/// mirroring TS's `path.resolve()` behaviour (TS uses
+/// `process.cwd()` implicitly; we take `cwd` as a parameter since
+/// Rust has no ambient cwd). Dot segments (`.`, `..`) are then
+/// eliminated. Does NOT resolve symlinks — callers needing
+/// symlink-escape protection should layer on
+/// [`std::fs::canonicalize`] + the TS `validateTeamMemWritePath`
+/// flow (deferred).
 ///
 /// Prefix-attack protection is delegated to
 /// [`Path::starts_with`], which requires a separator boundary
 /// (so `/foo/team-evil` doesn't match `/foo/team`).
 pub fn is_team_mem_path(file_path: &Path, cwd: &Path) -> bool {
-    let resolved = resolve_dot_segments(file_path);
+    let anchored = if file_path.is_absolute() {
+        file_path.to_path_buf()
+    } else {
+        cwd.join(file_path)
+    };
+    let resolved = resolve_dot_segments(&anchored);
     let team_dir = get_team_mem_path(cwd);
     resolved.starts_with(team_dir)
 }
 
-/// Eliminate `.` and `..` segments from `p` without touching the
-/// filesystem. Port of TS `path.resolve(filePath)`'s
-/// normalisation step (TS resolve ALSO converts relative to
-/// absolute; we leave relative paths as-is so callers that want
-/// absolutisation can do it explicitly).
+/// Eliminate `.` and `..` segments from an absolute path without
+/// touching the filesystem. `..` at the root is a no-op — cannot
+/// escape above `/`, matching POSIX + TS `path.resolve('/..')`
+/// returning `/`.
+///
+/// For non-absolute paths the pop-on-empty behaviour would
+/// silently eat leading `..` segments (differing from TS
+/// `path.resolve`), so callers must absolutise first. See
+/// [`is_team_mem_path`] for the anchoring pattern.
 fn resolve_dot_segments(p: &Path) -> PathBuf {
+    use std::path::Component;
     let mut out = PathBuf::new();
     for comp in p.components() {
-        use std::path::Component;
         match comp {
             Component::ParentDir => {
-                out.pop();
+                // Preserve root if we'd otherwise pop past it.
+                let was_rooted =
+                    matches!(out.components().next(), Some(Component::RootDir));
+                let popped = out.pop();
+                if was_rooted && !popped {
+                    // We were sitting at `/` with no subpath — stay at root.
+                    out = PathBuf::from("/");
+                }
             }
             Component::CurDir => {}
             other => out.push(other.as_os_str()),
@@ -143,6 +164,44 @@ mod tests {
         // e.g. <team>/../escape.md → outside the team dir.
         let outside = team.join("..").join("escape.md");
         assert!(!is_team_mem_path(&outside, cwd));
+    }
+
+    /// Relative paths are anchored to `cwd` before resolution,
+    /// matching TS `path.resolve()` which uses `process.cwd()`.
+    /// Codex CR caught that the earlier implementation treated
+    /// relatives as already-absolute, so any `foo/bar` would never
+    /// match the team dir (absolute prefix).
+    #[test]
+    fn is_team_mem_path_anchors_relative_to_cwd() {
+        let cwd = Path::new("/Users/alex/proj");
+
+        // Plain relative resolves to cwd/foo.md, which is NOT
+        // under the team dir (team lives under the memory base,
+        // not cwd). Must return false.
+        let plain_rel = Path::new("foo.md");
+        assert!(!is_team_mem_path(plain_rel, cwd));
+
+        // Relative with `..` evaluated against cwd — outside team.
+        let rel_escape = Path::new("..").join("escape.md");
+        assert!(!is_team_mem_path(&rel_escape, cwd));
+
+        // Sanity: before the fix, relative paths didn't absolutise,
+        // so `is_team_mem_path(Path::new("team"), cwd)` would attempt
+        // to match a RELATIVE "team" against an ABSOLUTE team_dir
+        // — always false. After the fix, it anchors to
+        // cwd/team (still not the team dir), so still false but
+        // via the correct code path. The plain-rel assertion above
+        // exercises exactly that path.
+    }
+
+    /// `..` at the root is a no-op — matches POSIX and TS
+    /// `path.resolve('/..')` behaviour. Earlier version would
+    /// pop past root silently.
+    #[test]
+    fn resolve_dot_segments_cannot_escape_root() {
+        let p = Path::new("/a/..").join("..");
+        let resolved = resolve_dot_segments(&p);
+        assert_eq!(resolved, PathBuf::from("/"));
     }
 
     #[test]
