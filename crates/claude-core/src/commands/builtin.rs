@@ -2220,6 +2220,135 @@ impl CommandHandler for InsightsHandler {
     }
 }
 
+/// /btw — Ask a quick side question without interrupting the main conversation.
+/// Port of src/commands/btw (TS). If args are empty we prompt the user; otherwise
+/// we frame the question so the model treats it as a parenthetical aside and
+/// returns to the primary task afterward.
+pub struct BtwHandler;
+impl CommandHandler for BtwHandler {
+    fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            return Ok(CommandResult::Error(
+                "Usage: /btw <question>".to_string(),
+            ));
+        }
+        Ok(CommandResult::Message(format!(
+            "[Side question — answer briefly, then return to what we were doing]\n\n{}",
+            trimmed
+        )))
+    }
+}
+
+/// /feedback — Submit feedback about Claude Code. TS opens a form; we print
+/// the URL and echo the optional report text so it's in the transcript.
+pub struct FeedbackHandler;
+impl CommandHandler for FeedbackHandler {
+    fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let extra = args.trim();
+        let body = if extra.is_empty() {
+            "To send feedback, open: https://github.com/anthropics/claude-code/issues\n\
+             Or reply to this message with your feedback — it will be logged in the transcript."
+                .to_string()
+        } else {
+            format!(
+                "Feedback recorded in the transcript (not sent automatically):\n\n---\n{}\n---\n\n\
+                 To submit officially, open: https://github.com/anthropics/claude-code/issues",
+                extra
+            )
+        };
+        Ok(CommandResult::Action(body))
+    }
+}
+
+/// /upgrade — Print upgrade URL. TS opens a browser page; we surface the URL
+/// so the user can follow it themselves.
+pub struct UpgradeHandler;
+impl CommandHandler for UpgradeHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Upgrade options:\n\
+             - Claude Max: https://claude.ai/upgrade\n\
+             - Team/Enterprise: https://claude.com/pricing"
+                .to_string(),
+        ))
+    }
+}
+
+/// /privacy-settings — Point the user at the privacy docs.
+pub struct PrivacySettingsHandler;
+impl CommandHandler for PrivacySettingsHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Privacy settings:\n\
+             - Docs: https://docs.claude.com/claude-code/privacy\n\
+             - Data retention & telemetry are controlled in ~/.claude/settings.json\n\
+             - Set CLAUDE_CODE_SIMPLE=1 for essential-traffic-only mode"
+                .to_string(),
+        ))
+    }
+}
+
+/// /tag — Label the current session with a short name, stored on the shared
+/// CommandState so the TUI/statusline can display it. Clears when args empty.
+pub struct TagHandler;
+impl CommandHandler for TagHandler {
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let Some(shared) = ctx.shared.as_ref() else {
+            return Ok(CommandResult::Error(
+                "/tag requires a live session".to_string(),
+            ));
+        };
+        let Ok(mut state) = shared.lock() else {
+            return Ok(CommandResult::Error(
+                "/tag: failed to acquire session state lock".to_string(),
+            ));
+        };
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            state.session_name.clear();
+            return Ok(CommandResult::Action("Session tag cleared.".to_string()));
+        }
+        state.session_name = trimmed.to_string();
+        Ok(CommandResult::Action(format!(
+            "Session tagged: {}",
+            trimmed
+        )))
+    }
+}
+
+/// /extra-usage — Extended usage breakdown. Reuses the usage-summary path
+/// from the shared command state and appends per-turn details when available.
+pub struct ExtraUsageHandler;
+impl CommandHandler for ExtraUsageHandler {
+    fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let Some(shared) = ctx.shared.as_ref() else {
+            return Ok(CommandResult::Error(
+                "/extra-usage requires a live session".to_string(),
+            ));
+        };
+        let Ok(state) = shared.lock() else {
+            return Ok(CommandResult::Error(
+                "/extra-usage: failed to acquire session state lock".to_string(),
+            ));
+        };
+        let mut out = String::new();
+        out.push_str(&format!(
+            "Model:            {}\nRequests:         {}\nTotal tokens:     {}\nTotal cost (USD): ${:.4}\n\n",
+            state.model, state.request_count, state.total_tokens, state.total_cost_usd
+        ));
+        if state.per_turn_tokens.is_empty() {
+            out.push_str("No per-turn token data recorded.\n");
+        } else {
+            out.push_str("Per-turn tokens (turn, input, output):\n");
+            for (turn, input, output) in &state.per_turn_tokens {
+                out.push_str(&format!("  {:>3}: {:>7} in / {:>7} out\n", turn, input, output));
+            }
+        }
+        Ok(CommandResult::Action(out))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Registry builder
 // ---------------------------------------------------------------------------
@@ -2443,6 +2572,44 @@ pub fn build_default_commands() -> CommandRegistry {
         ThinkbackHandler
     );
     register!("insights", "Usage insights report", Prompt, InsightsHandler);
+
+    // Batch 4 — previously-missing TS ports
+    register!(
+        "btw",
+        "Ask a quick side question without losing context",
+        Prompt,
+        BtwHandler
+    );
+    register!(
+        "feedback",
+        "Submit feedback about Claude Code",
+        Action,
+        FeedbackHandler
+    );
+    register!(
+        "upgrade",
+        "Show upgrade links (Max / Team / Enterprise)",
+        Action,
+        UpgradeHandler
+    );
+    register!(
+        "privacy-settings",
+        "Show privacy settings documentation",
+        Action,
+        PrivacySettingsHandler
+    );
+    register!(
+        "tag",
+        "Tag the current session with a short name",
+        Action,
+        TagHandler
+    );
+    register!(
+        "extra-usage",
+        "Detailed usage breakdown including per-turn tokens",
+        Action,
+        ExtraUsageHandler
+    );
 
     registry
 }
@@ -3514,6 +3681,117 @@ mod tests {
                 assert!(text.contains("0.2500"));
             }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_btw_empty_args_errors() {
+        let r = BtwHandler.execute("", &test_ctx()).unwrap();
+        assert!(matches!(r, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn test_btw_wraps_question() {
+        let r = BtwHandler.execute("what's 2+2?", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Message(t) => {
+                assert!(t.contains("what's 2+2?"));
+                assert!(t.contains("Side question"));
+            }
+            _ => panic!("expected Message"),
+        }
+    }
+
+    #[test]
+    fn test_feedback_prints_url() {
+        let r = FeedbackHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("github.com/anthropics/claude-code"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_feedback_echoes_report() {
+        let r = FeedbackHandler
+            .execute("repro: open file + crash", &test_ctx())
+            .unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("repro: open file + crash"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_upgrade_has_both_links() {
+        let r = UpgradeHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("claude.ai/upgrade"));
+                assert!(t.contains("claude.com/pricing"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_privacy_settings_shows_env_hint() {
+        let r = PrivacySettingsHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("CLAUDE_CODE_SIMPLE"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_tag_requires_shared_state() {
+        let r = TagHandler.execute("work", &test_ctx()).unwrap();
+        assert!(matches!(r, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn test_tag_sets_and_clears() {
+        use std::sync::{Arc, Mutex};
+        let state = super::super::registry::SharedCommandState::default();
+        let shared = Arc::new(Mutex::new(state));
+        let ctx = CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp"),
+            model: "m".to_string(),
+            shared: Some(shared.clone()),
+        };
+        let set = TagHandler.execute("bugfix", &ctx).unwrap();
+        assert!(matches!(set, CommandResult::Action(_)));
+        assert_eq!(shared.lock().unwrap().session_name, "bugfix");
+        let clear = TagHandler.execute("", &ctx).unwrap();
+        assert!(matches!(clear, CommandResult::Action(_)));
+        assert_eq!(shared.lock().unwrap().session_name, "");
+    }
+
+    #[test]
+    fn test_extra_usage_reports_per_turn() {
+        use std::sync::{Arc, Mutex};
+        let mut state = super::super::registry::SharedCommandState::default();
+        state.per_turn_tokens = vec![(1, 100, 50), (2, 200, 75)];
+        let shared = Arc::new(Mutex::new(state));
+        let ctx = CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp"),
+            model: "m".into(),
+            shared: Some(shared),
+        };
+        let r = ExtraUsageHandler.execute("", &ctx).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("Per-turn tokens"));
+                assert!(t.contains("100"));
+                assert!(t.contains("200"));
+            }
+            _ => panic!("expected Action"),
         }
     }
 }
