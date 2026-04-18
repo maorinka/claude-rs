@@ -217,6 +217,36 @@ const VERIFICATION_WHEN_TO_USE: &str = "Use this agent to verify that implementa
 const CODE_REVIEWER_WHEN_TO_USE: &str = "Use this agent to get an independent code review. Best for reviewing migrations, security-sensitive changes, or when you want a second opinion on correctness.";
 
 // ---------------------------------------------------------------------------
+// Claude Code Guide agent (port of TS claudeCodeGuideAgent.ts)
+//
+// The TS side assembles a dynamic "User's Current Configuration"
+// block (custom skills, agents, MCP servers, plugin commands,
+// settings.json) at prompt-build time using ToolUseContext fields
+// that aren't plumbed on the Rust side yet. The base prompt +
+// feedback guideline port verbatim; the dynamic context block is
+// deferred to a future builder.
+// ---------------------------------------------------------------------------
+
+pub const CLAUDE_CODE_GUIDE_AGENT_TYPE: &str = "claude-code-guide";
+
+const CLAUDE_CODE_GUIDE_SYSTEM_PROMPT: &str =
+    include_str!("prompts/claude_code_guide.md");
+
+const CLAUDE_CODE_GUIDE_WHEN_TO_USE: &str = "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage.";
+
+// ---------------------------------------------------------------------------
+// Statusline setup agent (port of TS statuslineSetup.ts)
+// ---------------------------------------------------------------------------
+
+pub const STATUSLINE_SETUP_AGENT_TYPE: &str = "statusline-setup";
+
+const STATUSLINE_SETUP_SYSTEM_PROMPT: &str =
+    include_str!("prompts/statusline_setup.md");
+
+const STATUSLINE_SETUP_WHEN_TO_USE: &str =
+    "Use this agent to configure the user's Claude Code status line setting.";
+
+// ---------------------------------------------------------------------------
 // Built-in agent list
 // ---------------------------------------------------------------------------
 
@@ -256,6 +286,20 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             when_to_use: CODE_REVIEWER_WHEN_TO_USE.into(),
             system_prompt: "You review code for quality, correctness, and security. Focus on finding bugs, potential issues, and suggesting improvements.".into(),
             model: None,
+        },
+        AgentDefinition {
+            name: CLAUDE_CODE_GUIDE_AGENT_TYPE.into(),
+            description: "Claude Code / Agent SDK / Claude API docs navigator".into(),
+            when_to_use: CLAUDE_CODE_GUIDE_WHEN_TO_USE.into(),
+            system_prompt: CLAUDE_CODE_GUIDE_SYSTEM_PROMPT.to_string(),
+            model: Some("haiku".into()),
+        },
+        AgentDefinition {
+            name: STATUSLINE_SETUP_AGENT_TYPE.into(),
+            description: "Statusline (PS1 / settings.json) setup agent".into(),
+            when_to_use: STATUSLINE_SETUP_WHEN_TO_USE.into(),
+            system_prompt: STATUSLINE_SETUP_SYSTEM_PROMPT.to_string(),
+            model: Some("sonnet".into()),
         },
     ]
 }
