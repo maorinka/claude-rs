@@ -50,8 +50,29 @@ pub use registry::{ProgressSender, ReadFileState, ToolExecutor, ToolRegistry, To
 
 use std::sync::Arc;
 
+/// Check whether an env-var-based feature flag is enabled.
+/// Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). Anything else
+/// (including unset) is false. Mirrors the behaviour of TS `feature('X')`
+/// + `isEnvTruthy(process.env.X)` in `tools.ts`.
+fn feature_enabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => {
+            let v = v.to_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Internal/Anthropic user build, matching TS `process.env.USER_TYPE === 'ant'`.
+fn is_ant_user() -> bool {
+    std::env::var("USER_TYPE").map(|v| v == "ant").unwrap_or(false)
+}
+
 pub fn build_default_registry() -> ToolRegistry {
     let mut reg = ToolRegistry::new();
+
+    // ── Baseline tools (always registered in TS tools.ts getAllBaseTools()) ──
     reg.register(Arc::new(bash::BashTool::new()));
     reg.register(Arc::new(read::FileReadTool));
     reg.register(Arc::new(write::FileWriteTool));
@@ -69,7 +90,6 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(task_tools::TaskOutputTool));
     reg.register(Arc::new(notebook_edit::NotebookEditTool));
     reg.register(Arc::new(agent_tool::AgentTool));
-    reg.register(Arc::new(config_tool::ConfigTool::default()));
     reg.register(Arc::new(plan_mode::EnterPlanModeTool));
     reg.register(Arc::new(plan_mode::ExitPlanModeTool));
     reg.register(Arc::new(ask_user::AskUserQuestionTool));
@@ -79,34 +99,72 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(tool_search::ToolSearchTool));
     reg.register(Arc::new(team_tools::TeamCreateTool));
     reg.register(Arc::new(team_tools::TeamDeleteTool));
-    reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
     reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
     reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool));
     reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool));
     reg.register(Arc::new(powershell::PowerShellTool));
-    reg.register(Arc::new(cron_tool::ScheduleCronTool));
     reg.register(Arc::new(skill_tool::SkillTool));
     reg.register(Arc::new(sleep_tool::SleepTool));
     reg.register(Arc::new(synthetic_output::SyntheticOutputTool));
     reg.register(Arc::new(todo_write::TodoWriteTool));
     reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
-    reg.register(Arc::new(repl_tool::REPLTool));
-    reg.register(Arc::new(monitor_tool::MonitorTool));
-    reg.register(Arc::new(push_notification_tool::PushNotificationTool));
-    reg.register(Arc::new(send_user_file_tool::SendUserFileTool));
-    reg.register(Arc::new(terminal_capture_tool::TerminalCaptureTool));
-    reg.register(Arc::new(ctx_inspect_tool::CtxInspectTool));
-    reg.register(Arc::new(snip_tool::SnipTool));
-    reg.register(Arc::new(web_browser_tool::WebBrowserTool));
-    reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
-    reg.register(Arc::new(subscribe_pr_tool::SubscribePRTool));
-    reg.register(Arc::new(
-        suggest_background_pr_tool::SuggestBackgroundPRTool,
-    ));
-    reg.register(Arc::new(list_peers_tool::ListPeersTool));
-    reg.register(Arc::new(workflow_tool::WorkflowTool));
-    reg.register(Arc::new(cron_tool::CronDeleteTool));
-    reg.register(Arc::new(cron_tool::CronListTool));
+
+    // ── USER_TYPE=ant gated (TS: process.env.USER_TYPE === 'ant') ────────────
+    if is_ant_user() {
+        reg.register(Arc::new(config_tool::ConfigTool::default()));
+        reg.register(Arc::new(repl_tool::REPLTool));
+        reg.register(Arc::new(
+            suggest_background_pr_tool::SuggestBackgroundPRTool,
+        ));
+    }
+
+    // ── Cron / agent-trigger gated (TS: feature('AGENT_TRIGGERS')) ───────────
+    if feature_enabled("AGENT_TRIGGERS") {
+        reg.register(Arc::new(cron_tool::ScheduleCronTool));
+        reg.register(Arc::new(cron_tool::CronDeleteTool));
+        reg.register(Arc::new(cron_tool::CronListTool));
+    }
+    if feature_enabled("AGENT_TRIGGERS_REMOTE") {
+        reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
+    }
+
+    // ── Kairos / desktop-bridge gated (TS: feature('KAIROS*')) ───────────────
+    if feature_enabled("KAIROS") || feature_enabled("KAIROS_PUSH_NOTIFICATION") {
+        reg.register(Arc::new(push_notification_tool::PushNotificationTool));
+    }
+    if feature_enabled("KAIROS") {
+        reg.register(Arc::new(send_user_file_tool::SendUserFileTool));
+    }
+    if feature_enabled("KAIROS_GITHUB_WEBHOOKS") {
+        reg.register(Arc::new(subscribe_pr_tool::SubscribePRTool));
+    }
+
+    // ── Experimental / internal gated (one env var each) ─────────────────────
+    if feature_enabled("MONITOR_TOOL") {
+        reg.register(Arc::new(monitor_tool::MonitorTool));
+    }
+    if feature_enabled("CONTEXT_COLLAPSE") {
+        reg.register(Arc::new(ctx_inspect_tool::CtxInspectTool));
+    }
+    if feature_enabled("TERMINAL_PANEL") {
+        reg.register(Arc::new(terminal_capture_tool::TerminalCaptureTool));
+    }
+    if feature_enabled("HISTORY_SNIP") {
+        reg.register(Arc::new(snip_tool::SnipTool));
+    }
+    if feature_enabled("WEB_BROWSER_TOOL") {
+        reg.register(Arc::new(web_browser_tool::WebBrowserTool));
+    }
+    if feature_enabled("UDS_INBOX") {
+        reg.register(Arc::new(list_peers_tool::ListPeersTool));
+    }
+    if feature_enabled("WORKFLOW_SCRIPTS") {
+        reg.register(Arc::new(workflow_tool::WorkflowTool));
+    }
+    if feature_enabled("CLAUDE_CODE_VERIFY_PLAN") {
+        reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
+    }
+
     reg
 }
