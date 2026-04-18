@@ -17,6 +17,7 @@ pub mod loader;
 pub mod matching;
 pub mod parser;
 pub mod reserved;
+pub mod resolver;
 pub mod validate;
 
 pub use defaults::default_bindings;
@@ -30,4 +31,5 @@ pub use reserved::{
     get_reserved_shortcuts, normalize_key_for_comparison, ReservedShortcut, Severity,
     MACOS_RESERVED, NON_REBINDABLE, TERMINAL_RESERVED,
 };
+pub use resolver::{get_binding_display_text, get_shortcut_display};
 pub use validate::{validate_bindings, KeybindingWarning, WarningType};
