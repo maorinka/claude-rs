@@ -4,6 +4,7 @@ pub mod mailbox;
 pub mod memory;
 pub mod permission_sync;
 pub mod spawn;
+pub mod team_mem_secret_guard;
 pub mod types;
 
 // Re-export key types for convenience.

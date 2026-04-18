@@ -25,6 +25,7 @@ pub mod entrypoint;
 pub mod paths;
 pub mod prompt;
 pub mod scan;
+pub mod team_mem_paths;
 pub mod types;
 
 pub use age::{memory_age, memory_age_days, memory_freshness_note, memory_freshness_text};
