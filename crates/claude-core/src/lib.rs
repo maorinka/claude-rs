@@ -18,6 +18,7 @@ pub mod hooks;
 pub mod keybindings;
 pub mod lsp;
 pub mod magic_docs;
+pub mod markdown_config_loader;
 pub mod mcp;
 pub mod memdir;
 pub mod migrations;
