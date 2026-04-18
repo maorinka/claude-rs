@@ -13,12 +13,21 @@
 //! a UI concern that ratatui call sites implement directly.
 
 pub mod defaults;
+pub mod loader;
 pub mod matching;
 pub mod parser;
+pub mod reserved;
+pub mod validate;
 
 pub use defaults::default_bindings;
+pub use loader::{get_keybindings_path, load_keybindings, load_keybindings_from_str, LoadResult};
 pub use matching::{matches, ParsedBinding};
 pub use parser::{
     chord_to_string, keystroke_to_string, parse_bindings, parse_chord, parse_keystroke,
     Chord, KeybindingBlock, ParsedKeystroke,
 };
+pub use reserved::{
+    get_reserved_shortcuts, normalize_key_for_comparison, ReservedShortcut, Severity,
+    MACOS_RESERVED, NON_REBINDABLE, TERMINAL_RESERVED,
+};
+pub use validate::{validate_bindings, KeybindingWarning, WarningType};
