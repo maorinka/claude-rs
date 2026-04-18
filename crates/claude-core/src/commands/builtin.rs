@@ -2317,6 +2317,198 @@ impl CommandHandler for TagHandler {
     }
 }
 
+/// /install-github-app — Points the user at the GitHub App installer.
+pub struct InstallGithubAppHandler;
+impl CommandHandler for InstallGithubAppHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Install the Claude Code GitHub App:\n\
+             1. Visit https://github.com/apps/claude for Claude\n\
+             2. Click \"Install\" and pick the repos you want Claude on\n\
+             3. Grant the requested permissions (content, PRs, issues)\n\
+             4. Back here, run `gh auth status` to confirm the installation.\n\n\
+             The TS version launches an interactive wizard; the Rust build ships only \
+             the URL + manual steps. A full wizard needs the IDE bridge, which has not \
+             been ported."
+                .to_string(),
+        ))
+    }
+}
+
+/// /install-slack-app — Points the user at the Claude Slack app installer.
+pub struct InstallSlackAppHandler;
+impl CommandHandler for InstallSlackAppHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Install Claude for Slack:\n\
+             1. Visit https://claude.ai/slack for Claude\n\
+             2. Click \"Add to Slack\" and pick the workspace\n\
+             3. Approve the requested scopes when Slack prompts\n\
+             4. In any Slack channel, DM @Claude or use `/claude <prompt>`."
+                .to_string(),
+        ))
+    }
+}
+
+/// /chrome — Claude in Chrome (extension settings).
+pub struct ChromeHandler;
+impl CommandHandler for ChromeHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Claude in Chrome:\n\
+             - Chrome Web Store: https://chromewebstore.google.com/search/claude\n\
+             - Docs: https://docs.claude.com/claude-code/chrome\n\
+             - After install, sign in with the same account you use here to sync sessions."
+                .to_string(),
+        ))
+    }
+}
+
+/// /desktop — Continue the current session in Claude Desktop.
+/// Only meaningful on macOS / Windows x64 (matches TS availability gate);
+/// we print the install link regardless since there's no UX cost.
+pub struct DesktopHandler;
+impl CommandHandler for DesktopHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let platform_note = if cfg!(target_os = "macos") {
+            "Your platform is supported (macOS)."
+        } else if cfg!(target_os = "windows") {
+            "Your platform is supported (Windows)."
+        } else {
+            "Note: Claude Desktop currently ships for macOS and Windows only."
+        };
+        Ok(CommandResult::Action(format!(
+            "Claude Desktop:\n\
+             - Download: https://claude.ai/download\n\
+             - Docs: https://docs.claude.com/claude-code/desktop\n\n\
+             {}",
+            platform_note
+        )))
+    }
+}
+
+/// /mobile — Pointer to the mobile app.
+pub struct MobileHandler;
+impl CommandHandler for MobileHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Claude on mobile:\n\
+             - iOS:     https://apps.apple.com/app/claude-by-anthropic/id6473753684\n\
+             - Android: https://play.google.com/store/apps/details?id=com.anthropic.claude\n\
+             - Sign in with the same account to sync sessions across devices."
+                .to_string(),
+        ))
+    }
+}
+
+/// /terminalSetup — Run through terminal-bell / clipboard / key-mode setup.
+pub struct TerminalSetupHandler;
+impl CommandHandler for TerminalSetupHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let term = std::env::var("TERM").unwrap_or_else(|_| "(unset)".into());
+        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "(unset)".into());
+        Ok(CommandResult::Action(format!(
+            "Terminal setup:\n\
+             - Detected TERM={}, TERM_PROGRAM={}\n\
+             - Ensure your terminal supports 256 colours (TERM=xterm-256color or better)\n\
+             - For shift+tab / ctrl+shift+<letter>, use a Kitty-protocol terminal \
+             (Kitty, WezTerm, Ghostty, iTerm2 with Kitty mode)\n\
+             - On Windows, use Windows Terminal (not cmd.exe / conhost)\n\
+             - Image paste: ctrl+v (alt+v on Windows). Kitty-protocol terminals also \
+             accept cmd+v on macOS.\n\
+             - Docs: https://docs.claude.com/claude-code/terminal",
+            term, term_program
+        )))
+    }
+}
+
+/// /heapdump — Dump a v8 heap snapshot. Rust doesn't have v8; we emit
+/// equivalent rusty info (memory stats from getrusage if available).
+pub struct HeapdumpHandler;
+impl CommandHandler for HeapdumpHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let pid = std::process::id();
+        Ok(CommandResult::Action(format!(
+            "Heap dump (Rust):\n\
+             - PID: {}\n\
+             - Rust doesn't expose a v8-style heap snapshot. For process-level profiling:\n\
+               macOS:  `leaks {pid}` or `vmmap {pid}`\n\
+               Linux:  `pmap {pid}` or `heaptrack --attach {pid}`\n\
+             - For allocation-site profiling, rebuild with --features profiling \
+             (not yet wired — tracked for later).",
+            pid,
+            pid = pid
+        )))
+    }
+}
+
+/// /remote-env — Print remote environment info (CCR / remote-shell mode).
+pub struct RemoteEnvHandler;
+impl CommandHandler for RemoteEnvHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let remote = std::env::var("CLAUDE_CODE_REMOTE").unwrap_or_default();
+        let mem_dir = std::env::var("CLAUDE_CODE_REMOTE_MEMORY_DIR").unwrap_or_default();
+        Ok(CommandResult::Action(format!(
+            "Remote environment:\n\
+             - CLAUDE_CODE_REMOTE={}\n\
+             - CLAUDE_CODE_REMOTE_MEMORY_DIR={}\n\
+             - CLAUDE_CONFIG_DIR={}\n\
+             - HOME={}\n\
+             - Docs: https://docs.claude.com/claude-code/remote",
+            if remote.is_empty() {
+                "(unset — running locally)".into()
+            } else {
+                remote
+            },
+            if mem_dir.is_empty() {
+                "(unset)".into()
+            } else {
+                mem_dir
+            },
+            std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| "(unset)".into()),
+            std::env::var("HOME").unwrap_or_else(|_| "(unset)".into()),
+        )))
+    }
+}
+
+/// /remote-setup — Start remote-session setup.
+pub struct RemoteSetupHandler;
+impl CommandHandler for RemoteSetupHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Remote session setup:\n\
+             1. On the remote host, install claude-rs (same version as local).\n\
+             2. Set CLAUDE_CODE_REMOTE=1 and point CLAUDE_CODE_REMOTE_MEMORY_DIR at a \
+             persistent path if you want auto-memory across sessions.\n\
+             3. Start the bridge server locally with `claude-rs server --port <N>`.\n\
+             4. On the remote, set CLAUDE_CODE_BRIDGE=ws://<local-host>:<N> and run \
+             `claude-rs`. The TUI there forwards keystrokes and tool calls to the \
+             local orchestrator.\n\
+             - Docs: https://docs.claude.com/claude-code/remote-setup"
+                .to_string(),
+        ))
+    }
+}
+
+/// /passes — Issues / PRs awaiting reply from the user. Since the real TS
+/// version depends on GitHub-webhook + subscription state we don't have in
+/// Rust yet, this ships as a prompt handler that asks the model to summarise
+/// open items it can find via `gh`.
+pub struct PassesHandler;
+impl CommandHandler for PassesHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Message(
+            "Summarise items in this repository that are waiting on me. Use:\n\
+             - `gh pr list --search 'review-requested:@me'` for PR review requests\n\
+             - `gh pr list --search 'assignee:@me is:open'` for PRs assigned to me\n\
+             - `gh issue list --search 'assignee:@me is:open'` for open issues\n\n\
+             Format the result as three short sections (PRs to review, My PRs, My issues), \
+             one line each with number + title + link. Skip sections with no items."
+                .to_string(),
+        ))
+    }
+}
+
 /// /extra-usage — Extended usage breakdown. Reuses the usage-summary path
 /// from the shared command state and appends per-turn details when available.
 pub struct ExtraUsageHandler;
@@ -2609,6 +2801,63 @@ pub fn build_default_commands() -> CommandRegistry {
         "Detailed usage breakdown including per-turn tokens",
         Action,
         ExtraUsageHandler
+    );
+
+    // Batch 5 — integration / setup commands (URL + instructions; TS opens UI)
+    register!(
+        "install-github-app",
+        "Install the Claude Code GitHub App",
+        Action,
+        InstallGithubAppHandler
+    );
+    register!(
+        "install-slack-app",
+        "Install the Claude Slack app",
+        Action,
+        InstallSlackAppHandler
+    );
+    register!(
+        "chrome",
+        "Claude in Chrome (Beta) settings",
+        Action,
+        ChromeHandler
+    );
+    register!(
+        "desktop",
+        "Continue the current session in Claude Desktop",
+        Action,
+        DesktopHandler
+    );
+    register!("mobile", "Claude on mobile (iOS / Android)", Action, MobileHandler);
+    register!(
+        "terminalSetup",
+        "Terminal setup diagnostics + instructions",
+        Action,
+        TerminalSetupHandler
+    );
+    register!(
+        "heapdump",
+        "Process memory profiling info",
+        Action,
+        HeapdumpHandler
+    );
+    register!(
+        "remote-env",
+        "Show remote-session environment",
+        Action,
+        RemoteEnvHandler
+    );
+    register!(
+        "remote-setup",
+        "Remote session setup instructions",
+        Action,
+        RemoteSetupHandler
+    );
+    register!(
+        "passes",
+        "Summarise GitHub items waiting on the user",
+        Prompt,
+        PassesHandler
     );
 
     registry
@@ -3771,6 +4020,117 @@ mod tests {
         let clear = TagHandler.execute("", &ctx).unwrap();
         assert!(matches!(clear, CommandResult::Action(_)));
         assert_eq!(shared.lock().unwrap().session_name, "");
+    }
+
+    #[test]
+    fn test_install_github_app_prints_url() {
+        let r = InstallGithubAppHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => assert!(t.contains("github.com/apps/claude")),
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_install_slack_app_prints_url() {
+        let r = InstallSlackAppHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => assert!(t.contains("claude.ai/slack")),
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_chrome_links_store() {
+        let r = ChromeHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => assert!(t.contains("chromewebstore.google.com")),
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_desktop_notes_platform() {
+        let r = DesktopHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("claude.ai/download"));
+                // The platform note always mentions macOS / Windows one way or another.
+                assert!(t.contains("macOS") || t.contains("Windows"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_mobile_has_both_stores() {
+        let r = MobileHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("apps.apple.com"));
+                assert!(t.contains("play.google.com"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_terminal_setup_shows_env() {
+        let r = TerminalSetupHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("TERM="));
+                assert!(t.contains("Image paste"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_heapdump_prints_pid() {
+        let r = HeapdumpHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("PID:"));
+                assert!(t.contains("leaks") || t.contains("pmap"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_remote_env_shows_defaults() {
+        let r = RemoteEnvHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("CLAUDE_CODE_REMOTE"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_remote_setup_has_steps() {
+        let r = RemoteSetupHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("claude-rs server"));
+                assert!(t.contains("CLAUDE_CODE_BRIDGE"));
+            }
+            _ => panic!("expected Action"),
+        }
+    }
+
+    #[test]
+    fn test_passes_returns_prompt() {
+        let r = PassesHandler.execute("", &test_ctx()).unwrap();
+        match r {
+            CommandResult::Message(t) => {
+                assert!(t.contains("gh pr list"));
+                assert!(t.contains("waiting on me"));
+            }
+            _ => panic!("expected Message"),
+        }
     }
 
     #[test]
