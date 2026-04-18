@@ -31,11 +31,7 @@ pub fn get_growthbook_client_key() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Tests mutate process-wide env vars. Serialize them so concurrent
-    /// runs don't clobber each other.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use super::super::ENV_LOCK;
 
     #[test]
     fn external_user_gets_external_key() {

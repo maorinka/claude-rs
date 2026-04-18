@@ -241,9 +241,7 @@ pub fn get_oauth_config() -> Result<OauthConfig, OauthConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use super::super::ENV_LOCK;
 
     fn clear_env() {
         for k in &[
