@@ -8,6 +8,13 @@ use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::teams::coordinator::{AgentSpec, GLOBAL_COORDINATOR};
 use claude_core::types::events::ToolResultData;
 
+/// Verbatim port of TS TeamCreateTool/prompt.ts getPrompt().
+pub const TEAM_CREATE_PROMPT: &str = include_str!("prompts/team_create.md");
+
+/// Verbatim port of TS TeamDeleteTool/prompt.ts getPrompt(). The
+/// Rust tool wraps this under TeamStopTool (kill+delete combined).
+pub const TEAM_DELETE_PROMPT: &str = include_str!("prompts/team_delete.md");
+
 /// TeamCreateTool creates a new multi-agent team/swarm.
 ///
 /// Matches TS `TeamCreateTool` — creates a team file, spawns agent processes,
@@ -21,10 +28,7 @@ impl ToolExecutor for TeamCreateTool {
     }
 
     fn description(&self) -> String {
-        "Create a new team for coordinating multiple agents. \
-         Spawns each agent as a child process and persists the team state \
-         under ~/.claude/teams/<team_id>/state.json."
-            .to_string()
+        TEAM_CREATE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -147,9 +151,7 @@ impl ToolExecutor for TeamDeleteTool {
     }
 
     fn description(&self) -> String {
-        "Stop a team: kill all agent processes and mark the team as stopped. \
-         Accepts either a team_id (UUID) or a team_name."
-            .to_string()
+        TEAM_DELETE_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

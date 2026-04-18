@@ -8,6 +8,13 @@ use claude_core::types::events::ToolResultData;
 
 // ─── ListMcpResourcesTool ────────────────────────────────────────────────────
 
+/// Verbatim port of TS ListMcpResourcesTool/prompt.ts `PROMPT`
+/// (the detailed parameter documentation — distinct from TS
+/// `DESCRIPTION` which is the short blurb). Rust port surfaces
+/// the detailed variant to the model.
+pub const LIST_MCP_RESOURCES_PROMPT: &str =
+    include_str!("prompts/list_mcp_resources.md");
+
 pub struct ListMcpResourcesTool;
 
 #[async_trait]
@@ -17,13 +24,7 @@ impl ToolExecutor for ListMcpResourcesTool {
     }
 
     fn description(&self) -> String {
-        r#"Lists available resources from configured MCP servers.
-Each resource object includes a 'server' field indicating which server it's from.
-
-Usage examples:
-- List all resources from all servers: `listMcpResources`
-- List resources from a specific server: `listMcpResources({ server: "myserver" })`"#
-            .to_string()
+        LIST_MCP_RESOURCES_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
