@@ -11,6 +11,7 @@ pub mod config;
 pub mod constants;
 pub mod context;
 pub mod cost;
+pub mod extract_memories;
 pub mod file_history;
 pub mod frontmatter;
 pub mod hooks;
