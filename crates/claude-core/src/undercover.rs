@@ -99,10 +99,18 @@ pub(crate) fn reset_repo_class_cache() {
 /// Case-sensitive, no URL parsing — a URL with an unusual prefix
 /// that still contains `"github.com:anthropics/apps"` as a substring
 /// will match.
+///
+/// Empty-string URL is treated as [`RepoClass::None`] to match TS's
+/// JS-truthy gate (`if (!remoteUrl) { return 'none' }` at
+/// `commitAttribution.ts:122`). `None` and `Some("")` are both
+/// "no remote configured".
 pub fn classify_remote_url(remote_url: Option<&str>) -> RepoClass {
     let Some(url) = remote_url else {
         return RepoClass::None;
     };
+    if url.is_empty() {
+        return RepoClass::None;
+    }
     if INTERNAL_MODEL_REPOS.iter().any(|repo| url.contains(repo)) {
         RepoClass::Internal
     } else {
@@ -311,12 +319,12 @@ mod tests {
     #[test]
     fn classify_no_remote() {
         assert_eq!(classify_remote_url(None), RepoClass::None);
-        assert_eq!(classify_remote_url(Some("")), RepoClass::External);
-        // Empty-but-Some is `External` per TS — TS checks
-        // `if (!remoteUrl) { return 'none' }` where empty string is
-        // falsy, but since Rust's Option separates absence from
-        // empty, we only hit `None` when the git command failed
-        // entirely. Document the difference here.
+        // Empty-but-Some is `None` — TS checks `if (!remoteUrl) {
+        // return 'none' }` where empty string is falsy. Both
+        // `None` and `Some("")` mean "no remote configured" so
+        // they resolve to the same class. Prior to the codex CR
+        // this was `External`; fixed for byte-exact TS parity.
+        assert_eq!(classify_remote_url(Some("")), RepoClass::None);
     }
 
     #[test]
