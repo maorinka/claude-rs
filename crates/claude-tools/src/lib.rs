@@ -22,6 +22,7 @@ pub mod plan_mode;
 pub mod powershell;
 pub mod push_notification_tool;
 pub mod read;
+pub mod read_only_validation;
 pub mod registry;
 pub mod remote_trigger;
 pub mod repl_tool;
