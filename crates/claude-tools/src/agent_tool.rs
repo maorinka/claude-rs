@@ -20,8 +20,15 @@ fn format_agent_line(name: &str, when_to_use: &str, tools_desc: &str) -> String 
 
 /// Build the complete Agent tool prompt with all sections.
 ///
-/// This mirrors the TS `getPrompt()` function from `tools/AgentTool/prompt.ts`.
-/// Currently uses the non-fork path since fork subagent is not yet implemented.
+/// Mirrors the TS `getPrompt()` function from `tools/AgentTool/prompt.ts`.
+///
+/// Architecture note: TS supports two sub-agent delivery modes — an
+/// in-process "fork" (shared JS context, inherits cached messages) and an
+/// out-of-process subprocess. The Rust port uses only the subprocess path —
+/// each sub-agent is a fresh `claude-rs` process with no inherited context.
+/// This is strictly stronger isolation at the cost of having to re-describe
+/// context in the sub-agent prompt. The optional `isolation: "worktree"`
+/// parameter layers filesystem isolation on top (temporary git worktree).
 fn build_agent_prompt() -> String {
     // Build the agent list section from built-in agent definitions
     let agents = builtin_agents();
@@ -58,7 +65,7 @@ When using the Agent tool, specify a subagent_type parameter to select which age
         agent_list_section
     );
 
-    // "When NOT to use" section (non-fork path)
+    // "When NOT to use" section
     let when_not_to_use = r#"
 When NOT to use the Agent tool:
 - If you want to read a specific file path, use the Read tool or the Glob tool instead of the Agent tool, to find the match more quickly
@@ -98,7 +105,7 @@ Usage notes:
 - If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple Agent tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
 - You can optionally set `isolation: "worktree"` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result."#;
 
-    // Examples section (non-fork path)
+    // Examples section
     let examples = r#"
 Example usage:
 
