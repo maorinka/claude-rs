@@ -18,6 +18,7 @@ pub mod migrations;
 pub mod output_styles;
 pub mod permissions;
 pub mod plugins;
+pub mod policy_limits;
 pub mod query;
 pub mod remote;
 pub mod sandbox;
