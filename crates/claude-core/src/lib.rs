@@ -16,6 +16,7 @@ pub mod plugins;
 pub mod query;
 pub mod remote;
 pub mod sandbox;
+pub mod secondary_model;
 pub mod session;
 pub mod teams;
 pub mod types;
