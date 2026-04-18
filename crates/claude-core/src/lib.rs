@@ -45,5 +45,6 @@ pub mod tips;
 pub mod tool_names;
 pub mod tool_use_summary;
 pub mod types;
+pub mod user_agent;
 pub mod vcr;
 pub mod vim;
