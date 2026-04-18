@@ -37,6 +37,7 @@ pub mod session;
 pub mod session_memory;
 pub mod settings_sync;
 pub mod string_utils;
+pub mod task_types;
 pub mod teams;
 pub mod tips;
 pub mod tool_names;
