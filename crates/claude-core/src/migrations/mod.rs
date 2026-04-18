@@ -65,6 +65,10 @@ pub fn run_all(
             "migrateBypassPermissionsAcceptedToSettings",
             settings_moves::migrate_bypass_permissions(global, settings),
         ),
+        (
+            "migrateSonnet1mToSonnet45",
+            model_aliases::migrate_sonnet_1m_to_sonnet_45(global, settings),
+        ),
     ] {
         if result {
             applied.push(name);

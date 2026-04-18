@@ -1,8 +1,9 @@
 //! Model-alias migrations.
 //!
-//! Ports `migrateFennecToOpus.ts`, `migrateLegacyOpusToCurrent.ts`, and
-//! `migrateSonnet45ToSonnet46.ts`. All three operate on `settings.model`
-//! string and translate legacy aliases to the current canonical ones.
+//! Ports `migrateFennecToOpus.ts`, `migrateLegacyOpusToCurrent.ts`,
+//! `migrateSonnet45ToSonnet46.ts`, and `migrateSonnet1mToSonnet45.ts`.
+//! All four operate on `settings.model` string and translate legacy
+//! aliases to the current canonical ones.
 //!
 //! Fast-mode / analytics side-effects from TS are not ported — the Rust
 //! Settings struct currently has no `fast_mode` field. When callers care
@@ -10,7 +11,9 @@
 //! return value (true means changed).
 
 use super::MigrationContext;
+use crate::config::global::GlobalConfig;
 use crate::config::settings::Settings;
+use serde_json::Value;
 
 /// Port of `migrateFennecToOpus`:
 ///   - `fennec-latest[1m]` → `opus[1m]`
@@ -94,6 +97,35 @@ pub fn migrate_sonnet45_to_sonnet46(ctx: &MigrationContext, settings: &mut Setti
     true
 }
 
+/// Port of `migrateSonnet1mToSonnet45`: users who had `sonnet[1m]` saved
+/// get pinned to the explicit `sonnet-4-5-20250929[1m]` before the
+/// `sonnet` alias flips to 4.6. Runs exactly once — completion is
+/// tracked via `sonnet1m45MigrationComplete` in GlobalConfig.extra.
+/// Returns true if state changed.
+pub fn migrate_sonnet_1m_to_sonnet_45(
+    global: &mut GlobalConfig,
+    settings: &mut Settings,
+) -> bool {
+    // Completion flag already set → no-op.
+    if matches!(
+        global.extra.get("sonnet1m45MigrationComplete"),
+        Some(Value::Bool(true))
+    ) {
+        return false;
+    }
+
+    if settings.model.as_deref() == Some("sonnet[1m]") {
+        settings.model = Some("sonnet-4-5-20250929[1m]".into());
+    }
+
+    // Mark completion regardless of whether the model matched, so we never
+    // re-enter. Matches TS: saveGlobalConfig always runs at the end.
+    global
+        .extra
+        .insert("sonnet1m45MigrationComplete".into(), Value::Bool(true));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +196,41 @@ mod tests {
         };
         assert!(migrate_sonnet45_to_sonnet46(&pro_ctx, &mut settings));
         assert_eq!(settings.model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn sonnet_1m_to_45_pins_model() {
+        let mut g = GlobalConfig::default();
+        let mut s = settings_with_model("sonnet[1m]");
+        assert!(migrate_sonnet_1m_to_sonnet_45(&mut g, &mut s));
+        assert_eq!(s.model.as_deref(), Some("sonnet-4-5-20250929[1m]"));
+        assert_eq!(
+            g.extra.get("sonnet1m45MigrationComplete"),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn sonnet_1m_migration_idempotent() {
+        let mut g = GlobalConfig::default();
+        let mut s = settings_with_model("sonnet[1m]");
+        assert!(migrate_sonnet_1m_to_sonnet_45(&mut g, &mut s));
+        // Second call: completion flag already set.
+        assert!(!migrate_sonnet_1m_to_sonnet_45(&mut g, &mut s));
+    }
+
+    #[test]
+    fn sonnet_1m_migration_marks_completion_even_without_match() {
+        let mut g = GlobalConfig::default();
+        let mut s = settings_with_model("opus");
+        assert!(migrate_sonnet_1m_to_sonnet_45(&mut g, &mut s));
+        // Model unchanged.
+        assert_eq!(s.model.as_deref(), Some("opus"));
+        // Completion flag set so future invocations no-op.
+        assert_eq!(
+            g.extra.get("sonnet1m45MigrationComplete"),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]
