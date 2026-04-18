@@ -25,6 +25,7 @@ pub mod sandbox;
 pub mod secondary_model;
 pub mod session;
 pub mod teams;
+pub mod tips;
 pub mod types;
 pub mod vcr;
 pub mod vim;
