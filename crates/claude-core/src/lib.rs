@@ -26,3 +26,4 @@ pub mod session;
 pub mod teams;
 pub mod types;
 pub mod vcr;
+pub mod vim;
