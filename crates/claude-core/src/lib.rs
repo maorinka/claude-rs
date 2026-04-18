@@ -23,6 +23,7 @@ pub mod plugins;
 pub mod policy_limits;
 pub mod query;
 pub mod remote;
+pub mod remote_managed_settings;
 pub mod sandbox;
 pub mod secondary_model;
 pub mod session;
