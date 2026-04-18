@@ -8,6 +8,16 @@ use claude_core::types::events::ToolResultData;
 
 const MAX_OUTPUT_CHARS: usize = 30_000;
 
+/// Verbatim port of TS PowerShellTool/prompt.ts getPrompt(). TS
+/// branches on `getPowerShellEdition()`; the Rust port embeds the
+/// conservative "unknown — assume 5.1" branch because
+/// edition-detection requires a live pwsh call that hasn't landed
+/// yet. Callers that want the 7+ guidance should inject their own
+/// edition-aware prompt. TS `${getMaxOutputLength()}` +
+/// `${getMaxTimeoutMs()}` are baked in at 600_000ms max / 120_000ms
+/// default (the static defaults in utils/timeouts.ts).
+pub const POWERSHELL_PROMPT: &str = include_str!("prompts/powershell.md");
+
 pub struct PowerShellTool;
 
 fn truncate_output(s: String) -> String {
@@ -25,12 +35,7 @@ impl ToolExecutor for PowerShellTool {
     }
 
     fn description(&self) -> String {
-        r#"Execute a PowerShell command. Only available on Windows.
-
-Use this tool to run PowerShell commands when working on Windows systems. On non-Windows platforms, this tool will return an error directing you to use the Bash tool instead.
-
-The command is executed via `powershell -Command <command>`. Output is captured from both stdout and stderr."#
-            .to_string()
+        POWERSHELL_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

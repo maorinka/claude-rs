@@ -19,6 +19,23 @@ const BLOCKED_PATHS: &[&str] = &[
 
 const DEFAULT_LINE_LIMIT: u64 = 2000;
 
+/// Verbatim port of TS FileReadTool/prompt.ts
+/// `renderPromptTemplate(...)` with the default runtime flags
+/// (line-format on, targeted-offset suggested, PDF supported).
+pub const FILE_READ_PROMPT: &str = include_str!("prompts/file_read.md");
+
+/// Verbatim port of TS FileReadTool/prompt.ts `FILE_UNCHANGED_STUB`.
+/// Returned from the dedup path when a file hasn't changed since the
+/// last Read in the conversation — the stub points the model back at
+/// the prior tool_result so the context isn't duplicated.
+pub const FILE_UNCHANGED_STUB: &str =
+    "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
+
+/// TS `MAX_LINES_TO_READ` constant used by the prompt builder.
+/// Rust's runtime uses `DEFAULT_LINE_LIMIT` instead, but we expose
+/// this so call sites that need the TS literal stay consistent.
+pub const MAX_LINES_TO_READ: u64 = 2000;
+
 /// Maximum file size for reading: 256 KB for text files (matches TS MAX_OUTPUT_SIZE).
 const MAX_TEXT_FILE_SIZE: u64 = 256 * 1024;
 
@@ -306,20 +323,7 @@ impl ToolExecutor for FileReadTool {
     }
 
     fn description(&self) -> String {
-        r#"Reads a file from the local filesystem. You can access any file directly by using this tool.
-Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
-
-Usage:
-- The file_path parameter must be an absolute path, not a relative path
-- By default, it reads up to 2000 lines starting from the beginning of the file
-- When you already know which part of the file you need, only read that part. This can be important for larger files.
-- Results are returned using cat -n format, with line numbers starting at 1
-- This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Claude Code is a multimodal LLM.
-- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: "1-5"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.
-- This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.
-- This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool.
-- You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
-- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents."#.to_string()
+        FILE_READ_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {

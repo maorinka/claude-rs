@@ -63,6 +63,14 @@ impl Default for ConfigTool {
     }
 }
 
+/// Verbatim port of TS ConfigTool/prompt.ts generatePrompt(). TS
+/// dynamically enumerates `SUPPORTED_SETTINGS` + model options at
+/// call time; the Rust port bakes in the static settings the TS
+/// registry exposes today (theme/verbose/editorMode/…) with the
+/// generic model line. Keep this file in sync when new settings
+/// are added to the Rust configuration layer.
+pub const CONFIG_TOOL_PROMPT: &str = include_str!("prompts/config_tool.md");
+
 #[async_trait]
 impl ToolExecutor for ConfigTool {
     fn name(&self) -> &str {
@@ -70,7 +78,7 @@ impl ToolExecutor for ConfigTool {
     }
 
     fn description(&self) -> String {
-        "Get, set, or list Claude configuration settings.".to_string()
+        CONFIG_TOOL_PROMPT.to_string()
     }
 
     fn input_schema(&self) -> Value {
