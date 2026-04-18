@@ -17,6 +17,7 @@ pub mod frontmatter;
 pub mod hooks;
 pub mod keybindings;
 pub mod lsp;
+pub mod magic_docs;
 pub mod mcp;
 pub mod memdir;
 pub mod migrations;
