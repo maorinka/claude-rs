@@ -19,13 +19,38 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub content: String,
+    /// Optional per-skill header under which user-supplied args
+    /// are appended at invoke time. When `None`, the tool falls
+    /// back to a generic `Arguments: {args}` line.
+    ///
+    /// Matches TS per-skill `getPromptForCommand(args)` shapes —
+    /// e.g. `simplify.ts` uses `## Additional Focus`, `stuck.ts`
+    /// uses `## User-provided context`, `remember.ts` uses
+    /// `## Additional context from user`.
+    pub argument_header: Option<String>,
 }
 
 static SKILL_STORE: Lazy<Mutex<HashMap<String, SkillEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Register a skill that can be invoked via the SkillTool.
+///
+/// Args are appended as `\n\nArguments: {args}` at invoke time.
+/// Use [`register_skill_with_arg_header`] for TS-equivalent
+/// per-skill headers (`## Additional Focus`, etc.).
 pub fn register_skill(name: &str, description: &str, content: &str) {
+    register_skill_with_arg_header(name, description, content, None);
+}
+
+/// Register a skill with a custom header for user-supplied args.
+/// The header is inserted as `\n\n## {header}\n\n{args}` at
+/// invoke time when args are present.
+pub fn register_skill_with_arg_header(
+    name: &str,
+    description: &str,
+    content: &str,
+    argument_header: Option<&str>,
+) {
     let mut store = SKILL_STORE.lock().unwrap();
     store.insert(
         name.to_string(),
@@ -33,6 +58,7 @@ pub fn register_skill(name: &str, description: &str, content: &str) {
             name: name.to_string(),
             description: description.to_string(),
             content: content.to_string(),
+            argument_header: argument_header.map(|s| s.to_string()),
         },
     );
 }
@@ -136,7 +162,15 @@ Important:
             Some(entry) => {
                 let mut content = entry.content.clone();
                 if let Some(a) = args {
-                    content = format!("{}\n\nArguments: {}", content, a);
+                    content = match &entry.argument_header {
+                        Some(header) => {
+                            // Matches TS per-skill appenders —
+                            // e.g. simplify.ts appends
+                            // "## Additional Focus\n\n{args}".
+                            format!("{}\n\n## {}\n\n{}", content, header, a)
+                        }
+                        None => format!("{}\n\nArguments: {}", content, a),
+                    };
                 }
 
                 Ok(ToolResultData {
