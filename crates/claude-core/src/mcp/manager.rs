@@ -75,6 +75,132 @@ impl McpManager {
         results
     }
 
+    /// Connect to many MCP servers with bounded concurrency, and
+    /// skip remote servers whose name is in the needs-auth cache.
+    ///
+    /// Ports the orchestration shape of TS
+    /// `getMcpToolsCommandsAndResources` at
+    /// `services/mcp/client.ts:2226-2403`. TS additionally fires
+    /// an `onConnectionAttempt` callback per server, fetches the
+    /// tools/commands/resources bundle, and handles a
+    /// `hasMcpDiscoveryButNoToken` early-skip — all of which
+    /// depend on the tool-layer / OAuth subsystems that aren't
+    /// wired yet. This method lands the shape that doesn't need
+    /// them:
+    ///
+    /// 1. **Auth-cache short-circuit (G2 wiring).** Remote
+    ///    transports (SSE / HTTP) whose `server_name` is present
+    ///    in `mcp_auth_cache` within its 15-min TTL skip the
+    ///    network round-trip and surface as `NeedsAuth`
+    ///    immediately. Matches TS `client.ts:2311-2319`.
+    /// 2. **Local vs remote concurrency split.** Local (stdio)
+    ///    servers fan out with the lower
+    ///    `MCP_SERVER_CONNECTION_BATCH_SIZE` (default 3, honours
+    ///    the env override from G1). Remote servers fan out at
+    ///    `MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE` (default
+    ///    20). Matches TS `client.ts:2264-2271`.
+    /// 3. **Tool-cache refresh at end.** Same best-effort
+    ///    `refresh_tools()` call `connect_all` makes.
+    ///
+    /// Each server's returned `McpServerConnection` reflects its
+    /// final status. Order of results is NOT stable — concurrent
+    /// completion order wins. TS also relies on the callback
+    /// rather than a return shape for the same reason.
+    pub async fn connect_all_respecting_auth_cache(
+        &self,
+        configs: HashMap<String, ScopedMcpServerConfig>,
+    ) -> Vec<McpServerConnection> {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+
+        // Partition into local (stdio) and remote (SSE/HTTP) so
+        // they can fan out at different concurrency caps.
+        let (local, remote): (Vec<_>, Vec<_>) = configs
+            .into_iter()
+            .partition(|(_, cfg)| super::helpers::is_local_mcp_server(cfg));
+
+        let local_batch = super::helpers::get_mcp_server_connection_batch_size();
+        let remote_batch = super::helpers::get_remote_mcp_server_connection_batch_size();
+
+        async fn drive<F, FU>(
+            items: Vec<(String, ScopedMcpServerConfig)>,
+            concurrency: usize,
+            mut each: F,
+        ) -> Vec<McpServerConnection>
+        where
+            F: FnMut(String, ScopedMcpServerConfig) -> FU,
+            FU: std::future::Future<Output = McpServerConnection>,
+        {
+            let mut in_flight = FuturesUnordered::new();
+            let mut iter = items.into_iter();
+            let mut out = Vec::new();
+            // Fill up to `concurrency` slots, then refill as each
+            // completes. Zero-cost when items < concurrency.
+            let concurrency = concurrency.max(1);
+            for _ in 0..concurrency {
+                if let Some((n, c)) = iter.next() {
+                    in_flight.push(each(n, c));
+                } else {
+                    break;
+                }
+            }
+            while let Some(result) = in_flight.next().await {
+                out.push(result);
+                if let Some((n, c)) = iter.next() {
+                    in_flight.push(each(n, c));
+                }
+            }
+            out
+        }
+
+        // Map across local servers first. Auth-cache short-circuit
+        // doesn't apply to stdio — TS's skip branch at
+        // client.ts:2308-2314 specifically filters on remote
+        // transport types.
+        let local_results = drive(local, local_batch, |name, cfg| {
+            let m = self;
+            async move { m.connect_server(&name, cfg).await }
+        })
+        .await;
+
+        // Remote: check the auth cache first — a cached
+        // needs-auth entry short-circuits to the NeedsAuth
+        // status without touching the network.
+        let remote_results = drive(remote, remote_batch, |name, cfg| {
+            let m = self;
+            async move {
+                if super::auth_cache::is_mcp_auth_cached(&name) {
+                    debug!(
+                        server = name,
+                        "Skipping connection (cached needs-auth)"
+                    );
+                    let conn = McpServerConnection {
+                        name: name.clone(),
+                        status: McpConnectionStatus::NeedsAuth,
+                        config: cfg.clone(),
+                    };
+                    // Keep manager state consistent with the
+                    // short-circuit — otherwise `connection(name)`
+                    // would return None while callers think the
+                    // server is known.
+                    let mut connections = m.connections.write().await;
+                    connections.insert(name, conn.clone());
+                    conn
+                } else {
+                    m.connect_server(&name, cfg).await
+                }
+            }
+        })
+        .await;
+
+        // Merge + best-effort tool refresh.
+        let mut results = local_results;
+        results.extend(remote_results);
+        if let Err(e) = self.refresh_tools().await {
+            warn!("Failed to refresh MCP tools after connecting: {}", e);
+        }
+        results
+    }
+
     /// Connect to a single MCP server.
     pub async fn connect_server(
         &self,
@@ -630,6 +756,111 @@ mod tests {
         );
         // Manager should not be holding a client for this server.
         assert!(!manager.is_connected("ghost").await);
+    }
+
+    // ─── G11: connect_all_respecting_auth_cache ───────────────────
+
+    /// Empty config map → empty result, no panic, tool refresh
+    /// still runs to keep state consistent.
+    #[tokio::test]
+    async fn connect_all_respecting_auth_cache_empty_configs() {
+        let manager = McpManager::new();
+        let out = manager
+            .connect_all_respecting_auth_cache(HashMap::new())
+            .await;
+        assert!(out.is_empty());
+    }
+
+    /// A remote server name that's in the auth cache short-
+    /// circuits to NeedsAuth without hitting the network. Uses
+    /// an unreachable URL so network contact would fail loudly.
+    #[tokio::test]
+    async fn connect_all_respecting_auth_cache_skips_cached_remote() {
+        use crate::mcp::auth_cache::{
+            clear_mcp_auth_cache, set_mcp_auth_cache_entry, shared_test_lock,
+        };
+        let _g = shared_test_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path());
+        clear_mcp_auth_cache();
+        set_mcp_auth_cache_entry("cached-sse");
+
+        let manager = McpManager::new();
+        let mut configs = HashMap::new();
+        configs.insert(
+            "cached-sse".to_string(),
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Sse(McpSseServerConfig {
+                    // Would fail loudly if we actually connected.
+                    url: "https://definitely.invalid/mcp".into(),
+                    headers: None,
+                }),
+                scope: ConfigScope::Project,
+            },
+        );
+
+        let results = manager
+            .connect_all_respecting_auth_cache(configs)
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0].status, McpConnectionStatus::NeedsAuth),
+            "cached-auth remote must short-circuit to NeedsAuth, got {:?}",
+            results[0].status
+        );
+        // And the manager's connections map reflects it.
+        let stored = manager.connection("cached-sse").await;
+        assert!(matches!(
+            stored.expect("connection recorded").status,
+            McpConnectionStatus::NeedsAuth
+        ));
+
+        clear_mcp_auth_cache();
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
+    }
+
+    /// Stdio servers ignore the auth-cache check — TS
+    /// client.ts:2308 only gates remote transports. A cached
+    /// entry for an stdio server name must NOT short-circuit.
+    #[tokio::test]
+    async fn connect_all_respecting_auth_cache_stdio_ignores_cache() {
+        use crate::mcp::auth_cache::{
+            clear_mcp_auth_cache, set_mcp_auth_cache_entry, shared_test_lock,
+        };
+        let _g = shared_test_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path());
+        clear_mcp_auth_cache();
+        set_mcp_auth_cache_entry("stdio-srv");
+
+        let manager = McpManager::new();
+        let mut configs = HashMap::new();
+        configs.insert(
+            "stdio-srv".to_string(),
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Stdio(McpStdioServerConfig {
+                    command: "/not/a/real/binary/for/mcp".into(),
+                    args: vec![],
+                    env: None,
+                }),
+                scope: ConfigScope::Project,
+            },
+        );
+
+        let results = manager
+            .connect_all_respecting_auth_cache(configs)
+            .await;
+        assert_eq!(results.len(), 1);
+        // Stdio doesn't short-circuit — the connect attempt runs
+        // and fails on the missing binary, surfacing as Failed.
+        assert!(
+            matches!(results[0].status, McpConnectionStatus::Failed { .. }),
+            "stdio must attempt connect despite cached-auth entry, got {:?}",
+            results[0].status
+        );
+
+        clear_mcp_auth_cache();
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
 
     /// Reconnecting an unknown server is equivalent to a fresh
