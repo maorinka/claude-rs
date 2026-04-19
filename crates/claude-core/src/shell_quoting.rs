@@ -165,6 +165,69 @@ static CONTROL_STRUCTURE_REGEX: Lazy<Regex> =
 static CONTINUATION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"\\+\n"#).unwrap());
 
+/// Detect a "simple help invocation" — a command like
+/// `tool --help` or `foo bar --help` where the ONLY flag is
+/// `--help` and all non-flag tokens are plain ASCII
+/// alphanumeric. Matches TS `isHelpCommand` at
+/// `utils/bash/commands.ts:388-436`.
+///
+/// Used to skip permission prompts for help invocations (help
+/// output is read-only and safe). The strict alphanumeric
+/// check on non-flag tokens rejects paths, shell special
+/// characters, and quoted arguments — those could smuggle
+/// side effects through a shell injection.
+///
+/// Returns `false` for:
+/// - commands not ending in `--help`,
+/// - commands containing quotes (`'` or `"`),
+/// - shell-parse failures,
+/// - non-alphanumeric non-flag tokens (e.g. `./script --help`
+///   has `.` which isn't alphanumeric),
+/// - any flag other than `--help`.
+pub fn is_help_command(command: &str) -> bool {
+    use crate::shell_quote::{try_parse_shell_command, ParseEntry, ShellParseResult};
+
+    let trimmed = command.trim();
+
+    if !trimmed.ends_with("--help") {
+        return false;
+    }
+    // Quote smuggling guard — TS at commands.ts:397.
+    if trimmed.contains('"') || trimmed.contains('\'') {
+        return false;
+    }
+
+    let tokens = match try_parse_shell_command(trimmed) {
+        ShellParseResult::Ok(tokens) => tokens,
+        ShellParseResult::Err(_) => return false,
+    };
+
+    let mut found_help = false;
+    for entry in tokens {
+        if let ParseEntry::Literal(token) = entry {
+            if token.starts_with('-') {
+                // A flag. The only allowed flag is `--help`.
+                if token == "--help" {
+                    found_help = true;
+                } else {
+                    return false;
+                }
+            } else if !token.chars().all(|c| c.is_ascii_alphanumeric()) {
+                // Non-flag token with any non-alphanumeric char
+                // — reject. Matches TS `alphanumericPattern` at
+                // commands.ts:411.
+                return false;
+            }
+        }
+        // Operators are not `Literal`; TS `typeof token ===
+        // 'string'` check at commands.ts:414 similarly skips
+        // them. Commands that parse with operators and still
+        // end in `--help` are edge cases — left conservative.
+    }
+
+    found_help
+}
+
 /// Detect a bash control-structure keyword in `command` — any of
 /// `for|while|until|if|case|select` at a word boundary followed
 /// by whitespace. Used as a bail-out signal before feeding a
@@ -524,5 +587,58 @@ mod tests {
         let input = "a \\\nb \\\nc";
         // Two continuations → all three pieces join on one line.
         assert_eq!(join_continuation_lines(input), "a b c");
+    }
+
+    // ─── is_help_command ─────────────────────────────────────────
+
+    #[test]
+    fn help_command_matches_plain_help_invocations() {
+        assert!(is_help_command("git --help"));
+        assert!(is_help_command("cargo --help"));
+        assert!(is_help_command("  git --help  ")); // trim
+        assert!(is_help_command("git subcommand --help"));
+        assert!(is_help_command("tool foo bar --help"));
+    }
+
+    #[test]
+    fn help_command_rejects_without_help_suffix() {
+        assert!(!is_help_command("git status"));
+        assert!(!is_help_command("git --help status")); // --help not last
+        assert!(!is_help_command(""));
+    }
+
+    #[test]
+    fn help_command_rejects_quoted_commands() {
+        // Quote-smuggling guard — a quoted `--help` could hide
+        // a payload.
+        assert!(!is_help_command("git \"--help\""));
+        assert!(!is_help_command("git '--help'"));
+        assert!(!is_help_command("echo 'x' --help"));
+    }
+
+    #[test]
+    fn help_command_rejects_extra_flags() {
+        // Only `--help` is allowed. Any other flag → reject.
+        assert!(!is_help_command("git -v --help"));
+        assert!(!is_help_command("tool --verbose --help"));
+        assert!(!is_help_command("tool -h --help"));
+    }
+
+    #[test]
+    fn help_command_rejects_non_alphanumeric_non_flag_tokens() {
+        // Paths and special characters are rejected because they
+        // could hide injection via tab-completion / path tricks.
+        assert!(!is_help_command("./script --help"));
+        assert!(!is_help_command("/usr/bin/tool --help"));
+        assert!(!is_help_command("tool foo.bar --help"));
+        assert!(!is_help_command("tool foo/bar --help"));
+    }
+
+    #[test]
+    fn help_command_accepts_alphanumeric_subcommands() {
+        // Subcommands / args with only letters & digits pass.
+        assert!(is_help_command("git clone --help"));
+        assert!(is_help_command("cargo test2 --help"));
+        assert!(is_help_command("gh pr list --help"));
     }
 }
