@@ -93,6 +93,7 @@ pub mod url_utils;
 pub mod user_agent;
 pub mod user_prompt_keywords;
 pub mod user_type;
+pub mod uuid_utils;
 pub mod vcr;
 pub mod vim;
 pub mod xdg;
