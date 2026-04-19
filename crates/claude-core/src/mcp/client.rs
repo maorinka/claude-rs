@@ -1056,7 +1056,10 @@ impl McpClient {
 
     /// Disconnect from the MCP server.
     ///
-    /// Closes the writer, kills the server process, and waits for the reader task.
+    /// Closes the writer, gracefully terminates the server process
+    /// (SIGINT → SIGTERM → SIGKILL escalation on Unix, direct kill
+    /// on Windows), and waits for the reader task. Matches TS
+    /// `cleanup()` at `services/mcp/client.ts:1404-1570`.
     pub async fn disconnect(&mut self) {
         debug!(server = self.name, "Disconnecting from MCP server");
 
@@ -1066,17 +1069,29 @@ impl McpClient {
             *writer = None;
         }
 
-        // Kill the process
+        // Gracefully terminate the process. Unix uses the escalated
+        // SIGINT → SIGTERM → SIGKILL sequence; Windows uses the
+        // blunt `child.kill()` since there's no ergonomic SIGTERM
+        // equivalent.
         if let Some(ref mut child) = self.process {
-            match child.kill() {
-                Ok(()) => {
-                    debug!(server = self.name, "Killed MCP server process");
-                }
-                Err(e) => {
-                    warn!(server = self.name, error = %e, "Failed to kill MCP server process");
+            #[cfg(unix)]
+            {
+                graceful_terminate_stdio(child, &self.name).await;
+            }
+            #[cfg(not(unix))]
+            {
+                if let Err(e) = child.kill() {
+                    warn!(
+                        server = self.name,
+                        error = %e,
+                        "Failed to kill MCP server process"
+                    );
                 }
             }
-            // Wait for the process to avoid zombies
+            // Wait for the process to avoid zombies. `wait` on an
+            // already-reaped child returns the cached exit status
+            // quickly; the graceful helper on Unix already reaps
+            // via try_wait().
             let _ = child.wait();
         }
 
@@ -1152,6 +1167,111 @@ pub fn normalize_mcp_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+// ─── Graceful stdio termination (G5) ─────────────────────────────────
+
+/// Escalate signals to terminate an MCP stdio subprocess gracefully:
+/// SIGINT first, then SIGTERM if still alive after 100ms, then
+/// SIGKILL if still alive after another 400ms. An absolute 600ms
+/// failsafe guarantees the function never blocks the CLI for
+/// longer than that. Matches TS `cleanup()` at
+/// `services/mcp/client.ts:1429-1562`.
+///
+/// Many MCP servers — especially Docker-wrapped ones — only drain
+/// on explicit signals; an immediate SIGKILL leaves log files
+/// corrupt and open network ports dangling. Escalating gives
+/// well-behaved servers a chance to shut down cleanly while
+/// capping the total wait so the CLI stays responsive.
+///
+/// Takes `&mut Child` (not a bare PID) so liveness can be checked
+/// via `try_wait()` — TS can `process.kill(pid, 0)` to probe since
+/// Node auto-reaps children on exit, but Rust's std `Child` holds
+/// onto the zombie until `wait()` is called, so a bare
+/// `libc::kill(pid, 0)` would see zombies as "alive" and hang the
+/// escalation through the 600ms failsafe.
+///
+/// Unix-only: compiled out on Windows where signals beyond
+/// `child.kill()` (i.e. TerminateProcess) aren't meaningful for
+/// stdio subprocesses in the same way.
+#[cfg(unix)]
+pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, name: &str) {
+    use std::time::Duration;
+
+    let pid = child.id();
+    let pid_i = pid as libc::pid_t;
+    if pid == 0 {
+        debug!(server = name, "No pid to terminate");
+        return;
+    }
+
+    // Step 1: SIGINT (like Ctrl-C). Polite — most servers handle
+    // this for graceful shutdown.
+    debug!(server = name, "Sending SIGINT to MCP server process");
+    let r = unsafe { libc::kill(pid_i, libc::SIGINT) };
+    if r != 0 {
+        debug!(
+            server = name,
+            errno = std::io::Error::last_os_error().raw_os_error(),
+            "SIGINT kill() failed (likely already exited)"
+        );
+        return;
+    }
+
+    // Poll on 50ms granularity up to the SIGINT window (100ms).
+    if wait_for_exit(child, Duration::from_millis(100)).await {
+        debug!(server = name, "MCP server process exited cleanly on SIGINT");
+        return;
+    }
+
+    // Step 2: SIGTERM.
+    debug!(server = name, "SIGINT failed, sending SIGTERM to MCP server process");
+    let r = unsafe { libc::kill(pid_i, libc::SIGTERM) };
+    if r != 0 {
+        debug!(
+            server = name,
+            errno = std::io::Error::last_os_error().raw_os_error(),
+            "SIGTERM kill() failed (likely exited between probes)"
+        );
+        return;
+    }
+
+    // SIGTERM window: 400ms. Combined with the 100ms SIGINT wait
+    // that's 500ms — inside the 600ms absolute failsafe.
+    if wait_for_exit(child, Duration::from_millis(400)).await {
+        debug!(server = name, "MCP server process exited on SIGTERM");
+        return;
+    }
+
+    // Step 3: SIGKILL. Unignorable; kernel reaps the process.
+    debug!(server = name, "SIGTERM failed, sending SIGKILL to MCP server process");
+    let r = unsafe { libc::kill(pid_i, libc::SIGKILL) };
+    if r != 0 {
+        debug!(
+            server = name,
+            errno = std::io::Error::last_os_error().raw_os_error(),
+            "SIGKILL kill() failed (process may be unkillable by us)"
+        );
+    }
+    // Give SIGKILL a small window to actually reap — the test
+    // harness otherwise races to `child.wait()` while the signal
+    // is still in flight.
+    let _ = wait_for_exit(child, Duration::from_millis(100)).await;
+
+    // Helper: poll `child.try_wait()` every 25ms up to `timeout`.
+    // Returns true if the child exited within the window.
+    async fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
 }
 
 // ─── Inbound request dispatch (G20) ──────────────────────────────────
@@ -1464,6 +1584,87 @@ mod tests {
         let guard = map.lock().await;
         assert!(guard.contains_key("roots/list"));
         assert!(guard.contains_key("elicitation/create"));
+    }
+
+    // ─── G5: graceful_terminate_stdio ──────────────────────────────
+
+    /// Core invariant: no matter how stubborn the subprocess, the
+    /// helper returns within the 600ms failsafe and the child is
+    /// dead. Three fixtures cover the three escalation tiers:
+    /// SIGINT-friendly, SIGINT-ignoring-SIGTERM-friendly, and
+    /// fully-stubborn (only SIGKILL works). We assert on the end
+    /// state (child is dead, elapsed ≤ failsafe + slack) rather
+    /// than which signal did it, because signal-timing on macOS CI
+    /// shells can escalate faster than the trap handler fires.
+    async fn run_graceful_terminate_case(script: &str, max_ms: u128, label: &str) {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        // Let the shell start and install its traps before we
+        // signal. Without this, the shell's default SIGINT
+        // action can fire before `trap ...` runs.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        let started = Instant::now();
+        super::graceful_terminate_stdio(&mut child, label).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed.as_millis() < max_ms,
+            "graceful_terminate ({}) exceeded window: {}ms > {}ms",
+            label,
+            elapsed.as_millis(),
+            max_ms
+        );
+        // After the helper returns, try_wait must report the
+        // child is fully reaped. (The helper already called
+        // try_wait; wait() returns the cached exit status.)
+        let _ = child.wait().expect("wait");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[cfg(unix)]
+    async fn graceful_terminate_sigint_friendly_fixture() {
+        // Trailing `; true` prevents bash's single-command exec
+        // optimisation (which would skip the trap installation).
+        run_graceful_terminate_case(
+            "trap 'exit 0' INT; sleep 30; true",
+            900,
+            "test-sigint",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[cfg(unix)]
+    async fn graceful_terminate_sigterm_escalation_fixture() {
+        run_graceful_terminate_case(
+            "trap '' INT; trap 'exit 0' TERM; sleep 30; true",
+            900,
+            "test-sigterm",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[cfg(unix)]
+    async fn graceful_terminate_sigkill_failsafe_fixture() {
+        // Ignores both INT and TERM — only SIGKILL escapes.
+        // 600ms helper failsafe + the 100ms post-SIGKILL reap
+        // window + CI slack.
+        run_graceful_terminate_case(
+            "trap '' INT; trap '' TERM; sleep 30; true",
+            1200,
+            "test-sigkill",
+        )
+        .await;
     }
 
     // ─── G4b: lifecycle wiring ─────────────────────────────────────
