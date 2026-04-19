@@ -394,15 +394,21 @@ impl McpManager {
 
     /// Disconnect a specific server.
     pub async fn disconnect_server(&self, name: &str) {
-        {
+        // Remove from BOTH maps before the disconnect await. If
+        // `client.disconnect().await` panics, the manager is still
+        // left in a consistent state (both maps show the server
+        // gone) rather than half-cleared (client removed but
+        // connections map still has the stale record).
+        let removed_client = {
             let mut clients = self.clients.write().await;
-            if let Some(mut client) = clients.remove(name) {
-                client.disconnect().await;
-            }
-        }
+            clients.remove(name)
+        };
         {
             let mut connections = self.connections.write().await;
             connections.remove(name);
+        }
+        if let Some(mut client) = removed_client {
+            client.disconnect().await;
         }
 
         // Refresh tools after disconnection
@@ -434,6 +440,20 @@ impl McpManager {
     /// - The returned `McpServerConnection` is also recorded in
     ///   the manager's `connections` map so
     ///   `manager.connection(name)` reflects the new status.
+    ///
+    /// # Intentional gaps vs TS
+    ///
+    /// * **Keychain cache invalidation** (TS `clearKeychainCache`
+    ///   at `client.ts:2152`) isn't represented here — the auth
+    ///   subsystem isn't ported to Rust yet. When it is, this
+    ///   method should invalidate it before `disconnect_server`.
+    /// * **Command / resource / skill fetch bundle** — G11 work.
+    /// * There's a benign TOCTOU window between
+    ///   `is_connected(name)` and `disconnect_server(name)`: a
+    ///   concurrent task could disconnect in between, turning
+    ///   the disconnect call into a no-op. Subsequent
+    ///   `connect_server` still runs so the outcome converges
+    ///   to "reconnected" either way.
     pub async fn reconnect_server(
         &self,
         name: &str,
