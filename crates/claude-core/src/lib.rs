@@ -34,6 +34,7 @@ pub mod frontmatter;
 pub mod hash;
 pub mod hooks;
 pub mod hyperlink;
+pub mod jsonl;
 pub mod keybindings;
 pub mod lsp;
 pub mod magic_docs;
