@@ -65,8 +65,13 @@ impl ReadFileState {
     }
 
     /// Update the read timestamp for a file after a successful write, so
-    /// subsequent writes do not get rejected as stale.
-    pub fn update_after_write(&mut self, path: &str) {
+    /// subsequent writes do not get rejected as stale. `content` should
+    /// be the LF-normalised post-write text — stored so the next
+    /// `check_file_staleness` can fall back to a content comparison
+    /// when the mtime bumps without a real change (antivirus, cloud
+    /// sync). Mirrors TS `FileEditTool.ts:520-525` which stores
+    /// `content: updatedFile` in `readFileState`.
+    pub fn update_after_write(&mut self, path: &str, content: Option<String>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -76,7 +81,7 @@ impl ReadFileState {
             ReadFileEntry {
                 timestamp: now,
                 is_partial_view: false,
-                content: None,
+                content,
             },
         );
     }

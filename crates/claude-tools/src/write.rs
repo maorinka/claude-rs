@@ -207,9 +207,12 @@ Usage:
         std::fs::write(path, content)
             .with_context(|| format!("failed to write file: {file_path}"))?;
 
-        // Update read state after successful write so subsequent writes are not rejected
+        // Update read state after successful write so subsequent writes are not rejected.
+        // Store the LF-normalised form — `check_file_staleness` normalises both sides
+        // before comparing, so stored content must be in LF to avoid a spurious
+        // mismatch when the disk copy is CRLF.
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            state.update_after_write(file_path);
+            state.update_after_write(file_path, Some(content.replace("\r\n", "\n")));
         }
 
         let data = json!({

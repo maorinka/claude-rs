@@ -324,6 +324,112 @@ async fn test_edit_new_string_with_crlf_does_not_double_normalize() {
     );
 }
 
+/// The `originalFile` field in the tool result must report the
+/// LF-normalised form so downstream consumers (model, diff
+/// renderers) see the same text they'd see after a Read. Matches
+/// TS which operates on the LF-normalised buffer throughout.
+#[tokio::test]
+async fn test_edit_originalfile_is_lf_normalised_for_crlf_disk() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("crlf_result.txt");
+    let original_crlf = "first\r\nold\r\nlast\r\n";
+    std::fs::write(&file_path, original_crlf).unwrap();
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state.lock().unwrap().record_read(
+        file_path.to_str().unwrap(),
+        false,
+        None,
+    );
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "old",
+            "new_string": "new",
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error);
+    let reported = result.data["originalFile"].as_str().unwrap();
+    assert_eq!(
+        reported, "first\nold\nlast\n",
+        "originalFile must be LF-normalised even when disk is CRLF"
+    );
+    assert!(!reported.contains('\r'), "no CR should leak to the model");
+}
+
+/// After a successful edit, a harmless mtime bump (antivirus,
+/// cloud-sync, `touch`) on the file must not cause the next edit
+/// to be rejected as stale. The staleness check falls back to
+/// content comparison only when `update_after_write` stored the
+/// post-edit content. Regression for the codex CR finding that
+/// `update_after_write` stored `content: None`, breaking this
+/// fallback. TS parity: `FileEditTool.ts:520-525`.
+#[tokio::test]
+async fn test_edit_survives_mtime_touch_after_successful_edit() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("touched.txt");
+    std::fs::write(&file_path, "alpha\nbeta\ngamma\n").unwrap();
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state.lock().unwrap().record_read(
+        file_path.to_str().unwrap(),
+        false,
+        Some("alpha\nbeta\ngamma\n".to_string()),
+    );
+
+    // First edit — populates read-state content via update_after_write.
+    let first = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "beta",
+            "new_string": "BETA",
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(!first.is_error, "first edit should succeed");
+
+    // Simulate an external tool bumping mtime without changing content
+    // (antivirus scan, cloud-sync metadata touch). Sleep past the
+    // millisecond floor so the mtime strictly exceeds the stored
+    // read timestamp — otherwise the mtime-check short-circuits
+    // before the content-comparison fallback is even exercised.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let current = std::fs::read_to_string(&file_path).unwrap();
+    std::fs::write(&file_path, &current).unwrap();
+
+    // Second edit should still succeed: the content-comparison
+    // fallback in check_file_staleness sees that disk == stored
+    // post-edit content, so the mtime bump is tolerated.
+    let second = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "gamma",
+            "new_string": "GAMMA",
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(
+        !second.is_error,
+        "second edit must not be rejected after a content-preserving \
+         mtime touch — got: {:?}",
+        second.data
+    );
+
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(on_disk, "alpha\nBETA\nGAMMA\n");
+}
+
 // ─── team_mem_secret_guard integration ──────────────────────────────────────
 
 use std::sync::Mutex as StdMutex;

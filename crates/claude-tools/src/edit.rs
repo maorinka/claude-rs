@@ -29,16 +29,27 @@ pub enum LineEndings {
     Crlf,
 }
 
-/// Count every `\n` in `content`; tally `\r\n` when the `\n` is
-/// preceded by `\r`, otherwise LF. Byte-for-byte port of TS
-/// `detectLineEndingsForString`. Ties go to `Lf` (TS uses
-/// `crlfCount > lfCount`).
+/// Maximum sample size for line-ending detection. Matches TS
+/// `readFileSyncWithMetadata` which samples `raw.slice(0, 4096)` at
+/// `fileRead.ts:92`; without a cap, Rust and TS disagree on files
+/// whose dominant ending flips past the first 4KB.
+const LINE_ENDING_SAMPLE_BYTES: usize = 4096;
+
+/// Count every `\n` in the first `LINE_ENDING_SAMPLE_BYTES` of
+/// `content`; tally `\r\n` when the `\n` is preceded by `\r`,
+/// otherwise LF. Byte-for-byte port of TS
+/// `detectLineEndingsForString` applied to a 4096-unit prefix. Ties
+/// go to `Lf` (TS uses `crlfCount > lfCount`). Since `\r` / `\n` are
+/// single-byte ASCII, capping on UTF-8 bytes is safe even if the
+/// cap falls inside a multi-byte character — a continuation byte
+/// can never be `\r` or `\n`.
 pub fn detect_line_endings(content: &str) -> LineEndings {
     let bytes = content.as_bytes();
+    let end = bytes.len().min(LINE_ENDING_SAMPLE_BYTES);
     let mut crlf = 0usize;
     let mut lf = 0usize;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'\n' {
+    for i in 0..end {
+        if bytes[i] == b'\n' {
             if i > 0 && bytes[i - 1] == b'\r' {
                 crlf += 1;
             } else {
@@ -262,9 +273,13 @@ Usage:
             return Ok(error_result(format!("Failed to write file: {}", e)));
         }
 
-        // Update read state after successful edit
+        // Update read state after successful edit. Store the
+        // LF-normalised post-edit content (not the CRLF-re-encoded
+        // disk form) so the next staleness check's content
+        // comparison uses the same normalisation as
+        // `check_file_staleness`. Mirrors TS `FileEditTool.ts:520-525`.
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            state.update_after_write(file_path);
+            state.update_after_write(file_path, Some(new_content.clone()));
         }
 
         Ok(ToolResultData {
@@ -293,5 +308,65 @@ Usage:
 
     fn max_result_size_chars(&self) -> usize {
         100_000
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_endings_empty_is_lf() {
+        assert_eq!(detect_line_endings(""), LineEndings::Lf);
+    }
+
+    #[test]
+    fn detect_endings_lone_cr_is_lf() {
+        // TS `detectLineEndingsForString` only tallies on `\n`; lone
+        // CR (old-Mac) never increments either counter.
+        assert_eq!(detect_line_endings("a\rb"), LineEndings::Lf);
+        assert_eq!(detect_line_endings("\r"), LineEndings::Lf);
+    }
+
+    #[test]
+    fn detect_endings_single_crlf_wins() {
+        assert_eq!(detect_line_endings("a\r\n"), LineEndings::Crlf);
+    }
+
+    #[test]
+    fn detect_endings_single_lf_wins() {
+        assert_eq!(detect_line_endings("a\n"), LineEndings::Lf);
+    }
+
+    #[test]
+    fn detect_endings_tie_goes_to_lf() {
+        // TS uses strict `crlfCount > lfCount` — 1 > 1 is false.
+        assert_eq!(detect_line_endings("\r\n\n"), LineEndings::Lf);
+    }
+
+    #[test]
+    fn detect_endings_caps_at_4096_bytes() {
+        // First 4096 bytes are pure LF; anything beyond should not
+        // be counted. TS samples `raw.slice(0, 4096)` at
+        // fileRead.ts:92.
+        let mut s = String::with_capacity(8192);
+        for _ in 0..4000 {
+            s.push_str("x\n"); // 4000 LFs in first 8000 bytes → first 4096 bytes see ~2048 LFs
+        }
+        // Append enough CRLF to dominate if we scanned the whole buffer.
+        for _ in 0..4000 {
+            s.push_str("x\r\n");
+        }
+        // With the cap: LFs in first 4096 bytes >> any CRLF, so Lf.
+        assert_eq!(detect_line_endings(&s), LineEndings::Lf);
+    }
+
+    #[test]
+    fn normalize_to_lf_strips_only_crlf() {
+        assert_eq!(normalize_to_lf("a\r\nb"), "a\nb");
+        // Lone CR preserved.
+        assert_eq!(normalize_to_lf("a\rb"), "a\rb");
+        // Lone LF untouched.
+        assert_eq!(normalize_to_lf("a\nb"), "a\nb");
     }
 }
