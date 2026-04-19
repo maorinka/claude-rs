@@ -45,6 +45,7 @@ pub mod lsp;
 pub mod magic_docs;
 pub mod markdown_config_loader;
 pub mod mcp;
+pub mod mdm_constants;
 pub mod memdir;
 pub mod migrations;
 pub mod object_group_by;
