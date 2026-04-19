@@ -202,6 +202,128 @@ fn test_edit_is_destructive() {
     assert_eq!(tool.name(), "Edit");
 }
 
+// ─── CRLF preservation ──────────────────────────────────────────────────────
+
+/// A CRLF-formatted file should: (a) match `old_string` sent with LF
+/// endings (the model's default), (b) land back on disk with its
+/// original CRLF line endings preserved. Matches TS FileEditTool
+/// behaviour at `FileEditTool.ts:214` + `:491`.
+#[tokio::test]
+async fn test_edit_preserves_crlf_line_endings() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("windowsy.txt");
+    let original_crlf = "first\r\nold line\r\nlast\r\n";
+    std::fs::write(&file_path, original_crlf).unwrap();
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state.lock().unwrap().record_read(
+        file_path.to_str().unwrap(),
+        false,
+        None,
+    );
+
+    // Model sends LF-normalised old_string + new_string.
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "old line",
+            "new_string": "new line",
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error, "edit should succeed despite CRLF on disk");
+
+    // On-disk content must still use CRLF endings.
+    let on_disk = std::fs::read(&file_path).unwrap();
+    let as_str = String::from_utf8_lossy(&on_disk);
+    assert_eq!(as_str, "first\r\nnew line\r\nlast\r\n");
+}
+
+/// LF-only files stay LF-only after an edit — we don't accidentally
+/// promote a Unix file to CRLF.
+#[tokio::test]
+async fn test_edit_preserves_lf_line_endings() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("unixy.txt");
+    let original_lf = "first\nold line\nlast\n";
+    std::fs::write(&file_path, original_lf).unwrap();
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state.lock().unwrap().record_read(
+        file_path.to_str().unwrap(),
+        false,
+        None,
+    );
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "old line",
+            "new_string": "new line",
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error);
+    let on_disk = std::fs::read(&file_path).unwrap();
+    let as_str = String::from_utf8_lossy(&on_disk);
+    assert_eq!(as_str, "first\nnew line\nlast\n");
+    assert!(
+        !as_str.contains('\r'),
+        "LF file must stay LF after edit — no accidental CRLF promotion"
+    );
+}
+
+/// A `new_string` that itself contains CRLF (model pasted Windows
+/// content into an edit) must not double-normalise into CRCRLF when
+/// written back to a CRLF file. TS guards this at `file.ts:90-94`.
+#[tokio::test]
+async fn test_edit_new_string_with_crlf_does_not_double_normalize() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("paste.txt");
+    let original_crlf = "a\r\nb\r\n";
+    std::fs::write(&file_path, original_crlf).unwrap();
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state.lock().unwrap().record_read(
+        file_path.to_str().unwrap(),
+        false,
+        None,
+    );
+
+    // new_string already contains CRLF.
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "b",
+            "new_string": "x\r\ny",
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error);
+    let on_disk = std::fs::read(&file_path).unwrap();
+    let as_str = String::from_utf8_lossy(&on_disk);
+    assert_eq!(
+        as_str, "a\r\nx\r\ny\r\n",
+        "CRLF should not double up (no CRCRLF)"
+    );
+    assert!(
+        !as_str.contains("\r\r"),
+        "sanity: no double-CR in output"
+    );
+}
+
 // ─── team_mem_secret_guard integration ──────────────────────────────────────
 
 use std::sync::Mutex as StdMutex;

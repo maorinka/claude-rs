@@ -19,6 +19,47 @@ fn truncate_display(s: &str) -> String {
     }
 }
 
+/// Detected line-ending flavour for a file buffer. `Crlf` when the
+/// CRLF count beats the LF count; `Lf` otherwise. Ports TS
+/// `LineEndingType` + `detectLineEndingsForString` at
+/// `fileRead.ts:18,51`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEndings {
+    Lf,
+    Crlf,
+}
+
+/// Count every `\n` in `content`; tally `\r\n` when the `\n` is
+/// preceded by `\r`, otherwise LF. Byte-for-byte port of TS
+/// `detectLineEndingsForString`. Ties go to `Lf` (TS uses
+/// `crlfCount > lfCount`).
+pub fn detect_line_endings(content: &str) -> LineEndings {
+    let bytes = content.as_bytes();
+    let mut crlf = 0usize;
+    let mut lf = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            if i > 0 && bytes[i - 1] == b'\r' {
+                crlf += 1;
+            } else {
+                lf += 1;
+            }
+        }
+    }
+    if crlf > lf {
+        LineEndings::Crlf
+    } else {
+        LineEndings::Lf
+    }
+}
+
+/// Strip CRLF → LF without touching lone LFs that were already
+/// present. TS's normalisation step in `FileEditTool.ts:214` uses
+/// `replaceAll('\r\n', '\n')` which is equivalent to this.
+pub fn normalize_to_lf(content: &str) -> String {
+    content.replace("\r\n", "\n")
+}
+
 fn error_result(msg: impl Into<String>) -> ToolResultData {
     ToolResultData {
         data: json!({ "error": msg.into() }),
@@ -155,12 +196,23 @@ Usage:
             let _ = tracker.snapshot(path);
         }
 
-        let original = match std::fs::read_to_string(path) {
+        let raw_original = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => return Ok(error_result(format!("Failed to read file: {}", e))),
         };
 
-        // Count occurrences
+        // CRLF preservation: detect original line endings from the raw
+        // file bytes, then work against the LF-normalised form so an
+        // `old_string` with LF endings (the model's default) matches
+        // content that may have CRLF on disk. On write, re-normalise
+        // LF→CRLF if the original file was CRLF-dominant. Matches TS
+        // `FileEditTool.ts:212-214` (normalize on read) + `:491`
+        // (writeTextContent re-normalizes on write).
+        let endings = detect_line_endings(&raw_original);
+        let original = normalize_to_lf(&raw_original);
+
+        // Count occurrences (against LF-normalised content — matches TS
+        // which operates on the normalised buffer).
         let count = original.matches(old_string).count();
 
         if count == 0 {
@@ -187,6 +239,18 @@ Usage:
             original.replacen(old_string, new_string, 1)
         };
 
+        // Re-normalize to CRLF on write when the original file used CRLF.
+        // Strip any existing CRLF first so a `new_string` that itself
+        // contains CRLF (raw model output, or copy-pasted Windows content)
+        // doesn't become CRCRLF after the join. Matches TS
+        // `writeTextContent` at file.ts:90-94.
+        let to_write = match endings {
+            LineEndings::Crlf => {
+                new_content.replace("\r\n", "\n").replace('\n', "\r\n")
+            }
+            LineEndings::Lf => new_content.clone(),
+        };
+
         // Ensure parent directories exist (in case of a new path -- defensive)
         if let Some(parent) = path.parent() {
             if !parent.exists() {
@@ -194,7 +258,7 @@ Usage:
             }
         }
 
-        if let Err(e) = std::fs::write(path, &new_content) {
+        if let Err(e) = std::fs::write(path, &to_write) {
             return Ok(error_result(format!("Failed to write file: {}", e)));
         }
 
@@ -208,7 +272,7 @@ Usage:
                 "filePath": file_path,
                 "oldString": old_string,
                 "newString": new_string,
-                "originalFile": original,
+                "originalFile": original, // LF-normalised form; TS parity
                 "replaceAll": replace_all
             }),
             is_error: false,
