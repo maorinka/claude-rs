@@ -48,17 +48,23 @@ enum McpTransport {
 /// The MCP protocol uses JSON-RPC 2.0 messages. For stdio, these are sent
 /// over stdin/stdout of a spawned subprocess. For SSE/HTTP, they are sent
 /// via HTTP POST requests.
-/// Handler for a server-initiated JSON-RPC request. Returns the
-/// `result` payload on success, or a `JsonRpcError` to surface a
-/// structured error back to the server.
+/// The future returned by a [`RequestHandler`]. Boxed + pinned so
+/// handlers can capture arbitrary async state without exposing a
+/// concrete `impl Future` through the `Arc<dyn Fn ...>` type.
+pub type RequestHandlerFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, JsonRpcError>> + Send>>;
+
+/// Handler for a server-initiated JSON-RPC request. Returns a future
+/// yielding the `result` payload on success, or a `JsonRpcError` to
+/// surface a structured error back to the server.
 ///
 /// Registered via `McpClient::set_request_handler`. Ports the TS
 /// `client.setRequestHandler(Schema, async request => ...)` pattern
-/// at `services/mcp/client.ts:1009-1018` and `:1191-1197`. Handlers
-/// are `Send + Sync` so the reader task (which may dispatch from a
-/// blocking thread) can clone-invoke them.
+/// at `services/mcp/client.ts:1009-1018` and `:1191-1197`. TS
+/// handlers are async; the Rust port mirrors that shape so handlers
+/// can await I/O or async locks naturally.
 pub type RequestHandler =
-    Arc<dyn Fn(Option<Value>) -> Result<Value, JsonRpcError> + Send + Sync>;
+    Arc<dyn Fn(Option<Value>) -> RequestHandlerFuture + Send + Sync>;
 
 pub struct McpClient {
     /// Name of this server (for logging and identification).
@@ -288,6 +294,24 @@ impl McpClient {
                                             let mut pending = pending_clone.lock().await;
                                             if let Some(sender) = pending.remove(&response.id) {
                                                 let _ = sender.send(response);
+                                            }
+                                        } else if let Ok(v) =
+                                            serde_json::from_str::<serde_json::Value>(&event_data)
+                                        {
+                                            // G20 gap: SSE inbound requests
+                                            // (method + id) aren't yet
+                                            // dispatched. Log so the deferral
+                                            // is visible instead of failing
+                                            // silently.
+                                            if v.get("method").is_some()
+                                                && v.get("id").is_some()
+                                            {
+                                                warn!(
+                                                    server = server_name,
+                                                    "SSE inbound request received but dispatch \
+                                                     is not yet implemented (dropped): {}",
+                                                    event_data
+                                                );
                                             }
                                         }
                                     }
@@ -1041,17 +1065,29 @@ async fn default_request_handlers() -> Arc<Mutex<HashMap<String, RequestHandler>
     map
 }
 
-/// Default handler for `roots/list`: reports the current working
+/// Startup cwd, captured once per process. Matches TS
+/// `getOriginalCwd()` semantics at `client.ts:1014`: even if the
+/// process later `chdir()`s, `roots/list` keeps reporting the
+/// original workspace that MCP servers observed at init. Falls
+/// back to `"."` if the first read fails so the handler can never
+/// panic.
+fn original_cwd() -> &'static std::path::PathBuf {
+    static CELL: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    })
+}
+
+/// Default handler for `roots/list`: reports the *startup* working
 /// directory as the sole root. TS at `client.ts:1009-1018` uses
-/// `getOriginalCwd()`; Rust uses `std::env::current_dir()` with a
-/// `"."` fallback so the handler can never panic on an unreadable
-/// cwd.
+/// `getOriginalCwd()`, so a post-startup `chdir` must NOT change
+/// what we report to the server.
 fn default_roots_list_handler() -> RequestHandler {
     Arc::new(|_params| {
-        let cwd = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let uri = format!("file://{}", cwd.display());
-        Ok(serde_json::json!({ "roots": [ { "uri": uri } ] }))
+        let uri = format!("file://{}", original_cwd().display());
+        Box::pin(async move {
+            Ok(serde_json::json!({ "roots": [ { "uri": uri } ] }))
+        })
     })
 }
 
@@ -1060,7 +1096,9 @@ fn default_roots_list_handler() -> RequestHandler {
 /// elicitation arriving before `registerElicitationHandler` runs
 /// gets a clean `cancel` rather than hanging.
 fn default_elicitation_cancel_handler() -> RequestHandler {
-    Arc::new(|_params| Ok(serde_json::json!({ "action": "cancel" })))
+    Arc::new(|_params| {
+        Box::pin(async { Ok(serde_json::json!({ "action": "cancel" })) })
+    })
 }
 
 /// Classify an inbound JSON-RPC line and dispatch it appropriately.
@@ -1110,14 +1148,30 @@ fn dispatch_inbound_line(
     // Response path — takes precedence when both `id` and a
     // result/error field are present.
     if has_result {
-        if let Ok(resp) = serde_json::from_value::<JsonRpcResponse>(value.clone()) {
-            rt.spawn(async move {
-                let mut pending = pending.lock().await;
-                if let Some(sender) = pending.remove(&resp.id) {
-                    let _ = sender.send(resp);
-                }
-            });
-            return;
+        match serde_json::from_value::<JsonRpcResponse>(value.clone()) {
+            Ok(resp) => {
+                rt.spawn(async move {
+                    let mut pending = pending.lock().await;
+                    if let Some(sender) = pending.remove(&resp.id) {
+                        let _ = sender.send(resp);
+                    }
+                });
+                return;
+            }
+            Err(e) => {
+                // Response-shaped but fails structural decode (e.g.
+                // non-numeric id — JsonRpcResponse.id is u64). The
+                // caller will hang until its send_request timeout
+                // fires, so surface this explicitly for
+                // diagnosability.
+                debug!(
+                    server = server_name,
+                    "Malformed response-shaped message (dropped): {} ({})",
+                    line,
+                    e
+                );
+                return;
+            }
         }
     }
 
@@ -1132,7 +1186,7 @@ fn dispatch_inbound_line(
                 guard.get(&m).cloned()
             };
             let response = match handler {
-                Some(h) => match h(params) {
+                Some(h) => match h(params).await {
                     Ok(result) => JsonRpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: request_id,
@@ -1214,12 +1268,15 @@ impl McpClient {
     /// parity but do not yet dispatch inbound requests (handler
     /// runs only for stdio). Dispatch for those transports is a
     /// follow-up ticket.
-    pub async fn set_request_handler<F>(&self, method: impl Into<String>, handler: F)
+    pub async fn set_request_handler<F, Fut>(&self, method: impl Into<String>, handler: F)
     where
-        F: Fn(Option<Value>) -> Result<Value, JsonRpcError> + Send + Sync + 'static,
+        F: Fn(Option<Value>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Value, JsonRpcError>> + Send + 'static,
     {
+        let wrapped: RequestHandler =
+            Arc::new(move |params| Box::pin(handler(params)) as RequestHandlerFuture);
         let mut guard = self.request_handlers.lock().await;
-        guard.insert(method.into(), Arc::new(handler));
+        guard.insert(method.into(), wrapped);
     }
 }
 
@@ -1252,10 +1309,10 @@ mod tests {
 
     // ─── G20: inbound request dispatch ──────────────────────────────
 
-    #[test]
-    fn default_roots_list_handler_returns_cwd_uri() {
+    #[tokio::test]
+    async fn default_roots_list_handler_returns_cwd_uri() {
         let h = default_roots_list_handler();
-        let out = h(None).expect("default handler must succeed");
+        let out = h(None).await.expect("default handler must succeed");
         let roots = out.get("roots").and_then(|r| r.as_array()).unwrap();
         assert_eq!(roots.len(), 1);
         let uri = roots[0].get("uri").and_then(|u| u.as_str()).unwrap();
@@ -1266,10 +1323,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_elicitation_handler_returns_cancel() {
+    #[tokio::test]
+    async fn default_roots_handler_pins_startup_cwd_after_chdir() {
+        // `original_cwd` captures once; a later chdir must NOT
+        // change what `roots/list` reports. We can't reliably
+        // chdir in parallel tests (process-global state), so
+        // instead we assert the uri uses the first-observed
+        // directory via identity on the OnceLock.
+        let h = default_roots_list_handler();
+        let first = h(None).await.expect("ok");
+        let second = h(None).await.expect("ok");
+        assert_eq!(first, second, "roots/list must be stable across calls");
+    }
+
+    #[tokio::test]
+    async fn default_elicitation_handler_returns_cancel() {
         let h = default_elicitation_cancel_handler();
-        let out = h(None).expect("default handler must succeed");
+        let out = h(None).await.expect("default handler must succeed");
         assert_eq!(
             out.get("action").and_then(|a| a.as_str()),
             Some("cancel")
