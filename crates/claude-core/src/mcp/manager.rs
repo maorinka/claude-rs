@@ -413,6 +413,59 @@ impl McpManager {
         info!(server = name, "MCP server disconnected");
     }
 
+    /// Reconnect a server: tear down the existing client (if any)
+    /// and connect fresh. Refreshes the tool cache afterwards so
+    /// subsequent tool lookups see the new session's tool list.
+    ///
+    /// Ports the orchestration shape of TS `reconnectMcpServerImpl`
+    /// at `services/mcp/client.ts:2137-2210`. The TS function
+    /// additionally fetches commands / skills / resources and
+    /// assembles a bundle result for the UI layer; those pieces
+    /// live in the tool layer on the Rust side (G11 orchestration
+    /// will wrap this call with the bundle logic once the
+    /// downstream caches are ported).
+    ///
+    /// Behaviour:
+    /// - Current client (if any) is disconnected first — mirrors
+    ///   TS's `clearServerCache` at `client.ts:2154` which
+    ///   triggers `client.cleanup()` via `connectToServer.cache`.
+    /// - Connect produces a fresh `McpServerConnection`. Success /
+    ///   failure status matches `connect_server`'s contract.
+    /// - The returned `McpServerConnection` is also recorded in
+    ///   the manager's `connections` map so
+    ///   `manager.connection(name)` reflects the new status.
+    pub async fn reconnect_server(
+        &self,
+        name: &str,
+        scoped_config: ScopedMcpServerConfig,
+    ) -> McpServerConnection {
+        debug!(server = name, "Reconnecting MCP server");
+        // Disconnect + drop from the map so the next connect runs
+        // from a clean slate. `disconnect_server` also refreshes
+        // the tool cache, which is redundant here (we refresh
+        // again after the reconnect), but it's cheap and keeps
+        // the tool map consistent even if the reconnect fails.
+        if self.is_connected(name).await {
+            self.disconnect_server(name).await;
+        }
+
+        let conn = self.connect_server(name, scoped_config).await;
+
+        // Best-effort tool refresh so the new session's tools are
+        // immediately visible. Mirrors the TS bundle behaviour
+        // that re-fetches tools after reconnect.
+        if matches!(conn.status, McpConnectionStatus::Connected { .. }) {
+            if let Err(e) = self.refresh_tools().await {
+                warn!(
+                    server = name,
+                    "Failed to refresh MCP tools after reconnect: {}", e
+                );
+            }
+        }
+
+        conn
+    }
+
     /// Disconnect all servers and clean up.
     pub async fn disconnect_all(&self) {
         let server_names: Vec<String> = {
@@ -481,5 +534,56 @@ mod tests {
     async fn test_resolve_tool_empty() {
         let manager = McpManager::new();
         assert!(manager.resolve_tool("mcp__server__tool").await.is_none());
+    }
+
+    // ─── G10: reconnect_server ────────────────────────────────────
+
+    /// Reconnect against a config that can't spawn (nonexistent
+    /// binary) must still return a Failed connection and leave
+    /// the manager in a clean state — not panic, not leak a
+    /// previous client handle.
+    #[tokio::test]
+    async fn reconnect_server_failed_config_returns_failed_status() {
+        let manager = McpManager::new();
+        let cfg = ScopedMcpServerConfig {
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: "/definitely/not/a/real/binary/claude_rs_test".into(),
+                args: vec![],
+                env: None,
+            }),
+            scope: ConfigScope::Project,
+        };
+
+        let conn = manager.reconnect_server("ghost", cfg).await;
+        assert!(
+            matches!(conn.status, McpConnectionStatus::Failed { .. }),
+            "unreachable binary should produce Failed status, got {:?}",
+            conn.status
+        );
+        // Manager should not be holding a client for this server.
+        assert!(!manager.is_connected("ghost").await);
+    }
+
+    /// Reconnecting an unknown server is equivalent to a fresh
+    /// connect — no panic, no "must exist first" precondition.
+    /// Mirrors TS which treats reconnect as a first-class
+    /// connect op.
+    #[tokio::test]
+    async fn reconnect_server_never_connected_proceeds_as_fresh_connect() {
+        let manager = McpManager::new();
+        let cfg = ScopedMcpServerConfig {
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: "/not/a/real/binary".into(),
+                args: vec![],
+                env: None,
+            }),
+            scope: ConfigScope::Project,
+        };
+
+        // No prior connect_server — reconnect should still work.
+        let conn = manager.reconnect_server("brand-new", cfg).await;
+        // Unreachable binary → Failed; the key assertion is that
+        // the call completed at all.
+        assert!(matches!(conn.status, McpConnectionStatus::Failed { .. }));
     }
 }
