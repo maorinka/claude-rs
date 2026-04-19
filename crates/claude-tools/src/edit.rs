@@ -171,6 +171,22 @@ Usage:
             original.replacen(old_string, new_string, 1)
         };
 
+        // Team-memory secret guard — reject edits that would leak
+        // secrets into a team-memory file. Scan the POST-EDIT content
+        // (not the original), matching the TS `checkTeamMemSecrets`
+        // call in `FileEditTool.validateInput`.
+        let cwd =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if let Some(msg) =
+            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
+                path,
+                &new_content,
+                &cwd,
+            )
+        {
+            return Ok(error_result(msg));
+        }
+
         // Ensure parent directories exist (in case of a new path -- defensive)
         if let Some(parent) = path.parent() {
             if !parent.exists() {

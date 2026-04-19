@@ -154,6 +154,24 @@ Usage:
             }
         }
 
+        // Team-memory secret guard — reject writes that would leak secrets
+        // into a team-memory file synced to all collaborators. Matches the
+        // TS `checkTeamMemSecrets` call in `FileWriteTool.validateInput`.
+        // The guard itself short-circuits when TEAMMEM is off or the path
+        // isn't a team-memory path, so calling it unconditionally is cheap.
+        let cwd =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if let Some(msg) =
+            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
+                path, content, &cwd,
+            )
+        {
+            return Ok(ToolResultData {
+                data: json!({ "error": msg }),
+                is_error: true,
+            });
+        }
+
         // Take a snapshot of the file before overwriting.
         if let Ok(mut tracker) = FILE_HISTORY.lock() {
             let _ = tracker.snapshot(path);
