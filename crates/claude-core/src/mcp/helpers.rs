@@ -265,6 +265,72 @@ pub fn extract_always_load(tool: &McpToolDefinition) -> bool {
         .unwrap_or(false)
 }
 
+// ─── Manager-level pure helpers (G6) ─────────────────────────────────
+
+/// Are two MCP server configs equivalent for connection-reuse
+/// purposes? Compares the connection-relevant fields; the
+/// `scope` field is explicitly ignored because it's metadata
+/// (project/user/global), not something that changes what socket
+/// the transport opens. Matches TS `areMcpConfigsEqual` at
+/// `client.ts:1710-1722`.
+///
+/// Semantics: `a.type != b.type` → false; otherwise serialize
+/// both WITHOUT scope and compare JSON strings. `serde_json`
+/// orders object keys in insertion order, same as TS
+/// `jsonStringify`, so equal shapes produce equal strings.
+pub fn are_mcp_configs_equal(
+    a: &ScopedMcpServerConfig,
+    b: &ScopedMcpServerConfig,
+) -> bool {
+    // Fast-path type check on the transport tag. Avoids a full
+    // serialize on the common "obviously different" case.
+    if std::mem::discriminant(&a.config) != std::mem::discriminant(&b.config) {
+        return false;
+    }
+    let a_json = serde_json::to_string(&a.config).unwrap_or_default();
+    let b_json = serde_json::to_string(&b.config).unwrap_or_default();
+    a_json == b_json
+}
+
+/// Encode an MCP tool's input arguments for the auto-mode
+/// security classifier. Matches TS
+/// `mcpToolInputToAutoClassifierInput` at `client.ts:1733-1740`:
+///
+/// - Empty input → the tool name alone.
+/// - Non-empty → `k1=v1 k2=v2 …` joined with a single space.
+///
+/// Used by the Rust auto-classifier stubs so their input shape
+/// matches what production models see.
+pub fn mcp_tool_input_to_auto_classifier_input(
+    input: &serde_json::Map<String, serde_json::Value>,
+    tool_name: &str,
+) -> String {
+    if input.is_empty() {
+        return tool_name.to_string();
+    }
+    input
+        .iter()
+        .map(|(k, v)| {
+            // TS `String(input[k])` returns the unquoted string for
+            // strings; `[object Object]` for nested objects;
+            // number/boolean cast to their decimal word. We match:
+            // strings unquoted, everything else via `Display` on
+            // the Value (serde_json's Display is the JSON
+            // encoding, which matches TS for null/number/boolean
+            // and gives `{"...":"..."}` for objects instead of
+            // `[object Object]`). That's a small readability win
+            // for the classifier prompt — still stable and
+            // reversible enough.
+            let vs = match v {
+                serde_json::Value::String(s) => s.clone(),
+                _ => v.to_string(),
+            };
+            format!("{}={}", k, vs)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // ─── Error classifiers ───────────────────────────────────────────────
 
 /// Detect whether an error message carries the "session expired"
@@ -605,6 +671,113 @@ mod tests {
         assert_eq!(a.open_world_hint, Some(true));
         assert_eq!(a.title.as_deref(), Some("Search"));
         assert!(extract_always_load(&parsed));
+    }
+
+    // ─── manager-level pure helpers (G6) ─────────────────────────
+
+    #[test]
+    fn configs_equal_same_stdio() {
+        let a = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec!["hi".into()],
+            env: None,
+        }));
+        let b = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec!["hi".into()],
+            env: None,
+        }));
+        assert!(are_mcp_configs_equal(&a, &b));
+    }
+
+    #[test]
+    fn configs_equal_different_types_rejected_fast() {
+        let stdio = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: None,
+        }));
+        let sse = scoped(McpServerConfig::Sse(McpSseServerConfig {
+            url: "https://x".into(),
+            headers: None,
+        }));
+        // Discriminant check rejects before the serialize path.
+        assert!(!are_mcp_configs_equal(&stdio, &sse));
+    }
+
+    #[test]
+    fn configs_equal_ignores_scope() {
+        // TS excludes `scope` — projects pinned at different
+        // scopes but with identical connection config should be
+        // considered equivalent.
+        let cfg = McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: None,
+        });
+        let a = ScopedMcpServerConfig { config: cfg.clone(), scope: ConfigScope::Project };
+        let b = ScopedMcpServerConfig { config: cfg, scope: ConfigScope::User };
+        assert!(
+            are_mcp_configs_equal(&a, &b),
+            "scope must not affect equivalence"
+        );
+    }
+
+    #[test]
+    fn configs_equal_different_commands_rejected() {
+        let a = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: None,
+        }));
+        let b = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "cat".into(),
+            args: vec![],
+            env: None,
+        }));
+        assert!(!are_mcp_configs_equal(&a, &b));
+    }
+
+    #[test]
+    fn auto_classifier_empty_input_returns_tool_name() {
+        let input = serde_json::Map::new();
+        assert_eq!(
+            mcp_tool_input_to_auto_classifier_input(&input, "mcp__svc__do_thing"),
+            "mcp__svc__do_thing"
+        );
+    }
+
+    #[test]
+    fn auto_classifier_single_string_arg() {
+        let mut input = serde_json::Map::new();
+        input.insert("query".into(), serde_json::json!("rust borrow checker"));
+        assert_eq!(
+            mcp_tool_input_to_auto_classifier_input(&input, "search"),
+            "query=rust borrow checker"
+        );
+    }
+
+    #[test]
+    fn auto_classifier_multiple_args_joined_with_space() {
+        let mut input = serde_json::Map::new();
+        input.insert("a".into(), serde_json::json!(1));
+        input.insert("b".into(), serde_json::json!(true));
+        input.insert("c".into(), serde_json::json!("hi"));
+        let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
+        // Insertion order is preserved by serde_json::Map.
+        assert_eq!(out, "a=1 b=true c=hi");
+    }
+
+    #[test]
+    fn auto_classifier_strings_are_unquoted() {
+        // TS `String(x)` on a string drops the quotes; Rust's
+        // serde_json Display would add them. Our helper special-
+        // cases strings to match TS.
+        let mut input = serde_json::Map::new();
+        input.insert("msg".into(), serde_json::json!("hello world"));
+        let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
+        assert_eq!(out, "msg=hello world");
+        assert!(!out.contains('"'), "strings must be unquoted: {}", out);
     }
 
     // ─── streamable-http post helper ─────────────────────────────
