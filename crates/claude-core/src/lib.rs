@@ -72,6 +72,7 @@ pub mod settings_sync;
 pub mod shell_output_limits;
 pub mod shell_quote;
 pub mod shell_quoting;
+pub mod shell_tool_utils;
 pub mod slash_command_parsing;
 pub mod string_utils;
 pub mod tagged_id;
