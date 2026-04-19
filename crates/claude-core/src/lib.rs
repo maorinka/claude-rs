@@ -32,6 +32,7 @@ pub mod env_validation;
 pub mod errors_util;
 pub mod extract_memories;
 pub mod file_history;
+pub mod find_git_root;
 pub mod fingerprint;
 pub mod fps_tracker;
 pub mod frontmatter;
