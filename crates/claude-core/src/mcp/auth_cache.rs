@@ -55,6 +55,16 @@ fn memo() -> &'static RwLock<Option<McpAuthCacheData>> {
     CELL.get_or_init(|| RwLock::new(None))
 }
 
+/// Shared test-only mutex for `CLAUDE_CONFIG_DIR`-mutating
+/// tests across the MCP auth subsystem. Sibling modules
+/// (`auth_failure::tests`) reuse this lock so their setup doesn't
+/// race auth_cache's on the shared env + on-disk cache file.
+#[cfg(test)]
+pub(crate) fn shared_test_lock() -> &'static Mutex<()> {
+    static CELL: OnceLock<Mutex<()>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(()))
+}
+
 /// Writer serialisation. Mirrors TS's `writeChain` Promise chain:
 /// concurrent `set_mcp_auth_cache_entry` calls are queued so the
 /// read-modify-write cycle never overlaps.
@@ -163,11 +173,14 @@ pub fn clear_mcp_auth_cache() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // Tests mutate CLAUDE_CONFIG_DIR + the on-disk file + the
-    // static memo — serialise across tests to keep them isolated.
-    static T_LOCK: Mutex<()> = Mutex::new(());
+    // static memo — serialise across tests (and across sibling
+    // modules like `auth_failure`) via `shared_test_lock` to
+    // keep them isolated.
+    fn t_lock() -> &'static std::sync::Mutex<()> {
+        shared_test_lock()
+    }
 
     /// Scoped override of CLAUDE_CONFIG_DIR that rewinds on drop.
     struct ConfigHomeGuard {
@@ -201,7 +214,7 @@ mod tests {
 
     #[test]
     fn missing_cache_file_reports_not_cached() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         clear_mcp_auth_cache();
         assert!(!is_mcp_auth_cached("server-a"));
@@ -209,7 +222,7 @@ mod tests {
 
     #[test]
     fn set_then_check_reports_cached() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         clear_mcp_auth_cache();
         set_mcp_auth_cache_entry("server-b");
@@ -220,7 +233,7 @@ mod tests {
 
     #[test]
     fn expired_entry_reports_not_cached() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         clear_mcp_auth_cache();
 
@@ -236,7 +249,7 @@ mod tests {
 
     #[test]
     fn set_overwrites_existing_entry_with_fresh_timestamp() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         clear_mcp_auth_cache();
 
@@ -255,7 +268,7 @@ mod tests {
 
     #[test]
     fn clear_removes_cache_file_and_invalidates_memo() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         set_mcp_auth_cache_entry("svc");
         let path = get_mcp_auth_cache_path();
@@ -269,7 +282,7 @@ mod tests {
 
     #[test]
     fn malformed_cache_file_is_treated_as_empty() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         let path = get_mcp_auth_cache_path();
         if let Some(parent) = path.parent() {
@@ -289,7 +302,7 @@ mod tests {
         // doesn't lose concurrent writes through a stale-load
         // race. (Serial write order is the only ordering
         // guarantee; final membership is the invariant.)
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         clear_mcp_auth_cache();
 
@@ -318,7 +331,7 @@ mod tests {
 
     #[test]
     fn memo_is_reused_across_reads() {
-        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = t_lock().lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, _guard) = setup_tmp_home();
         clear_mcp_auth_cache();
         set_mcp_auth_cache_entry("svc");

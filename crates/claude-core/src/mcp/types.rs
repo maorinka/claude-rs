@@ -182,6 +182,15 @@ pub enum McpConnectionStatus {
     },
     #[serde(rename = "disabled")]
     Disabled,
+    /// Server requires re-authorization (e.g. OAuth token
+    /// expired or revoked). `tengu_mcp_server_needs_auth`
+    /// telemetry fires when this status is reached; the
+    /// `mcp_auth_cache` suppresses reconnect attempts for 15
+    /// minutes so the UI doesn't repeat the same prompt.
+    /// Matches TS `'needs-auth'` status at
+    /// `services/mcp/client.ts:340-361`.
+    #[serde(rename = "needs-auth")]
+    NeedsAuth,
 }
 
 /// Full server connection state with config.
