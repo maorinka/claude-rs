@@ -10,21 +10,17 @@
 //! mirrors the TS structure and gives the rest of the MCP gap-fill
 //! tickets a single import surface.
 
-use crate::mcp::types::{McpServerConfig, McpToolDefinition, ScopedMcpServerConfig};
+use crate::mcp::types::{
+    McpServerConfig, McpToolDefinition, ScopedMcpServerConfig, MCP_CONNECTION_TIMEOUT_MS,
+    MCP_TOOL_TIMEOUT_MS,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────
-
-/// Default timeout for MCP tool calls in milliseconds. Effectively
-/// infinite — ~27.8 hours. Mirrors TS `DEFAULT_MCP_TOOL_TIMEOUT_MS`
-/// at `client.ts:211`.
-pub const DEFAULT_MCP_TOOL_TIMEOUT_MS: u64 = 100_000_000;
-
-/// Cap on MCP tool descriptions and server instructions sent to the
-/// model. OpenAPI-generated MCP servers have been observed dumping
-/// 15-60KB of endpoint docs into `tool.description`; this caps the
-/// p95 tail without losing the intent. Mirrors TS
-/// `MAX_MCP_DESCRIPTION_LENGTH` at `client.ts:218`.
-pub const MAX_MCP_DESCRIPTION_LENGTH: usize = 2048;
+//
+// `MCP_TOOL_TIMEOUT_MS`, `MAX_MCP_DESCRIPTION_LENGTH`, and
+// `MCP_CONNECTION_TIMEOUT_MS` live in `mcp::types` — re-exporting
+// here would hide the single-source-of-truth by letting callers drift
+// between `helpers::X` and `types::X`. Import where needed.
 
 /// Per-request timeout for MCP HTTP/SSE transports (ms). Applied by
 /// `wrap_fetch_with_timeout` (gap G3). Mirrors TS
@@ -66,16 +62,17 @@ fn env_usize_or(name: &str, default: usize) -> usize {
 }
 
 /// Read `MCP_TOOL_TIMEOUT` (ms); fall back to
-/// `DEFAULT_MCP_TOOL_TIMEOUT_MS`. Mirrors TS `getMcpToolTimeoutMs` at
-/// `client.ts:224-229`.
+/// `MCP_TOOL_TIMEOUT_MS` (defined in `mcp::types`). Mirrors TS
+/// `getMcpToolTimeoutMs` at `client.ts:224-229`.
 pub fn get_mcp_tool_timeout_ms() -> u64 {
-    env_u64_or("MCP_TOOL_TIMEOUT", DEFAULT_MCP_TOOL_TIMEOUT_MS)
+    env_u64_or("MCP_TOOL_TIMEOUT", MCP_TOOL_TIMEOUT_MS)
 }
 
-/// Read `MCP_TIMEOUT` (ms, connection timeout); fall back to 30s.
+/// Read `MCP_TIMEOUT` (ms, connection timeout); fall back to
+/// `MCP_CONNECTION_TIMEOUT_MS` (30_000, defined in `mcp::types`).
 /// Mirrors TS `getConnectionTimeoutMs` at `client.ts:456-458`.
 pub fn get_connection_timeout_ms() -> u64 {
-    env_u64_or("MCP_TIMEOUT", 30_000)
+    env_u64_or("MCP_TIMEOUT", MCP_CONNECTION_TIMEOUT_MS)
 }
 
 /// Read `MCP_SERVER_CONNECTION_BATCH_SIZE`; fall back to 3. Mirrors
@@ -106,6 +103,18 @@ pub fn get_remote_mcp_server_connection_batch_size() -> usize {
 /// (pending gap G17). When that lands, extend this match.
 pub fn is_local_mcp_server(config: &ScopedMcpServerConfig) -> bool {
     matches!(config.config, McpServerConfig::Stdio(_))
+}
+
+/// Deterministic cache key for a server connection: `"${name}-${json(serverRef)}"`.
+/// Mirrors TS `getServerCacheKey` at `client.ts:581-586`. The JSON
+/// serialization matches TS's `JSON.stringify(ScopedMcpServerConfig)`
+/// output because both sides use flattened config + `type`-tagged
+/// variants. Falls back to the debug form if serialization somehow
+/// fails — a cache-key collision is preferable to a panic here.
+pub fn get_server_cache_key(name: &str, server_ref: &ScopedMcpServerConfig) -> String {
+    let body = serde_json::to_string(server_ref)
+        .unwrap_or_else(|_| format!("{:?}", server_ref));
+    format!("{}-{}", name, body)
 }
 
 /// Filter for the tool list sent to the model. IDE MCP servers
@@ -170,7 +179,7 @@ mod tests {
     fn timeout_ms_falls_back_to_default() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::remove_var("MCP_TOOL_TIMEOUT");
-        assert_eq!(get_mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+        assert_eq!(get_mcp_tool_timeout_ms(), MCP_TOOL_TIMEOUT_MS);
     }
 
     #[test]
@@ -186,11 +195,11 @@ mod tests {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // TS `parseInt('0',10) || DEFAULT` returns DEFAULT (0 is falsy).
         std::env::set_var("MCP_TOOL_TIMEOUT", "0");
-        assert_eq!(get_mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+        assert_eq!(get_mcp_tool_timeout_ms(), MCP_TOOL_TIMEOUT_MS);
         std::env::set_var("MCP_TOOL_TIMEOUT", "not-a-number");
-        assert_eq!(get_mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+        assert_eq!(get_mcp_tool_timeout_ms(), MCP_TOOL_TIMEOUT_MS);
         std::env::set_var("MCP_TOOL_TIMEOUT", "");
-        assert_eq!(get_mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+        assert_eq!(get_mcp_tool_timeout_ms(), MCP_TOOL_TIMEOUT_MS);
         std::env::remove_var("MCP_TOOL_TIMEOUT");
     }
 
@@ -208,6 +217,21 @@ mod tests {
         std::env::remove_var("MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE");
         assert_eq!(get_mcp_server_connection_batch_size(), 3);
         assert_eq!(get_remote_mcp_server_connection_batch_size(), 20);
+    }
+
+    #[test]
+    fn batch_sizes_reject_zero_and_garbage() {
+        // Codex CR gap: the `usize` readers also need zero-is-falsy
+        // coverage so JS `|| DEFAULT` parity doesn't regress silently.
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("MCP_SERVER_CONNECTION_BATCH_SIZE", "0");
+        assert_eq!(get_mcp_server_connection_batch_size(), 3);
+        std::env::set_var("MCP_SERVER_CONNECTION_BATCH_SIZE", "nope");
+        assert_eq!(get_mcp_server_connection_batch_size(), 3);
+        std::env::set_var("MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE", "0");
+        assert_eq!(get_remote_mcp_server_connection_batch_size(), 20);
+        std::env::remove_var("MCP_SERVER_CONNECTION_BATCH_SIZE");
+        std::env::remove_var("MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE");
     }
 
     // ─── server predicate ────────────────────────────────────────
@@ -244,6 +268,31 @@ mod tests {
             description: None,
             input_schema: Some(serde_json::json!({})),
         }
+    }
+
+    #[test]
+    fn server_cache_key_is_name_dash_json() {
+        let cfg = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: None,
+        }));
+        let k = get_server_cache_key("foo", &cfg);
+        // Format: "<name>-<serde_json>". Exact JSON body depends on
+        // the derived Serialize but is deterministic for the same
+        // input — verify prefix + embedded type tag.
+        assert!(k.starts_with("foo-{"), "expected 'foo-{{...}}', got {}", k);
+        assert!(k.contains("\"type\":\"stdio\""));
+        assert!(k.contains("\"command\":\"echo\""));
+        // Same config → same key (caches must hit).
+        let cfg2 = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: None,
+        }));
+        assert_eq!(k, get_server_cache_key("foo", &cfg2));
+        // Different name → different key.
+        assert_ne!(k, get_server_cache_key("bar", &cfg));
     }
 
     #[test]
