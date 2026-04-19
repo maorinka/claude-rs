@@ -413,12 +413,31 @@ impl McpManager {
             // G18b: real WebSocket transport. `ws` and `ws-ide`
             // share the same `connect_ws` path — the caller
             // (this branch) assembles the auth headers per TS
-            // `client.ts:708-783`. ws-ide sends
-            // `X-Claude-Code-Ide-Authorization` when `auth_token`
-            // is set; `ws` leaves auth to user-configured headers.
+            // `client.ts:708-783`:
+            //   - Always attach `User-Agent: getMCPUserAgent()`
+            //     (TS `client.ts:711, 745`).
+            //   - `ws-ide` + `auth_token` → inject
+            //     `X-Claude-Code-Ide-Authorization: <token>`.
+            //   - `ws` → TS also injects a session-ingress
+            //     `Authorization: Bearer ...` header, but that
+            //     subsystem isn't ported yet; user-configured
+            //     `headers` pass through so callers can wire
+            //     their own bearer today.
             McpServerConfig::Ws(ref ws_config) | McpServerConfig::WsIde(ref ws_config) => {
                 let is_ide = matches!(&scoped_config.config, McpServerConfig::WsIde(_));
                 let mut headers = ws_config.headers.clone().unwrap_or_default();
+                // User-Agent: inserted only when the user
+                // hasn't supplied their own — don't stomp a
+                // caller's deliberate override.
+                let user_set_ua = headers
+                    .keys()
+                    .any(|k| k.eq_ignore_ascii_case("User-Agent"));
+                if !user_set_ua {
+                    headers.insert(
+                        "User-Agent".to_string(),
+                        crate::user_agent::get_mcp_user_agent(),
+                    );
+                }
                 if is_ide {
                     if let Some(token) = ws_config.auth_token.as_deref() {
                         headers.insert(
@@ -459,7 +478,7 @@ impl McpManager {
                             super::auth_failure::handle_remote_auth_failure(
                                 name,
                                 &scoped_config,
-                                super::auth_failure::RemoteTransportKind::Http,
+                                super::auth_failure::RemoteTransportKind::Ws,
                             )
                         } else {
                             error!(
@@ -879,7 +898,8 @@ mod tests {
         let manager = McpManager::new();
         let cfg = ScopedMcpServerConfig {
             config: McpServerConfig::Ws(McpWsServerConfig {
-                // RFC 6761 reserves `.invalid` so no DNS resolves.
+                // RFC 6761 reserves `.example` (the TLD) for
+                // documentation — resolution reliably fails.
                 url: "ws://definitely.invalid.example/mcp".into(),
                 headers: None,
                 auth_token: None,

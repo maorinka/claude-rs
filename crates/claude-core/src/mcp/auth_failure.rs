@@ -27,7 +27,12 @@ use crate::mcp::types::{McpConnectionStatus, McpServerConnection, ScopedMcpServe
 
 /// Transport flavours that can encounter a remote-auth failure.
 /// Matches the TS `'sse' | 'http' | 'claudeai-proxy'` union at
-/// `client.ts:343`.
+/// `client.ts:343`, plus the `Ws` variant added with G18b for
+/// WebSocket transports (no direct TS correspondence — TS
+/// handles `ws` / `ws-ide` auth failures inline rather than
+/// through `handleRemoteAuthFailure`, but the telemetry surface
+/// needs distinct classification on the Rust side so operators
+/// can tell `ws` failures apart from `sse` ones).
 ///
 /// `ClaudeAiProxy` isn't yet a first-class Rust `McpServerConfig`
 /// variant; it's included here so downstream auth code that
@@ -37,26 +42,33 @@ pub enum RemoteTransportKind {
     Sse,
     Http,
     ClaudeAiProxy,
+    /// G18b: WebSocket auth failures during the handshake.
+    Ws,
 }
 
 impl RemoteTransportKind {
     /// The human label used in debug logs — matches TS
-    /// `client.ts:350-354`: `SSE` / `HTTP` / `claude.ai proxy`.
+    /// `client.ts:350-354` for sse/http/claudeai-proxy; Rust
+    /// adds `"WebSocket"` for the WS case.
     pub fn label(self) -> &'static str {
         match self {
             RemoteTransportKind::Sse => "SSE",
             RemoteTransportKind::Http => "HTTP",
             RemoteTransportKind::ClaudeAiProxy => "claude.ai proxy",
+            RemoteTransportKind::Ws => "WebSocket",
         }
     }
 
     /// The analytics tag used in `tengu_mcp_server_needs_auth`.
-    /// Matches TS `transportType` string in the event payload.
+    /// Matches TS `transportType` string in the event payload
+    /// for the three TS-present kinds; WS uses `"ws"` so the
+    /// tag stays single-token like the others.
     pub fn analytics_tag(self) -> &'static str {
         match self {
             RemoteTransportKind::Sse => "sse",
             RemoteTransportKind::Http => "http",
             RemoteTransportKind::ClaudeAiProxy => "claudeai-proxy",
+            RemoteTransportKind::Ws => "ws",
         }
     }
 }
@@ -180,6 +192,16 @@ mod tests {
             RemoteTransportKind::ClaudeAiProxy.analytics_tag(),
             "claudeai-proxy"
         );
+        // G18b: WS classification, Rust-side addition.
+        assert_eq!(RemoteTransportKind::Ws.analytics_tag(), "ws");
+    }
+
+    #[test]
+    fn ws_label_is_websocket() {
+        // G18b addition: the `Ws` variant should log as
+        // "WebSocket" not "HTTP" — ensures operators see the
+        // correct transport flavour in debug logs.
+        assert_eq!(RemoteTransportKind::Ws.label(), "WebSocket");
     }
 
     #[test]
