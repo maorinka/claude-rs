@@ -391,6 +391,9 @@ pub struct McpPromptArgument {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// UI-display override for the argument label.
+    #[serde(default)]
+    pub title: Option<String>,
     #[serde(default)]
     pub required: Option<bool>,
 }
@@ -398,7 +401,7 @@ pub struct McpPromptArgument {
 /// An MCP prompt definition as returned by `prompts/list`. Named
 /// templates the server exposes as slash-commandable bodies the
 /// client can render with the provided arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpPromptDefinition {
     pub name: String,
     #[serde(default)]
@@ -410,12 +413,22 @@ pub struct McpPromptDefinition {
     pub title: Option<String>,
     #[serde(default)]
     pub arguments: Option<Vec<McpPromptArgument>>,
+    /// Optional icon set surfaced by newer MCP servers (SDK
+    /// schema `Prompt.icons`). Kept as raw JSON since consumers
+    /// decide the rendering.
+    #[serde(default)]
+    pub icons: Option<serde_json::Value>,
+    /// Arbitrary server-side metadata — the MCP schema's `_meta`
+    /// on `Prompt`. Mirrors the same field on McpToolDefinition.
+    #[serde(default, rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// One message in the response from `prompts/get`. Content is the
 /// raw MCP content block (text/image/resource/etc.); G12b's
 /// `transform_result_content` pipeline turns it into the
-/// provider-facing shape.
+/// provider-facing shape. Kept as `Value` at the transport
+/// boundary — downstream code normalises to `ContentBlock`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpPromptMessage {
     pub role: String,
@@ -428,4 +441,9 @@ pub struct McpPromptResult {
     #[serde(default)]
     pub description: Option<String>,
     pub messages: Vec<McpPromptMessage>,
+    /// Arbitrary server-side metadata — MCP schema's `_meta` on
+    /// `GetPromptResult`. Preserved so SDK consumers can still
+    /// see it.
+    #[serde(default, rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
 }

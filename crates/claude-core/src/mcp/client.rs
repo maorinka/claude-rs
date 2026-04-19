@@ -1005,15 +1005,20 @@ impl McpClient {
     pub async fn list_prompts(&self) -> Result<Vec<McpPromptDefinition>> {
         // If the server never advertised the `prompts` capability
         // during init, skip the request entirely — matches TS
-        // `if (!client.capabilities?.prompts) return []`.
-        if let Some(caps) = &self.capabilities {
-            if caps.prompts.is_none() {
-                debug!(
-                    server = self.name,
-                    "Server did not advertise prompts capability; skipping prompts/list"
-                );
-                return Ok(vec![]);
-            }
+        // `if (!client.capabilities?.prompts) return []` which
+        // short-circuits BOTH when `capabilities` itself is
+        // absent AND when `capabilities.prompts` is absent.
+        let prompts_advertised = self
+            .capabilities
+            .as_ref()
+            .and_then(|c| c.prompts.as_ref())
+            .is_some();
+        if !prompts_advertised {
+            debug!(
+                server = self.name,
+                "Server did not advertise prompts capability; skipping prompts/list"
+            );
+            return Ok(vec![]);
         }
 
         let response = self
@@ -1048,21 +1053,28 @@ impl McpClient {
 
     /// Retrieve a rendered prompt by name with arguments.
     ///
-    /// Sends a `prompts/get` request. `arguments` is a JSON object
-    /// whose keys are the argument names declared in the prompt's
-    /// definition. Returns the server's `GetPromptResult` (messages
-    /// + optional description). G8 port; TS equivalent at
+    /// Sends a `prompts/get` request. `arguments` is the
+    /// `{argName: stringValue}` map the MCP spec requires — the
+    /// schema mandates string values for every argument, so the
+    /// API type enforces that at the signature level rather than
+    /// accepting a looser `serde_json::Value` that could emit an
+    /// invalid protocol payload. Pass `None` to omit the
+    /// `arguments` field entirely.
+    ///
+    /// Returns the server's `GetPromptResult` (messages + optional
+    /// description + optional `_meta`). G8 port; TS equivalent at
     /// `services/mcp/client.ts:2077-2080` inside
     /// `getPromptForCommand`.
     pub async fn get_prompt(
         &self,
         prompt_name: &str,
-        arguments: Value,
+        arguments: Option<&HashMap<String, String>>,
     ) -> Result<McpPromptResult> {
-        let params = serde_json::json!({
-            "name": prompt_name,
-            "arguments": arguments,
-        });
+        let mut params = serde_json::json!({ "name": prompt_name });
+        if let Some(args) = arguments {
+            params["arguments"] = serde_json::to_value(args)
+                .context("Failed to serialize prompts/get arguments")?;
+        }
         let response = self.send_request(methods::PROMPTS_GET, Some(params)).await?;
 
         if let Some(result) = response.result {
@@ -1882,6 +1894,44 @@ mod tests {
         // bit.
         assert_eq!(super::methods::PROMPTS_LIST, "prompts/list");
         assert_eq!(super::methods::PROMPTS_GET, "prompts/get");
+    }
+
+    #[test]
+    fn prompt_meta_icons_and_argument_title_round_trip() {
+        // Codex CR coverage: newer MCP SDK schema defines
+        // Prompt._meta, Prompt.icons, PromptArgument.title,
+        // GetPromptResult._meta. Make sure all four survive a
+        // round-trip so the Rust struct doesn't silently drop
+        // server-provided data.
+        let wire = serde_json::json!({
+            "name": "p",
+            "icons": [{ "src": "a.png" }],
+            "_meta": { "anthropic/alwaysLoad": true },
+            "arguments": [
+                { "name": "x", "title": "X Axis" }
+            ]
+        });
+        let p: super::McpPromptDefinition =
+            serde_json::from_value(wire).expect("deserialize");
+        assert!(p.icons.is_some());
+        assert_eq!(
+            p.meta
+                .as_ref()
+                .and_then(|v| v.get("anthropic/alwaysLoad"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        let args = p.arguments.expect("arguments present");
+        assert_eq!(args[0].title.as_deref(), Some("X Axis"));
+
+        let got_result: super::McpPromptResult = serde_json::from_value(
+            serde_json::json!({
+                "messages": [],
+                "_meta": { "trace_id": "abc" }
+            }),
+        )
+        .expect("deserialize");
+        assert!(got_result.meta.is_some());
     }
 
     #[test]
