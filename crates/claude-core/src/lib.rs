@@ -75,6 +75,7 @@ pub mod teams;
 pub mod tempfile_path;
 pub mod timeouts;
 pub mod tips;
+pub mod token_budget;
 pub mod tool_names;
 pub mod tool_use_summary;
 pub mod types;
