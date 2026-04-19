@@ -23,6 +23,18 @@
 //! explicitly by callers that do have a growthbook/settings view. The
 //! pure predicates here (model matching, env gates, first-party beta
 //! gate) are fully ported and don't need that wiring.
+//!
+//! Deferred helpers
+//! ================
+//! Two TS helpers are intentionally not ported here; each is a thin
+//! one-liner whose cost is paying for a dependency graph we haven't
+//! wired:
+//!   - `getInitialAdvisorSetting()` at `advisor.ts:108-113` — reads
+//!     `getInitialSettings().advisorModel`. Port once `settings/` is
+//!     wired; the logic is `is_advisor_enabled(cfg).then(|| settings.advisor_model).flatten()`.
+//!   - `getAdvisorUsage(usage)` at `advisor.ts:115-128` — filters a
+//!     `BetaUsage.iterations` array for `type === 'advisor_message'`.
+//!     Port once the SDK `BetaUsage` shape lands on the Rust side.
 
 use crate::errors_util::is_env_truthy;
 use crate::privacy_level::{get_api_provider, ApiProvider};
