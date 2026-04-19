@@ -61,6 +61,7 @@ pub mod session_memory;
 pub mod session_url;
 pub mod settings_sync;
 pub mod shell_quote;
+pub mod shell_quoting;
 pub mod slash_command_parsing;
 pub mod string_utils;
 pub mod tagged_id;
