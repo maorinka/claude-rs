@@ -106,15 +106,19 @@ pub fn is_local_mcp_server(config: &ScopedMcpServerConfig) -> bool {
     matches!(config.config, McpServerConfig::Stdio(_))
 }
 
-/// `true` when the server is an IDE-scoped transport — currently
-/// `sse-ide`; `ws-ide` lands with G18. IDE servers have their tool
-/// list filtered through the `mcp__ide__*` allow-list
-/// (`is_included_mcp_tool`) and follow a different connection
-/// ordering in the CLI's `connect_all_respecting_auth_cache`.
-/// Matches TS `client.ts:678-783` which treats `sse-ide` /
-/// `ws-ide` as a distinct connection branch.
+/// `true` when the server is an IDE-scoped transport. Matches
+/// both `sse-ide` (G9) and `ws-ide` (G18) variants. IDE servers
+/// have their tool list filtered through the `mcp__ide__*`
+/// allow-list (`is_included_mcp_tool`) and follow a different
+/// connection ordering in the CLI's
+/// `connect_all_respecting_auth_cache`. Matches TS
+/// `client.ts:678-783` which treats `sse-ide` / `ws-ide` as a
+/// distinct connection branch.
 pub fn is_ide_mcp_server(config: &ScopedMcpServerConfig) -> bool {
-    matches!(config.config, McpServerConfig::SseIde(_))
+    matches!(
+        config.config,
+        McpServerConfig::SseIde(_) | McpServerConfig::WsIde(_)
+    )
 }
 
 // ─── HTTP request defaults ───────────────────────────────────────────
@@ -375,7 +379,7 @@ mod tests {
     use super::*;
     use crate::mcp::types::{
         ConfigScope, McpHttpServerConfig, McpServerConfig, McpSseServerConfig,
-        McpStdioServerConfig, ScopedMcpServerConfig,
+        McpStdioServerConfig, McpWsServerConfig, ScopedMcpServerConfig,
     };
     use std::sync::Mutex;
 
@@ -508,6 +512,83 @@ mod tests {
         assert!(!is_ide_mcp_server(&sse));
         assert!(!is_ide_mcp_server(&http));
         assert!(is_ide_mcp_server(&sse_ide));
+    }
+
+    #[test]
+    fn ide_server_predicate_matches_ws_ide() {
+        // G18 scaffolding: ws-ide must also classify as IDE so
+        // the tool allow-list + connection ordering apply.
+        let ws_ide = scoped(McpServerConfig::WsIde(McpWsServerConfig {
+            url: "ws://127.0.0.1:9000".into(),
+            headers: None,
+            auth_token: Some("tok".into()),
+        }));
+        assert!(is_ide_mcp_server(&ws_ide));
+        // Plain ws is NOT IDE — distinct variant.
+        let ws = scoped(McpServerConfig::Ws(McpWsServerConfig {
+            url: "wss://example.invalid".into(),
+            headers: None,
+            auth_token: None,
+        }));
+        assert!(!is_ide_mcp_server(&ws));
+    }
+
+    #[test]
+    fn local_server_ws_variants_are_not_local() {
+        let ws = scoped(McpServerConfig::Ws(McpWsServerConfig {
+            url: "ws://example.invalid".into(),
+            headers: None,
+            auth_token: None,
+        }));
+        assert!(!is_local_mcp_server(&ws));
+        let ws_ide = scoped(McpServerConfig::WsIde(McpWsServerConfig {
+            url: "ws://127.0.0.1".into(),
+            headers: None,
+            auth_token: Some("t".into()),
+        }));
+        assert!(!is_local_mcp_server(&ws_ide));
+    }
+
+    #[test]
+    fn ws_config_round_trips_with_distinct_type_tag() {
+        let cfg = McpServerConfig::Ws(McpWsServerConfig {
+            url: "wss://example.invalid".into(),
+            headers: None,
+            auth_token: None,
+        });
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"type\":\"ws\""),
+            "expected 'ws' tag in {}",
+            json
+        );
+        let back: McpServerConfig = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, McpServerConfig::Ws(_)));
+    }
+
+    #[test]
+    fn ws_ide_config_round_trips_with_auth_token_camel_case() {
+        // authToken must serialise as camelCase on the wire
+        // (matches TS's `serverRef.authToken` field name).
+        let cfg = McpServerConfig::WsIde(McpWsServerConfig {
+            url: "ws://127.0.0.1:9000".into(),
+            headers: None,
+            auth_token: Some("secret-token".into()),
+        });
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"type\":\"ws-ide\""));
+        assert!(
+            json.contains("\"authToken\":\"secret-token\""),
+            "expected camelCase 'authToken' field in {}",
+            json
+        );
+        let back: McpServerConfig = serde_json::from_str(&json).unwrap();
+        match back {
+            McpServerConfig::WsIde(ws) => {
+                assert_eq!(ws.auth_token.as_deref(), Some("secret-token"));
+            }
+            other => panic!("expected WsIde, got {:?}", other),
+        }
     }
 
     #[test]

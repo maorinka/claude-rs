@@ -64,6 +64,27 @@ pub struct McpHttpServerConfig {
     pub headers: Option<HashMap<String, String>>,
 }
 
+/// WebSocket server configuration, shared shape for `ws` and
+/// `ws-ide`. Matches TS's ws/ws-ide union (client.ts:708-783).
+///
+/// `auth_token` is the IDE-specific field TS sends as
+/// `X-Claude-Code-Ide-Authorization` for ws-ide connections
+/// (client.ts:712-714). For regular `ws` the token lives in the
+/// `Authorization` header via `session_ingress_token` wiring —
+/// not stored on the config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpWsServerConfig {
+    pub url: String,
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    /// IDE-authorization token sent as
+    /// `X-Claude-Code-Ide-Authorization` on `ws-ide`
+    /// connections only.
+    #[serde(default)]
+    pub auth_token: Option<String>,
+}
+
 /// Union of all MCP server config variants.
 /// Matches TS `McpServerConfig`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +103,19 @@ pub enum McpServerConfig {
     /// (`client.ts:678-707`).
     #[serde(rename = "sse-ide")]
     SseIde(McpSseServerConfig),
+    /// WebSocket transport (standard `ws://` or `wss://`).
+    /// Matches TS `client.ts:735-783`. Transport-level
+    /// implementation is G18b scope — config scaffolding lands
+    /// here so configs round-trip off disk and downstream
+    /// orchestration can classify the server correctly.
+    #[serde(rename = "ws")]
+    Ws(McpWsServerConfig),
+    /// IDE-scoped WebSocket — the same protocol as `ws` plus
+    /// the IDE-authorization header from `auth_token`. Same
+    /// tool allow-list + ordering semantics as `sse-ide`.
+    /// Matches TS `client.ts:708-734`.
+    #[serde(rename = "ws-ide")]
+    WsIde(McpWsServerConfig),
 }
 
 /// For backward compatibility: when `type` is omitted, default to stdio.
@@ -109,6 +143,7 @@ impl McpServerConfig {
             McpServerConfig::Sse(_) => TransportType::Sse,
             McpServerConfig::Http(_) => TransportType::Http,
             McpServerConfig::SseIde(_) => TransportType::SseIde,
+            McpServerConfig::Ws(_) | McpServerConfig::WsIde(_) => TransportType::Ws,
         }
     }
 }

@@ -410,6 +410,34 @@ impl McpManager {
                     }
                 }
             }
+            // G18: Ws/WsIde config variants round-trip off disk
+            // and drive orchestration (is_ide_mcp_server,
+            // connect_all_respecting_auth_cache), but the actual
+            // WebSocket transport isn't implemented yet (blocked
+            // on a tokio-tungstenite dep decision). Fail
+            // explicitly with the same "not yet" message for
+            // both — downstream code surfaces this in the UI
+            // instead of a silent mismatch.
+            McpServerConfig::Ws(_) | McpServerConfig::WsIde(_) => {
+                let error_msg =
+                    "WebSocket transport not yet implemented (G18b)".to_string();
+                warn!(
+                    server = name,
+                    "WebSocket MCP transport requested but not yet implemented"
+                );
+                let conn = McpServerConnection {
+                    name: name.to_string(),
+                    status: McpConnectionStatus::Failed {
+                        error: Some(error_msg),
+                    },
+                    config: scoped_config,
+                };
+                {
+                    let mut connections = self.connections.write().await;
+                    connections.insert(name.to_string(), conn.clone());
+                }
+                conn
+            }
         }
     }
 
