@@ -148,6 +148,76 @@ pub fn quote_shell_command(command: &str, add_stdin_redirect: bool) -> String {
     }
 }
 
+/// `for|while|until|if|case|select` keyword at the start of a
+/// "word" (preceded by a word-boundary, followed by
+/// whitespace). Used by the pipe-command rearranger to bail
+/// out of the shell-quote parse — those control structures
+/// confuse the parser and cause pipe boundaries inside the
+/// body to be misclassified. Matches TS `containsControlStructure`
+/// at `utils/bash/bashPipeCommand.ts:247-249`.
+static CONTROL_STRUCTURE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"\b(for|while|until|if|case|select)\s"#).unwrap());
+
+/// `\\+\n` — one or more backslashes at end-of-line followed
+/// by a newline. Used by `join_continuation_lines` to collapse
+/// bash line continuations. Matches TS
+/// `joinContinuationLines` at `utils/bash/bashPipeCommand.ts:284`.
+static CONTINUATION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"\\+\n"#).unwrap());
+
+/// Detect a bash control-structure keyword in `command` — any of
+/// `for|while|until|if|case|select` at a word boundary followed
+/// by whitespace. Used as a bail-out signal before feeding a
+/// command to the shell-quote parser; those constructs confuse
+/// the parser into misidentifying pipe boundaries inside the
+/// loop body. Matches TS `containsControlStructure`
+/// at `utils/bash/bashPipeCommand.ts:247`.
+pub fn contains_control_structure(command: &str) -> bool {
+    CONTROL_STRUCTURE_REGEX.is_match(command)
+}
+
+/// Single-quote a string for use as an `eval` argument.
+/// Embedded single quotes are escaped via `'"'"'` — close the
+/// current single-quoted segment, emit a literal quote inside
+/// a short double-quoted segment, then reopen the single-
+/// quoted segment. Matches TS `singleQuoteForEval` at
+/// `utils/bash/bashPipeCommand.ts:273-275`.
+///
+/// Preferred over `shell_quote::quote` for commands containing
+/// `'` because `quote` switches to double-quote mode when the
+/// input has single quotes and then escapes `!` to `\!`,
+/// corrupting `jq` / `awk` filters like `.x != .y`.
+pub fn single_quote_for_eval(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
+}
+
+/// Join bash line-continuation backslash-newlines into a
+/// single line. Only collapses sequences with an ODD number of
+/// backslashes before the newline — the last backslash escapes
+/// the newline. Even backslashes pair up as literal backslash-
+/// escapes and the newline stays a separator. Matches TS
+/// `joinContinuationLines` at
+/// `utils/bash/bashPipeCommand.ts:283-294`.
+pub fn join_continuation_lines(command: &str) -> String {
+    CONTINUATION_REGEX
+        .replace_all(command, |caps: &regex::Captures| {
+            let m = &caps[0];
+            // `m` is like `\\n`, `\\\\\n`, etc. The `\n` is
+            // always one byte; the backslashes fill the rest.
+            let backslash_count = m.len() - 1;
+            if backslash_count % 2 == 1 {
+                // Odd → last backslash escapes newline. Emit
+                // the pairs that paired up, drop the last
+                // backslash and the newline.
+                "\\".repeat(backslash_count - 1)
+            } else {
+                // Even → newline survives. Emit as-is.
+                m.to_string()
+            }
+        })
+        .into_owned()
+}
+
 /// Rewrite Windows CMD `>nul` redirects to POSIX `/dev/null`.
 /// TS at `shellQuoting.ts:108-128` — guards against models
 /// hallucinating Windows shell syntax inside Git Bash / WSL,
@@ -367,5 +437,92 @@ mod tests {
             rewrite_windows_null_redirect("ls >nul"),
             "ls >/dev/null"
         );
+    }
+
+    // ─── contains_control_structure ──────────────────────────────
+
+    #[test]
+    fn control_structure_matches_bash_keywords() {
+        assert!(contains_control_structure("for i in 1 2 3; do echo $i; done"));
+        assert!(contains_control_structure("while read line; do echo hi; done"));
+        assert!(contains_control_structure("until [[ $x -eq 0 ]]; do : ; done"));
+        assert!(contains_control_structure("if [[ -f file ]]; then ls; fi"));
+        assert!(contains_control_structure("case $x in a) echo a ;; esac"));
+        assert!(contains_control_structure("select opt in a b; do : ; done"));
+    }
+
+    #[test]
+    fn control_structure_rejects_plain_commands() {
+        assert!(!contains_control_structure("echo hello"));
+        assert!(!contains_control_structure("ls -la | grep foo"));
+        // Keyword embedded in a word doesn't count — word-
+        // boundary + whitespace guard.
+        assert!(!contains_control_structure("./forever"));
+        assert!(!contains_control_structure("cat /etc/forward-list"));
+    }
+
+    // ─── single_quote_for_eval ───────────────────────────────────
+
+    #[test]
+    fn single_quote_for_eval_wraps_plain_string() {
+        assert_eq!(single_quote_for_eval("echo hi"), "'echo hi'");
+    }
+
+    #[test]
+    fn single_quote_for_eval_escapes_inner_quotes() {
+        // `jq 'select(.x != .y)'` inside a single-quoted wrap
+        // becomes `'jq '"'"'select(.x != .y)'"'"''`.
+        let out = single_quote_for_eval("jq 'select(.x != .y)'");
+        assert_eq!(out, "'jq '\"'\"'select(.x != .y)'\"'\"''");
+    }
+
+    #[test]
+    fn single_quote_for_eval_preserves_bangs() {
+        // The whole reason this exists: avoid `!` → `\!`
+        // corruption that `shell_quote::quote` introduces when
+        // switching to double-quote mode.
+        let out = single_quote_for_eval(".x != .y");
+        assert_eq!(out, "'.x != .y'");
+        assert!(!out.contains("\\!"));
+    }
+
+    // ─── join_continuation_lines ─────────────────────────────────
+
+    #[test]
+    fn continuation_odd_backslashes_join() {
+        // `\<newline>` → collapse, newline swallowed.
+        let input = "echo hi \\\nthere";
+        assert_eq!(join_continuation_lines(input), "echo hi there");
+    }
+
+    #[test]
+    fn continuation_even_backslashes_preserve_newline() {
+        // `\\<newline>` → the two backslashes pair up as an
+        // escaped backslash, the newline stays a separator.
+        let input = "echo hi \\\\\nthere";
+        assert_eq!(join_continuation_lines(input), input);
+    }
+
+    #[test]
+    fn continuation_three_backslashes_join_with_one_remaining() {
+        // Three backslashes: one pair + one that escapes the
+        // newline. Result: one literal backslash, no newline.
+        let input = "echo hi \\\\\\\nthere";
+        assert_eq!(join_continuation_lines(input), "echo hi \\\\there");
+    }
+
+    #[test]
+    fn continuation_no_backslash_passthrough() {
+        assert_eq!(
+            join_continuation_lines("echo\nhello"),
+            "echo\nhello"
+        );
+    }
+
+    #[test]
+    fn continuation_multiple_lines() {
+        let input = "a \\\nb \\\nc";
+        // Two continuations → all three pieces join on one line.
+        assert_eq!(join_continuation_lines(input), "a b c");
     }
 }
