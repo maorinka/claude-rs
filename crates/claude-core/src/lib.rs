@@ -7,6 +7,7 @@ pub mod argument_substitution;
 pub mod auth;
 pub mod auto_dream;
 pub mod auto_mode_denials;
+pub mod binary_check;
 pub mod bridge;
 pub mod buddy;
 pub mod cache_paths;
