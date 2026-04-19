@@ -1205,6 +1205,14 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
         return;
     }
 
+    // Absolute wall-time cap: no matter how the per-step windows
+    // add up or how slow polling runs, the entire helper returns
+    // by this deadline. Matches TS `failsafeTimeout` at
+    // `client.ts:1467-1477` which starts a concurrent 600ms timer
+    // alongside the sequential escalation.
+    let absolute_deadline =
+        tokio::time::Instant::now() + Duration::from_millis(600);
+
     // Step 1: SIGINT (like Ctrl-C). Polite — most servers handle
     // this for graceful shutdown.
     debug!(server = name, "Sending SIGINT to MCP server process");
@@ -1218,8 +1226,15 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
         return;
     }
 
-    // Poll on 50ms granularity up to the SIGINT window (100ms).
-    if wait_for_exit(child, Duration::from_millis(100)).await {
+    // Poll on 25ms granularity up to the SIGINT window (100ms,
+    // capped by the absolute deadline).
+    if wait_for_exit_bounded(
+        child,
+        Duration::from_millis(100),
+        absolute_deadline,
+    )
+    .await
+    {
         debug!(server = name, "MCP server process exited cleanly on SIGINT");
         return;
     }
@@ -1236,9 +1251,15 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
         return;
     }
 
-    // SIGTERM window: 400ms. Combined with the 100ms SIGINT wait
-    // that's 500ms — inside the 600ms absolute failsafe.
-    if wait_for_exit(child, Duration::from_millis(400)).await {
+    // SIGTERM window: 400ms nominal; absolute_deadline may clip
+    // it short if the SIGINT step took longer than 100ms.
+    if wait_for_exit_bounded(
+        child,
+        Duration::from_millis(400),
+        absolute_deadline,
+    )
+    .await
+    {
         debug!(server = name, "MCP server process exited on SIGTERM");
         return;
     }
@@ -1253,23 +1274,34 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
             "SIGKILL kill() failed (process may be unkillable by us)"
         );
     }
-    // Give SIGKILL a small window to actually reap — the test
-    // harness otherwise races to `child.wait()` while the signal
-    // is still in flight.
-    let _ = wait_for_exit(child, Duration::from_millis(100)).await;
+    // Give SIGKILL a small window to actually reap. The absolute
+    // deadline may already be past; the bounded helper returns
+    // immediately in that case.
+    let _ =
+        wait_for_exit_bounded(child, Duration::from_millis(100), absolute_deadline)
+            .await;
 
-    // Helper: poll `child.try_wait()` every 25ms up to `timeout`.
-    // Returns true if the child exited within the window.
-    async fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+    /// Poll `child.try_wait()` every 25ms until the child exits
+    /// OR `min(now + per_step_window, absolute_deadline)` elapses.
+    /// Returns `true` if the child exited within the window.
+    async fn wait_for_exit_bounded(
+        child: &mut std::process::Child,
+        per_step_window: Duration,
+        absolute_deadline: tokio::time::Instant,
+    ) -> bool {
+        let step_deadline = tokio::time::Instant::now() + per_step_window;
+        let deadline = step_deadline.min(absolute_deadline);
         loop {
             if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
                 return true;
             }
-            if tokio::time::Instant::now() >= deadline {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
                 return false;
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            let remaining = deadline.duration_since(now);
+            let sleep_for = remaining.min(Duration::from_millis(25));
+            tokio::time::sleep(sleep_for).await;
         }
     }
 }
@@ -1651,6 +1683,41 @@ mod tests {
             "test-sigterm",
         )
         .await;
+    }
+
+    /// If the child has already exited by the time the helper is
+    /// called, the very first `libc::kill(pid, SIGINT)` returns
+    /// ESRCH and the helper short-circuits. Elapsed time must be
+    /// near-zero (single signal call + errno check, no polling).
+    #[tokio::test(flavor = "multi_thread")]
+    #[cfg(unix)]
+    async fn graceful_terminate_already_exited_short_circuits() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("true") // exits immediately, status 0
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        // Ensure the child has actually exited (and been reaped by
+        // a probe) before we call the helper.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let _ = child.try_wait();
+
+        let started = Instant::now();
+        super::graceful_terminate_stdio(&mut child, "test-already-exited").await;
+        let elapsed = started.elapsed();
+
+        // With no poll cycles required, must complete well under
+        // the SIGINT window.
+        assert!(
+            elapsed.as_millis() < 50,
+            "already-exited fast-path too slow: {}ms",
+            elapsed.as_millis()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
