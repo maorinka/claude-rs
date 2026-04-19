@@ -40,6 +40,7 @@ pub mod git_availability;
 pub mod hash;
 pub mod hooks;
 pub mod hyperlink;
+pub mod image_validation;
 pub mod jsonl;
 pub mod keybindings;
 pub mod lsp;
