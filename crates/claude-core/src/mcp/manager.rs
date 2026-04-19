@@ -825,6 +825,53 @@ mod tests {
         assert!(!manager.is_connected("ghost").await);
     }
 
+    /// G18a: Ws / WsIde currently produce a clear `Failed`
+    /// status with the "not yet implemented (G18b)" marker. Pin
+    /// the contract so G18b's wiring can't silently delete the
+    /// failure message without updating a test.
+    #[tokio::test]
+    async fn connect_server_ws_variant_returns_failed_with_g18b_marker() {
+        let manager = McpManager::new();
+        let cfg = ScopedMcpServerConfig {
+            config: McpServerConfig::Ws(McpWsServerConfig {
+                url: "ws://example.invalid".into(),
+                headers: None,
+                auth_token: None,
+            }),
+            scope: ConfigScope::Project,
+        };
+        let conn = manager.connect_server("ws-srv", cfg).await;
+        match conn.status {
+            McpConnectionStatus::Failed { error: Some(msg) } => {
+                assert!(
+                    msg.contains("G18b"),
+                    "ws variant must surface the G18b marker so its \
+                     replacement is traceable; got {}",
+                    msg
+                );
+            }
+            other => panic!("expected Failed with error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_server_ws_ide_returns_failed_with_g18b_marker() {
+        let manager = McpManager::new();
+        let cfg = ScopedMcpServerConfig {
+            config: McpServerConfig::WsIde(McpWsServerConfig {
+                url: "ws://127.0.0.1:9000".into(),
+                headers: None,
+                auth_token: Some("tok".into()),
+            }),
+            scope: ConfigScope::Project,
+        };
+        let conn = manager.connect_server("ws-ide-srv", cfg).await;
+        assert!(
+            matches!(conn.status, McpConnectionStatus::Failed { .. }),
+            "ws-ide must also route through the Failed fallback"
+        );
+    }
+
     // ─── G11: connect_all_respecting_auth_cache ───────────────────
 
     /// Empty config map → empty result, no panic, tool refresh

@@ -72,6 +72,18 @@ pub struct McpHttpServerConfig {
 /// (client.ts:712-714). For regular `ws` the token lives in the
 /// `Authorization` header via `session_ingress_token` wiring —
 /// not stored on the config.
+///
+/// # TS shape divergence note
+/// TS models `ws` with an optional `headers` map (user-configured
+/// via `combinedHeaders`) and `ws-ide` with ONLY `url + authToken`
+/// (the wire headers are transport-derived: `User-Agent` +
+/// `X-Claude-Code-Ide-Authorization`). The Rust shape is shared,
+/// so `ws-ide` configs round-trip a `headers` field TS doesn't
+/// recognise. **G18b TODO**: when the real WebSocket transport
+/// lands, either split into two structs or ignore `headers` on
+/// `ws-ide` at connect time to match TS. Keeping the shared
+/// shape for now so config files with a common structure still
+/// parse cleanly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpWsServerConfig {
