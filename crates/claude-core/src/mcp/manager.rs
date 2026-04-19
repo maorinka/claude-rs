@@ -179,14 +179,31 @@ impl McpManager {
                     }
                     Err(e) => {
                         let error_msg = format!("{:#}", e);
-                        error!(server = name, error = %error_msg, "Failed to connect to MCP SSE server");
-
-                        let conn = McpServerConnection {
-                            name: name.to_string(),
-                            status: McpConnectionStatus::Failed {
-                                error: Some(error_msg),
-                            },
-                            config: scoped_config,
+                        // G16 wiring: classify connect-time 401s
+                        // as NeedsAuth (populates the auth cache +
+                        // fires telemetry) instead of a generic
+                        // Failed status. Matches TS's
+                        // `handleRemoteAuthFailure` branch at
+                        // `client.ts:340-361`.
+                        let conn = if looks_like_auth_failure(&error_msg) {
+                            super::auth_failure::handle_remote_auth_failure(
+                                name,
+                                &scoped_config,
+                                super::auth_failure::RemoteTransportKind::Sse,
+                            )
+                        } else {
+                            error!(
+                                server = name,
+                                error = %error_msg,
+                                "Failed to connect to MCP SSE server"
+                            );
+                            McpServerConnection {
+                                name: name.to_string(),
+                                status: McpConnectionStatus::Failed {
+                                    error: Some(error_msg),
+                                },
+                                config: scoped_config,
+                            }
                         };
 
                         {
@@ -229,14 +246,25 @@ impl McpManager {
                     }
                     Err(e) => {
                         let error_msg = format!("{:#}", e);
-                        error!(server = name, error = %error_msg, "Failed to connect to MCP HTTP server");
-
-                        let conn = McpServerConnection {
-                            name: name.to_string(),
-                            status: McpConnectionStatus::Failed {
-                                error: Some(error_msg),
-                            },
-                            config: scoped_config,
+                        let conn = if looks_like_auth_failure(&error_msg) {
+                            super::auth_failure::handle_remote_auth_failure(
+                                name,
+                                &scoped_config,
+                                super::auth_failure::RemoteTransportKind::Http,
+                            )
+                        } else {
+                            error!(
+                                server = name,
+                                error = %error_msg,
+                                "Failed to connect to MCP HTTP server"
+                            );
+                            McpServerConnection {
+                                name: name.to_string(),
+                                status: McpConnectionStatus::Failed {
+                                    error: Some(error_msg),
+                                },
+                                config: scoped_config,
+                            }
                         };
 
                         {
@@ -250,6 +278,15 @@ impl McpManager {
             }
         }
     }
+
+    // `looks_like_auth_failure` is an internal helper used by
+    // connect_server to classify a connect-time error as auth
+    // failure vs generic failure. Same pattern matching as
+    // `classify_call_tool_error` in client.rs, but used during
+    // the connect handshake where typed errors aren't flowing
+    // through anyhow::downcast.
+    // (Defined below, after the impl block, since it has no
+    // reason to take `&self`.)
 
     /// Refresh the cached tool definitions from all connected servers.
     pub async fn refresh_tools(&self) -> Result<()> {
@@ -518,6 +555,17 @@ impl Default for McpManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Does this connect error look like an authentication failure
+/// rather than a generic transport error? Case-insensitive match
+/// on `"HTTP 401"` / `"unauthorized"` — same patterns as
+/// `classify_call_tool_error` in `mcp::client` uses after a
+/// tool-call error. Used by `connect_server` to flip remote
+/// transport connect failures into `NeedsAuth` status via G16's
+/// `handle_remote_auth_failure`.
+fn looks_like_auth_failure(msg: &str) -> bool {
+    msg.contains("HTTP 401") || msg.to_ascii_lowercase().contains("unauthorized")
 }
 
 #[cfg(test)]
