@@ -362,10 +362,14 @@ impl McpClient {
                 Err(e) => {
                     let msg = e.to_string();
                     debug!(server = server_name, "SSE connection failed: {}", msg);
-                    // Connection-setup failures skip the counter
-                    // (one-off, not a reconnect-eligible flap) but
-                    // still record so downstream staleness checks
-                    // see the tracker in a consistent state.
+                    // Connection-setup failures are fed through
+                    // `record_error` like any other error. If the
+                    // message matches a terminal-substring (e.g. a
+                    // connect-level ETIMEDOUT), the counter will
+                    // tick; a non-terminal setup failure (e.g. a
+                    // generic `reqwest` send error) will not. This
+                    // mirrors TS, whose onerror handler treats
+                    // setup and mid-stream errors the same way.
                     let _ = lifecycle_clone.lock().await.record_error(&msg);
                 }
             }
@@ -790,6 +794,16 @@ impl McpClient {
                 message_url,
                 ..
             } => {
+                // G4b: honour the transport-closed contract for
+                // notifications too. A dead transport should fail
+                // outbound traffic fast, not attempt network I/O.
+                if self.lifecycle.lock().await.has_triggered_close() {
+                    return Err(anyhow!(
+                        "MCP SSE server '{}' transport closed (reconnect required)",
+                        self.name
+                    ));
+                }
+
                 let msg_url = {
                     let mu = message_url.lock().await;
                     mu.clone().ok_or_else(|| {
@@ -822,6 +836,16 @@ impl McpClient {
                 headers,
                 session_id,
             } => {
+                // G4b: same closed-transport short-circuit as the
+                // SSE branch — prevents POSTs to a server we've
+                // already declared dead.
+                if self.lifecycle.lock().await.has_triggered_close() {
+                    return Err(anyhow!(
+                        "MCP HTTP server '{}' transport closed (reconnect required)",
+                        self.name
+                    ));
+                }
+
                 let mut req = mcp_streamable_http_post(http, url, headers.as_ref())
                     .header("content-type", "application/json");
                 if let Some(hdrs) = headers {
