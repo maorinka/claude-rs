@@ -248,3 +248,57 @@ async fn guard_skips_writes_outside_team_memory() {
         "non-team-path writes must skip the guard"
     );
 }
+
+/// After a FileWrite, the stored `read_file_state.content` must be
+/// the exact `content` argument (not LF-normalised) — matches TS
+/// `FileWriteTool.ts:331` which stores the raw value passed to
+/// `writeTextContent`. Staleness correctness is preserved because
+/// `check_file_staleness` normalises both sides before comparing.
+#[tokio::test]
+async fn test_write_stores_raw_content_in_read_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = FileWriteTool;
+    let ctx = make_ctx(tmp.path());
+    let file_path = tmp.path().join("stored.txt").to_string_lossy().to_string();
+    let content = "a\r\nb\r\nc";
+
+    let result = call_tool(
+        &tool,
+        json!({ "file_path": file_path, "content": content }),
+        &ctx,
+    )
+    .await;
+    assert!(!result.is_error);
+
+    let state = ctx.read_file_state.lock().unwrap();
+    let entry = state.get(&file_path).expect("read state must be populated");
+    assert_eq!(
+        entry.content.as_deref(),
+        Some(content),
+        "stored content must match raw `content` arg, not an LF-normalised copy"
+    );
+}
+
+/// An empty-string write should store `Some("")` in the read-state,
+/// not `None` — staleness behaviour must differentiate a write we
+/// just performed (even if it wrote no bytes) from a never-seen file.
+#[tokio::test]
+async fn test_write_empty_content_stores_some_empty_string() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = FileWriteTool;
+    let ctx = make_ctx(tmp.path());
+    let file_path = tmp.path().join("blank.txt").to_string_lossy().to_string();
+
+    let result = call_tool(
+        &tool,
+        json!({ "file_path": file_path, "content": "" }),
+        &ctx,
+    )
+    .await;
+    assert!(!result.is_error);
+
+    let state = ctx.read_file_state.lock().unwrap();
+    let entry = state.get(&file_path).expect("entry must exist");
+    assert_eq!(entry.content.as_deref(), Some(""));
+    assert!(!entry.is_partial_view);
+}

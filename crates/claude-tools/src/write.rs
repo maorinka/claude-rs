@@ -208,11 +208,13 @@ Usage:
             .with_context(|| format!("failed to write file: {file_path}"))?;
 
         // Update read state after successful write so subsequent writes are not rejected.
-        // Store the LF-normalised form — `check_file_staleness` normalises both sides
-        // before comparing, so stored content must be in LF to avoid a spurious
-        // mismatch when the disk copy is CRLF.
+        // Store the raw `content` that was written — matches TS `FileWriteTool.ts:331`
+        // which stores the argument passed to `writeTextContent` without
+        // LF-normalisation. `check_file_staleness` at write.rs:73-78 normalises both
+        // sides before comparing, so storage-form doesn't affect correctness; this
+        // keeps exact TS storage parity.
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            state.update_after_write(file_path, Some(content.replace("\r\n", "\n")));
+            state.update_after_write(file_path, Some(content.to_string()));
         }
 
         let data = json!({

@@ -29,33 +29,43 @@ pub enum LineEndings {
     Crlf,
 }
 
-/// Maximum sample size for line-ending detection. Matches TS
-/// `readFileSyncWithMetadata` which samples `raw.slice(0, 4096)` at
-/// `fileRead.ts:92`; without a cap, Rust and TS disagree on files
-/// whose dominant ending flips past the first 4KB.
-const LINE_ENDING_SAMPLE_BYTES: usize = 4096;
+/// Maximum sample size for line-ending detection, measured in
+/// UTF-16 code units to match TS `raw.slice(0, 4096)` at
+/// `fileRead.ts:92`. JS strings index by UTF-16 code unit, so
+/// capping on UTF-8 bytes would diverge on content that mixes
+/// many 2-byte UTF-8 chars (Cyrillic, most Asian scripts) near
+/// the boundary: TS's 4096-unit window reaches further into the
+/// byte stream than a 4096-byte cap would.
+const LINE_ENDING_SAMPLE_UTF16_UNITS: u32 = 4096;
 
-/// Count every `\n` in the first `LINE_ENDING_SAMPLE_BYTES` of
-/// `content`; tally `\r\n` when the `\n` is preceded by `\r`,
-/// otherwise LF. Byte-for-byte port of TS
-/// `detectLineEndingsForString` applied to a 4096-unit prefix. Ties
-/// go to `Lf` (TS uses `crlfCount > lfCount`). Since `\r` / `\n` are
-/// single-byte ASCII, capping on UTF-8 bytes is safe even if the
-/// cap falls inside a multi-byte character — a continuation byte
-/// can never be `\r` or `\n`.
+/// Walk `content` scalar-by-scalar, accumulating UTF-16 code-unit
+/// positions; stop once the *starting* position of the next char
+/// reaches `LINE_ENDING_SAMPLE_UTF16_UNITS`. Tally `\n` as LF, or
+/// CRLF when preceded by `\r`. Byte-for-byte port of TS
+/// `detectLineEndingsForString` applied to the sliced prefix —
+/// since `\r` and `\n` are BMP single-unit scalars, a TS slice
+/// that cuts mid-surrogate-pair never exposes a lone surrogate
+/// that could be mistaken for a line terminator, so walking by
+/// Rust scalars gives identical counts. Ties go to `Lf`
+/// (`crlfCount > lfCount`).
 pub fn detect_line_endings(content: &str) -> LineEndings {
-    let bytes = content.as_bytes();
-    let end = bytes.len().min(LINE_ENDING_SAMPLE_BYTES);
     let mut crlf = 0usize;
     let mut lf = 0usize;
-    for i in 0..end {
-        if bytes[i] == b'\n' {
-            if i > 0 && bytes[i - 1] == b'\r' {
+    let mut prev_is_cr = false;
+    let mut pos_u16: u32 = 0;
+    for c in content.chars() {
+        if pos_u16 >= LINE_ENDING_SAMPLE_UTF16_UNITS {
+            break;
+        }
+        if c == '\n' {
+            if prev_is_cr {
                 crlf += 1;
             } else {
                 lf += 1;
             }
         }
+        prev_is_cr = c == '\r';
+        pos_u16 += c.len_utf16() as u32;
     }
     if crlf > lf {
         LineEndings::Crlf
@@ -345,20 +355,58 @@ mod tests {
     }
 
     #[test]
-    fn detect_endings_caps_at_4096_bytes() {
-        // First 4096 bytes are pure LF; anything beyond should not
-        // be counted. TS samples `raw.slice(0, 4096)` at
+    fn detect_endings_caps_at_4096_utf16_units() {
+        // First 4096 code units are pure LF; anything beyond should
+        // not be counted. TS samples `raw.slice(0, 4096)` at
         // fileRead.ts:92.
         let mut s = String::with_capacity(8192);
         for _ in 0..4000 {
-            s.push_str("x\n"); // 4000 LFs in first 8000 bytes → first 4096 bytes see ~2048 LFs
+            s.push_str("x\n"); // ASCII: 1 byte = 1 UTF-16 unit
         }
         // Append enough CRLF to dominate if we scanned the whole buffer.
         for _ in 0..4000 {
             s.push_str("x\r\n");
         }
-        // With the cap: LFs in first 4096 bytes >> any CRLF, so Lf.
+        // With the cap: LFs in first 4096 units dominate, so Lf.
         assert_eq!(detect_line_endings(&s), LineEndings::Lf);
+    }
+
+    #[test]
+    fn detect_endings_cap_is_utf16_not_bytes() {
+        // Regression for codex CR finding: byte-capping at 4096
+        // would miss `\r\n` that TS's UTF-16 code-unit slice still
+        // includes. Build content where a CRLF majority falls
+        // between byte 4096 and UTF-16 unit 4096 — i.e. after the
+        // byte-cap but before the code-unit-cap. 2-byte UTF-8 chars
+        // (U+00E4 'ä': 2 bytes = 1 UTF-16 unit) double the byte
+        // stride relative to the code-unit stride.
+        let mut s = String::new();
+        // 5 bare LFs so the baseline favours Lf (5 > any CRLF count
+        // that a byte-cap would see, which is 0).
+        for _ in 0..5 {
+            s.push('\n');
+        }
+        // Pad with 'ä' until we're ~4090 bytes / ~2045 units in
+        // (stay inside a byte-cap's window so the LFs alone would
+        // still tip it to Lf with no CRLFs).
+        for _ in 0..2045 {
+            s.push('ä'); // 2 bytes, 1 UTF-16 unit
+        }
+        // Now place 6 CRLFs, each separated by an 'ä'. First CRLF
+        // starts at byte ~4095 / unit ~2050 — outside the byte cap
+        // (4096) but well inside the code-unit cap (4096).
+        for _ in 0..6 {
+            s.push('ä');
+            s.push_str("\r\n");
+        }
+        // TS (code-unit cap): sees all 6 CRLFs + 5 LFs → Crlf.
+        // Byte-cap (old Rust): sees 0 CRLFs + 5 LFs → Lf (wrong).
+        assert_eq!(
+            detect_line_endings(&s),
+            LineEndings::Crlf,
+            "UTF-16 code-unit cap must match TS `raw.slice(0, 4096)`; \
+             byte-capping would miss CRLFs beyond byte 4096"
+        );
     }
 
     #[test]
