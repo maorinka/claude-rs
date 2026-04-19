@@ -45,6 +45,7 @@ pub mod jsonl;
 pub mod keybindings;
 pub mod lsp;
 pub mod magic_docs;
+pub mod managed_env_constants;
 pub mod managed_path;
 pub mod markdown_config_loader;
 pub mod mcp;
