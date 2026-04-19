@@ -48,6 +48,18 @@ enum McpTransport {
 /// The MCP protocol uses JSON-RPC 2.0 messages. For stdio, these are sent
 /// over stdin/stdout of a spawned subprocess. For SSE/HTTP, they are sent
 /// via HTTP POST requests.
+/// Handler for a server-initiated JSON-RPC request. Returns the
+/// `result` payload on success, or a `JsonRpcError` to surface a
+/// structured error back to the server.
+///
+/// Registered via `McpClient::set_request_handler`. Ports the TS
+/// `client.setRequestHandler(Schema, async request => ...)` pattern
+/// at `services/mcp/client.ts:1009-1018` and `:1191-1197`. Handlers
+/// are `Send + Sync` so the reader task (which may dispatch from a
+/// blocking thread) can clone-invoke them.
+pub type RequestHandler =
+    Arc<dyn Fn(Option<Value>) -> Result<Value, JsonRpcError> + Send + Sync>;
+
 pub struct McpClient {
     /// Name of this server (for logging and identification).
     name: String,
@@ -61,6 +73,12 @@ pub struct McpClient {
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
     /// Monotonically increasing request ID counter.
     next_id: Arc<AtomicU64>,
+    /// Inbound request handlers keyed by JSON-RPC method name. Ports
+    /// TS `client.setRequestHandler` at
+    /// `services/mcp/client.ts:1009,1191`. Currently dispatched only
+    /// for the stdio reader; SSE/HTTP dispatch is a follow-up
+    /// ticket.
+    request_handlers: Arc<Mutex<HashMap<String, RequestHandler>>>,
     /// Server capabilities received during initialization.
     capabilities: Option<ServerCapabilities>,
     /// Server info received during initialization.
@@ -113,9 +131,25 @@ impl McpClient {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
+        let request_handlers: Arc<Mutex<HashMap<String, RequestHandler>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // Pre-register the two default handlers from TS
+        // `client.ts:1009,1191` before the reader starts so the first
+        // inbound `roots/list` or `elicitation/create` finds them.
+        {
+            let mut h = request_handlers.lock().await;
+            h.insert("roots/list".to_string(), default_roots_list_handler());
+            h.insert(
+                "elicitation/create".to_string(),
+                default_elicitation_cancel_handler(),
+            );
+        }
 
-        // Start reader task to process responses from the server
+        // Start reader task to process messages (responses + inbound
+        // requests + notifications) from the server.
         let pending_clone = pending.clone();
+        let handlers_clone = request_handlers.clone();
+        let writer_clone = writer.clone();
         let server_name = name.to_string();
         let reader_handle = tokio::task::spawn_blocking(move || {
             let reader = BufReader::new(stdout);
@@ -126,31 +160,13 @@ impl McpClient {
                         if line.is_empty() {
                             continue;
                         }
-                        match serde_json::from_str::<JsonRpcResponse>(&line) {
-                            Ok(response) => {
-                                let pending = pending_clone.clone();
-                                // Use try_lock to avoid blocking; if we can't acquire the lock
-                                // immediately, spawn a task to complete the operation.
-                                let rt = tokio::runtime::Handle::try_current();
-                                if let Ok(rt) = rt {
-                                    rt.spawn(async move {
-                                        let mut pending = pending.lock().await;
-                                        if let Some(sender) = pending.remove(&response.id) {
-                                            let _ = sender.send(response);
-                                        }
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                // Might be a notification (no id field) - that's ok
-                                debug!(
-                                    server = server_name,
-                                    "Non-response message from MCP server: {} (parse error: {})",
-                                    line,
-                                    e
-                                );
-                            }
-                        }
+                        dispatch_inbound_line(
+                            &line,
+                            &server_name,
+                            pending_clone.clone(),
+                            handlers_clone.clone(),
+                            writer_clone.clone(),
+                        );
                     }
                     Err(e) => {
                         debug!(server = server_name, "MCP server stdout read error: {}", e);
@@ -168,6 +184,7 @@ impl McpClient {
             writer,
             pending,
             next_id,
+            request_handlers,
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -307,6 +324,9 @@ impl McpClient {
             writer,
             pending,
             next_id,
+            // SSE inbound-request dispatch is deferred; the map
+            // holds defaults for API parity with stdio.
+            request_handlers: default_request_handlers().await,
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -345,6 +365,9 @@ impl McpClient {
             writer,
             pending,
             next_id,
+            // HTTP inbound-request dispatch is deferred; the map
+            // holds defaults for API parity with stdio.
+            request_handlers: default_request_handlers().await,
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -995,6 +1018,211 @@ pub fn normalize_mcp_name(name: &str) -> String {
         .collect()
 }
 
+// ─── Inbound request dispatch (G20) ──────────────────────────────────
+
+/// Build the default inbound-request handler map. Two defaults are
+/// registered, matching TS `client.setRequestHandler` calls at
+/// `services/mcp/client.ts:1009,1191`:
+///   - `roots/list` → `{"roots": [{"uri": "file://<cwd>"}]}`
+///   - `elicitation/create` → `{"action": "cancel"}`
+///
+/// Callers can override either via `McpClient::set_request_handler`
+/// before the server issues its first inbound request.
+async fn default_request_handlers() -> Arc<Mutex<HashMap<String, RequestHandler>>> {
+    let map = Arc::new(Mutex::new(HashMap::new()));
+    {
+        let mut guard = map.lock().await;
+        guard.insert("roots/list".to_string(), default_roots_list_handler());
+        guard.insert(
+            "elicitation/create".to_string(),
+            default_elicitation_cancel_handler(),
+        );
+    }
+    map
+}
+
+/// Default handler for `roots/list`: reports the current working
+/// directory as the sole root. TS at `client.ts:1009-1018` uses
+/// `getOriginalCwd()`; Rust uses `std::env::current_dir()` with a
+/// `"."` fallback so the handler can never panic on an unreadable
+/// cwd.
+fn default_roots_list_handler() -> RequestHandler {
+    Arc::new(|_params| {
+        let cwd = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let uri = format!("file://{}", cwd.display());
+        Ok(serde_json::json!({ "roots": [ { "uri": uri } ] }))
+    })
+}
+
+/// Default elicitation handler: cancel. TS at `client.ts:1191-1197`
+/// registers this immediately after `initialize` so any server
+/// elicitation arriving before `registerElicitationHandler` runs
+/// gets a clean `cancel` rather than hanging.
+fn default_elicitation_cancel_handler() -> RequestHandler {
+    Arc::new(|_params| Ok(serde_json::json!({ "action": "cancel" })))
+}
+
+/// Classify an inbound JSON-RPC line and dispatch it appropriately.
+///
+/// - Response (`result` / `error` + `id`): forward to `pending` to
+///   wake the waiting `send_request`.
+/// - Inbound request (`method` + `id`): look up the handler, call
+///   it, and write a JSON-RPC response back via `writer`. This is
+///   the G20 path; TS handles it inside the MCP SDK's `setRequestHandler`.
+/// - Notification (`method`, no `id`): log and drop.
+///
+/// Errors at any stage are debug-logged — a misbehaving server must
+/// never poison the reader loop.
+fn dispatch_inbound_line(
+    line: &str,
+    server_name: &str,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
+    handlers: Arc<Mutex<HashMap<String, RequestHandler>>>,
+    writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+) {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            debug!(
+                server = server_name,
+                "Unparseable MCP line (dropped): {} ({})", line, e
+            );
+            return;
+        }
+    };
+
+    let has_result = value.get("result").is_some() || value.get("error").is_some();
+    let method = value.get("method").and_then(|m| m.as_str()).map(String::from);
+    let id = value.get("id").and_then(|i| i.as_u64());
+
+    let rt = match tokio::runtime::Handle::try_current() {
+        Ok(rt) => rt,
+        Err(_) => {
+            debug!(
+                server = server_name,
+                "Reader has no tokio runtime; dropping message: {}", line
+            );
+            return;
+        }
+    };
+
+    // Response path — takes precedence when both `id` and a
+    // result/error field are present.
+    if has_result {
+        if let Ok(resp) = serde_json::from_value::<JsonRpcResponse>(value.clone()) {
+            rt.spawn(async move {
+                let mut pending = pending.lock().await;
+                if let Some(sender) = pending.remove(&resp.id) {
+                    let _ = sender.send(resp);
+                }
+            });
+            return;
+        }
+    }
+
+    // Inbound-request path — `method` + `id` together.
+    if let (Some(m), Some(request_id)) = (method.as_deref(), id) {
+        let m = m.to_string();
+        let params = value.get("params").cloned();
+        let server_name_owned = server_name.to_string();
+        rt.spawn(async move {
+            let handler = {
+                let guard = handlers.lock().await;
+                guard.get(&m).cloned()
+            };
+            let response = match handler {
+                Some(h) => match h(params) {
+                    Ok(result) => JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request_id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(err) => JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request_id,
+                        result: None,
+                        error: Some(err),
+                    },
+                },
+                None => {
+                    // JSON-RPC "method not found" (-32601).
+                    JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request_id,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: -32601,
+                            message: format!("method not found: {}", m),
+                            data: None,
+                        }),
+                    }
+                }
+            };
+
+            let line = match serde_json::to_string(&response) {
+                Ok(s) => s,
+                Err(e) => {
+                    debug!(
+                        server = server_name_owned,
+                        "Failed to serialize response: {}", e
+                    );
+                    return;
+                }
+            };
+            let mut w = writer.lock().await;
+            if let Some(ref mut w) = *w {
+                if let Err(e) = writeln!(w, "{}", line) {
+                    debug!(
+                        server = server_name_owned,
+                        "Failed to write inbound response: {}", e
+                    );
+                }
+                let _ = w.flush();
+            }
+        });
+        return;
+    }
+
+    // Notification path (`method` only, no id). TS drops these too
+    // unless a notification handler is registered — not part of G20.
+    if method.is_some() {
+        debug!(server = server_name, "Ignoring server notification: {}", line);
+        return;
+    }
+
+    debug!(
+        server = server_name,
+        "Unrecognised MCP message (dropped): {}", line
+    );
+}
+
+impl McpClient {
+    /// Register or replace the inbound-request handler for `method`.
+    /// Ports TS `client.setRequestHandler(Schema, handler)` at
+    /// `services/mcp/client.ts:1009`.
+    ///
+    /// The handler receives the `params` field (`None` if absent) and
+    /// returns either the `result` payload or a structured
+    /// `JsonRpcError`. Call this BEFORE the server would plausibly
+    /// issue an inbound request of this method; for defaults like
+    /// `roots/list` the client pre-registers them during
+    /// `connect_stdio` so callers only need this method to override.
+    ///
+    /// SSE/HTTP transports currently accept registrations for API
+    /// parity but do not yet dispatch inbound requests (handler
+    /// runs only for stdio). Dispatch for those transports is a
+    /// follow-up ticket.
+    pub async fn set_request_handler<F>(&self, method: impl Into<String>, handler: F)
+    where
+        F: Fn(Option<Value>) -> Result<Value, JsonRpcError> + Send + Sync + 'static,
+    {
+        let mut guard = self.request_handlers.lock().await;
+        guard.insert(method.into(), Arc::new(handler));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1020,5 +1248,39 @@ mod tests {
         assert_eq!(normalize_mcp_name("with spaces"), "with_spaces");
         assert_eq!(normalize_mcp_name("UPPER"), "UPPER");
         assert_eq!(normalize_mcp_name("mix123"), "mix123");
+    }
+
+    // ─── G20: inbound request dispatch ──────────────────────────────
+
+    #[test]
+    fn default_roots_list_handler_returns_cwd_uri() {
+        let h = default_roots_list_handler();
+        let out = h(None).expect("default handler must succeed");
+        let roots = out.get("roots").and_then(|r| r.as_array()).unwrap();
+        assert_eq!(roots.len(), 1);
+        let uri = roots[0].get("uri").and_then(|u| u.as_str()).unwrap();
+        assert!(
+            uri.starts_with("file://"),
+            "uri must be a file:// URI, got {}",
+            uri
+        );
+    }
+
+    #[test]
+    fn default_elicitation_handler_returns_cancel() {
+        let h = default_elicitation_cancel_handler();
+        let out = h(None).expect("default handler must succeed");
+        assert_eq!(
+            out.get("action").and_then(|a| a.as_str()),
+            Some("cancel")
+        );
+    }
+
+    #[tokio::test]
+    async fn default_request_handlers_contains_both_defaults() {
+        let map = default_request_handlers().await;
+        let guard = map.lock().await;
+        assert!(guard.contains_key("roots/list"));
+        assert!(guard.contains_key("elicitation/create"));
     }
 }
