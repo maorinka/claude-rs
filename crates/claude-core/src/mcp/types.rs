@@ -75,6 +75,13 @@ pub enum McpServerConfig {
     Sse(McpSseServerConfig),
     #[serde(rename = "http")]
     Http(McpHttpServerConfig),
+    /// IDE-scoped SSE transport. Wire-identical to `sse` but
+    /// marked distinct so downstream code can apply the
+    /// `mcp__ide__*` tool allow-list (G1 `is_included_mcp_tool`)
+    /// and the connection ordering TS uses for IDE servers
+    /// (`client.ts:678-707`).
+    #[serde(rename = "sse-ide")]
+    SseIde(McpSseServerConfig),
 }
 
 /// For backward compatibility: when `type` is omitted, default to stdio.
@@ -101,6 +108,7 @@ impl McpServerConfig {
             McpServerConfig::Stdio(_) => TransportType::Stdio,
             McpServerConfig::Sse(_) => TransportType::Sse,
             McpServerConfig::Http(_) => TransportType::Http,
+            McpServerConfig::SseIde(_) => TransportType::SseIde,
         }
     }
 }

@@ -91,8 +91,9 @@ pub fn get_remote_mcp_server_connection_batch_size() -> usize {
 // ─── Server / tool predicates ────────────────────────────────────────
 
 /// `true` when the server is in-process (stdio or future `sdk`
-/// variant). Remote transports (SSE, Streamable HTTP, WS) return
-/// `false`. Mirrors TS `isLocalMcpServer` at `client.ts:563-565`.
+/// variant). Remote transports (SSE, Streamable HTTP, WS,
+/// sse-ide, ws-ide) return `false`. Mirrors TS
+/// `isLocalMcpServer` at `client.ts:563-565`.
 ///
 /// TS also accepts `type === undefined` as local (stdio is the
 /// default). The Rust port encodes transport as a required enum
@@ -103,6 +104,17 @@ pub fn get_remote_mcp_server_connection_batch_size() -> usize {
 /// (pending gap G17). When that lands, extend this match.
 pub fn is_local_mcp_server(config: &ScopedMcpServerConfig) -> bool {
     matches!(config.config, McpServerConfig::Stdio(_))
+}
+
+/// `true` when the server is an IDE-scoped transport — currently
+/// `sse-ide`; `ws-ide` lands with G18. IDE servers have their tool
+/// list filtered through the `mcp__ide__*` allow-list
+/// (`is_included_mcp_tool`) and follow a different connection
+/// ordering in the CLI's `connect_all_respecting_auth_cache`.
+/// Matches TS `client.ts:678-783` which treats `sse-ide` /
+/// `ws-ide` as a distinct connection branch.
+pub fn is_ide_mcp_server(config: &ScopedMcpServerConfig) -> bool {
+    matches!(config.config, McpServerConfig::SseIde(_))
 }
 
 // ─── HTTP request defaults ───────────────────────────────────────────
@@ -462,6 +474,58 @@ mod tests {
             headers: None,
         }));
         assert!(!is_local_mcp_server(&http));
+        // G9: sse-ide is a remote transport too — it wires the
+        // same SSE protocol at a locally-reachable IDE endpoint,
+        // but `is_local_mcp_server` is about in-process, not
+        // about network locality.
+        let sse_ide = scoped(McpServerConfig::SseIde(McpSseServerConfig {
+            url: "http://127.0.0.1:3000".into(),
+            headers: None,
+        }));
+        assert!(!is_local_mcp_server(&sse_ide));
+    }
+
+    #[test]
+    fn ide_server_predicate_matches_sse_ide_only() {
+        let stdio = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: None,
+        }));
+        let sse = scoped(McpServerConfig::Sse(McpSseServerConfig {
+            url: "https://remote".into(),
+            headers: None,
+        }));
+        let http = scoped(McpServerConfig::Http(McpHttpServerConfig {
+            url: "https://remote".into(),
+            headers: None,
+        }));
+        let sse_ide = scoped(McpServerConfig::SseIde(McpSseServerConfig {
+            url: "http://127.0.0.1:3000".into(),
+            headers: None,
+        }));
+        assert!(!is_ide_mcp_server(&stdio));
+        assert!(!is_ide_mcp_server(&sse));
+        assert!(!is_ide_mcp_server(&http));
+        assert!(is_ide_mcp_server(&sse_ide));
+    }
+
+    #[test]
+    fn sse_ide_config_round_trips_with_distinct_type_tag() {
+        // `sse-ide` must serialize with its own `"type"` tag so
+        // the distinction survives reads from disk.
+        let cfg = McpServerConfig::SseIde(McpSseServerConfig {
+            url: "http://127.0.0.1:9000".into(),
+            headers: None,
+        });
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"type\":\"sse-ide\""),
+            "expected 'sse-ide' tag in {}",
+            json
+        );
+        let back: McpServerConfig = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, McpServerConfig::SseIde(_)));
     }
 
     // ─── tool predicate ──────────────────────────────────────────

@@ -274,7 +274,15 @@ impl McpManager {
                     }
                 }
             }
-            McpServerConfig::Sse(sse_config) => {
+            // G9: `sse-ide` is wire-identical to `sse` at the
+            // transport level — same endpoint, same message
+            // handshake. IDE-specific behaviour (tool allow-list,
+            // reconnect ordering) happens on the tool-layer read
+            // side. Route both variants through the same
+            // `connect_sse` to avoid duplicating the reader +
+            // lifecycle wiring.
+            McpServerConfig::SseIde(sse_config)
+            | McpServerConfig::Sse(sse_config) => {
                 match McpClient::connect_sse(name, sse_config).await {
                     Ok(client) => {
                         let capabilities = client.capabilities().cloned().unwrap_or_default();
