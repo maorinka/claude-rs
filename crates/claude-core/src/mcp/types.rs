@@ -377,5 +377,55 @@ pub mod methods {
     pub const TOOLS_CALL: &str = "tools/call";
     pub const RESOURCES_LIST: &str = "resources/list";
     pub const RESOURCES_READ: &str = "resources/read";
+    pub const PROMPTS_LIST: &str = "prompts/list";
+    pub const PROMPTS_GET: &str = "prompts/get";
     pub const PING: &str = "ping";
+}
+
+// ─── Prompts (G8) ────────────────────────────────────────────────────
+
+/// One named argument of an MCP prompt template. The `required`
+/// flag follows the MCP SDK default of `false` when absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPromptArgument {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: Option<bool>,
+}
+
+/// An MCP prompt definition as returned by `prompts/list`. Named
+/// templates the server exposes as slash-commandable bodies the
+/// client can render with the provided arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPromptDefinition {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// UI-display override; `name` stays the canonical identifier
+    /// so slash-command parsing doesn't trip on embedded spaces.
+    /// TS `client.ts:2066-2070`.
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<Vec<McpPromptArgument>>,
+}
+
+/// One message in the response from `prompts/get`. Content is the
+/// raw MCP content block (text/image/resource/etc.); G12b's
+/// `transform_result_content` pipeline turns it into the
+/// provider-facing shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptMessage {
+    pub role: String,
+    pub content: serde_json::Value,
+}
+
+/// Full reply to `prompts/get`. Mirrors the MCP `GetPromptResult`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptResult {
+    #[serde(default)]
+    pub description: Option<String>,
+    pub messages: Vec<McpPromptMessage>,
 }

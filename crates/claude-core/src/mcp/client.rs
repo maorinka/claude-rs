@@ -994,6 +994,106 @@ impl McpClient {
         ))
     }
 
+    /// List all prompts available from this MCP server.
+    ///
+    /// Sends a `prompts/list` request and parses the response into
+    /// `McpPromptDefinition`s. G8 port; TS equivalent at
+    /// `services/mcp/client.ts:2043-2046` inside
+    /// `fetchCommandsForClient`. An empty `prompts` field (or no
+    /// server capability) surfaces as an empty vec rather than an
+    /// error — matches the TS `return []` fallbacks.
+    pub async fn list_prompts(&self) -> Result<Vec<McpPromptDefinition>> {
+        // If the server never advertised the `prompts` capability
+        // during init, skip the request entirely — matches TS
+        // `if (!client.capabilities?.prompts) return []`.
+        if let Some(caps) = &self.capabilities {
+            if caps.prompts.is_none() {
+                debug!(
+                    server = self.name,
+                    "Server did not advertise prompts capability; skipping prompts/list"
+                );
+                return Ok(vec![]);
+            }
+        }
+
+        let response = self
+            .send_request(methods::PROMPTS_LIST, Some(serde_json::json!({})))
+            .await?;
+
+        if let Some(result) = response.result {
+            if let Some(prompts) = result.get("prompts") {
+                let prompts: Vec<McpPromptDefinition> =
+                    serde_json::from_value(prompts.clone())
+                        .context("Failed to parse MCP prompts list")?;
+                debug!(
+                    server = self.name,
+                    count = prompts.len(),
+                    "Listed MCP prompts"
+                );
+                return Ok(prompts);
+            }
+        }
+
+        if let Some(err) = response.error {
+            return Err(anyhow!(
+                "MCP prompts/list error from '{}': {} (code: {})",
+                self.name,
+                err.message,
+                err.code
+            ));
+        }
+
+        Ok(vec![])
+    }
+
+    /// Retrieve a rendered prompt by name with arguments.
+    ///
+    /// Sends a `prompts/get` request. `arguments` is a JSON object
+    /// whose keys are the argument names declared in the prompt's
+    /// definition. Returns the server's `GetPromptResult` (messages
+    /// + optional description). G8 port; TS equivalent at
+    /// `services/mcp/client.ts:2077-2080` inside
+    /// `getPromptForCommand`.
+    pub async fn get_prompt(
+        &self,
+        prompt_name: &str,
+        arguments: Value,
+    ) -> Result<McpPromptResult> {
+        let params = serde_json::json!({
+            "name": prompt_name,
+            "arguments": arguments,
+        });
+        let response = self.send_request(methods::PROMPTS_GET, Some(params)).await?;
+
+        if let Some(result) = response.result {
+            let parsed: McpPromptResult = serde_json::from_value(result)
+                .context("Failed to parse MCP prompts/get result")?;
+            debug!(
+                server = self.name,
+                prompt = prompt_name,
+                messages = parsed.messages.len(),
+                "Retrieved MCP prompt"
+            );
+            return Ok(parsed);
+        }
+
+        if let Some(err) = response.error {
+            return Err(anyhow!(
+                "MCP prompts/get error from '{}' (prompt: {}): {} (code: {})",
+                self.name,
+                prompt_name,
+                err.message,
+                err.code
+            ));
+        }
+
+        Err(anyhow!(
+            "MCP prompts/get returned empty response from '{}' (prompt: {})",
+            self.name,
+            prompt_name
+        ))
+    }
+
     /// List all resources available from this MCP server.
     ///
     /// Sends a `resources/list` request.
@@ -1711,6 +1811,78 @@ impl McpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─── G8: prompt types + list/get shape ───────────────────────
+
+    #[test]
+    fn prompt_definition_parses_from_server_payload() {
+        // Representative wire payload for a single prompt entry.
+        let wire = serde_json::json!({
+            "name": "changelog",
+            "title": "Generate a Changelog",
+            "description": "Build release notes",
+            "arguments": [
+                { "name": "since", "description": "Tag/commit", "required": true },
+                { "name": "format" }
+            ]
+        });
+        let p: super::McpPromptDefinition =
+            serde_json::from_value(wire).expect("deserialize");
+        assert_eq!(p.name, "changelog");
+        assert_eq!(p.title.as_deref(), Some("Generate a Changelog"));
+        assert_eq!(p.description.as_deref(), Some("Build release notes"));
+        let args = p.arguments.expect("arguments present");
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].name, "since");
+        assert_eq!(args[0].required, Some(true));
+        // `required` absent → None, matching serde default.
+        assert_eq!(args[1].name, "format");
+        assert_eq!(args[1].required, None);
+    }
+
+    #[test]
+    fn prompt_definition_handles_empty_arguments() {
+        // No `arguments` field on the wire → Option stays None;
+        // empty array → Some(vec![]). Either must deserialize.
+        let p1: super::McpPromptDefinition =
+            serde_json::from_value(serde_json::json!({ "name": "quick" }))
+                .expect("bare name");
+        assert!(p1.arguments.is_none());
+
+        let p2: super::McpPromptDefinition = serde_json::from_value(
+            serde_json::json!({ "name": "quick", "arguments": [] }),
+        )
+        .expect("empty arguments array");
+        assert_eq!(p2.arguments.as_ref().map(|v| v.len()), Some(0));
+    }
+
+    #[test]
+    fn prompt_result_parses_messages() {
+        let wire = serde_json::json!({
+            "description": "rendered prompt",
+            "messages": [
+                { "role": "user", "content": { "type": "text", "text": "hi" } },
+                { "role": "assistant", "content": { "type": "text", "text": "ok" } }
+            ]
+        });
+        let r: super::McpPromptResult =
+            serde_json::from_value(wire).expect("deserialize");
+        assert_eq!(r.messages.len(), 2);
+        assert_eq!(r.messages[0].role, "user");
+        assert_eq!(
+            r.messages[0].content.get("type").and_then(|v| v.as_str()),
+            Some("text")
+        );
+    }
+
+    #[test]
+    fn prompt_method_constants_are_wire_correct() {
+        // TS uses the literal method strings below when talking
+        // to servers — make sure the Rust constants match bit for
+        // bit.
+        assert_eq!(super::methods::PROMPTS_LIST, "prompts/list");
+        assert_eq!(super::methods::PROMPTS_GET, "prompts/get");
+    }
 
     #[test]
     fn test_build_mcp_tool_name() {
