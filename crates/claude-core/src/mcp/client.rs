@@ -85,6 +85,13 @@ pub struct McpClient {
     /// for the stdio reader; SSE/HTTP dispatch is a follow-up
     /// ticket.
     request_handlers: Arc<Mutex<HashMap<String, RequestHandler>>>,
+    /// Lifecycle-error tracker (G4b). Records terminal-connection
+    /// errors + threshold-triggered close signals for remote
+    /// transports. Populated on every McpClient but only wired for
+    /// SSE/HTTP per TS `client.ts:1333-1364` — stdio subprocess
+    /// crashes surface as process-exit signals, not reconnectable
+    /// network flaps, so they never touch this tracker.
+    lifecycle: Arc<Mutex<super::lifecycle::LifecycleTracker>>,
     /// Server capabilities received during initialization.
     capabilities: Option<ServerCapabilities>,
     /// Server info received during initialization.
@@ -191,6 +198,11 @@ impl McpClient {
             pending,
             next_id,
             request_handlers,
+            // stdio never feeds this tracker (see field doc); keep
+            // a clean default for field-shape parity.
+            lifecycle: Arc::new(Mutex::new(
+                super::lifecycle::LifecycleTracker::new(),
+            )),
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -216,6 +228,8 @@ impl McpClient {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
+        let lifecycle: Arc<Mutex<super::lifecycle::LifecycleTracker>> =
+            Arc::new(Mutex::new(super::lifecycle::LifecycleTracker::new()));
 
         // Start SSE listener task.
         // The SSE endpoint typically returns an event with a session/message URL
@@ -223,6 +237,7 @@ impl McpClient {
         let sse_url = config.url.clone();
         let message_url_clone = message_url.clone();
         let pending_clone = pending.clone();
+        let lifecycle_clone = lifecycle.clone();
         let server_name = name.to_string();
         let headers_clone = config.headers.clone();
 
@@ -318,14 +333,40 @@ impl McpClient {
                                 }
                             }
                             Err(e) => {
-                                debug!(server = server_name, "SSE stream error: {}", e);
+                                let msg = e.to_string();
+                                debug!(server = server_name, "SSE stream error: {}", msg);
+                                // G4b: feed the error to the
+                                // lifecycle tracker. If it decides
+                                // to close, drop pending senders so
+                                // waiting send_request calls fail
+                                // fast instead of hanging until
+                                // their per-request timeout.
+                                let mut lc = lifecycle_clone.lock().await;
+                                if let super::lifecycle::LifecycleDecision::TriggerClose {
+                                    reason,
+                                } = lc.record_error(&msg)
+                                {
+                                    debug!(
+                                        server = server_name,
+                                        "SSE transport closed by lifecycle tracker: {}",
+                                        reason
+                                    );
+                                    let mut pending = pending_clone.lock().await;
+                                    pending.clear();
+                                }
                                 break;
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    debug!(server = server_name, "SSE connection failed: {}", e);
+                    let msg = e.to_string();
+                    debug!(server = server_name, "SSE connection failed: {}", msg);
+                    // Connection-setup failures skip the counter
+                    // (one-off, not a reconnect-eligible flap) but
+                    // still record so downstream staleness checks
+                    // see the tracker in a consistent state.
+                    let _ = lifecycle_clone.lock().await.record_error(&msg);
                 }
             }
             debug!(server = server_name, "SSE reader task ended");
@@ -351,6 +392,7 @@ impl McpClient {
             // SSE inbound-request dispatch is deferred; the map
             // holds defaults for API parity with stdio.
             request_handlers: default_request_handlers().await,
+            lifecycle,
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -392,6 +434,9 @@ impl McpClient {
             // HTTP inbound-request dispatch is deferred; the map
             // holds defaults for API parity with stdio.
             request_handlers: default_request_handlers().await,
+            lifecycle: Arc::new(Mutex::new(
+                super::lifecycle::LifecycleTracker::new(),
+            )),
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -526,6 +571,15 @@ impl McpClient {
                 message_url,
                 ..
             } => {
+                // G4b: short-circuit if the lifecycle tracker has
+                // already signalled close on this connection.
+                if self.lifecycle.lock().await.has_triggered_close() {
+                    return Err(anyhow!(
+                        "MCP SSE server '{}' transport closed (reconnect required)",
+                        self.name
+                    ));
+                }
+
                 // For SSE, POST the request to the message endpoint.
                 // The response comes back via the SSE event stream.
                 let msg_url = {
@@ -623,12 +677,30 @@ impl McpClient {
                     }
                 }
 
-                let resp = req.json(&request).send().await.with_context(|| {
-                    format!(
-                        "Failed to POST to MCP HTTP server '{}' at {}",
-                        self.name, url
-                    )
-                })?;
+                // G4b: short-circuit if the lifecycle tracker has
+                // already signalled a close. Subsequent requests
+                // through a dead transport must fail fast rather
+                // than contact a server that we've declared dead.
+                if self.lifecycle.lock().await.has_triggered_close() {
+                    return Err(anyhow!(
+                        "MCP HTTP server '{}' transport closed (reconnect required)",
+                        self.name
+                    ));
+                }
+
+                let resp = match req.json(&request).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // G4b: feed send error to the tracker so
+                        // repeated terminal errors escalate to a
+                        // transport close signal.
+                        let _ = self.lifecycle.lock().await.record_error(&e.to_string());
+                        return Err(anyhow!(e).context(format!(
+                            "Failed to POST to MCP HTTP server '{}' at {}",
+                            self.name, url
+                        )));
+                    }
+                };
 
                 // Capture session ID from response header
                 if let Some(sid_val) = resp.headers().get("mcp-session-id") {
@@ -641,6 +713,22 @@ impl McpClient {
                 if !resp.status().is_success() {
                     let status = resp.status().as_u16();
                     let body = resp.text().await.unwrap_or_default();
+                    // G4b: detect HTTP session-expired signal (404
+                    // + JSON-RPC -32001) and fire the dedicated
+                    // record_session_expired path. Mirrors TS
+                    // `client.ts:1316-1329`.
+                    if super::helpers::is_mcp_session_expired_error(Some(status), &body) {
+                        let _ = self.lifecycle.lock().await.record_session_expired();
+                        return Err(anyhow!(
+                            "MCP HTTP server '{}' session expired (HTTP 404 + JSON-RPC -32001)",
+                            self.name
+                        ));
+                    }
+                    let _ = self
+                        .lifecycle
+                        .lock()
+                        .await
+                        .record_error(&format!("HTTP {} body: {}", status, body));
                     return Err(anyhow!(
                         "MCP HTTP server '{}' error {}: {}",
                         self.name,
@@ -1352,5 +1440,30 @@ mod tests {
         let guard = map.lock().await;
         assert!(guard.contains_key("roots/list"));
         assert!(guard.contains_key("elicitation/create"));
+    }
+
+    // ─── G4b: lifecycle wiring ─────────────────────────────────────
+
+    /// A freshly-constructed tracker reports not-closed. The send
+    /// short-circuit then lets requests through. After `mark_closed`
+    /// the short-circuit path activates.
+    #[tokio::test]
+    async fn lifecycle_short_circuit_matches_tracker_state() {
+        use crate::mcp::lifecycle::LifecycleTracker;
+
+        // Bare tracker behaviour — same logic used by
+        // `has_triggered_close()` in the send path.
+        let tracker: Arc<Mutex<LifecycleTracker>> =
+            Arc::new(Mutex::new(LifecycleTracker::new()));
+
+        {
+            let g = tracker.lock().await;
+            assert!(!g.has_triggered_close());
+        }
+        tracker.lock().await.mark_closed();
+        {
+            let g = tracker.lock().await;
+            assert!(g.has_triggered_close());
+        }
     }
 }
