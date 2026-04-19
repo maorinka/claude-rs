@@ -25,6 +25,7 @@ pub mod cost;
 pub mod debug_filter;
 pub mod detect_repository;
 pub mod display_tags;
+pub mod embedded_tools;
 pub mod env_validation;
 pub mod errors_util;
 pub mod extract_memories;
