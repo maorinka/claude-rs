@@ -165,6 +165,50 @@ static CONTROL_STRUCTURE_REGEX: Lazy<Regex> =
 static CONTINUATION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"\\+\n"#).unwrap());
 
+/// Bash list-separators — operators that separate top-level
+/// commands in a compound command. Used to detect "this looks
+/// like a pure list of commands" during permission analysis.
+/// Matches TS `COMMAND_LIST_SEPARATORS` at
+/// `utils/bash/commands.ts:521-529`.
+pub const COMMAND_LIST_SEPARATORS: &[&str] =
+    &["&&", "||", ";", ";;", "|"];
+
+/// Every control operator the shell-quote path recognises:
+/// list separators plus the three stdout-redirect operators.
+/// Matches TS `ALL_SUPPORTED_CONTROL_OPERATORS` at
+/// `utils/bash/commands.ts:531-536`.
+pub const ALL_SUPPORTED_CONTROL_OPERATORS: &[&str] =
+    &["&&", "||", ";", ";;", "|", ">&", ">", ">>"];
+
+/// Filter a list of tokens down to just the non-operator
+/// command pieces. Matches TS `filterControlOperators` at
+/// `utils/bash/commands.ts:251-257`.
+///
+/// Used by the permission analyzer to present the user with
+/// only the actual subcommands inside a compound expression,
+/// hiding the shell plumbing (`|`, `&&`, `>>`, etc.). The TS
+/// version takes the string-form tokens emitted by a
+/// shell-quote tokenise + rebuild pass; Rust keeps the same
+/// stringly-typed contract so call sites can `&[&str]` or
+/// `Vec<String>` interchangeably.
+pub fn filter_control_operators<I, S>(parts: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    parts
+        .into_iter()
+        .filter_map(|p| {
+            let s = p.as_ref();
+            if ALL_SUPPORTED_CONTROL_OPERATORS.iter().any(|op| *op == s) {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
+        .collect()
+}
+
 /// Detect a "simple help invocation" — a command like
 /// `tool --help` or `foo bar --help` where the ONLY flag is
 /// `--help` and all non-flag tokens are plain ASCII
@@ -640,5 +684,60 @@ mod tests {
         assert!(is_help_command("git clone --help"));
         assert!(is_help_command("cargo test2 --help"));
         assert!(is_help_command("gh pr list --help"));
+    }
+
+    // ─── filter_control_operators ────────────────────────────────
+
+    #[test]
+    fn filter_removes_list_separators() {
+        let input = vec!["ls", "|", "grep", "foo", "&&", "echo", "done"];
+        let out = filter_control_operators(input);
+        assert_eq!(out, vec!["ls", "grep", "foo", "echo", "done"]);
+    }
+
+    #[test]
+    fn filter_removes_redirect_operators() {
+        let input = vec!["ls", ">", "file.txt", ">>", "log", "2>&1"];
+        let out = filter_control_operators(input);
+        // `>`, `>>` stripped; `2>&1` isn't in the operator list
+        // (it's a shell-quote literal), so it survives.
+        assert_eq!(out, vec!["ls", "file.txt", "log", "2>&1"]);
+    }
+
+    #[test]
+    fn filter_preserves_non_operator_tokens() {
+        let input = vec!["git", "status", "--short"];
+        let out = filter_control_operators(input);
+        assert_eq!(out, vec!["git", "status", "--short"]);
+    }
+
+    #[test]
+    fn filter_accepts_string_and_str_refs() {
+        // Contract: caller can pass Vec<String>, &[&str], or
+        // IntoIterator<&String> — all work.
+        let owned: Vec<String> = vec!["a".into(), "&&".into(), "b".into()];
+        assert_eq!(filter_control_operators(&owned), vec!["a", "b"]);
+        let borrowed: &[&str] = &["a", "||", "b"];
+        assert_eq!(filter_control_operators(borrowed), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn separator_sets_cover_expected_operators() {
+        // Pin the set contents so accidental edits to the
+        // operator lists are caught.
+        for op in ["&&", "||", ";", ";;", "|"] {
+            assert!(
+                COMMAND_LIST_SEPARATORS.contains(&op),
+                "{} should be in COMMAND_LIST_SEPARATORS",
+                op
+            );
+        }
+        for op in ["&&", "||", ";", ";;", "|", ">&", ">", ">>"] {
+            assert!(
+                ALL_SUPPORTED_CONTROL_OPERATORS.contains(&op),
+                "{} should be in ALL_SUPPORTED_CONTROL_OPERATORS",
+                op
+            );
+        }
     }
 }
