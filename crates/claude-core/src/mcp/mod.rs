@@ -7,4 +7,5 @@ pub mod instructions_delta;
 pub mod lifecycle;
 pub mod manager;
 pub mod output_storage;
+pub mod result_transform;
 pub mod types;
