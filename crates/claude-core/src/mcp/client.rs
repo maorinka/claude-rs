@@ -913,23 +913,46 @@ impl McpClient {
 
         // G14: start a 30s heartbeat so long-running tool calls
         // don't look frozen to the user. Mirrors TS `setInterval`
-        // at `client.ts:3055-3066`. The handle aborts on drop so
-        // the timer stops when call_tool returns (normal or error).
-        let heartbeat = spawn_progress_heartbeat(self.name.clone(), tool_name.to_string());
+        // at `client.ts:3055-3066`. `HeartbeatGuard::drop` aborts
+        // the spawned task so the timer stops on ANY return path
+        // (success, error, or parent-future cancellation).
+        let _heartbeat =
+            spawn_progress_heartbeat(self.name.clone(), tool_name.to_string());
+        // Transport flavour hint for the session-expiry classifier
+        // (TS scopes -32000 "Connection closed" to http /
+        // claudeai-proxy only; SSE and stdio errors of that shape
+        // must NOT become McpSessionExpiredError).
+        let transport_hint = match &self.transport {
+            McpTransport::Http { .. } => TransportHint::Http,
+            McpTransport::Sse { .. } => TransportHint::Sse,
+            McpTransport::Stdio => TransportHint::Stdio,
+        };
 
         let response = match self.send_request(methods::TOOLS_CALL, Some(params)).await {
             Ok(r) => r,
             Err(e) => {
-                heartbeat.abort();
-                return Err(classify_call_tool_error(e, &self.name));
+                return Err(classify_call_tool_error(
+                    e,
+                    &self.name,
+                    transport_hint,
+                ));
             }
         };
 
-        // Cancel the heartbeat before parsing — even if parsing
-        // panics we don't want the timer to linger.
-        heartbeat.abort();
-
         if let Some(result) = response.result {
+            // Peek for a legacy `result.error` string BEFORE the
+            // structural deserialize — TS `client.ts:3139-3142`
+            // falls back to `String(result.error)` for servers
+            // that predate the `content[]`+`isError` envelope. The
+            // Rust `McpToolResult` shape doesn't model the legacy
+            // field, so we pull it out as a JSON fallback.
+            let legacy_error = result
+                .get("error")
+                .map(|v| match v.as_str() {
+                    Some(s) => s.to_string(),
+                    None => v.to_string(),
+                });
+
             let tool_result: McpToolResult =
                 serde_json::from_value(result).context("Failed to parse MCP tool call result")?;
 
@@ -942,6 +965,7 @@ impl McpClient {
                     .content
                     .iter()
                     .find_map(|c| c.text.clone())
+                    .or(legacy_error)
                     .unwrap_or_else(|| "Unknown error".to_string());
                 return Err(anyhow::Error::from(
                     super::errors::McpToolCallError::new(
@@ -1205,19 +1229,26 @@ pub fn normalize_mcp_name(name: &str) -> String {
 
 // ─── call_tool classification + heartbeat (G14) ─────────────────────
 
+/// RAII guard around a spawned heartbeat. Dropping the guard
+/// aborts the background task — tokio's `AbortHandle` does NOT
+/// auto-abort on drop (it's just a weak cancel handle), so we
+/// wrap it with an explicit `Drop` impl to prevent the heartbeat
+/// from outliving a cancelled `call_tool()` future.
+struct HeartbeatGuard(tokio::task::AbortHandle);
+
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Spawn a 30-second heartbeat that debug-logs
-/// `"Tool '<tool>' still running (<secs>s elapsed)"`. Returns an
-/// `AbortHandle` the caller drops / aborts when the tool call
-/// resolves. Matches TS `setInterval` at `client.ts:3055-3066`.
-///
-/// Using `tokio::spawn` + `AbortHandle` (rather than a
-/// tokio::time::interval owned by the caller) keeps the heartbeat
-/// out of the async-fn stack; the caller's flow stays a simple
-/// await.
-fn spawn_progress_heartbeat(
-    server_name: String,
-    tool_name: String,
-) -> tokio::task::AbortHandle {
+/// `"Tool '<tool>' still running (<secs>s elapsed)"`. Returns a
+/// `HeartbeatGuard` whose `Drop` impl aborts the task — cancelling
+/// `call_tool()` at any await point (including by dropping the
+/// future) stops the heartbeat. Matches TS `setInterval` at
+/// `client.ts:3055-3066`.
+fn spawn_progress_heartbeat(server_name: String, tool_name: String) -> HeartbeatGuard {
     use std::time::Duration;
     let handle = tokio::spawn(async move {
         let start = tokio::time::Instant::now();
@@ -1237,20 +1268,41 @@ fn spawn_progress_heartbeat(
             );
         }
     });
-    handle.abort_handle()
+    HeartbeatGuard(handle.abort_handle())
+}
+
+/// Which transport originated the error. The
+/// `-32000 "Connection closed"` session-expiry mapping is scoped
+/// to HTTP transports per TS `client.ts:3218-3222`; other
+/// transports must NOT flip that signal into a session-expired
+/// error (an SSE stream closing mid-request is a lifecycle event,
+/// not a session-ID invalidation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportHint {
+    Http,
+    Sse,
+    Stdio,
 }
 
 /// Classify a `send_request` error into a typed domain error when
 /// the message matches a known auth / session-expired pattern.
 /// Unmatched errors pass through unchanged. Mirrors TS
 /// `client.ts:3194-3232`.
-fn classify_call_tool_error(e: anyhow::Error, server_name: &str) -> anyhow::Error {
+fn classify_call_tool_error(
+    e: anyhow::Error,
+    server_name: &str,
+    transport: TransportHint,
+) -> anyhow::Error {
     let msg = format!("{:#}", e);
+    let msg_lower = msg.to_ascii_lowercase();
 
-    // 401 signals an expired / revoked OAuth token. The Rust
-    // transport surfaces this as `"HTTP 401 body: ..."` (see
-    // G4b wiring in send_request's non-2xx branch).
-    if msg.contains("HTTP 401") || msg.contains("401 Unauthorized") {
+    // 401 signals an expired / revoked OAuth token. The Rust HTTP
+    // transport surfaces it as `"HTTP 401 body: ..."` (see G4b
+    // wiring). TS also matches `UnauthorizedError` raised by the
+    // OAuth layer — that's not wired in the Rust client yet, but
+    // a case-insensitive "unauthorized" substring covers most
+    // transport-level wordings we might see in practice.
+    if msg.contains("HTTP 401") || msg_lower.contains("unauthorized") {
         return anyhow::Error::from(super::errors::McpAuthError::new(
             server_name.to_string(),
             format!(
@@ -1261,15 +1313,18 @@ fn classify_call_tool_error(e: anyhow::Error, server_name: &str) -> anyhow::Erro
     }
 
     // Session expired: either HTTP 404 + JSON-RPC -32001, or the
-    // SDK's derived -32000 "Connection closed" on HTTP. TS
-    // `client.ts:3217-3231` handles both. The Rust HTTP send path
-    // already short-circuits the 404+-32001 case into its own
-    // error message ("session expired"); catch that plus the
-    // direct payload match.
-    if msg.contains("session expired")
-        || super::helpers::is_mcp_session_expired_error(Some(404), &msg)
-        || (msg.contains("-32000") && msg.contains("Connection closed"))
-    {
+    // SDK's derived -32000 "Connection closed" on HTTP only. TS
+    // `client.ts:3217-3222` explicitly gates the -32000 branch on
+    // `config.type === 'http' || 'claudeai-proxy'`; the -32001
+    // branch applies globally because it's a direct server
+    // signal, not a transport-layer wrap.
+    let direct_404_32001 =
+        msg.contains("session expired")
+            || super::helpers::is_mcp_session_expired_error(Some(404), &msg);
+    let connection_closed_on_http = transport == TransportHint::Http
+        && msg.contains("-32000")
+        && msg.contains("Connection closed");
+    if direct_404_32001 || connection_closed_on_http {
         return anyhow::Error::from(super::errors::McpSessionExpiredError::new(
             server_name.to_string(),
         ));
@@ -1848,7 +1903,8 @@ mod tests {
     #[test]
     fn classify_http_401_becomes_auth_error() {
         let e = anyhow::anyhow!("Failed to POST: HTTP 401 body: unauthorized");
-        let classified = super::classify_call_tool_error(e, "jira");
+        let classified =
+            super::classify_call_tool_error(e, "jira", super::TransportHint::Http);
         // Downcast to the typed error — proves callers can handle
         // auth specifically via `.downcast()`.
         let auth: &super::super::errors::McpAuthError = classified
@@ -1862,7 +1918,8 @@ mod tests {
     fn classify_401_unauthorized_text_becomes_auth_error() {
         // Alternate wording some transports use.
         let e = anyhow::anyhow!("server returned 401 Unauthorized");
-        let classified = super::classify_call_tool_error(e, "slack");
+        let classified =
+            super::classify_call_tool_error(e, "slack", super::TransportHint::Http);
         assert!(
             classified
                 .downcast_ref::<super::super::errors::McpAuthError>()
@@ -1875,7 +1932,8 @@ mod tests {
         let e = anyhow::anyhow!(
             "MCP HTTP server 'x' session expired (HTTP 404 + JSON-RPC -32001)"
         );
-        let classified = super::classify_call_tool_error(e, "x");
+        let classified =
+            super::classify_call_tool_error(e, "x", super::TransportHint::Http);
         let sess: &super::super::errors::McpSessionExpiredError = classified
             .downcast_ref()
             .expect("expected McpSessionExpiredError");
@@ -1890,7 +1948,8 @@ mod tests {
         let e = anyhow::anyhow!(
             "Failed to call tool: code -32000: Connection closed"
         );
-        let classified = super::classify_call_tool_error(e, "vault");
+        let classified =
+            super::classify_call_tool_error(e, "vault", super::TransportHint::Http);
         assert!(
             classified
                 .downcast_ref::<super::super::errors::McpSessionExpiredError>()
@@ -1899,10 +1958,70 @@ mod tests {
         );
     }
 
+    /// Codex CR: -32000 "Connection closed" must NOT become
+    /// session-expired on non-HTTP transports. SSE stream closing
+    /// is a lifecycle event handled by G4b's LifecycleTracker,
+    /// not a session-invalidation signal.
+    #[test]
+    fn classify_32000_connection_closed_on_sse_passes_through() {
+        let e = anyhow::anyhow!("code -32000: Connection closed");
+        let classified =
+            super::classify_call_tool_error(e, "sse-server", super::TransportHint::Sse);
+        assert!(
+            classified
+                .downcast_ref::<super::super::errors::McpSessionExpiredError>()
+                .is_none(),
+            "SSE -32000 close must NOT classify as session expired"
+        );
+    }
+
+    #[test]
+    fn classify_32000_connection_closed_on_stdio_passes_through() {
+        let e = anyhow::anyhow!("code -32000: Connection closed");
+        let classified = super::classify_call_tool_error(
+            e,
+            "stdio-server",
+            super::TransportHint::Stdio,
+        );
+        assert!(
+            classified
+                .downcast_ref::<super::super::errors::McpSessionExpiredError>()
+                .is_none(),
+            "stdio -32000 close must NOT classify as session expired"
+        );
+    }
+
+    /// 404 + -32001 is a direct server signal — applies regardless
+    /// of transport hint. Only the -32000 branch is transport-gated.
+    #[test]
+    fn classify_404_32001_applies_regardless_of_transport() {
+        // The error message contains a JSON payload with braces —
+        // build it as a plain String so the `anyhow!` macro
+        // doesn't interpret the braces as format specifiers.
+        let payload =
+            String::from("HTTP 404 body: {\"error\":{\"code\":-32001}}");
+        for hint in [
+            super::TransportHint::Http,
+            super::TransportHint::Sse,
+            super::TransportHint::Stdio,
+        ] {
+            let e = anyhow::Error::msg(payload.clone());
+            let classified = super::classify_call_tool_error(e, "x", hint);
+            assert!(
+                classified
+                    .downcast_ref::<super::super::errors::McpSessionExpiredError>()
+                    .is_some(),
+                "404+-32001 should classify on transport {:?}",
+                hint
+            );
+        }
+    }
+
     #[test]
     fn classify_unknown_error_passes_through() {
         let e = anyhow::anyhow!("parse error at offset 42");
-        let classified = super::classify_call_tool_error(e, "x");
+        let classified =
+            super::classify_call_tool_error(e, "x", super::TransportHint::Http);
         // No typed error — original bubbles up unchanged.
         assert!(
             classified
