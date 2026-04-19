@@ -78,7 +78,20 @@ fn which(cmd: &str) -> Option<PathBuf> {
     }
 
     let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
+
+    // Windows parity with npm `which`: the current working directory
+    // is searched *before* `PATH`. Unix deliberately does not — a
+    // bare `ls` never resolves from CWD, only from `PATH`.
+    #[cfg(windows)]
+    let search_dirs: Vec<std::path::PathBuf> = std::iter::once(
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    )
+    .chain(std::env::split_paths(&path_var))
+    .collect();
+    #[cfg(not(windows))]
+    let search_dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path_var).collect();
+
+    for dir in search_dirs {
         if dir.as_os_str().is_empty() {
             continue;
         }
@@ -250,5 +263,26 @@ mod tests {
         assert!(is_binary_installed("/bin/sh"));
         // Absolute path to nonexistent file must still be false.
         assert!(!is_binary_installed("/definitely/not/here/xyzzy"));
+    }
+
+    /// A file that exists but has no exec bit set must not resolve.
+    /// Guards the TS parity with npm `which`, which also requires
+    /// the executable bit on Unix. Mode `0o644` is the standard
+    /// non-executable regular-file permission.
+    #[test]
+    #[cfg(unix)]
+    fn non_executable_regular_file_is_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_binary_cache();
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("not_exec");
+        std::fs::write(&p, b"#!/bin/sh\necho hi\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!is_binary_installed(p.to_str().unwrap()));
+        // Flip exec bit: now it resolves.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        clear_binary_cache();
+        assert!(is_binary_installed(p.to_str().unwrap()));
     }
 }
