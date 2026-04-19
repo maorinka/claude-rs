@@ -8,6 +8,19 @@
 //! exist in Rust) — callers that need accumulation can use String +
 //! push_str directly.
 
+/// UTF-8 byte-order mark (U+FEFF). PowerShell 5.x writes UTF-8
+/// with BOM by default (`Out-File`, `Set-Content`). Without
+/// stripping, a BOM-prefixed JSON file fails to parse with
+/// "Unexpected token". Matches TS `utils/jsonRead.ts:12`.
+pub const UTF8_BOM: &str = "\u{FEFF}";
+
+/// Strip a leading UTF-8 BOM if present; otherwise return the
+/// input unchanged. Pure, zero-allocation on the no-BOM path.
+/// TS `stripBOM` at `utils/jsonRead.ts:14-16`.
+pub fn strip_bom(content: &str) -> &str {
+    content.strip_prefix(UTF8_BOM).unwrap_or(content)
+}
+
 /// Escape regex metacharacters so `str` is matched literally.
 /// Matches TS `escapeRegExp` verbatim.
 pub fn escape_regex(s: &str) -> String {
@@ -177,6 +190,35 @@ mod tests {
     fn escape_regex_works() {
         assert_eq!(escape_regex("foo.bar*"), "foo\\.bar\\*");
         assert_eq!(escape_regex("abc"), "abc");
+    }
+
+    #[test]
+    fn strip_bom_removes_leading_feff() {
+        // UTF-8 BOM is 0xEF 0xBB 0xBF (3 bytes) which encodes
+        // U+FEFF as a single scalar. Constructed via the
+        // escape so the source stays ASCII.
+        let with_bom = format!("{}{{\"k\":1}}", UTF8_BOM);
+        assert_eq!(strip_bom(&with_bom), "{\"k\":1}");
+    }
+
+    #[test]
+    fn strip_bom_passes_through_when_absent() {
+        assert_eq!(strip_bom("{\"k\":1}"), "{\"k\":1}");
+        assert_eq!(strip_bom(""), "");
+        // A BOM in the middle of the string is NOT stripped —
+        // TS only checks `startsWith`.
+        let mid = format!("hello {} world", UTF8_BOM);
+        assert_eq!(strip_bom(&mid), mid);
+    }
+
+    #[test]
+    fn strip_bom_returns_borrowed_slice() {
+        // Zero-alloc path: pass-through returns a sub-slice of
+        // the input. After `strip_bom(s)` the result's bytes
+        // must live inside `s`.
+        let s = String::from("plain");
+        let out = strip_bom(&s);
+        assert_eq!(out.as_ptr(), s.as_ptr());
     }
 
     #[test]
