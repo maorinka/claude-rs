@@ -427,12 +427,43 @@ impl McpManager {
         let mut all_tools = Vec::new();
         let mut tool_map = HashMap::new();
 
+        // Build a per-server "is IDE?" lookup so we can apply the
+        // `mcp__ide__*` allow-list to IDE-scoped servers before
+        // surfacing their tools. G9 wiring — TS filters at
+        // `client.ts:567-573` via `isIncludedMcpTool`.
+        let ide_servers: std::collections::HashSet<String> = {
+            let conns = self.connections.read().await;
+            conns
+                .iter()
+                .filter(|(_, c)| super::helpers::is_ide_mcp_server(&c.config))
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+
         let clients = self.clients.read().await;
         for (server_name, client) in clients.iter() {
             match client.list_tools().await {
                 Ok(tools) => {
+                    let is_ide = ide_servers.contains(server_name);
                     for tool in tools {
                         let normalized_name = build_mcp_tool_name(server_name, &tool.name);
+
+                        // IDE allow-list: skip tools on IDE
+                        // servers that aren't in ALLOWED_IDE_TOOLS.
+                        // Non-IDE servers pass through all tools
+                        // unconditionally (matches TS's
+                        // `!tool.name.startsWith('mcp__ide__') ||
+                        // allowlist.includes(tool.name)`).
+                        if is_ide
+                            && !super::helpers::is_included_mcp_tool(&tool)
+                        {
+                            debug!(
+                                server = server_name,
+                                tool = %tool.name,
+                                "Skipping non-allow-listed IDE tool"
+                            );
+                            continue;
+                        }
 
                         // Truncate description if too long
                         let description = tool.description.map(|d| {
