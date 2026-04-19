@@ -52,6 +52,7 @@ pub mod memdir;
 pub mod migrations;
 pub mod object_group_by;
 pub mod output_styles;
+pub mod paste_store;
 pub mod path_utils;
 pub mod peer_address;
 pub mod permissions;
