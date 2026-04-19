@@ -174,26 +174,46 @@ pub fn is_included_mcp_tool(tool: &McpToolDefinition) -> bool {
 pub const TRUNCATION_SUFFIX: &str = "… [truncated]";
 
 /// Produce the description string the model sees for this tool.
-/// If `description` is longer than `MAX_MCP_DESCRIPTION_LENGTH`,
-/// truncate at the cap and append `"… [truncated]"`. Matches TS
-/// `client.ts:1789-1794`.
+/// If `description` is longer than `MAX_MCP_DESCRIPTION_LENGTH`
+/// UTF-16 code units, truncate at the cap and append
+/// `"… [truncated]"`. Matches TS `client.ts:1789-1794` which
+/// uses JS `String.slice(0, 2048)` — that slices by UTF-16 code
+/// units, not bytes.
 ///
-/// Byte-level slicing would be unsafe on UTF-8 (could cut a
-/// multi-byte char); we slice on the nearest char boundary at or
-/// below the cap.
+/// For ASCII the three counting conventions (bytes, chars,
+/// UTF-16 units) are equivalent. They diverge on BMP non-ASCII:
+/// 2048 Cyrillic chars are 4096 UTF-8 bytes but 2048 UTF-16
+/// units, so a byte-based cap would keep half as many chars as
+/// TS. Counting UTF-16 units preserves visible-length parity.
+///
+/// Astral-plane characters (len_utf16 == 2) can't be split in
+/// Rust (our `String` is valid UTF-8 and can't represent a lone
+/// surrogate). If the cap lands mid-pair, we stop before the
+/// char so the output stays valid UTF-8; TS can produce a lone
+/// surrogate, but the rendered result is indistinguishable in
+/// practice.
 pub fn tool_description_for_model(tool: &McpToolDefinition) -> String {
     let desc = tool.description.as_deref().unwrap_or("");
-    if desc.len() <= MAX_MCP_DESCRIPTION_LENGTH {
-        return desc.to_string();
+    let mut out = String::new();
+    let mut units: u32 = 0;
+    let cap = MAX_MCP_DESCRIPTION_LENGTH as u32;
+    let mut truncated = false;
+    for c in desc.chars() {
+        let take = c.len_utf16() as u32;
+        if units + take > cap {
+            truncated = true;
+            break;
+        }
+        out.push(c);
+        units += take;
     }
-    // Walk char boundaries backwards from the cap until we land on
-    // one. `is_char_boundary(0)` and `is_char_boundary(len)` are
-    // always true, so this terminates.
-    let mut end = MAX_MCP_DESCRIPTION_LENGTH;
-    while end > 0 && !desc.is_char_boundary(end) {
-        end -= 1;
+    // Didn't exhaust the input AND didn't consume the whole
+    // thing → real truncation; otherwise the buffered string is
+    // already the complete original.
+    if truncated {
+        out.push_str(TRUNCATION_SUFFIX);
     }
-    format!("{}{}", &desc[..end], TRUNCATION_SUFFIX)
+    out
 }
 
 /// Extract the optional search hint from `tool._meta.anthropic/searchHint`,
@@ -465,21 +485,48 @@ mod tests {
     }
 
     #[test]
-    fn description_truncation_respects_utf8_boundaries() {
-        // The cap may land mid-multibyte-char; the helper must
-        // back up to the nearest char boundary so the returned
-        // `String` is still valid UTF-8.
+    fn description_truncation_counts_utf16_code_units() {
+        // Codex CR parity gap: TS JS `.slice(0, 2048)` counts
+        // UTF-16 code units. Cyrillic 'я' is 1 code unit (BMP).
+        // 2049 'я' chars → truncate to the first 2048 + suffix,
+        // NOT to byte-floor(2048/2)=1024 (the byte-cap bug).
         let mut t = tool_named("x");
-        // 2-byte-per-char Cyrillic → ~1500 chars fills ~3000
-        // bytes, well past the cap.
-        t.description = Some("я".repeat(1500));
+        t.description = Some("я".repeat(2049));
         let s = tool_description_for_model(&t);
-        // Must not panic and must contain the marker.
         assert!(s.ends_with(TRUNCATION_SUFFIX));
-        // Body must be valid UTF-8 (trivially true for &str /
-        // String; the assertion is "no panic on non-boundary
-        // slice").
-        assert!(!s.is_empty());
+        // Strip suffix; remaining chars must be exactly 2048.
+        let body = s.strip_suffix(TRUNCATION_SUFFIX).expect("suffix present");
+        let chars = body.chars().count();
+        assert_eq!(
+            chars, MAX_MCP_DESCRIPTION_LENGTH,
+            "BMP chars should fill exactly 2048 units, got {} chars",
+            chars
+        );
+    }
+
+    #[test]
+    fn description_truncation_astral_char_does_not_split() {
+        // Non-BMP char ('🎉' U+1F389) is 2 UTF-16 code units.
+        // With 1024 emoji = 2048 units exactly, we keep them
+        // all. 1025 = 2050 units → stops before the 1025th to
+        // avoid a cap-straddling surrogate pair.
+        let mut t = tool_named("x");
+        t.description = Some("🎉".repeat(1025));
+        let s = tool_description_for_model(&t);
+        assert!(s.ends_with(TRUNCATION_SUFFIX));
+        let body = s.strip_suffix(TRUNCATION_SUFFIX).unwrap();
+        let chars = body.chars().count();
+        assert_eq!(chars, 1024, "astral pairs must not be split, got {} chars", chars);
+    }
+
+    #[test]
+    fn description_exactly_at_cap_is_not_truncated() {
+        // Boundary parity: exactly 2048 UTF-16 units → no suffix.
+        let mut t = tool_named("x");
+        t.description = Some("a".repeat(MAX_MCP_DESCRIPTION_LENGTH));
+        let s = tool_description_for_model(&t);
+        assert!(!s.ends_with(TRUNCATION_SUFFIX));
+        assert_eq!(s.len(), MAX_MCP_DESCRIPTION_LENGTH);
     }
 
     #[test]
