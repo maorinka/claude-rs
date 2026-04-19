@@ -1,3 +1,4 @@
+pub mod auth_cache;
 pub mod client;
 pub mod datetime_parser;
 pub mod elicitation_validation;
