@@ -4,6 +4,7 @@ pub mod elicitation_validation;
 pub mod errors;
 pub mod helpers;
 pub mod instructions_delta;
+pub mod lifecycle;
 pub mod manager;
 pub mod output_storage;
 pub mod types;
