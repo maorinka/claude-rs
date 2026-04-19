@@ -86,6 +86,13 @@ pub fn infer_compact_schema_default(value: &serde_json::Value) -> String {
 /// downstream variants like `resource` (with embedded base64) are
 /// detected after `transform_result_content` expands them, not
 /// here.
+///
+/// TS `contentContainsImages` is typed `MCPToolResult` which is
+/// `string | ContentBlock[]` and returns `false` for the string
+/// case. Rust's `McpToolResult.content` is always an array so the
+/// string branch has no representation today; if G12b/c introduces
+/// a union where post-transform content can be a string,
+/// add a wrapper that short-circuits to `false` for strings.
 pub fn content_contains_images(content: &[crate::mcp::types::McpToolResultContent]) -> bool {
     content.iter().any(|b| b.content_type == "image")
 }
@@ -164,6 +171,48 @@ mod tests {
             s
         );
         assert!(s.ends_with(", ...}"));
+    }
+
+    #[test]
+    fn schema_exactly_ten_keys_has_no_truncation_marker() {
+        // Codex CR gap: 10 keys is the cut-off — exactly 10 must
+        // NOT have ", ..." appended (TS `map > 10 ? ", ..." : ""`
+        // strict-greater). Guards against a regression where the
+        // boundary condition flips to `>=`.
+        let mut m = serde_json::Map::new();
+        for i in 0..10 {
+            m.insert(format!("k{}", i), json!(i));
+        }
+        let s = infer_compact_schema(&serde_json::Value::Object(m), 2);
+        assert!(
+            !s.contains(", ...}"),
+            "exactly-10 keys should not produce the '... ,' marker; got {}",
+            s
+        );
+    }
+
+    #[test]
+    fn schema_large_integer_is_still_number() {
+        // TS would report this as "number" even if it overflows
+        // JS-safe integers; Rust serde_json parses it into
+        // Value::Number regardless of width. Assert parity.
+        let v = json!(12345678901234567890u64);
+        assert_eq!(infer_compact_schema(&v, 2), "number");
+    }
+
+    #[test]
+    fn schema_array_of_arrays_uses_first_element_only() {
+        // First-element recursion: `[[{...}], ["x"]]` recurses
+        // only on the first element `[{...}]` → `[[{...}]]`.
+        // Guards against any accidental "survey all elements"
+        // behaviour.
+        let v = json!([[{"a": 1}], ["x"]]);
+        let s = infer_compact_schema(&v, 3);
+        assert!(
+            s.starts_with("[[{") && s.ends_with("}]]"),
+            "first-element recursion broken for array-of-arrays: {}",
+            s
+        );
     }
 
     #[test]
