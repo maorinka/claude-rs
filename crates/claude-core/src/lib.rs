@@ -87,6 +87,7 @@ pub mod types;
 pub mod undercover;
 pub mod url_utils;
 pub mod user_agent;
+pub mod user_prompt_keywords;
 pub mod user_type;
 pub mod vcr;
 pub mod vim;
