@@ -152,22 +152,22 @@ impl McpManager {
             out
         }
 
-        // Map across local servers first. Auth-cache short-circuit
-        // doesn't apply to stdio — TS's skip branch at
-        // client.ts:2308-2314 specifically filters on remote
-        // transport types.
-        let local_results = drive(local, local_batch, |name, cfg| {
+        // Run local + remote buckets CONCURRENTLY (TS uses
+        // `Promise.all([processBatched(local), processBatched(remote)])`
+        // at `client.ts:2391-2400` — remote connections overlap
+        // with local stdio spawns instead of waiting for the
+        // whole local batch to finish first).
+        let local_fut = drive(local, local_batch, |name, cfg| {
             let m = self;
             async move { m.connect_server(&name, cfg).await }
-        })
-        .await;
-
-        // Remote: check the auth cache first — a cached
-        // needs-auth entry short-circuits to the NeedsAuth
-        // status without touching the network.
-        let remote_results = drive(remote, remote_batch, |name, cfg| {
+        });
+        let remote_fut = drive(remote, remote_batch, |name, cfg| {
             let m = self;
             async move {
+                // Auth-cache short-circuit: cached needs-auth
+                // entries skip the network round-trip. TS
+                // `client.ts:2311-2319`. Stdio doesn't reach
+                // this branch (partitioned into `local_fut`).
                 if super::auth_cache::is_mcp_auth_cached(&name) {
                     debug!(
                         server = name,
@@ -189,8 +189,8 @@ impl McpManager {
                     m.connect_server(&name, cfg).await
                 }
             }
-        })
-        .await;
+        });
+        let (local_results, remote_results) = tokio::join!(local_fut, remote_fut);
 
         // Merge + best-effort tool refresh.
         let mut results = local_results;
