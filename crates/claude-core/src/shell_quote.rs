@@ -511,6 +511,54 @@ where
     }
 }
 
+/// Quote a shell-executable `prefix` together with a `command`
+/// string. Mirrors TS `formatShellPrefixCommand` at
+/// `utils/bash/shellPrefix.ts:15-28`.
+///
+/// The `prefix` may be a bare executable name (`bash`), an
+/// absolute path (`/usr/bin/bash`), or an executable-path-plus-
+/// args form whose arguments begin with a leading dash
+/// (`/usr/bin/bash -c`, `C:\Program Files\Git\bin\bash.exe -c`).
+/// The split point is the *last* `" -"` in the prefix — matching
+/// TS's `prefix.lastIndexOf(' -')` — so any dashes embedded in a
+/// path segment stay part of the executable.
+///
+/// # Examples
+/// - `"bash"` + `"ls"` → `"bash ls"` (no quoting needed)
+/// - `"/usr/bin/bash -c"` + `"echo hi"` → `"/usr/bin/bash -c 'echo hi'"`
+/// - `"C:\\Program Files\\bash.exe -c"` + `"ls"` →
+///   `"'C:\\Program Files\\bash.exe' -c ls"` (space forces quoting)
+///
+/// `quote` follows shell-quote semantics — it only single-
+/// quotes tokens that carry special characters. `bash`, `ls`,
+/// `/usr/bin/bash`, `-c` all round-trip unquoted. The command
+/// payload gets quoted only if it contains characters the
+/// shell would otherwise interpret. TS's docstring examples
+/// show quotes optimistically; the real behaviour is what
+/// shell-quote emits.
+pub fn format_shell_prefix_command(prefix: &str, command: &str) -> String {
+    // `.rfind(" -")` is Rust's equivalent of TS's
+    // `lastIndexOf(' -')`. TS treats `> 0` as "found AND not at
+    // the start"; Rust's `rfind` returns byte offsets, and the
+    // > 0 check rules out the degenerate "prefix starts with
+    // a space + dash" case.
+    if let Some(space_before_dash) = prefix.rfind(" -") {
+        if space_before_dash > 0 {
+            let exec_path = &prefix[..space_before_dash];
+            // Skip the leading space — TS uses
+            // `substring(spaceBeforeDash + 1)`.
+            let args = &prefix[space_before_dash + 1..];
+            return format!(
+                "{} {} {}",
+                quote([exec_path]),
+                args,
+                quote([command])
+            );
+        }
+    }
+    format!("{} {}", quote([prefix]), quote([command]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,5 +786,74 @@ mod tests {
             .filter_map(|e| e.as_literal())
             .collect();
         assert_eq!(literals, vec!["echo", "hi there", "$x"]);
+    }
+
+    // ─── format_shell_prefix_command ──────────────────────────────
+
+    #[test]
+    fn format_shell_prefix_bare_executable() {
+        // Both tokens are alphanumeric-safe, so `quote` emits
+        // them unquoted (matches shell-quote semantics — single-
+        // quote only when the token carries special chars).
+        let out = format_shell_prefix_command("bash", "ls");
+        assert_eq!(out, "bash ls");
+    }
+
+    #[test]
+    fn format_shell_prefix_absolute_path_with_dash_arg() {
+        // `/usr/bin/bash` contains `/` which shell-quote leaves
+        // unquoted for path-like tokens. `-c` is raw args.
+        let out = format_shell_prefix_command("/usr/bin/bash -c", "ls");
+        assert_eq!(out, "/usr/bin/bash -c ls");
+    }
+
+    #[test]
+    fn format_shell_prefix_windows_path_with_spaces() {
+        // Embedded spaces force single-quoting of the exec path.
+        let out = format_shell_prefix_command(
+            r"C:\Program Files\Git\bin\bash.exe -c",
+            "ls",
+        );
+        assert_eq!(
+            out,
+            r"'C:\Program Files\Git\bin\bash.exe' -c ls"
+        );
+    }
+
+    #[test]
+    fn format_shell_prefix_last_dash_is_the_split_point() {
+        // A prefix with multiple `" -"` occurrences splits on
+        // the LAST one — matches TS `lastIndexOf(' -')`. The
+        // exec path gets quoted (space character) and args stay
+        // verbatim after.
+        let out = format_shell_prefix_command("/weird -path/bash -c", "ls");
+        assert_eq!(out, "'/weird -path/bash' -c ls");
+    }
+
+    #[test]
+    fn format_shell_prefix_command_gets_quoted_when_needed() {
+        // Special characters (`$`) in the command force
+        // single-quoting so variable expansion is suppressed.
+        let out = format_shell_prefix_command("bash -c", "echo $FOO");
+        assert_eq!(out, "bash -c 'echo $FOO'");
+    }
+
+    #[test]
+    fn format_shell_prefix_leading_dash_prefix_falls_back() {
+        // TS `spaceBeforeDash > 0` guard: if the prefix itself
+        // starts with " -" (degenerate case — space at the
+        // front), no split; quote the whole prefix instead.
+        let out = format_shell_prefix_command(" -c", "ls");
+        // `rfind(" -")` returns 0 → guard rejects, fallback
+        // quotes " -c" (leading space forces quoting).
+        assert_eq!(out, "' -c' ls");
+    }
+
+    #[test]
+    fn format_shell_prefix_no_args_case() {
+        // Pure executable with no dash args — both safe, both
+        // unquoted.
+        let out = format_shell_prefix_command("zsh", "pwd");
+        assert_eq!(out, "zsh pwd");
     }
 }
