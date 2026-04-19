@@ -106,6 +106,22 @@ Usage:
             ));
         }
 
+        // Team-memory secret guard — fires BEFORE the new-file-creation
+        // branch so a brand-new team-memory file with a secret never lands
+        // on disk. Matches TS `FileEditTool.validateInput` which scans
+        // `new_string` (not the projected post-edit buffer) at
+        // FileEditTool.ts:144. cwd comes from the request-scoped tool
+        // context, mirroring TS's AsyncLocalStorage `getCwd()`.
+        if let Some(msg) =
+            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
+                path,
+                new_string,
+                &ctx.working_directory,
+            )
+        {
+            return Ok(error_result(msg));
+        }
+
         // If old_string is non-empty and the file doesn't exist -> error
         if !path.exists() {
             if old_string.is_empty() {
@@ -170,22 +186,6 @@ Usage:
             // replace first occurrence only
             original.replacen(old_string, new_string, 1)
         };
-
-        // Team-memory secret guard — reject edits that would leak
-        // secrets into a team-memory file. Scan the POST-EDIT content
-        // (not the original), matching the TS `checkTeamMemSecrets`
-        // call in `FileEditTool.validateInput`.
-        let cwd =
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        if let Some(msg) =
-            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
-                path,
-                &new_content,
-                &cwd,
-            )
-        {
-            return Ok(error_result(msg));
-        }
 
         // Ensure parent directories exist (in case of a new path -- defensive)
         if let Some(parent) = path.parent() {

@@ -201,3 +201,145 @@ fn test_edit_is_destructive() {
     assert_eq!(tool.max_result_size_chars(), 100_000);
     assert_eq!(tool.name(), "Edit");
 }
+
+// ─── team_mem_secret_guard integration ──────────────────────────────────────
+
+use std::sync::Mutex as StdMutex;
+static GUARD_ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+const AWS_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
+
+struct TeamMemEnv<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+}
+
+impl<'a> TeamMemEnv<'a> {
+    fn enter(config_dir: &std::path::Path) -> Self {
+        let guard = GUARD_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("CLAUDE_CONFIG_DIR", config_dir);
+        std::env::set_var("TEAMMEM", "1");
+        std::env::remove_var("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+        TeamMemEnv { _guard: guard }
+    }
+}
+
+impl Drop for TeamMemEnv<'_> {
+    fn drop(&mut self) {
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
+        std::env::remove_var("TEAMMEM");
+    }
+}
+
+/// Regression for codex CR finding 1: the `!path.exists() &&
+/// old_string.is_empty()` branch in FileEditTool wrote the new
+/// file directly without consulting the guard. A FileEdit that
+/// creates a brand-new team-memory file with a secret in
+/// `new_string` must be rejected.
+#[tokio::test]
+async fn edit_guard_blocks_new_team_memory_file_with_secret() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".claude");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let _env = TeamMemEnv::enter(&config_dir);
+
+    let cwd = tmp.path().to_path_buf();
+    let team_dir = claude_core::memdir::team_mem_paths::get_team_mem_path(&cwd);
+    std::fs::create_dir_all(&team_dir).unwrap();
+
+    let ctx = ToolUseContext {
+        working_directory: cwd.clone(),
+        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
+        permission_mode: claude_tools::registry::PermissionMode::Default,
+    };
+    let tool = FileEditTool;
+    let file_path = team_dir
+        .join("brand_new.md")
+        .to_string_lossy()
+        .to_string();
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path,
+            "old_string": "",
+            "new_string": format!("leaked: {AWS_KEY}")
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(result.is_error, "new-file Edit with secret must be rejected");
+    assert!(result.data["error"]
+        .as_str()
+        .unwrap()
+        .contains("Team memory is shared"));
+
+    // Side-effect guard: the file must NOT exist — rejection
+    // happens before the write.
+    assert!(
+        !std::path::Path::new(&file_path).exists(),
+        "rejected edit must not leave the file on disk"
+    );
+}
+
+/// Edits to an existing team-memory file: a `new_string` with a
+/// secret must be rejected, matching TS `FileEditTool.ts:144`
+/// which scans `new_string` only (not the projected post-edit
+/// buffer).
+#[tokio::test]
+async fn edit_guard_blocks_existing_team_memory_file_with_secret() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join(".claude");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let _env = TeamMemEnv::enter(&config_dir);
+
+    let cwd = tmp.path().to_path_buf();
+    let team_dir = claude_core::memdir::team_mem_paths::get_team_mem_path(&cwd);
+    std::fs::create_dir_all(&team_dir).unwrap();
+
+    let file_path_buf = team_dir.join("existing.md");
+    std::fs::write(&file_path_buf, "original\n").unwrap();
+    let file_path = file_path_buf.to_string_lossy().to_string();
+
+    let ctx = ToolUseContext {
+        working_directory: cwd.clone(),
+        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
+        permission_mode: claude_tools::registry::PermissionMode::Default,
+    };
+    // Record a read so the staleness check passes — but the guard
+    // should fire BEFORE staleness anyway per TS ordering.
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(&file_path, false, None);
+
+    let tool = FileEditTool;
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path,
+            "old_string": "original",
+            "new_string": format!("swapped for: {AWS_KEY}")
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(
+        result.is_error,
+        "edit that inserts a secret into team memory must be rejected"
+    );
+    assert!(result.data["error"]
+        .as_str()
+        .unwrap()
+        .contains("Team memory is shared"));
+
+    // The file should still have its original content.
+    let on_disk = std::fs::read_to_string(&file_path_buf).unwrap();
+    assert_eq!(on_disk, "original\n", "rejected edit must not touch disk");
+}

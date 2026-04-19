@@ -143,6 +143,27 @@ Usage:
 
         let path = std::path::Path::new(file_path);
 
+        // Team-memory secret guard — reject writes that would leak secrets
+        // into a team-memory file synced to all collaborators. Runs BEFORE
+        // staleness to match TS `FileWriteTool.validateInput` (which calls
+        // checkTeamMemSecrets first, then staleness via the call() path).
+        // cwd comes from the tool context (request-scoped, equivalent to
+        // TS's AsyncLocalStorage-backed getCwd()) — not ambient process
+        // state. The guard short-circuits cheaply when TEAMMEM is off or
+        // the path isn't a team-memory path.
+        if let Some(msg) =
+            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
+                path,
+                content,
+                &ctx.working_directory,
+            )
+        {
+            return Ok(ToolResultData {
+                data: json!({ "error": msg }),
+                is_error: true,
+            });
+        }
+
         // Staleness check: if the file already exists, ensure it has been read
         // first and has not been modified since the last read.
         if path.exists() {
@@ -152,24 +173,6 @@ Usage:
                     is_error: true,
                 });
             }
-        }
-
-        // Team-memory secret guard — reject writes that would leak secrets
-        // into a team-memory file synced to all collaborators. Matches the
-        // TS `checkTeamMemSecrets` call in `FileWriteTool.validateInput`.
-        // The guard itself short-circuits when TEAMMEM is off or the path
-        // isn't a team-memory path, so calling it unconditionally is cheap.
-        let cwd =
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        if let Some(msg) =
-            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
-                path, content, &cwd,
-            )
-        {
-            return Ok(ToolResultData {
-                data: json!({ "error": msg }),
-                is_error: true,
-            });
         }
 
         // Take a snapshot of the file before overwriting.

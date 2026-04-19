@@ -168,20 +168,11 @@ async fn guard_blocks_secret_in_team_memory_path() {
     std::fs::create_dir_all(&config_dir).unwrap();
     let _env = TeamMemEnv::enter(&config_dir);
 
-    // Canonicalise the tempdir cwd so the guard's later
-    // `std::env::current_dir()` (which returns a canonical path on
-    // macOS) matches the cwd we used to precompute team_dir. Without
-    // this step, macOS's `/var/folders/...` vs
-    // `/private/var/folders/...` mismatch causes
-    // `is_team_mem_path` to miss and the guard silently skips.
-    let cwd = tmp.path().canonicalize().unwrap();
+    // cwd is passed through `ctx.working_directory` — no need to
+    // mutate the process-global cwd.
+    let cwd = tmp.path().to_path_buf();
     let team_dir = claude_core::memdir::team_mem_paths::get_team_mem_path(&cwd);
     std::fs::create_dir_all(&team_dir).unwrap();
-
-    // Ensure subsequent tool calls execute in this cwd so the guard
-    // computes the same team dir we're writing into.
-    let prev_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&cwd).unwrap();
 
     let tool = FileWriteTool;
     let ctx = make_ctx(&cwd);
@@ -193,8 +184,6 @@ async fn guard_blocks_secret_in_team_memory_path() {
         &ctx,
     )
     .await;
-
-    std::env::set_current_dir(prev_cwd).unwrap();
 
     assert!(result.is_error, "guard must reject secret-containing write");
     let err = result.data["error"].as_str().unwrap();
@@ -211,12 +200,9 @@ async fn guard_allows_benign_team_memory_write() {
     std::fs::create_dir_all(&config_dir).unwrap();
     let _env = TeamMemEnv::enter(&config_dir);
 
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = tmp.path().to_path_buf();
     let team_dir = claude_core::memdir::team_mem_paths::get_team_mem_path(&cwd);
     std::fs::create_dir_all(&team_dir).unwrap();
-
-    let prev_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&cwd).unwrap();
 
     let tool = FileWriteTool;
     let ctx = make_ctx(&cwd);
@@ -232,8 +218,6 @@ async fn guard_allows_benign_team_memory_write() {
     )
     .await;
 
-    std::env::set_current_dir(prev_cwd).unwrap();
-
     assert!(!result.is_error, "benign team-memory writes must succeed");
 }
 
@@ -244,12 +228,7 @@ async fn guard_skips_writes_outside_team_memory() {
     std::fs::create_dir_all(&config_dir).unwrap();
     let _env = TeamMemEnv::enter(&config_dir);
 
-    let cwd = tmp.path().canonicalize().unwrap();
-    let prev_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&cwd).unwrap();
-
-    // Write to a non-team path — even with secret-looking content,
-    // the guard must not fire (different paths have different guards).
+    let cwd = tmp.path().to_path_buf();
     let tool = FileWriteTool;
     let ctx = make_ctx(&cwd);
     let file_path = cwd.join("normal.md").to_string_lossy().to_string();
@@ -263,8 +242,6 @@ async fn guard_skips_writes_outside_team_memory() {
         &ctx,
     )
     .await;
-
-    std::env::set_current_dir(prev_cwd).unwrap();
 
     assert!(
         !result.is_error,
