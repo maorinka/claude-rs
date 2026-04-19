@@ -31,6 +31,7 @@ pub mod env_validation;
 pub mod errors_util;
 pub mod extract_memories;
 pub mod file_history;
+pub mod fingerprint;
 pub mod fps_tracker;
 pub mod frontmatter;
 pub mod hash;
