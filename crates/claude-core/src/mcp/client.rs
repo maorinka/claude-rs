@@ -911,11 +911,45 @@ impl McpClient {
             "arguments": arguments
         });
 
-        let response = self.send_request(methods::TOOLS_CALL, Some(params)).await?;
+        // G14: start a 30s heartbeat so long-running tool calls
+        // don't look frozen to the user. Mirrors TS `setInterval`
+        // at `client.ts:3055-3066`. The handle aborts on drop so
+        // the timer stops when call_tool returns (normal or error).
+        let heartbeat = spawn_progress_heartbeat(self.name.clone(), tool_name.to_string());
+
+        let response = match self.send_request(methods::TOOLS_CALL, Some(params)).await {
+            Ok(r) => r,
+            Err(e) => {
+                heartbeat.abort();
+                return Err(classify_call_tool_error(e, &self.name));
+            }
+        };
+
+        // Cancel the heartbeat before parsing — even if parsing
+        // panics we don't want the timer to linger.
+        heartbeat.abort();
 
         if let Some(result) = response.result {
             let tool_result: McpToolResult =
                 serde_json::from_value(result).context("Failed to parse MCP tool call result")?;
+
+            // G14: detect `isError: true` in the success envelope
+            // and surface as a typed McpToolCallError so callers
+            // can downcast for structured telemetry. Mirrors TS
+            // `client.ts:3124-3148`.
+            if tool_result.is_error.unwrap_or(false) {
+                let details = tool_result
+                    .content
+                    .iter()
+                    .find_map(|c| c.text.clone())
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                return Err(anyhow::Error::from(
+                    super::errors::McpToolCallError::new(
+                        details,
+                        "MCP tool returned error",
+                    ),
+                ));
+            }
             return Ok(tool_result);
         }
 
@@ -1167,6 +1201,81 @@ pub fn normalize_mcp_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+// ─── call_tool classification + heartbeat (G14) ─────────────────────
+
+/// Spawn a 30-second heartbeat that debug-logs
+/// `"Tool '<tool>' still running (<secs>s elapsed)"`. Returns an
+/// `AbortHandle` the caller drops / aborts when the tool call
+/// resolves. Matches TS `setInterval` at `client.ts:3055-3066`.
+///
+/// Using `tokio::spawn` + `AbortHandle` (rather than a
+/// tokio::time::interval owned by the caller) keeps the heartbeat
+/// out of the async-fn stack; the caller's flow stays a simple
+/// await.
+fn spawn_progress_heartbeat(
+    server_name: String,
+    tool_name: String,
+) -> tokio::task::AbortHandle {
+    use std::time::Duration;
+    let handle = tokio::spawn(async move {
+        let start = tokio::time::Instant::now();
+        let mut ticker = tokio::time::interval(Duration::from_secs(30));
+        // First tick fires immediately in tokio's default Burst
+        // mode — skip it so we only log at 30, 60, 90s, etc.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let elapsed_s = start.elapsed().as_secs();
+            debug!(
+                server = server_name,
+                tool = tool_name,
+                "Tool '{}' still running ({}s elapsed)",
+                tool_name,
+                elapsed_s
+            );
+        }
+    });
+    handle.abort_handle()
+}
+
+/// Classify a `send_request` error into a typed domain error when
+/// the message matches a known auth / session-expired pattern.
+/// Unmatched errors pass through unchanged. Mirrors TS
+/// `client.ts:3194-3232`.
+fn classify_call_tool_error(e: anyhow::Error, server_name: &str) -> anyhow::Error {
+    let msg = format!("{:#}", e);
+
+    // 401 signals an expired / revoked OAuth token. The Rust
+    // transport surfaces this as `"HTTP 401 body: ..."` (see
+    // G4b wiring in send_request's non-2xx branch).
+    if msg.contains("HTTP 401") || msg.contains("401 Unauthorized") {
+        return anyhow::Error::from(super::errors::McpAuthError::new(
+            server_name.to_string(),
+            format!(
+                "MCP server \"{}\" requires re-authorization (token expired)",
+                server_name
+            ),
+        ));
+    }
+
+    // Session expired: either HTTP 404 + JSON-RPC -32001, or the
+    // SDK's derived -32000 "Connection closed" on HTTP. TS
+    // `client.ts:3217-3231` handles both. The Rust HTTP send path
+    // already short-circuits the 404+-32001 case into its own
+    // error message ("session expired"); catch that plus the
+    // direct payload match.
+    if msg.contains("session expired")
+        || super::helpers::is_mcp_session_expired_error(Some(404), &msg)
+        || (msg.contains("-32000") && msg.contains("Connection closed"))
+    {
+        return anyhow::Error::from(super::errors::McpSessionExpiredError::new(
+            server_name.to_string(),
+        ));
+    }
+
+    e
 }
 
 // ─── Graceful stdio termination (G5) ─────────────────────────────────
@@ -1732,6 +1841,80 @@ mod tests {
             "test-sigkill",
         )
         .await;
+    }
+
+    // ─── G14: call_tool error classification ───────────────────────
+
+    #[test]
+    fn classify_http_401_becomes_auth_error() {
+        let e = anyhow::anyhow!("Failed to POST: HTTP 401 body: unauthorized");
+        let classified = super::classify_call_tool_error(e, "jira");
+        // Downcast to the typed error — proves callers can handle
+        // auth specifically via `.downcast()`.
+        let auth: &super::super::errors::McpAuthError = classified
+            .downcast_ref()
+            .expect("expected McpAuthError");
+        assert_eq!(auth.server_name, "jira");
+        assert!(auth.message.contains("re-authorization"));
+    }
+
+    #[test]
+    fn classify_401_unauthorized_text_becomes_auth_error() {
+        // Alternate wording some transports use.
+        let e = anyhow::anyhow!("server returned 401 Unauthorized");
+        let classified = super::classify_call_tool_error(e, "slack");
+        assert!(
+            classified
+                .downcast_ref::<super::super::errors::McpAuthError>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn classify_session_expired_text_becomes_session_error() {
+        let e = anyhow::anyhow!(
+            "MCP HTTP server 'x' session expired (HTTP 404 + JSON-RPC -32001)"
+        );
+        let classified = super::classify_call_tool_error(e, "x");
+        let sess: &super::super::errors::McpSessionExpiredError = classified
+            .downcast_ref()
+            .expect("expected McpSessionExpiredError");
+        assert_eq!(sess.server_name, "x");
+    }
+
+    #[test]
+    fn classify_32000_connection_closed_becomes_session_error() {
+        // SDK's -32000 "Connection closed" wrapper fires when the
+        // transport is torn down mid-request on HTTP. Should map
+        // to session-expired so the caller reconnects.
+        let e = anyhow::anyhow!(
+            "Failed to call tool: code -32000: Connection closed"
+        );
+        let classified = super::classify_call_tool_error(e, "vault");
+        assert!(
+            classified
+                .downcast_ref::<super::super::errors::McpSessionExpiredError>()
+                .is_some(),
+            "expected -32000 + Connection closed to classify as session expired"
+        );
+    }
+
+    #[test]
+    fn classify_unknown_error_passes_through() {
+        let e = anyhow::anyhow!("parse error at offset 42");
+        let classified = super::classify_call_tool_error(e, "x");
+        // No typed error — original bubbles up unchanged.
+        assert!(
+            classified
+                .downcast_ref::<super::super::errors::McpAuthError>()
+                .is_none()
+        );
+        assert!(
+            classified
+                .downcast_ref::<super::super::errors::McpSessionExpiredError>()
+                .is_none()
+        );
+        assert!(classified.to_string().contains("parse error"));
     }
 
     // ─── G4b: lifecycle wiring ─────────────────────────────────────
