@@ -220,6 +220,35 @@ pub struct ServerResource {
     pub server: String,
 }
 
+/// MCP tool annotations — hints the server sends to describe the
+/// tool's side-effect profile. Used by the Rust tool layer to
+/// decide concurrency safety, permission prompts, and
+/// destructive-action confirmations. Ports the TS
+/// `Tool.annotations` shape (MCP SDK `ToolAnnotations`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolAnnotations {
+    /// Human-friendly title override for UIs.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// `true` → tool does not mutate server state; safe to run
+    /// concurrently with other read-only tools.
+    #[serde(default)]
+    pub read_only_hint: Option<bool>,
+    /// `true` → tool may cause non-recoverable changes; the
+    /// UI should prompt before invoking.
+    #[serde(default)]
+    pub destructive_hint: Option<bool>,
+    /// `true` → tool reaches into arbitrary external systems
+    /// (Internet, remote APIs). Used by the permission layer.
+    #[serde(default)]
+    pub open_world_hint: Option<bool>,
+    /// `true` → calling with the same args produces the same
+    /// result (pure-ish).
+    #[serde(default)]
+    pub idempotent_hint: Option<bool>,
+}
+
 /// An MCP tool definition as received from the server.
 /// Matches TS `SerializedTool` / the MCP SDK `Tool` type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +258,16 @@ pub struct McpToolDefinition {
     pub description: Option<String>,
     #[serde(default)]
     pub input_schema: Option<serde_json::Value>,
+    /// Server-provided side-effect hints. Populated by G7 so the
+    /// Rust tool layer can propagate `readOnly` / `destructive`
+    /// etc. into its permission checks.
+    #[serde(default)]
+    pub annotations: Option<McpToolAnnotations>,
+    /// Arbitrary server-side metadata. MCP spec allows anything
+    /// under here; Claude Code uses `anthropic/searchHint` and
+    /// `anthropic/alwaysLoad` keys (see `mcp::helpers`).
+    #[serde(default, rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// Result content from an MCP tool call.

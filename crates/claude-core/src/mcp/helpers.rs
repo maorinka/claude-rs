@@ -11,8 +11,8 @@
 //! tickets a single import surface.
 
 use crate::mcp::types::{
-    McpServerConfig, McpToolDefinition, ScopedMcpServerConfig, MCP_CONNECTION_TIMEOUT_MS,
-    MCP_TOOL_TIMEOUT_MS,
+    McpServerConfig, McpToolDefinition, ScopedMcpServerConfig, MAX_MCP_DESCRIPTION_LENGTH,
+    MCP_CONNECTION_TIMEOUT_MS, MCP_TOOL_TIMEOUT_MS,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -167,6 +167,84 @@ pub fn is_included_mcp_tool(tool: &McpToolDefinition) -> bool {
     ALLOWED_IDE_TOOLS.iter().any(|&t| t == tool.name)
 }
 
+// ─── Tool enrichment (G7) ────────────────────────────────────────────
+
+/// The suffix TS appends when `tool.description` exceeds
+/// `MAX_MCP_DESCRIPTION_LENGTH`. Literal from `client.ts:1792`.
+pub const TRUNCATION_SUFFIX: &str = "… [truncated]";
+
+/// Produce the description string the model sees for this tool.
+/// If `description` is longer than `MAX_MCP_DESCRIPTION_LENGTH`,
+/// truncate at the cap and append `"… [truncated]"`. Matches TS
+/// `client.ts:1789-1794`.
+///
+/// Byte-level slicing would be unsafe on UTF-8 (could cut a
+/// multi-byte char); we slice on the nearest char boundary at or
+/// below the cap.
+pub fn tool_description_for_model(tool: &McpToolDefinition) -> String {
+    let desc = tool.description.as_deref().unwrap_or("");
+    if desc.len() <= MAX_MCP_DESCRIPTION_LENGTH {
+        return desc.to_string();
+    }
+    // Walk char boundaries backwards from the cap until we land on
+    // one. `is_char_boundary(0)` and `is_char_boundary(len)` are
+    // always true, so this terminates.
+    let mut end = MAX_MCP_DESCRIPTION_LENGTH;
+    while end > 0 && !desc.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &desc[..end], TRUNCATION_SUFFIX)
+}
+
+/// Extract the optional search hint from `tool._meta.anthropic/searchHint`,
+/// collapsing any whitespace run to a single space. TS
+/// `client.ts:1779-1784` — the whitespace normalisation prevents
+/// newlines in a server-controlled field from injecting orphan
+/// lines into the formatted tool list.
+///
+/// Returns `None` when the meta field is absent, non-string, or
+/// trims to the empty string.
+pub fn extract_search_hint(tool: &McpToolDefinition) -> Option<String> {
+    let raw = tool
+        .meta
+        .as_ref()?
+        .get("anthropic/searchHint")?
+        .as_str()?;
+    // Whitespace run → single space; trim end; drop if now empty.
+    let collapsed: String = {
+        let mut out = String::with_capacity(raw.len());
+        let mut prev_was_ws = false;
+        for ch in raw.chars() {
+            if ch.is_whitespace() {
+                if !prev_was_ws {
+                    out.push(' ');
+                    prev_was_ws = true;
+                }
+            } else {
+                out.push(ch);
+                prev_was_ws = false;
+            }
+        }
+        out.trim().to_string()
+    };
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
+    }
+}
+
+/// Is `tool._meta.anthropic/alwaysLoad === true`? Used by the
+/// deferred-tool-loader to decide whether to skip the lazy-load
+/// gate for this tool. TS `client.ts:1785`.
+pub fn extract_always_load(tool: &McpToolDefinition) -> bool {
+    tool.meta
+        .as_ref()
+        .and_then(|m| m.get("anthropic/alwaysLoad"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 // ─── Error classifiers ───────────────────────────────────────────────
 
 /// Detect whether an error message carries the "session expired"
@@ -306,6 +384,8 @@ mod tests {
             name: name.to_string(),
             description: None,
             input_schema: Some(serde_json::json!({})),
+            annotations: None,
+            meta: None,
         }
     }
 
@@ -351,6 +431,133 @@ mod tests {
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__listOpenFiles")));
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__closeTab")));
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__")));
+    }
+
+    // ─── tool enrichment (G7) ────────────────────────────────────
+
+    #[test]
+    fn description_passthrough_when_under_cap() {
+        let mut t = tool_named("x");
+        t.description = Some("short description".to_string());
+        assert_eq!(tool_description_for_model(&t), "short description");
+    }
+
+    #[test]
+    fn description_truncates_with_marker_when_over_cap() {
+        let mut t = tool_named("x");
+        // cap = 2048 (MAX_MCP_DESCRIPTION_LENGTH). Build a 3000-byte
+        // ASCII description so truncation clearly fires.
+        t.description = Some("a".repeat(3000));
+        let s = tool_description_for_model(&t);
+        assert!(
+            s.ends_with(TRUNCATION_SUFFIX),
+            "expected truncation suffix, got tail: {:?}",
+            &s[s.len().saturating_sub(30)..]
+        );
+        // Body length = cap; total = cap + suffix bytes.
+        assert!(s.len() > MAX_MCP_DESCRIPTION_LENGTH);
+    }
+
+    #[test]
+    fn description_empty_when_missing() {
+        let t = tool_named("x"); // no description
+        assert_eq!(tool_description_for_model(&t), "");
+    }
+
+    #[test]
+    fn description_truncation_respects_utf8_boundaries() {
+        // The cap may land mid-multibyte-char; the helper must
+        // back up to the nearest char boundary so the returned
+        // `String` is still valid UTF-8.
+        let mut t = tool_named("x");
+        // 2-byte-per-char Cyrillic → ~1500 chars fills ~3000
+        // bytes, well past the cap.
+        t.description = Some("я".repeat(1500));
+        let s = tool_description_for_model(&t);
+        // Must not panic and must contain the marker.
+        assert!(s.ends_with(TRUNCATION_SUFFIX));
+        // Body must be valid UTF-8 (trivially true for &str /
+        // String; the assertion is "no panic on non-boundary
+        // slice").
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn search_hint_extracts_and_collapses_whitespace() {
+        let mut t = tool_named("x");
+        t.meta = Some(serde_json::json!({
+            "anthropic/searchHint": "one\t\ttwo\n\nthree  four",
+        }));
+        assert_eq!(
+            extract_search_hint(&t).as_deref(),
+            Some("one two three four")
+        );
+    }
+
+    #[test]
+    fn search_hint_none_when_missing_or_wrong_shape() {
+        let t_no_meta = tool_named("x");
+        assert!(extract_search_hint(&t_no_meta).is_none());
+
+        let mut t_wrong_key = tool_named("x");
+        t_wrong_key.meta = Some(serde_json::json!({ "other": "v" }));
+        assert!(extract_search_hint(&t_wrong_key).is_none());
+
+        let mut t_non_string = tool_named("x");
+        t_non_string.meta = Some(serde_json::json!({
+            "anthropic/searchHint": 42,
+        }));
+        assert!(extract_search_hint(&t_non_string).is_none());
+    }
+
+    #[test]
+    fn search_hint_whitespace_only_returns_none() {
+        let mut t = tool_named("x");
+        t.meta = Some(serde_json::json!({
+            "anthropic/searchHint": "   \t\n  ",
+        }));
+        assert!(extract_search_hint(&t).is_none());
+    }
+
+    #[test]
+    fn always_load_strict_true_only() {
+        let mut t = tool_named("x");
+        assert!(!extract_always_load(&t)); // no meta
+        t.meta = Some(serde_json::json!({ "anthropic/alwaysLoad": false }));
+        assert!(!extract_always_load(&t));
+        t.meta = Some(serde_json::json!({ "anthropic/alwaysLoad": "true" }));
+        assert!(!extract_always_load(&t)); // strict: string-true doesn't qualify
+        t.meta = Some(serde_json::json!({ "anthropic/alwaysLoad": 1 }));
+        assert!(!extract_always_load(&t)); // strict: truthy doesn't qualify
+        t.meta = Some(serde_json::json!({ "anthropic/alwaysLoad": true }));
+        assert!(extract_always_load(&t));
+    }
+
+    #[test]
+    fn annotations_round_trip_from_server_payload() {
+        // Verify the new McpToolDefinition fields deserialize from
+        // a representative wire payload. Guards against accidental
+        // rename breakage on `annotations` / `_meta`.
+        let wire = serde_json::json!({
+            "name": "search",
+            "description": "Search",
+            "inputSchema": { "type": "object" },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "openWorldHint": true,
+                "title": "Search"
+            },
+            "_meta": { "anthropic/alwaysLoad": true }
+        });
+        let parsed: McpToolDefinition =
+            serde_json::from_value(wire).expect("deserialize");
+        let a = parsed.annotations.as_ref().expect("annotations present");
+        assert_eq!(a.read_only_hint, Some(true));
+        assert_eq!(a.destructive_hint, Some(false));
+        assert_eq!(a.open_world_hint, Some(true));
+        assert_eq!(a.title.as_deref(), Some("Search"));
+        assert!(extract_always_load(&parsed));
     }
 
     // ─── streamable-http post helper ─────────────────────────────
