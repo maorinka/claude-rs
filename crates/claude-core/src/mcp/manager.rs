@@ -410,33 +410,78 @@ impl McpManager {
                     }
                 }
             }
-            // G18: Ws/WsIde config variants round-trip off disk
-            // and drive orchestration (is_ide_mcp_server,
-            // connect_all_respecting_auth_cache), but the actual
-            // WebSocket transport isn't implemented yet (blocked
-            // on a tokio-tungstenite dep decision). Fail
-            // explicitly with the same "not yet" message for
-            // both — downstream code surfaces this in the UI
-            // instead of a silent mismatch.
-            McpServerConfig::Ws(_) | McpServerConfig::WsIde(_) => {
-                let error_msg =
-                    "WebSocket transport not yet implemented (G18b)".to_string();
-                warn!(
-                    server = name,
-                    "WebSocket MCP transport requested but not yet implemented"
-                );
-                let conn = McpServerConnection {
-                    name: name.to_string(),
-                    status: McpConnectionStatus::Failed {
-                        error: Some(error_msg),
-                    },
-                    config: scoped_config,
-                };
-                {
-                    let mut connections = self.connections.write().await;
-                    connections.insert(name.to_string(), conn.clone());
+            // G18b: real WebSocket transport. `ws` and `ws-ide`
+            // share the same `connect_ws` path — the caller
+            // (this branch) assembles the auth headers per TS
+            // `client.ts:708-783`. ws-ide sends
+            // `X-Claude-Code-Ide-Authorization` when `auth_token`
+            // is set; `ws` leaves auth to user-configured headers.
+            McpServerConfig::Ws(ref ws_config) | McpServerConfig::WsIde(ref ws_config) => {
+                let is_ide = matches!(&scoped_config.config, McpServerConfig::WsIde(_));
+                let mut headers = ws_config.headers.clone().unwrap_or_default();
+                if is_ide {
+                    if let Some(token) = ws_config.auth_token.as_deref() {
+                        headers.insert(
+                            "X-Claude-Code-Ide-Authorization".to_string(),
+                            token.to_string(),
+                        );
+                    }
                 }
-                conn
+                match McpClient::connect_ws(name, &ws_config.url, headers).await {
+                    Ok(client) => {
+                        let capabilities = client.capabilities().cloned().unwrap_or_default();
+                        let server_info = client.server_info().cloned();
+                        let instructions = client.instructions().map(|s| s.to_string());
+
+                        let conn = McpServerConnection {
+                            name: name.to_string(),
+                            status: McpConnectionStatus::Connected {
+                                capabilities,
+                                server_info,
+                                instructions,
+                            },
+                            config: scoped_config,
+                        };
+                        {
+                            let mut clients = self.clients.write().await;
+                            clients.insert(name.to_string(), client);
+                        }
+                        {
+                            let mut connections = self.connections.write().await;
+                            connections.insert(name.to_string(), conn.clone());
+                        }
+                        info!(server = name, "MCP WebSocket server connected");
+                        conn
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{:#}", e);
+                        let conn = if looks_like_auth_failure(&error_msg) {
+                            super::auth_failure::handle_remote_auth_failure(
+                                name,
+                                &scoped_config,
+                                super::auth_failure::RemoteTransportKind::Http,
+                            )
+                        } else {
+                            error!(
+                                server = name,
+                                error = %error_msg,
+                                "Failed to connect to MCP WebSocket server"
+                            );
+                            McpServerConnection {
+                                name: name.to_string(),
+                                status: McpConnectionStatus::Failed {
+                                    error: Some(error_msg),
+                                },
+                                config: scoped_config,
+                            }
+                        };
+                        {
+                            let mut connections = self.connections.write().await;
+                            connections.insert(name.to_string(), conn.clone());
+                        }
+                        conn
+                    }
+                }
             }
         }
     }
@@ -825,16 +870,17 @@ mod tests {
         assert!(!manager.is_connected("ghost").await);
     }
 
-    /// G18a: Ws / WsIde currently produce a clear `Failed`
-    /// status with the "not yet implemented (G18b)" marker. Pin
-    /// the contract so G18b's wiring can't silently delete the
-    /// failure message without updating a test.
+    /// G18b: an unreachable WebSocket URL produces a clear
+    /// `Failed` status (the DNS / connect error). The G18a
+    /// "not yet implemented" placeholder is gone — this pins
+    /// that the real connect path is in place.
     #[tokio::test]
-    async fn connect_server_ws_variant_returns_failed_with_g18b_marker() {
+    async fn connect_server_ws_variant_attempts_real_connect() {
         let manager = McpManager::new();
         let cfg = ScopedMcpServerConfig {
             config: McpServerConfig::Ws(McpWsServerConfig {
-                url: "ws://example.invalid".into(),
+                // RFC 6761 reserves `.invalid` so no DNS resolves.
+                url: "ws://definitely.invalid.example/mcp".into(),
                 headers: None,
                 auth_token: None,
             }),
@@ -843,10 +889,12 @@ mod tests {
         let conn = manager.connect_server("ws-srv", cfg).await;
         match conn.status {
             McpConnectionStatus::Failed { error: Some(msg) } => {
+                // Must NOT still be the G18a placeholder — the
+                // real connect path is wired.
                 assert!(
-                    msg.contains("G18b"),
-                    "ws variant must surface the G18b marker so its \
-                     replacement is traceable; got {}",
+                    !msg.contains("not yet implemented"),
+                    "WebSocket transport should now attempt a real \
+                     connect, not return the G18a placeholder; got {}",
                     msg
                 );
             }
@@ -855,11 +903,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_server_ws_ide_returns_failed_with_g18b_marker() {
+    async fn connect_server_ws_ide_attempts_real_connect() {
         let manager = McpManager::new();
         let cfg = ScopedMcpServerConfig {
             config: McpServerConfig::WsIde(McpWsServerConfig {
-                url: "ws://127.0.0.1:9000".into(),
+                url: "ws://definitely.invalid.example/mcp".into(),
                 headers: None,
                 auth_token: Some("tok".into()),
             }),
@@ -868,7 +916,7 @@ mod tests {
         let conn = manager.connect_server("ws-ide-srv", cfg).await;
         assert!(
             matches!(conn.status, McpConnectionStatus::Failed { .. }),
-            "ws-ide must also route through the Failed fallback"
+            "ws-ide must surface real connect failure, not G18a fallback"
         );
     }
 

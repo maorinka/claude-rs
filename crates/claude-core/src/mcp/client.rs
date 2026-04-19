@@ -41,6 +41,20 @@ enum McpTransport {
         /// Session ID returned by the server, sent in subsequent requests.
         session_id: Arc<Mutex<Option<String>>>,
     },
+    /// WebSocket transport: persistent bidirectional connection.
+    /// Outbound messages are queued via the `write_tx` mpsc; a
+    /// reader task owns the read half of the WS stream and
+    /// dispatches inbound frames to `pending` / `request_handlers`
+    /// using the same machinery as stdio. G18b port of TS
+    /// `WebSocketTransport` usage at `client.ts:735-783`.
+    Ws {
+        /// Retained for diagnostics + reconnect address.
+        #[allow(dead_code)]
+        url: String,
+        /// Channel to enqueue outbound text frames. The receiver
+        /// is owned by the WS writer task.
+        write_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    },
 }
 
 /// An MCP client that communicates with an MCP server via stdio, SSE, or HTTP transport.
@@ -452,6 +466,189 @@ impl McpClient {
         Ok(client)
     }
 
+    /// Connect to an MCP server over a WebSocket. Shared
+    /// implementation for both `ws` and `ws-ide`; the caller
+    /// assembles the appropriate headers. G18b port of TS
+    /// `WebSocketTransport` setup at `client.ts:735-783`.
+    ///
+    /// `request_headers` is applied at the handshake via the
+    /// `tungstenite` request builder. Requested subprotocol is
+    /// hardcoded to `mcp` to match TS `protocols: ['mcp']`.
+    ///
+    /// The reader task owns the read half of the stream and
+    /// dispatches frames through the same `dispatch_inbound_line`
+    /// pipeline stdio uses — responses → `pending`, server
+    /// requests → `request_handlers`, notifications → debug log.
+    /// Outbound messages go through an `mpsc::UnboundedSender`
+    /// so `send_request` / `send_notification` remain
+    /// single-await.
+    pub async fn connect_ws(
+        name: &str,
+        url: &str,
+        request_headers: HashMap<String, String>,
+    ) -> Result<Self> {
+        use tokio_tungstenite::tungstenite::{
+            client::IntoClientRequest, http::HeaderValue, Message,
+        };
+
+        debug!(server = name, url, "Connecting to MCP server via WebSocket");
+
+        // Build the upgrade request with custom headers +
+        // `Sec-WebSocket-Protocol: mcp`.
+        let mut req = url
+            .into_client_request()
+            .with_context(|| format!("invalid WebSocket URL for MCP server '{}'", name))?;
+        {
+            let hdrs = req.headers_mut();
+            hdrs.insert(
+                "Sec-WebSocket-Protocol",
+                HeaderValue::from_static("mcp"),
+            );
+            for (k, v) in &request_headers {
+                if let (Ok(hn), Ok(hv)) = (
+                    tokio_tungstenite::tungstenite::http::HeaderName::try_from(
+                        k.as_str(),
+                    ),
+                    HeaderValue::try_from(v.as_str()),
+                ) {
+                    hdrs.insert(hn, hv);
+                } else {
+                    warn!(
+                        server = name,
+                        header = %k,
+                        "Skipping invalid WebSocket header"
+                    );
+                }
+            }
+        }
+
+        let (ws_stream, _response) = tokio_tungstenite::connect_async(req)
+            .await
+            .with_context(|| {
+                format!("Failed to establish WebSocket to MCP server '{}'", name)
+            })?;
+
+        use futures_util::{SinkExt, StreamExt};
+        let (mut write_half, mut read_half) = ws_stream.split();
+
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let request_handlers = default_request_handlers().await;
+        let lifecycle: Arc<Mutex<super::lifecycle::LifecycleTracker>> =
+            Arc::new(Mutex::new(super::lifecycle::LifecycleTracker::new()));
+        let next_id = Arc::new(AtomicU64::new(1));
+
+        // Outbound queue — unbounded since we don't want
+        // send_request to block on a full channel. Volume is
+        // bounded by the pending map size already.
+        let (write_tx, mut write_rx) =
+            tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Writer task: drain outgoing frames.
+        let writer_server_name = name.to_string();
+        tokio::spawn(async move {
+            while let Some(msg) = write_rx.recv().await {
+                if let Err(e) = write_half.send(Message::Text(msg.into())).await {
+                    debug!(
+                        server = writer_server_name,
+                        "WebSocket write failed: {}", e
+                    );
+                    break;
+                }
+            }
+            let _ = write_half.close().await;
+        });
+
+        // Reader task: dispatch incoming frames via the shared
+        // inbound pipeline.
+        let reader_server_name = name.to_string();
+        let pending_clone = pending.clone();
+        let handlers_clone = request_handlers.clone();
+        let lifecycle_clone = lifecycle.clone();
+        // Reuse the stdio dispatcher — it accepts a writer Arc
+        // so we wrap our write_tx in an adapter that ignores the
+        // writer slot (WS doesn't use the blocking-Write
+        // interface). To keep dispatch unified we just clone the
+        // write_tx into a no-op writer for now; server-initiated
+        // request responses get sent directly.
+        let writer_adapter: Arc<Mutex<Option<Box<dyn Write + Send>>>> =
+            Arc::new(Mutex::new(None));
+        let write_tx_clone = write_tx.clone();
+        let reader_handle = tokio::spawn(async move {
+            while let Some(frame) = read_half.next().await {
+                match frame {
+                    Ok(Message::Text(txt)) => {
+                        dispatch_ws_inbound_line(
+                            &txt,
+                            &reader_server_name,
+                            pending_clone.clone(),
+                            handlers_clone.clone(),
+                            write_tx_clone.clone(),
+                        );
+                    }
+                    Ok(Message::Close(_)) => {
+                        debug!(
+                            server = reader_server_name,
+                            "WebSocket closed by peer"
+                        );
+                        break;
+                    }
+                    Ok(_) => {
+                        // Ignore binary / ping / pong — MCP uses
+                        // text JSON only. tungstenite auto-pongs
+                        // pings internally.
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        debug!(
+                            server = reader_server_name,
+                            "WebSocket stream error: {}", msg
+                        );
+                        // Same lifecycle treatment as SSE stream
+                        // errors — drain pending on TriggerClose.
+                        let mut lc = lifecycle_clone.lock().await;
+                        if let super::lifecycle::LifecycleDecision::TriggerClose {
+                            reason,
+                        } = lc.record_error(&msg)
+                        {
+                            debug!(
+                                server = reader_server_name,
+                                "WebSocket closed by lifecycle tracker: {}",
+                                reason
+                            );
+                            let mut pending = pending_clone.lock().await;
+                            pending.clear();
+                        }
+                        break;
+                    }
+                }
+            }
+            // Silence unused-Arc warnings for the adapter slot.
+            drop(writer_adapter);
+        });
+
+        let mut client = Self {
+            name: name.to_string(),
+            transport: McpTransport::Ws {
+                url: url.to_string(),
+                write_tx,
+            },
+            process: None,
+            writer: Arc::new(Mutex::new(None)),
+            pending,
+            next_id,
+            request_handlers,
+            lifecycle,
+            capabilities: None,
+            server_info: None,
+            instructions: None,
+            reader_handle: Some(reader_handle),
+        };
+
+        client.initialize().await?;
+        Ok(client)
+    }
+
     /// Perform the MCP initialization handshake.
     ///
     /// Sends `initialize` request and then `notifications/initialized` notification.
@@ -765,6 +962,54 @@ impl McpClient {
 
                 Ok(response)
             }
+            McpTransport::Ws { write_tx, .. } => {
+                // G18b: lifecycle short-circuit same shape as
+                // SSE — a closed transport fails fast.
+                if self.lifecycle.lock().await.has_triggered_close() {
+                    return Err(anyhow!(
+                        "MCP WS server '{}' transport closed (reconnect required)",
+                        self.name
+                    ));
+                }
+                let (tx, rx) = oneshot::channel();
+                {
+                    let mut pending = self.pending.lock().await;
+                    pending.insert(id, tx);
+                }
+                let line = serde_json::to_string(&request)
+                    .context("Failed to serialize WS request")?;
+                if let Err(e) = write_tx.send(line) {
+                    // Writer task is gone — pending was inserted;
+                    // drop it so the caller sees the error
+                    // immediately rather than on timeout.
+                    let mut pending = self.pending.lock().await;
+                    pending.remove(&id);
+                    return Err(anyhow!(
+                        "MCP WS server '{}' writer closed: {}",
+                        self.name,
+                        e
+                    ));
+                }
+
+                let timeout = Duration::from_millis(MCP_TOOL_TIMEOUT_MS);
+                match tokio::time::timeout(timeout, rx).await {
+                    Ok(Ok(response)) => Ok(response),
+                    Ok(Err(_)) => Err(anyhow!(
+                        "MCP WS server '{}' response channel closed for request {}",
+                        self.name,
+                        id
+                    )),
+                    Err(_) => {
+                        let mut pending = self.pending.lock().await;
+                        pending.remove(&id);
+                        Err(anyhow!(
+                            "MCP WS request to '{}' timed out (method: {})",
+                            self.name,
+                            method
+                        ))
+                    }
+                }
+            }
         }
     }
 
@@ -867,6 +1112,23 @@ impl McpClient {
                     )
                 })?;
             }
+            McpTransport::Ws { write_tx, .. } => {
+                if self.lifecycle.lock().await.has_triggered_close() {
+                    return Err(anyhow!(
+                        "MCP WS server '{}' transport closed (reconnect required)",
+                        self.name
+                    ));
+                }
+                let line = serde_json::to_string(&notification)
+                    .context("Failed to serialize WS notification")?;
+                if let Err(e) = write_tx.send(line) {
+                    return Err(anyhow!(
+                        "MCP WS server '{}' notification writer closed: {}",
+                        self.name,
+                        e
+                    ));
+                }
+            }
         }
 
         debug!(server = self.name, method = method, "Sent MCP notification");
@@ -926,6 +1188,11 @@ impl McpClient {
             McpTransport::Http { .. } => TransportHint::Http,
             McpTransport::Sse { .. } => TransportHint::Sse,
             McpTransport::Stdio => TransportHint::Stdio,
+            // Ws uses the same classifier rules as SSE for the
+            // -32000 "Connection closed" session-expiry path —
+            // both are reconnect-eligible streaming transports,
+            // not HTTP-session-tied.
+            McpTransport::Ws { .. } => TransportHint::Sse,
         };
 
         let response = match self.send_request(methods::TOOLS_CALL, Some(params)).await {
@@ -1303,6 +1570,16 @@ impl McpClient {
                 // we have the URL configured
                 true
             }
+            McpTransport::Ws { .. } => {
+                // Same liveness rule as SSE: the reader task
+                // exits when the socket closes (either via a
+                // Close frame or a stream error).
+                if let Some(ref handle) = self.reader_handle {
+                    !handle.is_finished()
+                } else {
+                    false
+                }
+            }
         }
     }
 }
@@ -1652,6 +1929,133 @@ fn default_elicitation_cancel_handler() -> RequestHandler {
 ///
 /// Errors at any stage are debug-logged — a misbehaving server must
 /// never poison the reader loop.
+/// WebSocket-flavour dispatcher. Same decision logic as the
+/// stdio `dispatch_inbound_line` — classify line as response /
+/// request / notification — but server→client responses go back
+/// through the WS writer `mpsc::UnboundedSender` instead of a
+/// blocking `Write` handle. G18b.
+fn dispatch_ws_inbound_line(
+    line: &str,
+    server_name: &str,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
+    handlers: Arc<Mutex<HashMap<String, RequestHandler>>>,
+    write_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            debug!(
+                server = server_name,
+                "Unparseable WS line (dropped): {} ({})", line, e
+            );
+            return;
+        }
+    };
+
+    let has_result = value.get("result").is_some() || value.get("error").is_some();
+    let method = value.get("method").and_then(|m| m.as_str()).map(String::from);
+    let id = value.get("id").and_then(|i| i.as_u64());
+
+    let rt = match tokio::runtime::Handle::try_current() {
+        Ok(rt) => rt,
+        Err(_) => {
+            debug!(
+                server = server_name,
+                "Reader has no tokio runtime; dropping WS message: {}", line
+            );
+            return;
+        }
+    };
+
+    if has_result {
+        match serde_json::from_value::<JsonRpcResponse>(value.clone()) {
+            Ok(resp) => {
+                rt.spawn(async move {
+                    let mut pending = pending.lock().await;
+                    if let Some(sender) = pending.remove(&resp.id) {
+                        let _ = sender.send(resp);
+                    }
+                });
+                return;
+            }
+            Err(e) => {
+                debug!(
+                    server = server_name,
+                    "Malformed response-shaped WS message (dropped): {} ({})",
+                    line,
+                    e
+                );
+                return;
+            }
+        }
+    }
+
+    if let (Some(m), Some(request_id)) = (method.as_deref(), id) {
+        let m = m.to_string();
+        let params = value.get("params").cloned();
+        let server_name_owned = server_name.to_string();
+        let write_tx = write_tx.clone();
+        rt.spawn(async move {
+            let handler = {
+                let guard = handlers.lock().await;
+                guard.get(&m).cloned()
+            };
+            let response = match handler {
+                Some(h) => match h(params).await {
+                    Ok(result) => JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request_id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(err) => JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request_id,
+                        result: None,
+                        error: Some(err),
+                    },
+                },
+                None => JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request_id,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32601,
+                        message: format!("method not found: {}", m),
+                        data: None,
+                    }),
+                },
+            };
+            let line = match serde_json::to_string(&response) {
+                Ok(s) => s,
+                Err(e) => {
+                    debug!(
+                        server = server_name_owned,
+                        "Failed to serialize WS response: {}", e
+                    );
+                    return;
+                }
+            };
+            if let Err(e) = write_tx.send(line) {
+                debug!(
+                    server = server_name_owned,
+                    "Failed to enqueue WS response: {}", e
+                );
+            }
+        });
+        return;
+    }
+
+    if method.is_some() {
+        debug!(server = server_name, "Ignoring WS server notification: {}", line);
+        return;
+    }
+    debug!(
+        server = server_name,
+        "Unrecognised WS message (dropped): {}", line
+    );
+}
+
 fn dispatch_inbound_line(
     line: &str,
     server_name: &str,

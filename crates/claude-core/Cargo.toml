@@ -27,6 +27,12 @@ regex = "1"
 urlencoding = "2"
 open = "5"
 once_cell = "1"
+# G18b: WebSocket transport for ws / ws-ide MCP servers. Uses
+# native-tls by default so wss:// URLs work with the system trust
+# store (TS uses Node's built-in TLS; Rust's rustls would need a
+# distinct webpki root bundle). `connect` only — no server
+# surface — so the client features are sufficient.
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 # Unix-only: graceful subprocess termination with SIGINT→SIGTERM→SIGKILL
 # escalation (see `mcp::client::graceful_terminate_stdio`). `libc` is
