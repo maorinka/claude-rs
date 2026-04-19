@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, warn};
 
+use super::helpers::mcp_streamable_http_post;
 use super::types::*;
 
 /// The transport backend used by an MCP client.
@@ -496,8 +497,7 @@ impl McpClient {
                     pending.insert(id, tx);
                 }
 
-                let mut req = http
-                    .post(&msg_url)
+                let mut req = mcp_streamable_http_post(http, &msg_url, headers.as_ref())
                     .header("content-type", "application/json");
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
@@ -559,10 +559,8 @@ impl McpClient {
             } => {
                 // For HTTP (Streamable HTTP), POST the JSON-RPC request and
                 // read the response directly from the HTTP response body.
-                let mut req = http
-                    .post(url)
-                    .header("content-type", "application/json")
-                    .header("accept", "application/json, text/event-stream");
+                let mut req = mcp_streamable_http_post(http, url, headers.as_ref())
+                    .header("content-type", "application/json");
 
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
@@ -667,8 +665,7 @@ impl McpClient {
                     })?
                 };
 
-                let mut req = http
-                    .post(&msg_url)
+                let mut req = mcp_streamable_http_post(http, &msg_url, headers.as_ref())
                     .header("content-type", "application/json");
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
@@ -690,7 +687,8 @@ impl McpClient {
                 headers,
                 session_id,
             } => {
-                let mut req = http.post(url).header("content-type", "application/json");
+                let mut req = mcp_streamable_http_post(http, url, headers.as_ref())
+                    .header("content-type", "application/json");
                 if let Some(hdrs) = headers {
                     for (k, v) in hdrs {
                         req = req.header(k, v);

@@ -105,6 +105,45 @@ pub fn is_local_mcp_server(config: &ScopedMcpServerConfig) -> bool {
     matches!(config.config, McpServerConfig::Stdio(_))
 }
 
+// ─── HTTP request defaults ───────────────────────────────────────────
+
+/// Attach the MCP Streamable-HTTP defaults to a `reqwest` POST:
+/// per-request 60-second timeout and the required
+/// `Accept: application/json, text/event-stream` header.
+///
+/// Mirrors TS `wrapFetchWithTimeout` at `client.ts:492-550`:
+///
+/// - **Timeout** is per-request rather than per-client so long-lived
+///   SSE `GET` streams don't inherit the 60s cap. The equivalent JS
+///   pattern creates a fresh `AbortController` for every call to
+///   avoid a single stale `AbortSignal.timeout()` poisoning later
+///   requests.
+/// - **Accept header** is only applied when the user's configured
+///   headers don't already carry one. Case-insensitive match —
+///   servers that enforce RFC 7230 treat `accept` and `Accept`
+///   identically, and users in the wild do both. Mirrors TS
+///   `if (!headers.has('accept'))` at `client.ts:508-510`.
+///
+/// The caller applies `content-type: application/json` and body
+/// separately — this helper only handles the two concerns TS
+/// centralises in its fetch wrapper.
+pub fn mcp_streamable_http_post(
+    http: &reqwest::Client,
+    url: &str,
+    user_headers: Option<&std::collections::HashMap<String, String>>,
+) -> reqwest::RequestBuilder {
+    let mut req = http
+        .post(url)
+        .timeout(std::time::Duration::from_millis(MCP_REQUEST_TIMEOUT_MS));
+    let user_set_accept = user_headers
+        .map(|h| h.keys().any(|k| k.eq_ignore_ascii_case("accept")))
+        .unwrap_or(false);
+    if !user_set_accept {
+        req = req.header("accept", MCP_STREAMABLE_HTTP_ACCEPT);
+    }
+    req
+}
+
 /// Deterministic cache key for a server connection: `"${name}-${json(serverRef)}"`.
 /// Mirrors TS `getServerCacheKey` at `client.ts:581-586`. The JSON
 /// serialization matches TS's `JSON.stringify(ScopedMcpServerConfig)`
@@ -312,6 +351,56 @@ mod tests {
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__listOpenFiles")));
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__closeTab")));
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__")));
+    }
+
+    // ─── streamable-http post helper ─────────────────────────────
+
+    #[tokio::test]
+    async fn streamable_post_adds_accept_when_user_has_none() {
+        let http = reqwest::Client::new();
+        // Build the request — `try_clone` to harvest an inspectable
+        // `Request` without actually sending.
+        let rb = mcp_streamable_http_post(&http, "http://example.invalid/x", None);
+        let req = rb.build().expect("build should succeed");
+        let accept = req
+            .headers()
+            .get("accept")
+            .expect("accept header must be present");
+        assert_eq!(accept, MCP_STREAMABLE_HTTP_ACCEPT);
+        // Per-request timeout must be exactly MCP_REQUEST_TIMEOUT_MS.
+        assert_eq!(
+            req.timeout(),
+            Some(&std::time::Duration::from_millis(MCP_REQUEST_TIMEOUT_MS))
+        );
+    }
+
+    #[tokio::test]
+    async fn streamable_post_respects_user_accept_header_any_case() {
+        let http = reqwest::Client::new();
+        let mut user = std::collections::HashMap::new();
+        user.insert("Accept".to_string(), "application/json".to_string());
+        let rb = mcp_streamable_http_post(&http, "http://example.invalid/x", Some(&user));
+        let req = rb.build().expect("build should succeed");
+        // The helper must NOT have set a default; the user's header
+        // is supplied by the caller (who iterates the user map after
+        // the helper call), so the built request here has no accept.
+        // The *contract* is: helper doesn't stomp user-set accept.
+        assert!(
+            req.headers().get("accept").is_none(),
+            "helper must not force a default when user set accept (case-insensitive)"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamable_post_user_header_mixed_case_detected() {
+        // "aCcEpT" must also suppress the default — TS's Headers
+        // lookup is case-insensitive.
+        let http = reqwest::Client::new();
+        let mut user = std::collections::HashMap::new();
+        user.insert("aCcEpT".to_string(), "text/plain".to_string());
+        let rb = mcp_streamable_http_post(&http, "http://example.invalid/x", Some(&user));
+        let req = rb.build().expect("build should succeed");
+        assert!(req.headers().get("accept").is_none());
     }
 
     // ─── session-expired classifier ──────────────────────────────
