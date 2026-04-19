@@ -9,6 +9,7 @@ pub mod auto_dream;
 pub mod auto_mode_denials;
 pub mod binary_check;
 pub mod bridge;
+pub mod browser;
 pub mod buddy;
 pub mod cache_paths;
 pub mod circular_buffer;
