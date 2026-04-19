@@ -274,22 +274,17 @@ pub fn extract_always_load(tool: &McpToolDefinition) -> bool {
 /// the transport opens. Matches TS `areMcpConfigsEqual` at
 /// `client.ts:1710-1722`.
 ///
-/// Semantics: `a.type != b.type` → false; otherwise serialize
-/// both WITHOUT scope and compare JSON strings. `serde_json`
-/// orders object keys in insertion order, same as TS
-/// `jsonStringify`, so equal shapes produce equal strings.
+/// Uses `PartialEq` directly instead of serialize-and-compare:
+/// the config structs contain `HashMap<String,String>` for `env`
+/// and `headers`, and `HashMap`'s iteration order is randomised
+/// — serializing two equivalent configs could produce different
+/// JSON strings and spuriously compare unequal. `HashMap`'s
+/// `PartialEq` impl is order-insensitive.
 pub fn are_mcp_configs_equal(
     a: &ScopedMcpServerConfig,
     b: &ScopedMcpServerConfig,
 ) -> bool {
-    // Fast-path type check on the transport tag. Avoids a full
-    // serialize on the common "obviously different" case.
-    if std::mem::discriminant(&a.config) != std::mem::discriminant(&b.config) {
-        return false;
-    }
-    let a_json = serde_json::to_string(&a.config).unwrap_or_default();
-    let b_json = serde_json::to_string(&b.config).unwrap_or_default();
-    a_json == b_json
+    a.config == b.config
 }
 
 /// Encode an MCP tool's input arguments for the auto-mode
@@ -301,6 +296,22 @@ pub fn are_mcp_configs_equal(
 ///
 /// Used by the Rust auto-classifier stubs so their input shape
 /// matches what production models see.
+///
+/// # Divergences from TS
+///
+/// * **Key order**: TS iterates `Object.keys(input)` (insertion
+///   order). Rust's default `serde_json::Map` is backed by
+///   `BTreeMap` (alphabetical). Keys come out sorted. This is
+///   stable and deterministic but not TS-identical; classifier
+///   outputs are order-invariant in practice.
+/// * **String values** (primitive): unquoted, matches TS.
+/// * **Numbers / booleans / null**: match TS (`1`, `true`,
+///   `null`).
+/// * **Nested objects**: TS `String({a:1})` → `"[object Object]"`.
+///   Rust emits the compact JSON `{"a":1}`. Divergent but more
+///   useful for the classifier.
+/// * **Arrays**: TS `String([1,2,3])` → `"1,2,3"`. Rust emits
+///   `[1,2,3]` (JSON form). Divergent but more useful.
 pub fn mcp_tool_input_to_auto_classifier_input(
     input: &serde_json::Map<String, serde_json::Value>,
     tool_name: &str,
@@ -311,16 +322,6 @@ pub fn mcp_tool_input_to_auto_classifier_input(
     input
         .iter()
         .map(|(k, v)| {
-            // TS `String(input[k])` returns the unquoted string for
-            // strings; `[object Object]` for nested objects;
-            // number/boolean cast to their decimal word. We match:
-            // strings unquoted, everything else via `Display` on
-            // the Value (serde_json's Display is the JSON
-            // encoding, which matches TS for null/number/boolean
-            // and gives `{"...":"..."}` for objects instead of
-            // `[object Object]`). That's a small readability win
-            // for the classifier prompt — still stable and
-            // reversible enough.
             let vs = match v {
                 serde_json::Value::String(s) => s.clone(),
                 _ => v.to_string(),
@@ -724,6 +725,76 @@ mod tests {
     }
 
     #[test]
+    fn configs_equal_env_order_invariant() {
+        // HashMap iteration order is randomised. Two configs with
+        // the SAME env vars but inserted in different orders must
+        // still compare equal. Guards against the
+        // serialize-and-compare regression codex flagged.
+        use std::collections::HashMap;
+        let mut env_a = HashMap::new();
+        env_a.insert("FOO".to_string(), "1".to_string());
+        env_a.insert("BAR".to_string(), "2".to_string());
+        let mut env_b = HashMap::new();
+        env_b.insert("BAR".to_string(), "2".to_string());
+        env_b.insert("FOO".to_string(), "1".to_string());
+        let a = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "x".into(),
+            args: vec![],
+            env: Some(env_a),
+        }));
+        let b = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "x".into(),
+            args: vec![],
+            env: Some(env_b),
+        }));
+        assert!(
+            are_mcp_configs_equal(&a, &b),
+            "env order must not affect equivalence"
+        );
+    }
+
+    #[test]
+    fn configs_equal_headers_order_invariant() {
+        // Same guard for SSE/HTTP headers.
+        use std::collections::HashMap;
+        let mut h_a = HashMap::new();
+        h_a.insert("X-A".to_string(), "1".to_string());
+        h_a.insert("X-B".to_string(), "2".to_string());
+        let mut h_b = HashMap::new();
+        h_b.insert("X-B".to_string(), "2".to_string());
+        h_b.insert("X-A".to_string(), "1".to_string());
+        let a = scoped(McpServerConfig::Sse(McpSseServerConfig {
+            url: "https://x".into(),
+            headers: Some(h_a),
+        }));
+        let b = scoped(McpServerConfig::Sse(McpSseServerConfig {
+            url: "https://x".into(),
+            headers: Some(h_b),
+        }));
+        assert!(are_mcp_configs_equal(&a, &b));
+    }
+
+    #[test]
+    fn configs_equal_different_env_values_rejected() {
+        use std::collections::HashMap;
+        let mut env_a = HashMap::new();
+        env_a.insert("FOO".to_string(), "1".to_string());
+        let mut env_b = HashMap::new();
+        env_b.insert("FOO".to_string(), "2".to_string());
+        let a = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "x".into(),
+            args: vec![],
+            env: Some(env_a),
+        }));
+        let b = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "x".into(),
+            args: vec![],
+            env: Some(env_b),
+        }));
+        assert!(!are_mcp_configs_equal(&a, &b));
+    }
+
+    #[test]
     fn configs_equal_different_commands_rejected() {
         let a = scoped(McpServerConfig::Stdio(McpStdioServerConfig {
             command: "echo".into(),
@@ -760,12 +831,53 @@ mod tests {
     #[test]
     fn auto_classifier_multiple_args_joined_with_space() {
         let mut input = serde_json::Map::new();
+        // Inserted alphabetically so the assertion holds whether
+        // the backing map is a BTreeMap (default) or IndexMap
+        // (feature `preserve_order`). Order-specific behaviour
+        // is pinned separately by
+        // `auto_classifier_keys_emerge_alphabetically`.
         input.insert("a".into(), serde_json::json!(1));
         input.insert("b".into(), serde_json::json!(true));
         input.insert("c".into(), serde_json::json!("hi"));
         let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
-        // Insertion order is preserved by serde_json::Map.
         assert_eq!(out, "a=1 b=true c=hi");
+    }
+
+    #[test]
+    fn auto_classifier_keys_emerge_alphabetically() {
+        // Codex CR: serde_json::Map is backed by BTreeMap without
+        // the `preserve_order` feature, so iteration is
+        // alphabetical — NOT insertion-order (which is what the
+        // original commit claimed). The output is still stable
+        // and deterministic, just sorted rather than as-inserted.
+        let mut input = serde_json::Map::new();
+        input.insert("zebra".into(), serde_json::json!(1));
+        input.insert("apple".into(), serde_json::json!(2));
+        input.insert("mango".into(), serde_json::json!(3));
+        let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
+        assert_eq!(out, "apple=2 mango=3 zebra=1");
+    }
+
+    #[test]
+    fn auto_classifier_array_value_differs_from_ts() {
+        // TS `String([1,2,3])` emits "1,2,3"; Rust emits the JSON
+        // form "[1,2,3]". Divergent but more informative for the
+        // classifier prompt. Pin the Rust shape so it doesn't
+        // drift silently.
+        let mut input = serde_json::Map::new();
+        input.insert("items".into(), serde_json::json!([1, 2, 3]));
+        let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
+        assert_eq!(out, "items=[1,2,3]");
+    }
+
+    #[test]
+    fn auto_classifier_nested_object_value_differs_from_ts() {
+        // TS `String({a:1})` emits "[object Object]"; Rust emits
+        // the JSON form. Divergent but informative.
+        let mut input = serde_json::Map::new();
+        input.insert("opts".into(), serde_json::json!({ "a": 1 }));
+        let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
+        assert_eq!(out, r#"opts={"a":1}"#);
     }
 
     #[test]

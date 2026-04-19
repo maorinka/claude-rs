@@ -37,7 +37,7 @@ pub enum ConfigScope {
 
 /// Stdio server configuration.
 /// Matches TS `McpStdioServerConfig`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpStdioServerConfig {
     pub command: String,
     #[serde(default)]
@@ -48,7 +48,7 @@ pub struct McpStdioServerConfig {
 
 /// SSE server configuration.
 /// Matches TS `McpSSEServerConfig`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpSseServerConfig {
     pub url: String,
     #[serde(default)]
@@ -57,7 +57,7 @@ pub struct McpSseServerConfig {
 
 /// HTTP server configuration.
 /// Matches TS `McpHTTPServerConfig`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpHttpServerConfig {
     pub url: String,
     #[serde(default)]
@@ -66,7 +66,7 @@ pub struct McpHttpServerConfig {
 
 /// Union of all MCP server config variants.
 /// Matches TS `McpServerConfig`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum McpServerConfig {
     #[serde(rename = "stdio")]
