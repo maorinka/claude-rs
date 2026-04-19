@@ -87,6 +87,18 @@ pub enum LifecycleDecision {
 /// across tasks. Keeping it unsynchronised internally mirrors TS's
 /// closure-captured `let` variables and lets callers choose their
 /// own locking strategy.
+///
+/// # Transport gating (G4b wiring note)
+/// TS scopes the terminal-error counter and the
+/// `"Maximum reconnection attempts"` short-circuit to remote
+/// transports only — specifically `sse`, `http`, and
+/// `claudeai-proxy` (see `client.ts:1333-1364`). The tracker here
+/// is intentionally transport-agnostic so the data structure
+/// stays composable, but callers wiring it into transport reader
+/// loops (G4b) should NOT apply `record_error` to stdio reader
+/// errors: a crashed stdio subprocess surfaces as a process-exit
+/// signal, not as a reconnectable network-level flap, and running
+/// it through the counter would diverge from TS behaviour.
 #[derive(Debug, Default, Clone)]
 pub struct LifecycleTracker {
     consecutive_errors: u32,
@@ -290,6 +302,36 @@ mod tests {
         );
         // Second call is absorbed.
         assert_eq!(t.record_session_expired(), LifecycleDecision::Continue);
+    }
+
+    #[test]
+    fn tracker_non_terminal_reset_requires_fresh_three_to_fire_close() {
+        // Codex CR coverage gap: a non-terminal mid-streak must
+        // fully reset — three FRESH terminal errors after the
+        // reset should be needed to trigger close. Guards against
+        // an off-by-one where we might decrement-to-2 instead of
+        // zeroing.
+        let mut t = LifecycleTracker::new();
+        t.record_error("ECONNRESET"); // streak=1
+        t.record_error("ETIMEDOUT"); // streak=2
+        t.record_error("401 Unauthorized"); // non-terminal → reset
+        assert_eq!(t.consecutive_errors(), 0);
+        // Two fresh terminal must NOT fire close.
+        assert_eq!(
+            t.record_error("ECONNRESET"),
+            LifecycleDecision::Continue
+        );
+        assert_eq!(
+            t.record_error("ECONNRESET"),
+            LifecycleDecision::Continue
+        );
+        // Third fires.
+        assert_eq!(
+            t.record_error("ECONNRESET"),
+            LifecycleDecision::TriggerClose {
+                reason: "max consecutive terminal errors"
+            }
+        );
     }
 
     #[test]
