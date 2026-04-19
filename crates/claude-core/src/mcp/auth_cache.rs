@@ -131,10 +131,12 @@ pub fn is_mcp_auth_cached(server_id: &str) -> bool {
 /// Any I/O error (path unwritable, parent dir can't be created,
 /// JSON serialise fails) is swallowed silently — TS catches too.
 pub fn set_mcp_auth_cache_entry(server_id: &str) {
-    let _guard = match write_lock().lock() {
-        Ok(g) => g,
-        Err(_) => return, // Poisoned lock — best-effort, bail.
-    };
+    // Recover from poison (`.into_inner()`) rather than bail. A
+    // previous panic while holding the guard bricks the lock
+    // forever otherwise; TS's `writeChain.then(...).catch(...)`
+    // self-heals after a failed write, so poison-propagation
+    // diverges from TS's best-effort semantics.
+    let _guard = write_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut cache = load_cache();
     cache.insert(
         server_id.to_string(),
@@ -277,6 +279,41 @@ mod tests {
         invalidate_memo();
         // Malformed → best-effort empty — no panic, reports false.
         assert!(!is_mcp_auth_cached("anything"));
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_lose_entries() {
+        // Stress: N concurrent threads each set a different
+        // server_id. All N entries must appear in the final
+        // cache — proves the write_lock + invalidate_memo cycle
+        // doesn't lose concurrent writes through a stale-load
+        // race. (Serial write order is the only ordering
+        // guarantee; final membership is the invariant.)
+        let _g = T_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let (_tmp, _guard) = setup_tmp_home();
+        clear_mcp_auth_cache();
+
+        let n = 16;
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    set_mcp_auth_cache_entry(&format!("svc-{:02}", i));
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Every id must be present and unexpired.
+        for i in 0..n {
+            let id = format!("svc-{:02}", i);
+            assert!(
+                is_mcp_auth_cached(&id),
+                "concurrent writer lost id {}",
+                id
+            );
+        }
     }
 
     #[test]
