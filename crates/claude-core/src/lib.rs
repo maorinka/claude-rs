@@ -54,6 +54,7 @@ pub mod query;
 pub mod remote;
 pub mod remote_managed_settings;
 pub mod sandbox;
+pub mod sanitization;
 pub mod secondary_model;
 pub mod secret_scanner;
 pub mod session;
