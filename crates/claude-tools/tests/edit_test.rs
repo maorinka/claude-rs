@@ -12,6 +12,7 @@ fn make_ctx(dir: &TempDir) -> ToolUseContext {
             claude_tools::registry::ReadFileState::new(),
         )),
         permission_mode: claude_tools::registry::PermissionMode::Default,
+        ..Default::default()
     }
 }
 
@@ -480,6 +481,7 @@ async fn edit_guard_blocks_new_team_memory_file_with_secret() {
             claude_tools::registry::ReadFileState::new(),
         )),
         permission_mode: claude_tools::registry::PermissionMode::Default,
+        ..Default::default()
     };
     let tool = FileEditTool;
     let file_path = team_dir
@@ -537,6 +539,7 @@ async fn edit_guard_blocks_existing_team_memory_file_with_secret() {
             claude_tools::registry::ReadFileState::new(),
         )),
         permission_mode: claude_tools::registry::PermissionMode::Default,
+        ..Default::default()
     };
     // Record a read so the staleness check passes — but the guard
     // should fire BEFORE staleness anyway per TS ordering.

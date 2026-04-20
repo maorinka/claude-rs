@@ -238,6 +238,7 @@ mod tests {
                 crate::registry::ReadFileState::new(),
             )),
             permission_mode: crate::registry::PermissionMode::Default,
+            ..Default::default()
         }
     }
 

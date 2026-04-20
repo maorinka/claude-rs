@@ -592,6 +592,7 @@ async fn main() -> Result<()> {
                                             working_directory: cwd.clone(),
                                             read_file_state: read_file_state.clone(),
                                             permission_mode: permission_mode.clone(),
+                                            ..Default::default()
                                         };
                                         match exec
                                             .call(&tool_info.input, &ctx, cancel.clone(), None)

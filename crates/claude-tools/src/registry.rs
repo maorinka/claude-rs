@@ -112,6 +112,28 @@ pub struct ToolUseContext {
     /// The current permission mode of the parent session.
     /// Propagated to sub-agents to avoid unconditionally granting bypass.
     pub permission_mode: PermissionMode,
+    /// Session options (model, tools, commands, thinking config, …).
+    /// Optional for tool call sites that don't need the full session
+    /// surface; `None` is semantically "tests or ad-hoc context".
+    pub options: Option<Arc<claude_core::tool_use_context_options::ToolUseContextOptions>>,
+    /// Capability handle back to the host session. Tools call through
+    /// this to prompt for permission, append to transcript, mutate
+    /// AppState, etc. `None` means the tool is running without a host
+    /// — the `ToolHost` default impls give safe no-ops so tests and
+    /// non-interactive call sites don't need to stand up a real host.
+    pub host: Option<claude_core::tool_host::SharedToolHost>,
+}
+
+impl Default for ToolUseContext {
+    fn default() -> Self {
+        Self {
+            working_directory: PathBuf::new(),
+            read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            permission_mode: PermissionMode::default(),
+            options: None,
+            host: None,
+        }
+    }
 }
 
 #[async_trait]

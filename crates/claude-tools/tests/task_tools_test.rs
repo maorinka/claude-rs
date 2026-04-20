@@ -14,6 +14,7 @@ fn make_ctx() -> ToolUseContext {
             claude_tools::registry::ReadFileState::new(),
         )),
         permission_mode: claude_tools::registry::PermissionMode::Default,
+        ..Default::default()
     }
 }
 

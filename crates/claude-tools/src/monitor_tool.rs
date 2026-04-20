@@ -131,6 +131,7 @@ mod tests {
             working_directory: PathBuf::from("/tmp"),
             read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
             permission_mode: crate::registry::PermissionMode::Default,
+            ..Default::default()
         }
     }
     #[tokio::test]

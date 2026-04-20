@@ -11,6 +11,7 @@ fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
             claude_tools::registry::ReadFileState::new(),
         )),
         permission_mode: claude_tools::registry::PermissionMode::Default,
+        ..Default::default()
     }
 }
 

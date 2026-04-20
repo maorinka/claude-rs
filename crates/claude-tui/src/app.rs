@@ -1876,6 +1876,7 @@ async fn execute_tool(
         working_directory: cwd.to_path_buf(),
         read_file_state,
         permission_mode,
+        ..Default::default()
     };
     executor.call(input, &ctx, cancel, None).await
 }
