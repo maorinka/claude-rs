@@ -188,6 +188,12 @@ pub struct AppState {
     /// Opaque placeholder until `ToolPermissionContext` ports.
     #[serde(default)]
     pub tool_permission_context: Value,
+
+    /// Transcript-injected system messages (hook output, permission
+    /// retry notices). Opaque `Value` payloads — the renderer owns
+    /// the wire shape. Matches TS `setMessages(appendSystemMessage)`.
+    #[serde(default)]
+    pub system_messages: Vec<Value>,
 }
 
 /// Typed update message variants.
@@ -210,6 +216,11 @@ pub enum AppStateUpdate {
     AppendFileEdit(FileEdit),
     AppendAttribution(AttributionEntry),
     RegisterAgent { name: String, agent_id: String },
+    /// Injected system-level transcript message (hook output, permission
+    /// retry notice, etc.). Opaque `Value` because the message-type
+    /// graph lives outside the actor store; the host renders via its
+    /// own UI layer. Matches TS `appendSystemMessage`.
+    AppendSystemMessage(Value),
 }
 
 impl AppStateUpdate {
@@ -242,6 +253,9 @@ impl AppStateUpdate {
             }
             Self::RegisterAgent { name, agent_id } => {
                 state.agent_name_registry.insert(name, agent_id);
+            }
+            Self::AppendSystemMessage(msg) => {
+                state.system_messages.push(msg);
             }
         }
     }
@@ -620,6 +634,7 @@ mod tests {
             response_length: 100,
             agent_name_registry: HashMap::from([("researcher".into(), "a-deadbeef".into())]),
             tool_permission_context: serde_json::json!({ "mode": "default" }),
+            system_messages: vec![serde_json::json!({ "subtype": "hook_output" })],
         };
         let v = serde_json::to_value(&s).unwrap();
         let back: AppState = serde_json::from_value(v).unwrap();

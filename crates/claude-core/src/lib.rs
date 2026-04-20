@@ -49,6 +49,7 @@ pub mod hash;
 pub mod hooks;
 pub mod hyperlink;
 pub mod image_validation;
+pub mod interactive_tool_host;
 pub mod intl;
 pub mod jsonl;
 pub mod keybindings;
