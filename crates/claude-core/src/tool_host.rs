@@ -71,6 +71,7 @@
 //! can supply a partial implementation (e.g. a `NullToolHost` for
 //! batch / non-interactive use).
 
+use crate::app_state::{AppState, AttributionEntry, FileEdit};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -112,31 +113,40 @@ pub struct OsNotification {
 /// through a locked shared map.
 #[async_trait]
 pub trait ToolHost: Send + Sync {
-    /// Read-only snapshot of host state. `Value::Null` when the
-    /// host carries no meaningful state (non-interactive CLI).
-    async fn app_state_snapshot(&self) -> Value {
-        Value::Null
+    /// Read-only snapshot of host state. Returns a fresh
+    /// `Arc<AppState>` clone; production hosts wire this to an
+    /// `AppStateHandle::snapshot()` call. A `None` return
+    /// documents "this host doesn't participate in session
+    /// state" (batch / SDK / test hosts), distinguishing that
+    /// from "state is present but empty". Tools that treat
+    /// `None` as an error should fail their invocation rather
+    /// than assume defaults.
+    async fn app_state_snapshot(&self) -> Option<Arc<AppState>> {
+        None
     }
 
     /// Record that a tool invocation is or isn't in progress.
-    /// Matches TS `setInProgressToolUseIDs(prev => ...)`. Host
-    /// decides how to track — set, counter, etc.
+    /// Matches TS `setInProgressToolUseIDs(prev => ...)`.
+    /// Production hosts dispatch an
+    /// `AppStateUpdate::MarkToolUseInProgress` internally.
     async fn mark_tool_use_in_progress(&self, _tool_use_id: &str, _in_progress: bool) {}
 
     /// Record that the tool contributed `chars` to the streamed
     /// response. Hosts that implement context-budget tracking
-    /// (REPL compaction) accumulate; non-interactive hosts no-op.
+    /// (REPL compaction) dispatch
+    /// `AppStateUpdate::AddResponseChars` internally;
+    /// non-interactive hosts no-op.
     async fn record_response_chars(&self, _chars: usize) {}
 
-    /// Append an entry to the host's file-history state. The
-    /// `patch` value is an opaque representation of the edit —
-    /// step-2's typed FileHistoryState swap replaces it.
-    async fn update_file_history(&self, _patch: Value) {}
+    /// Append an entry to the host's file-history state.
+    /// Production hosts dispatch
+    /// `AppStateUpdate::AppendFileEdit(edit)` internally.
+    async fn update_file_history(&self, _edit: FileEdit) {}
 
     /// Append an entry to the host's per-agent attribution
-    /// tracker (who edited what). See `update_file_history` for
-    /// typing plan.
-    async fn update_attribution(&self, _patch: Value) {}
+    /// tracker (who edited what). Production hosts dispatch
+    /// `AppStateUpdate::AppendAttribution(entry)` internally.
+    async fn update_attribution(&self, _entry: AttributionEntry) {}
 
     /// Inject a system-level message into the transcript. Used by
     /// hook outputs that need to surface text without the model's
@@ -189,11 +199,21 @@ mod tests {
     #[tokio::test]
     async fn null_host_returns_trait_defaults() {
         let host: SharedToolHost = Arc::new(NullToolHost);
-        assert_eq!(host.app_state_snapshot().await, Value::Null);
+        assert!(host.app_state_snapshot().await.is_none());
         host.mark_tool_use_in_progress("t1", true).await;
         host.record_response_chars(100).await;
-        host.update_file_history(Value::Null).await;
-        host.update_attribution(Value::Null).await;
+        host.update_file_history(FileEdit {
+            path: "/a".into(),
+            timestamp_ms: 0,
+            kind: "update".into(),
+        })
+        .await;
+        host.update_attribution(AttributionEntry {
+            file_path: "/a".into(),
+            timestamp_ms: 0,
+            agent_id: None,
+        })
+        .await;
         host.append_system_message(Value::Null).await;
         host.send_os_notification(OsNotification {
             message: "done".into(),
@@ -252,12 +272,97 @@ mod tests {
         assert_eq!(host.prompts_recorded.load(Ordering::SeqCst), 2);
         assert_eq!(host.chars_recorded.load(Ordering::SeqCst), 1250);
         // Non-overridden defaults still callable, don't panic.
-        host.update_file_history(Value::Null).await;
+        host.update_file_history(FileEdit {
+            path: "/x".into(),
+            timestamp_ms: 0,
+            kind: "update".into(),
+        })
+        .await;
         host.send_os_notification(OsNotification {
             message: "x".into(),
             kind: "y".into(),
         })
         .await;
+    }
+
+    /// End-to-end: a production-shaped host that wraps
+    /// `AppStateHandle` + forwards host methods to typed
+    /// `AppStateUpdate` dispatches. Codex CR step-2 verdict:
+    /// tools must not see the handle directly; the host
+    /// owns state policy.
+    #[tokio::test]
+    async fn app_state_backed_host_routes_updates_via_handle() {
+        use crate::app_state::AppStateHandle;
+
+        struct BackedHost {
+            state: AppStateHandle,
+        }
+
+        #[async_trait]
+        impl ToolHost for BackedHost {
+            async fn app_state_snapshot(&self) -> Option<Arc<AppState>> {
+                Some(self.state.snapshot())
+            }
+
+            async fn mark_tool_use_in_progress(&self, id: &str, in_progress: bool) {
+                let _ = self.state.update(
+                    crate::app_state::AppStateUpdate::MarkToolUseInProgress {
+                        tool_use_id: id.into(),
+                        in_progress,
+                    },
+                );
+            }
+
+            async fn record_response_chars(&self, chars: usize) {
+                let _ = self
+                    .state
+                    .update(crate::app_state::AppStateUpdate::AddResponseChars { chars });
+            }
+
+            async fn update_file_history(&self, edit: FileEdit) {
+                let _ = self
+                    .state
+                    .update(crate::app_state::AppStateUpdate::AppendFileEdit(edit));
+            }
+
+            async fn update_attribution(&self, entry: AttributionEntry) {
+                let _ = self
+                    .state
+                    .update(crate::app_state::AppStateUpdate::AppendAttribution(entry));
+            }
+        }
+
+        let host = BackedHost {
+            state: AppStateHandle::spawn(),
+        };
+        // Tools invoke the host, which internally dispatches updates.
+        host.mark_tool_use_in_progress("tu-x", true).await;
+        host.record_response_chars(500).await;
+        host.update_file_history(FileEdit {
+            path: "/src/main.rs".into(),
+            timestamp_ms: 12345,
+            kind: "update".into(),
+        })
+        .await;
+        host.update_attribution(AttributionEntry {
+            file_path: "/src/main.rs".into(),
+            timestamp_ms: 12345,
+            agent_id: Some("a-deadbeef".into()),
+        })
+        .await;
+
+        // Allow owner loop to drain + publish.
+        for _ in 0..3 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Snapshot reads typed state, not Value.
+        let snap = host.app_state_snapshot().await.expect("snapshot");
+        assert!(snap.in_progress_tool_uses.contains("tu-x"));
+        assert_eq!(snap.response_length, 500);
+        assert_eq!(snap.file_history.edits.len(), 1);
+        assert_eq!(snap.file_history.edits[0].path, "/src/main.rs");
+        assert_eq!(snap.attribution.entries.len(), 1);
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 pub mod advisor;
+pub mod agent_definition;
 pub mod agent_id;
 pub mod agent_summary;
 pub mod analytics;
@@ -19,6 +20,7 @@ pub mod circular_buffer;
 pub mod claude_code_hints;
 pub mod cli_args;
 pub mod combined_cancel;
+pub mod command_trait;
 pub mod commands;
 pub mod compact;
 pub mod config;

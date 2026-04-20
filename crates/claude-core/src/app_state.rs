@@ -56,6 +56,23 @@
 //! the owner task observes the channel close and exits. Tests
 //! use `spawn_for_tests` which returns a handle + the owner
 //! task's `JoinHandle` so the test can await clean shutdown.
+//!
+//! A retained `watch::Receiver` survives owner-task exit: it
+//! continues to expose the last published snapshot via
+//! `borrow()`, and `changed().await` returns `Err` once the
+//! channel is fully closed.
+//!
+//! # Coalescing semantics
+//!
+//! The owner loop drains every queued `AppStateUpdate` via
+//! `try_recv` between `recv`s, applying them all BEFORE
+//! publishing a single snapshot. This keeps subscriber churn
+//! low when tools fire 2-3 updates back-to-back. Subscribers
+//! MUST NOT rely on intermediate states being observable — a
+//! burst of N updates publishes exactly one snapshot, namely
+//! the post-burst state. Callers that need per-update
+//! observability want a separate event stream (e.g.
+//! `broadcast::Sender<AppStateUpdate>`), not `watch`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -527,6 +544,33 @@ mod tests {
             .unwrap();
         let snap = rx.borrow().clone();
         assert_eq!(snap.response_length, 42);
+    }
+
+    #[tokio::test]
+    async fn receiver_survives_owner_exit_with_last_snapshot() {
+        // Subscriber keeps `watch::Receiver` after all handles
+        // drop — they should still see the final published
+        // snapshot via `borrow()`. `changed().await` returns
+        // `Err` once the watch sender is closed.
+        let (handle, owner) = AppStateHandle::spawn_for_tests();
+        handle
+            .update(AppStateUpdate::AddResponseChars { chars: 777 })
+            .unwrap();
+        settle(&handle).await;
+        let mut rx = handle.subscribe();
+        rx.mark_unchanged();
+        drop(handle);
+        // Owner observes channel close + exits.
+        tokio::time::timeout(std::time::Duration::from_secs(1), owner)
+            .await
+            .expect("owner task didn't exit")
+            .unwrap();
+        // borrow() still yields the last-published snapshot.
+        let snap = rx.borrow().clone();
+        assert_eq!(snap.response_length, 777);
+        // changed() returns Err because sender is closed.
+        let r = rx.changed().await;
+        assert!(r.is_err(), "expected Err after sender close, got {r:?}");
     }
 
     #[tokio::test]
