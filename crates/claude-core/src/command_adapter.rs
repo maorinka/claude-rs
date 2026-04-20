@@ -103,14 +103,14 @@ impl Command for LegacyBuiltinCommand {
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> Result<CommandOutcome, CommandError> {
-        // Legacy context: the current working directory and
-        // main-loop model ride through the `options` snapshot.
-        // Working directory isn't on `ToolUseContextOptions`
-        // today, so the adapter defaults to `.` — callers with
-        // a real cwd should prefer the new `Command` trait.
+        // Forward the session cwd from the new `CommandContext`
+        // to the legacy one. Codex CR step-5 flagged the
+        // earlier `std::env::current_dir()` fallback as a
+        // semantic leak: handlers branching on cwd would see
+        // the PROCESS cwd, which can disagree with the session
+        // cwd (subagent worktrees, SDK-from-stdin, etc.).
         let legacy_ctx = LegacyCommandContext {
-            working_directory: std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            working_directory: ctx.working_directory.to_path_buf(),
             model: ctx.options.main_loop_model.clone(),
             shared: self.shared.clone(),
         };
@@ -214,6 +214,7 @@ mod tests {
             .execute(CommandContext {
                 args: "hello",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap();
@@ -237,6 +238,7 @@ mod tests {
             .execute(CommandContext {
                 args: "",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap();
@@ -260,6 +262,7 @@ mod tests {
             .execute(CommandContext {
                 args: "",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap_err();
@@ -282,6 +285,7 @@ mod tests {
             .execute(CommandContext {
                 args: "",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap_err();
@@ -323,6 +327,7 @@ mod tests {
             .execute(CommandContext {
                 args: "",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap();
@@ -361,6 +366,7 @@ mod tests {
             .execute(CommandContext {
                 args: "via registry",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap();

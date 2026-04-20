@@ -32,9 +32,9 @@
 //!   triggers.
 //! - `agent_name_registry` — name → agent id map set by the
 //!   Agent tool (TS `AppStateStore.ts:163`).
-//! - `tool_permission_context` — opaque `Value` because the
-//!   `ToolPermissionContext` type (`Tool.ts:123-138`) has its own
-//!   nested types that remain un-ported.
+//! - `tool_permission_context` — typed
+//!   `permissions::types::ToolPermissionContext` (the
+//!   canonical type the live permission subsystem uses).
 //!
 //! # Scope — what is NOT in this MVP
 //!
@@ -185,9 +185,13 @@ pub struct AppState {
     #[serde(default)]
     pub agent_name_registry: HashMap<String, String>,
 
-    /// Opaque placeholder until `ToolPermissionContext` ports.
+    /// Permission-scope snapshot consumed by every tool
+    /// invocation. Typed aggregate from
+    /// `permissions::types::ToolPermissionContext` — the
+    /// canonical type the live permission subsystem already
+    /// uses.
     #[serde(default)]
-    pub tool_permission_context: Value,
+    pub tool_permission_context: crate::permissions::types::ToolPermissionContext,
 
     /// Transcript-injected system messages (hook output, permission
     /// retry notices). Opaque `Value` payloads — the renderer owns
@@ -633,7 +637,7 @@ mod tests {
             in_progress_tool_uses: HashSet::from(["tu1".into()]),
             response_length: 100,
             agent_name_registry: HashMap::from([("researcher".into(), "a-deadbeef".into())]),
-            tool_permission_context: serde_json::json!({ "mode": "default" }),
+            tool_permission_context: crate::permissions::types::ToolPermissionContext::default(),
             system_messages: vec![serde_json::json!({ "subtype": "hook_output" })],
         };
         let v = serde_json::to_value(&s).unwrap();

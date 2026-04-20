@@ -203,14 +203,20 @@ pub enum CommandError {
 
 /// Per-invocation context. Lightweight on purpose: commands
 /// get the current args + the main-loop options snapshot they
-/// need for prompt construction. Anything heavier (host
-/// capabilities, app-state handle) is passed through the
-/// already-designed `ToolHost` boundary; commands that need
-/// state mutation do it via the host too.
+/// need for prompt construction + the session working directory.
+/// Anything heavier (host capabilities, app-state handle) is
+/// passed through the already-designed `ToolHost` boundary;
+/// commands that need state mutation do it via the host too.
 #[derive(Debug, Clone)]
 pub struct CommandContext<'a> {
     pub args: &'a str,
     pub options: &'a crate::tool_use_context_options::ToolUseContextOptions,
+    /// Session working directory. Legacy `CommandContext` (in
+    /// `commands::registry`) carries this inline; exposing it
+    /// here means adapters can forward it without falling back
+    /// to `std::env::current_dir()`, which is process-level and
+    /// can disagree with the session's cwd.
+    pub working_directory: &'a std::path::Path,
 }
 
 /// Unified command interface. Built-in / plugin / skill / MCP
@@ -402,6 +408,7 @@ mod tests {
             .execute(CommandContext {
                 args: "hello",
                 options: &opts,
+                working_directory: std::path::Path::new("."),
             })
             .await
             .unwrap();

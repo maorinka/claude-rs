@@ -111,7 +111,6 @@ pub mod token_budget;
 pub mod tool_names;
 pub mod tool_errors;
 pub mod tool_host;
-pub mod tool_permission_context;
 pub mod tool_use_context_options;
 pub mod tool_use_summary;
 pub mod treeify;

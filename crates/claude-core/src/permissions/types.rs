@@ -661,7 +661,8 @@ pub type ToolPermissionRulesBySource = HashMap<PermissionRuleSource, Vec<String>
 
 /// Context needed for permission checking in tools.
 /// Matches TS ToolPermissionContext.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolPermissionContext {
     pub mode: PermissionMode,
     pub additional_working_directories: HashMap<String, AdditionalWorkingDirectory>,
@@ -701,6 +702,38 @@ impl ToolPermissionContext {
             PermissionBehavior::Deny => &mut self.always_deny_rules,
             PermissionBehavior::Ask => &mut self.always_ask_rules,
         }
+    }
+
+    /// `true` iff `rule` appears in any source entry of
+    /// `always_allow_rules`. Convenience lookup.
+    pub fn is_always_allowed(&self, rule: &str) -> bool {
+        self.always_allow_rules
+            .values()
+            .any(|rules| rules.iter().any(|r| r == rule))
+    }
+
+    /// Same for `always_deny_rules`.
+    pub fn is_always_denied(&self, rule: &str) -> bool {
+        self.always_deny_rules
+            .values()
+            .any(|rules| rules.iter().any(|r| r == rule))
+    }
+
+    /// Same for `always_ask_rules`.
+    pub fn is_always_ask(&self, rule: &str) -> bool {
+        self.always_ask_rules
+            .values()
+            .any(|rules| rules.iter().any(|r| r == rule))
+    }
+
+    /// Record an additional working directory under `path`,
+    /// overwriting any prior entry for that path. Matches TS
+    /// `Map.set(path, { path, source })` semantics.
+    pub fn add_working_directory(&mut self, path: String, source: PermissionRuleSource) {
+        self.additional_working_directories.insert(
+            path.clone(),
+            AdditionalWorkingDirectory { path, source },
+        );
     }
 }
 
