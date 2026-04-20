@@ -3778,9 +3778,22 @@ mod tests {
         let result = handler.execute("", &ctx).unwrap();
         match result {
             CommandResult::Message(text) => {
-                assert!(text.contains("git add"), "should mention staging");
-                assert!(text.contains("git commit"), "should mention committing");
-                assert!(text.contains("git push"), "should mention pushing");
+                // Match the actual TS prompt content at
+                // `commands/commit-push-pr.ts:85-91`. The TS
+                // prompt numbers the steps as:
+                //   1. Create a new branch if on main
+                //   2. Create a single commit (shows `git commit` heredoc)
+                //   3. Push the branch to origin   ← prose, not literal "git push"
+                //   4. gh pr create / gh pr edit
+                // "git push" appears only in the allowedTools slot
+                // (`'Bash(git push:*)'`), not in the prompt body. Don't
+                // assert the literal command string; assert the
+                // push-step prose + the PR-creation command instead.
+                assert!(text.contains("git commit"), "should show the commit heredoc");
+                assert!(
+                    text.contains("Push the branch to origin"),
+                    "should contain the push step prose"
+                );
                 assert!(text.contains("gh pr create"), "should mention PR creation");
                 assert!(text.contains("PR URL"), "should ask to return URL");
             }

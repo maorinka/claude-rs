@@ -627,10 +627,18 @@ mod tests {
         fs::write(dotclaude.join("CLAUDE.md"), "Dotclaude instructions").unwrap();
 
         let results = load_claude_md_files(root);
-        let entry = results
-            .iter()
-            .find(|(src, _)| src.contains(".claude/CLAUDE.md"));
-        assert!(entry.is_some());
+        // Filter by the TEMPDIR path, not just `.contains(".claude/CLAUDE.md")`.
+        // `load_claude_md_files` also reads the user-level
+        // `~/.claude/CLAUDE.md` (step 1 in the fn body) — on a dev
+        // machine with a real global CLAUDE.md that match would pick
+        // up the host file instead of the test fixture. Scoping the
+        // find() to a path that starts with the tempdir makes the
+        // test hermetic.
+        let root_str = root.to_string_lossy();
+        let entry = results.iter().find(|(src, _)| {
+            src.starts_with(root_str.as_ref()) && src.contains(".claude/CLAUDE.md")
+        });
+        assert!(entry.is_some(), "entry not found in: {results:?}");
         assert_eq!(entry.unwrap().1, "Dotclaude instructions");
     }
 
