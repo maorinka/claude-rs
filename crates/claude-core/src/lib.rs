@@ -3,6 +3,7 @@ pub mod agent_id;
 pub mod agent_summary;
 pub mod analytics;
 pub mod api;
+pub mod api_preconnect;
 pub mod argument_substitution;
 pub mod auth;
 pub mod auto_dream;
