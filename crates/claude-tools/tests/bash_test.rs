@@ -5,14 +5,9 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: PathBuf) -> ToolUseContext {
-    ToolUseContext {
-        working_directory: dir,
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(dir, std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    }
+        )), claude_tools::registry::PermissionMode::Default)
 }
 
 fn tmpdir() -> PathBuf {

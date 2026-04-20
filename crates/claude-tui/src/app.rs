@@ -1872,12 +1872,7 @@ async fn execute_tool(
     let executor = tools
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
-    let ctx = ToolUseContext {
-        working_directory: cwd.to_path_buf(),
-        read_file_state,
-        permission_mode,
-        ..Default::default()
-    };
+    let ctx = ToolUseContext::for_test(cwd.to_path_buf(), read_file_state, permission_mode);
     executor.call(input, &ctx, cancel, None).await
 }
 

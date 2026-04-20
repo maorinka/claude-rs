@@ -5,14 +5,9 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
-    ToolUseContext {
-        working_directory: dir.to_path_buf(),
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(dir.to_path_buf(), std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    }
+        )), claude_tools::registry::PermissionMode::Default)
 }
 
 async fn call_tool(tool: &FileWriteTool, input: Value, ctx: &ToolUseContext) -> ToolResultData {

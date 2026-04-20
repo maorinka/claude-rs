@@ -260,12 +260,7 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
-        ToolUseContext {
-            working_directory: dir.to_path_buf(),
-            read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
-            permission_mode: crate::registry::PermissionMode::Default,
-            ..Default::default()
-        }
+        ToolUseContext::for_test(dir.to_path_buf(), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
     }
 
     #[tokio::test]

@@ -106,6 +106,16 @@ impl ReadFileState {
     }
 }
 
+/// Tool execution context. Mirrors TS `Tool.ts:158` `ToolUseContext`:
+/// every field is unconditionally present. Callers that don't have a
+/// real host or full options set stubs (TS uses `() => {}` no-op
+/// callbacks; we use `NullToolHost` + `ToolUseContextOptions::minimal`).
+///
+/// Construction:
+/// - `ToolUseContext::new(...)` — production/session, every field
+///   explicit. Analogue of TS `REPL.tsx:getToolUseContext()`.
+/// - `ToolUseContext::for_test(...)` — headless/test. Builds minimal
+///   options + `NullToolHost`. Analogue of TS `queryContext.ts:142`.
 pub struct ToolUseContext {
     pub working_directory: PathBuf,
     pub read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
@@ -113,25 +123,56 @@ pub struct ToolUseContext {
     /// Propagated to sub-agents to avoid unconditionally granting bypass.
     pub permission_mode: PermissionMode,
     /// Session options (model, tools, commands, thinking config, …).
-    /// Optional for tool call sites that don't need the full session
-    /// surface; `None` is semantically "tests or ad-hoc context".
-    pub options: Option<Arc<claude_core::tool_use_context_options::ToolUseContextOptions>>,
-    /// Capability handle back to the host session. Tools call through
-    /// this to prompt for permission, append to transcript, mutate
-    /// AppState, etc. `None` means the tool is running without a host
-    /// — the `ToolHost` default impls give safe no-ops so tests and
-    /// non-interactive call sites don't need to stand up a real host.
-    pub host: Option<claude_core::tool_host::SharedToolHost>,
+    /// Always present — matches TS `ToolUseContext.options` which is
+    /// non-optional. Headless callers pass
+    /// `ToolUseContextOptions::minimal(model)`.
+    pub options: Arc<claude_core::tool_use_context_options::ToolUseContextOptions>,
+    /// Capability handle back to the host session. Always present —
+    /// matches TS where required callbacks (updateFileHistoryState,
+    /// setAppState, …) are wired or stubbed with `() => {}`, never
+    /// absent. Headless callers pass `Arc::new(NullToolHost)`.
+    pub host: claude_core::tool_host::SharedToolHost,
 }
 
-impl Default for ToolUseContext {
-    fn default() -> Self {
+impl ToolUseContext {
+    /// Production / session constructor. Every field must be supplied
+    /// explicitly. Analogue of TS `REPL.tsx:getToolUseContext()`.
+    pub fn new(
+        working_directory: PathBuf,
+        read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
+        permission_mode: PermissionMode,
+        options: Arc<claude_core::tool_use_context_options::ToolUseContextOptions>,
+        host: claude_core::tool_host::SharedToolHost,
+    ) -> Self {
         Self {
-            working_directory: PathBuf::new(),
-            read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
-            permission_mode: PermissionMode::default(),
-            options: None,
-            host: None,
+            working_directory,
+            read_file_state,
+            permission_mode,
+            options,
+            host,
+        }
+    }
+
+    /// Headless / test constructor. Wires a minimal `ToolUseContextOptions`
+    /// and a `NullToolHost` so the context is complete without a real
+    /// session. Analogue of TS `queryContext.ts:142` — required callbacks
+    /// get no-op stubs there, `NullToolHost`'s default trait impls are
+    /// the Rust equivalent.
+    pub fn for_test(
+        working_directory: PathBuf,
+        read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
+        permission_mode: PermissionMode,
+    ) -> Self {
+        Self {
+            working_directory,
+            read_file_state,
+            permission_mode,
+            options: Arc::new(
+                claude_core::tool_use_context_options::ToolUseContextOptions::minimal(
+                    "claude-opus-4-7",
+                ),
+            ),
+            host: Arc::new(claude_core::tool_host::NullToolHost),
         }
     }
 }

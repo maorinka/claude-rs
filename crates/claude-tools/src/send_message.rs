@@ -489,12 +489,7 @@ mod tests {
             "from": "tool-sender",
         });
 
-        let ctx = ToolUseContext {
-            working_directory: PathBuf::from("/tmp"),
-            read_file_state: Arc::new(Mutex::new(ReadFileState::new())),
-            permission_mode: crate::registry::PermissionMode::Default,
-            ..Default::default()
-        };
+        let ctx = ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default);
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
@@ -522,12 +517,7 @@ mod tests {
         let tool = SendMessageTool;
         let input = json!({ "content": "hello" });
 
-        let ctx = ToolUseContext {
-            working_directory: PathBuf::from("/tmp"),
-            read_file_state: Arc::new(Mutex::new(ReadFileState::new())),
-            permission_mode: crate::registry::PermissionMode::Default,
-            ..Default::default()
-        };
+        let ctx = ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default);
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
@@ -543,12 +533,7 @@ mod tests {
         let tool = SendMessageTool;
         let input = json!({ "to": "agent@team", "content": "hello" });
 
-        let ctx = ToolUseContext {
-            working_directory: PathBuf::from("/tmp"),
-            read_file_state: Arc::new(Mutex::new(ReadFileState::new())),
-            permission_mode: crate::registry::PermissionMode::Default,
-            ..Default::default()
-        };
+        let ctx = ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default);
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();

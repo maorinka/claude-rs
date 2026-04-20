@@ -926,14 +926,9 @@ mod tests {
     // -- BashTool integration tests (async) --
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext {
-            working_directory: std::env::current_dir().unwrap_or_else(|_| "/tmp".into()),
-            read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+        ToolUseContext::for_test(std::env::current_dir().unwrap_or_else(|_| "/tmp".into()), std::sync::Arc::new(std::sync::Mutex::new(
                 crate::registry::ReadFileState::new(),
-            )),
-            permission_mode: crate::registry::PermissionMode::Default,
-            ..Default::default()
-        }
+            )), crate::registry::PermissionMode::Default)
     }
 
     #[tokio::test]

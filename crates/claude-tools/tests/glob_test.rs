@@ -6,14 +6,9 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
-    ToolUseContext {
-        working_directory: dir.path().to_path_buf(),
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(dir.path().to_path_buf(), std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    }
+        )), claude_tools::registry::PermissionMode::Default)
 }
 
 #[tokio::test]

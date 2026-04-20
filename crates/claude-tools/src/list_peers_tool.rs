@@ -94,12 +94,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext {
-            working_directory: PathBuf::from("/tmp"),
-            read_file_state: Arc::new(std::sync::Mutex::new(ReadFileState::new())),
-            permission_mode: crate::registry::PermissionMode::Default,
-            ..Default::default()
-        }
+        ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
     }
     #[tokio::test]
     async fn list_peers_returns_empty_when_no_sessions_dir() {

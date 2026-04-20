@@ -8,14 +8,9 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx() -> ToolUseContext {
-    ToolUseContext {
-        working_directory: PathBuf::from("/tmp"),
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    }
+        )), claude_tools::registry::PermissionMode::Default)
 }
 
 async fn create_task(subject: &str, description: &str) -> serde_json::Value {

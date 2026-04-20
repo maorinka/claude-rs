@@ -588,12 +588,7 @@ async fn main() -> Result<()> {
                                 let executor = tools.get(&tool_info.name);
                                 match executor {
                                     Some(exec) => {
-                                        let ctx = ToolUseContext {
-                                            working_directory: cwd.clone(),
-                                            read_file_state: read_file_state.clone(),
-                                            permission_mode: permission_mode.clone(),
-                                            ..Default::default()
-                                        };
+                                        let ctx = ToolUseContext::for_test(cwd.clone(), read_file_state.clone(), permission_mode.clone());
                                         match exec
                                             .call(&tool_info.input, &ctx, cancel.clone(), None)
                                             .await

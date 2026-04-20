@@ -6,14 +6,9 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
-    ToolUseContext {
-        working_directory: dir.path().to_path_buf(),
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(dir.path().to_path_buf(), std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    }
+        )), claude_tools::registry::PermissionMode::Default)
 }
 
 async fn call_tool(
@@ -475,14 +470,9 @@ async fn edit_guard_blocks_new_team_memory_file_with_secret() {
     let team_dir = claude_core::memdir::team_mem_paths::get_team_mem_path(&cwd);
     std::fs::create_dir_all(&team_dir).unwrap();
 
-    let ctx = ToolUseContext {
-        working_directory: cwd.clone(),
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    let ctx = ToolUseContext::for_test(cwd.clone(), std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    };
+        )), claude_tools::registry::PermissionMode::Default);
     let tool = FileEditTool;
     let file_path = team_dir
         .join("brand_new.md")
@@ -533,14 +523,9 @@ async fn edit_guard_blocks_existing_team_memory_file_with_secret() {
     std::fs::write(&file_path_buf, "original\n").unwrap();
     let file_path = file_path_buf.to_string_lossy().to_string();
 
-    let ctx = ToolUseContext {
-        working_directory: cwd.clone(),
-        read_file_state: std::sync::Arc::new(std::sync::Mutex::new(
+    let ctx = ToolUseContext::for_test(cwd.clone(), std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )),
-        permission_mode: claude_tools::registry::PermissionMode::Default,
-        ..Default::default()
-    };
+        )), claude_tools::registry::PermissionMode::Default);
     // Record a read so the staleness check passes — but the guard
     // should fire BEFORE staleness anyway per TS ordering.
     ctx.read_file_state
