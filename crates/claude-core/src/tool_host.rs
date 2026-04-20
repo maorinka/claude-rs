@@ -28,6 +28,8 @@
 //! | `setHasInterruptibleToolInProgress`   | Spinner + escape-key handling, TUI-only            |
 //! | `setConversationId`                   | SDK orchestrator, not tool-owned                   |
 //! | `setMessages`                         | JSX command callback, UI-only                      |
+//! | `abortController`                     | Cancellation reaches tools directly via            |
+//! |                                       | `ToolExecutor::call(_, _, cancel, _)` — not host   |
 //! | theme / IDE-install / resume hooks    | UI affordances                                     |
 //! | footer selection, expanded panels     | View-model, belongs in TUI state                   |
 //!
@@ -37,6 +39,30 @@
 //! session-scoped services (permission prompts, state mutations,
 //! transcript appends, OS notifications). The TUI renders results
 //! the tool returned, plus its own view-model state.
+//!
+//! # Production-host invariants (step 2 wiring)
+//!
+//! The default `{}` bodies are ergonomic for tests + batch /
+//! non-interactive hosts, but they make it easy to silently
+//! no-op correctness-critical host behaviour in a production
+//! REPL host. Before step 2 wires tools through the real
+//! interactive host, consumers **MUST** implement these
+//! (any tool that transits a session turn depends on them):
+//!
+//! - `app_state_snapshot` — callers reading AppState before a
+//!   decision will see `Null` otherwise.
+//! - `mark_tool_use_in_progress` — permission UI +
+//!   parallel-tool gates depend on this tracker.
+//! - `update_file_history` — write validation + diff rendering
+//!   depend on the edit log.
+//! - `append_system_message` — hook-output surfacing drops
+//!   entries silently if defaulted.
+//!
+//! Truly optional defaults (keep the `{}`):
+//! `send_os_notification`, `request_prompt`,
+//! `handle_elicitation`, `record_response_chars`,
+//! `update_attribution`. Non-interactive / SDK hosts
+//! reasonably no-op these.
 //!
 //! # What IS exposed
 //!
