@@ -20,9 +20,16 @@
 //! - [`collapse_background_bash`] — TS
 //!   `utils/collapseBackgroundBashNotifications.ts:1-84`
 //! - [`group_tool_uses`] — TS `utils/groupToolUses.ts:1-182`
+//! - [`context_analysis`] — TS `utils/contextAnalysis.ts:1-272`
+//! - [`process_text_prompt`] — TS
+//!   `utils/processUserInput/processTextPrompt.ts:1-100`
 //!
 //! Fields accessed per consumer are listed at the top of each
 //! submodule as provenance for the reconstruction.
 
 pub mod collapse_background_bash;
 pub mod collapse_hook_summaries;
+pub mod context_analysis;
+pub mod group_tool_uses;
+pub mod in_process_teammate_helpers;
+pub mod process_text_prompt;
