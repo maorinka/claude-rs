@@ -45,10 +45,17 @@
 //!
 //! # Update semantics
 //!
-//! `AppStateUpdate::Reducer(Box<dyn FnOnce(&mut AppState) + Send>)`
-//! covers the long tail of "one-off custom patch" updates without
-//! forcing a new enum variant per edge case. The typed variants
-//! above it are the fast path for common patterns.
+//! Every state mutation flows through a typed `AppStateUpdate`
+//! variant. New callers that need a mutation pattern not covered
+//! by the existing variants **add a variant** — the discipline
+//! is intentional: typed messages keep audit trails readable
+//! (`Debug` formatting names the variant), serialise cleanly
+//! for log replay, and prevent the actor's private state
+//! mutation from leaking into the caller closure.
+//!
+//! Codex CR follow-up (2026-04-20, final pass): an earlier
+//! `Reducer(Box<dyn FnOnce>)` escape hatch was removed to enforce
+//! this discipline before the state surface grows further.
 //!
 //! # Shutdown
 //!
@@ -183,10 +190,17 @@ pub struct AppState {
     pub tool_permission_context: Value,
 }
 
-/// Typed update message variants. Fast-path variants cover the
-/// patterns that appear many times across the codebase; the
-/// `Reducer` escape hatch handles long-tail custom edits without
-/// forcing a new variant per niche use.
+/// Typed update message variants.
+///
+/// Discipline: every mutation pattern is an enum variant. The
+/// Codex review (2026-04-20) explicitly rejected a generic
+/// `Reducer(Box<dyn FnOnce>)` escape hatch — it would weaken
+/// audit-trail readability (closures don't `Debug`-format
+/// their effect), break serialisation for log replay, and
+/// invite ad-hoc state mutations that fragment the state
+/// surface. Callers whose mutation doesn't fit an existing
+/// variant should **add a variant**.
+#[derive(Debug)]
 pub enum AppStateUpdate {
     UpsertTask { id: String, task: Value },
     RemoveTask { id: String },
@@ -196,28 +210,6 @@ pub enum AppStateUpdate {
     AppendFileEdit(FileEdit),
     AppendAttribution(AttributionEntry),
     RegisterAgent { name: String, agent_id: String },
-    /// Custom patch. Caller owns the closure; applies inside
-    /// the owner task with exclusive `&mut` access. Intentionally
-    /// not `FnOnce + Sync` — the actor owns it briefly then drops.
-    Reducer(Box<dyn FnOnce(&mut AppState) + Send>),
-}
-
-impl std::fmt::Debug for AppStateUpdate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UpsertTask { id, .. } => write!(f, "UpsertTask({id})"),
-            Self::RemoveTask { id } => write!(f, "RemoveTask({id})"),
-            Self::MarkToolUseInProgress { tool_use_id, in_progress } => {
-                write!(f, "MarkToolUseInProgress({tool_use_id}, {in_progress})")
-            }
-            Self::AddResponseChars { chars } => write!(f, "AddResponseChars({chars})"),
-            Self::ResetResponseLength => write!(f, "ResetResponseLength"),
-            Self::AppendFileEdit(e) => write!(f, "AppendFileEdit({})", e.path),
-            Self::AppendAttribution(e) => write!(f, "AppendAttribution({})", e.file_path),
-            Self::RegisterAgent { name, .. } => write!(f, "RegisterAgent({name})"),
-            Self::Reducer(_) => write!(f, "Reducer(<closure>)"),
-        }
-    }
 }
 
 impl AppStateUpdate {
@@ -251,7 +243,6 @@ impl AppStateUpdate {
             Self::RegisterAgent { name, agent_id } => {
                 state.agent_name_registry.insert(name, agent_id);
             }
-            Self::Reducer(f) => f(state),
         }
     }
 }
@@ -506,23 +497,6 @@ mod tests {
                 .map(String::as_str),
             Some("a-deadbeef"),
         );
-    }
-
-    #[tokio::test]
-    async fn reducer_escape_hatch_runs_in_owner_task() {
-        let handle = AppStateHandle::spawn();
-        handle
-            .update(AppStateUpdate::Reducer(Box::new(|state| {
-                state.response_length = 9999;
-                state
-                    .agent_name_registry
-                    .insert("custom".into(), "id".into());
-            })))
-            .unwrap();
-        settle(&handle).await;
-        let snap = handle.snapshot();
-        assert_eq!(snap.response_length, 9999);
-        assert_eq!(snap.agent_name_registry.len(), 1);
     }
 
     #[tokio::test]
