@@ -85,7 +85,7 @@ pub struct SystemPromptParts {
 /// for the API `system` field.
 ///
 /// TS `queryContext.ts:127-132`:
-/// ```
+/// ```text
 /// asSystemPrompt([
 ///   ...(customSystemPrompt !== undefined ? [customSystemPrompt] : defaultSystemPrompt),
 ///   ...(appendSystemPrompt ? [appendSystemPrompt] : []),
@@ -149,7 +149,7 @@ pub fn strip_in_progress_assistant(messages: &[Value]) -> &[Value] {
 /// on `should_enable_thinking_by_default`.
 ///
 /// TS `queryContext.ts:149-153`:
-/// ```
+/// ```text
 /// thinkingConfig ?? (
 ///   shouldEnableThinkingByDefault() !== false
 ///     ? { type: 'adaptive' }
