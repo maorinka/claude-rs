@@ -69,6 +69,7 @@ pub mod policy_limits;
 pub mod privacy_level;
 pub mod process_utils;
 pub mod query;
+pub mod query_context;
 pub mod remote;
 pub mod remote_managed_settings;
 pub mod sandbox;
