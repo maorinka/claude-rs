@@ -5696,7 +5696,7 @@ Find the sessions that are most relevant to this query.`
 ## utils/permissions/permissionExplainer.ts
 ### Permission Explainer System Prompt
 **File:** `src/utils/permissions/permissionExplainer.ts:43`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer (LLM-powered command explanation shown in permission dialogs) is not implemented. The Rust permission system evaluates permissions but doesn't call an LLM to explain commands.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/permission_explainer_prompt.rs` (system prompt constant ported; LLM explainer caller not yet wired)
 
 > **Why not ported:** Infrastructure Gap — In TS, the permission explainer calls an LLM to generate human-readable explanations of shell commands shown in permission dialogs, including risk level assessment. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: implement LLM-based command explanation for permission dialogs with risk level assessment.
 
@@ -6038,7 +6038,7 @@ Never reuse tab IDs from a previous/other session. Follow these guidelines:
 
 ### Chrome Tool Search Instructions
 **File:** `src/utils/claudeInChrome/prompt.ts:53-61`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CLAUDE_IN_CHROME_SKILL_HINT` (hint constant ported; main BASE_CHROME_PROMPT still TODO)
 
 > **Why not ported:** Feature Not Implemented — In TS, the Chrome browser automation system provides guidelines for GIF recording, console log debugging, alert avoidance, tab management, and rabbit-hole prevention. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement Chrome browser automation integration with MCP tool loading and GIF recording guidelines.
 
@@ -6056,7 +6056,7 @@ For example, to get tab context:
 
 ### Chrome Skill Hint
 **File:** `src/utils/claudeInChrome/prompt.ts:76`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER` (hint variant ported)
 
 > **Why not ported:** Feature Not Implemented — In TS, the Claude in Chrome skill activates browser automation tools and instructs the model to start by calling tabs_context_mcp. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement Chrome browser automation integration with MCP tool loading and GIF recording guidelines.
 
@@ -6841,7 +6841,7 @@ messages: [
 
 ## [Feedback.tsx]
 ### Feedback Title Generation System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TUI has a `FeedbackDialog` in `crates/claude-tui/src/widgets/feedback_dialog.rs` that collects ratings/comments locally, but it does not generate GitHub issue titles via an LLM call. The LLM-based title generation feature is not implemented.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/feedback_title_prompt.rs` (system prompt constant ported; LLM-based title generation caller not yet wired)
 **File:** `src/components/Feedback.tsx:450`
 
 > **Why not ported:** Infrastructure Gap — In TS, feedback title generation uses an LLM to create concise GitHub issue titles from bug reports. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: build the required supporting infrastructure (secondary model calls, dynamic prompt assembly, or context injection).

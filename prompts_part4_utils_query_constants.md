@@ -740,7 +740,7 @@ Find the sessions that are most relevant to this query.`
 ## utils/permissions/permissionExplainer.ts
 ### Permission Explainer System Prompt
 **File:** `src/utils/permissions/permissionExplainer.ts:43`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer (LLM-powered command explanation shown in permission dialogs) is not implemented. The Rust permission system evaluates permissions but doesn't call an LLM to explain commands.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/permission_explainer_prompt.rs` (system prompt constant ported; LLM explainer caller not yet wired)
 ```ts
 const SYSTEM_PROMPT = `Analyze shell commands and explain what they do, why you're running them, and potential risks.`
 ```
@@ -1043,7 +1043,7 @@ Never reuse tab IDs from a previous/other session. Follow these guidelines:
 
 ### Chrome Tool Search Instructions
 **File:** `src/utils/claudeInChrome/prompt.ts:53-61`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CLAUDE_IN_CHROME_SKILL_HINT` (hint constant ported; main BASE_CHROME_PROMPT still TODO)
 ```ts
 export const CHROME_TOOL_SEARCH_INSTRUCTIONS = `**IMPORTANT: Before using any chrome browser tools, you MUST first load them using ToolSearch.**
 
@@ -1058,7 +1058,7 @@ For example, to get tab context:
 
 ### Chrome Skill Hint
 **File:** `src/utils/claudeInChrome/prompt.ts:76`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER` (hint variant ported)
 ```ts
 export const CLAUDE_IN_CHROME_SKILL_HINT = `**Browser Automation**: Chrome browser tools are available via the "claude-in-chrome" skill. CRITICAL: Before using any mcp__claude-in-chrome__* tools, invoke the skill by calling the Skill tool with skill: "claude-in-chrome". The skill provides browser automation instructions and enables the tools.`
 ```

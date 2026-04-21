@@ -182,7 +182,7 @@ messages: [
 
 ## [Feedback.tsx]
 ### Feedback Title Generation System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TUI has a `FeedbackDialog` in `crates/claude-tui/src/widgets/feedback_dialog.rs` that collects ratings/comments locally, but it does not generate GitHub issue titles via an LLM call. The LLM-based title generation feature is not implemented.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/feedback_title_prompt.rs` (system prompt constant ported; LLM-based title generation caller not yet wired)
 **File:** `src/components/Feedback.tsx:450`
 ```ts
 systemPrompt: asSystemPrompt([
