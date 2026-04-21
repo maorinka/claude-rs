@@ -336,7 +336,7 @@ async fn main() -> Result<()> {
         max_tokens: resolve_max_output_tokens(&model, &settings),
         session_id: claude_core::api::client::get_session_id().clone(),
         account_uuid,
-        model,
+        model: model.clone(),
         ..Default::default()
     };
     // Install a Haiku-backed secondary model so WebFetchTool and other tools
@@ -588,7 +588,19 @@ async fn main() -> Result<()> {
                                 let executor = tools.get(&tool_info.name);
                                 match executor {
                                     Some(exec) => {
-                                        let ctx = ToolUseContext::for_test(cwd.clone(), read_file_state.clone(), permission_mode.clone());
+                                        // Explicit construction (not `for_test`) so the session's
+                                        // live `model` reaches `ctx.options.main_loop_model` —
+                                        // consumed by e.g. the command adapter at
+                                        // `claude-core/src/command_adapter.rs:114`.
+                                        let ctx = ToolUseContext::new(
+                                            cwd.clone(),
+                                            read_file_state.clone(),
+                                            permission_mode.clone(),
+                                            std::sync::Arc::new(
+                                                claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model),
+                                            ),
+                                            std::sync::Arc::new(claude_core::tool_host::NullToolHost),
+                                        );
                                         match exec
                                             .call(&tool_info.input, &ctx, cancel.clone(), None)
                                             .await

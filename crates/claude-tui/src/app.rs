@@ -1122,6 +1122,7 @@ impl App {
                             let cancel_clone = cancel.clone();
                             let rfs_clone = read_file_state.clone();
                             let perm_mode_clone = permission_mode.clone();
+                            let model_clone = self.model_name.clone();
                             let tx_tool = tx.clone();
                             let tidx = tool_idx;
                             tokio::spawn(async move {
@@ -1133,6 +1134,7 @@ impl App {
                                     cancel_clone,
                                     rfs_clone,
                                     perm_mode_clone,
+                                    &model_clone,
                                 )
                                 .await;
                                 let mapped = result.map_err(|e| e.to_string());
@@ -1860,6 +1862,13 @@ impl Drop for App {
 }
 
 /// Execute a tool call.
+///
+/// Constructs the `ToolUseContext` explicitly with the session's
+/// live model and a `NullToolHost`. Not `for_test` — the CLI/TUI
+/// production path isn't a test, and burying the model hard-code
+/// in a factory would quietly regress any tool/command that reads
+/// `ctx.options.main_loop_model` (e.g. the command adapter at
+/// `claude-core/src/command_adapter.rs:114`).
 async fn execute_tool(
     tools: &ToolRegistry,
     name: &str,
@@ -1868,11 +1877,23 @@ async fn execute_tool(
     cancel: CancellationToken,
     read_file_state: std::sync::Arc<std::sync::Mutex<claude_tools::registry::ReadFileState>>,
     permission_mode: PermissionMode,
+    model: &str,
 ) -> Result<ToolResultData> {
+    use claude_core::tool_host::NullToolHost;
+    use claude_core::tool_use_context_options::ToolUseContextOptions;
+
     let executor = tools
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
-    let ctx = ToolUseContext::for_test(cwd.to_path_buf(), read_file_state, permission_mode);
+    let options = Arc::new(ToolUseContextOptions::minimal(model));
+    let host = Arc::new(NullToolHost);
+    let ctx = ToolUseContext::new(
+        cwd.to_path_buf(),
+        read_file_state,
+        permission_mode,
+        options,
+        host,
+    );
     executor.call(input, &ctx, cancel, None).await
 }
 
