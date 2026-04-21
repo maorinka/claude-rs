@@ -542,7 +542,7 @@ const VERIFICATION_WHEN_TO_USE =
 ```
 
 ### Verification Agent Critical System Reminder
-**Status: ❌ NOT IN RUST** — Reason: The `criticalSystemReminder_EXPERIMENTAL` field is a TS-specific feature (injected as a system-reminder message) that doesn't have equivalent infrastructure in Rust yet.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/agents/`
 **File:** `src/tools/AgentTool/built-in/verificationAgent.ts:151`
 ```ts
 criticalSystemReminder_EXPERIMENTAL:
@@ -629,7 +629,7 @@ whenToUse: `Use this agent when the user asks questions ("Can Claude...", "Does 
 ```
 
 ### Claude Code Guide Agent - Dynamic context appended to system prompt
-**Status: ❌ NOT IN RUST** — Reason: Claude Code Guide agent not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/agents/`
 **File:** `src/tools/AgentTool/built-in/claudeCodeGuideAgent.ts:184`
 ```ts
 // If we have any context to add, append it to the base system prompt
@@ -710,7 +710,7 @@ export const DESCRIPTION =
 ```
 
 ### AskUserQuestion Tool Preview Feature Prompt
-**Status: ❌ NOT IN RUST** — Reason: The preview feature (markdown/HTML previews in option selections) is not implemented in the Rust AskUser tool. The Rust tool has a simpler option model (label + description only, no preview field).
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/ask_user.rs`
 **File:** `src/tools/AskUserQuestionTool/prompt.ts:11`
 ```ts
 export const PREVIEW_FEATURE_PROMPT = {
@@ -813,7 +813,7 @@ function getBackgroundUsageNote(): string | null {
 ```
 
 ### Bash Tool - Git Commit and PR Instructions (External Users)
-**Status: ❌ NOT IN RUST** — Reason: The full commit and PR instructions are not part of the Bash tool description in Rust. The Rust codebase has a `/commit` slash command handler in `crates/claude-core/src/commands/builtin.rs:1145` with abbreviated commit instructions, but the comprehensive Bash tool prompt sections (Git Safety Protocol, commit HEREDOC formatting, PR creation flow with `gh pr create`) are not included in the Bash tool description. The TS appends these via `getCommitAndPRInstructions()`.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bash.rs`
 **File:** `src/tools/BashTool/prompt.ts:81`
 ```ts
 return `# Committing changes with git
@@ -899,7 +899,7 @@ Important:
 ```
 
 ### Bash Tool - Git Instructions for Ant Users (Short Version)
-**Status: ❌ NOT IN RUST** — Reason: Ant-specific user type logic and short git instructions are not implemented in Rust. The Rust codebase does not differentiate between internal (ant) and external users.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bash.rs`
 **File:** `src/tools/BashTool/prompt.ts:56`
 ```ts
 return `${undercoverSection}# Git operations
@@ -989,7 +989,7 @@ Keep messages tight — the decision, the file:line, the PR number. Second perso
 
 ## [ConfigTool/prompt.ts]
 ### Config Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust ConfigTool only has a one-line description ("Get, set, or list Claude configuration settings.") and lacks the full generated prompt with dynamically-listed settings (global settings, project settings, model section, examples). The TS version dynamically enumerates available settings.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/config_tool.md`
 **File:** `src/tools/ConfigTool/prompt.ts:14`
 ```ts
 export function generatePrompt(): string {
@@ -1094,7 +1094,7 @@ Only skip EnterPlanMode for simple tasks:
 ```
 
 ### EnterPlanMode Tool Prompt (Ant Users)
-**Status: ❌ NOT IN RUST** — Reason: Ant-specific user type differentiation not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/plan_mode.rs`
 **File:** `src/tools/EnterPlanModeTool/prompt.ts:101`
 ```ts
 function getEnterPlanModeToolPromptAnt(): string {
@@ -1493,7 +1493,7 @@ Usage notes:
 ```
 
 ### PowerShell Tool - Edition Section (PS 5.1 vs 7+)
-**Status: ❌ NOT IN RUST** — Reason: PowerShell edition detection and edition-specific guidance (PS 5.1 vs 7+) not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/powershell.md`
 **File:** `src/tools/PowerShellTool/prompt.ts:51`
 ```ts
 // For PS 5.1:
@@ -1604,7 +1604,7 @@ Returns a job ID you can pass to ${CRON_DELETE_TOOL_NAME}.`
 ```
 
 ### CronCreate Tool Description
-**Status: ❌ NOT IN RUST** — Reason: The Rust ScheduleCronTool description doesn't match the TS buildCronCreateDescription which mentions durable persistence to `.claude/scheduled_tasks.json`. The Rust version says "Persists configuration to ~/.claude/cron/" which is similar but different path.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/cron_tool.rs`
 **File:** `src/tools/ScheduleCronTool/prompt.ts:68`
 ```ts
 export function buildCronCreateDescription(durableEnabled: boolean): string {
@@ -2300,7 +2300,7 @@ Use this when all teammates have finished their work and you want to clean up th
 
 ## [McpAuthTool/McpAuthTool.ts]
 ### MCP Auth Tool - Dynamic Description
-**Status: ❌ NOT IN RUST** — Reason: The Rust McpAuthTool at `crates/claude-tools/src/mcp_auth_tool.rs:51` has a generic description ("Manages MCP server authentication..."). The TS version dynamically generates per-server descriptions that include the server name and location, mentioning OAuth flow and authorization URL. The Rust version is not per-server dynamic.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/mcp_auth_tool.rs`
 **File:** `src/tools/McpAuthTool/McpAuthTool.ts:57`
 ```ts
 const description =

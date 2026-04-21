@@ -611,7 +611,7 @@ const VERIFICATION_WHEN_TO_USE =
 ```
 
 ### Verification Agent Critical System Reminder
-**Status: ❌ NOT IN RUST** — Reason: The `criticalSystemReminder_EXPERIMENTAL` field is a TS-specific feature (injected as a system-reminder message) that doesn't have equivalent infrastructure in Rust yet.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/agents/`
 **File:** `src/tools/AgentTool/built-in/verificationAgent.ts:151`
 
 > **Why not ported:** Infrastructure Gap — In TS, this is an experimental system-reminder injected into the verification agent's context to enforce read-only behavior and require a VERDICT output. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: build the required supporting infrastructure (secondary model calls, dynamic prompt assembly, or context injection).
@@ -707,7 +707,7 @@ whenToUse: `Use this agent when the user asks questions ("Can Claude...", "Does 
 ```
 
 ### Claude Code Guide Agent - Dynamic context appended to system prompt
-**Status: ❌ NOT IN RUST** — Reason: Claude Code Guide agent not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/agents/`
 **File:** `src/tools/AgentTool/built-in/claudeCodeGuideAgent.ts:184`
 
 > **Why not ported:** Feature Not Implemented — In TS, the Claude Code Guide agent is a built-in subagent that fetches official documentation via WebFetch/WebSearch to answer questions about Claude Code, the Agent SDK, and the Claude API. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement IDE extension integration for VS Code/JetBrains with selected lines and opened file context.
@@ -794,7 +794,7 @@ export const DESCRIPTION =
 ```
 
 ### AskUserQuestion Tool Preview Feature Prompt
-**Status: ❌ NOT IN RUST** — Reason: The preview feature (markdown/HTML previews in option selections) is not implemented in the Rust AskUser tool. The Rust tool has a simpler option model (label + description only, no preview field).
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/ask_user.rs`
 **File:** `src/tools/AskUserQuestionTool/prompt.ts:11`
 
 > **Why not ported:** Feature Not Implemented — In TS, the AskUser tool supports optional preview fields on options for side-by-side visual comparisons of ASCII mockups, code snippets, or diagrams. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the missing feature/subsystem and add the corresponding prompt text.
@@ -903,7 +903,7 @@ function getBackgroundUsageNote(): string | null {
 ```
 
 ### Bash Tool - Git Commit and PR Instructions (External Users)
-**Status: ❌ NOT IN RUST** — Reason: The full commit and PR instructions are not part of the Bash tool description in Rust. The Rust codebase has a `/commit` slash command handler in `crates/claude-core/src/commands/builtin.rs:1145` with abbreviated commit instructions, but the comprehensive Bash tool prompt sections (Git Safety Protocol, commit HEREDOC formatting, PR creation flow with `gh pr create`) are not included in the Bash tool description. The TS appends these via `getCommitAndPRInstructions()`.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bash.rs`
 **File:** `src/tools/BashTool/prompt.ts:81`
 
 > **Why not ported:** Feature Not Implemented — In TS, the Bash tool description includes comprehensive Git Safety Protocol, commit HEREDOC formatting, and a full PR creation workflow with `gh pr create`. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the missing feature/subsystem and add the corresponding prompt text.
@@ -992,7 +992,7 @@ Important:
 ```
 
 ### Bash Tool - Git Instructions for Ant Users (Short Version)
-**Status: ❌ NOT IN RUST** — Reason: Ant-specific user type logic and short git instructions are not implemented in Rust. The Rust codebase does not differentiate between internal (ant) and external users.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bash.rs`
 **File:** `src/tools/BashTool/prompt.ts:56`
 
 > **Why not ported:** Ant-Only Feature — In TS, internal Anthropic users get a shorter git instructions section with undercover mode support and skills-based commit flow. This feature is restricted to internal Anthropic users (USER_TYPE === 'ant') and is not relevant to the open-source Rust port. To add: implement user-type differentiation and internal-only feature gates.
@@ -1094,7 +1094,7 @@ Keep messages tight — the decision, the file:line, the PR number. Second perso
 
 ## [ConfigTool/prompt.ts]
 ### Config Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust ConfigTool only has a one-line description ("Get, set, or list Claude configuration settings.") and lacks the full generated prompt with dynamically-listed settings (global settings, project settings, model section, examples). The TS version dynamically enumerates available settings.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/config_tool.md`
 **File:** `src/tools/ConfigTool/prompt.ts:14`
 
 > **Why not ported:** Infrastructure Gap — In TS, the ConfigTool dynamically generates its prompt by enumerating all available settings (global, project, model) with examples for get/set operations. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: build the required supporting infrastructure (secondary model calls, dynamic prompt assembly, or context injection).
@@ -1205,7 +1205,7 @@ Only skip EnterPlanMode for simple tasks:
 ```
 
 ### EnterPlanMode Tool Prompt (Ant Users)
-**Status: ❌ NOT IN RUST** — Reason: Ant-specific user type differentiation not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/plan_mode.rs`
 **File:** `src/tools/EnterPlanModeTool/prompt.ts:101`
 
 > **Why not ported:** Ant-Only Feature — In TS, Anthropic-internal users get a more concise plan mode prompt that biases toward starting work and using AskUser for specific questions rather than entering a full planning phase. This feature is restricted to internal Anthropic users (USER_TYPE === 'ant') and is not relevant to the open-source Rust port. To add: implement user-type differentiation and internal-only feature gates.
@@ -1619,7 +1619,7 @@ Usage notes:
 ```
 
 ### PowerShell Tool - Edition Section (PS 5.1 vs 7+)
-**Status: ❌ NOT IN RUST** — Reason: PowerShell edition detection and edition-specific guidance (PS 5.1 vs 7+) not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/powershell.md`
 **File:** `src/tools/PowerShellTool/prompt.ts:51`
 
 > **Why not ported:** Feature Not Implemented — In TS, the PowerShell tool detects whether PS 5.1 or 7+ is available and provides edition-specific guidance (e.g., pipeline chain operators, ternary syntax, encoding defaults). The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the missing feature/subsystem and add the corresponding prompt text.
@@ -1739,7 +1739,7 @@ Returns a job ID you can pass to ${CRON_DELETE_TOOL_NAME}.`
 ```
 
 ### CronCreate Tool Description
-**Status: ❌ NOT IN RUST** — Reason: The Rust ScheduleCronTool description doesn't match the TS buildCronCreateDescription which mentions durable persistence to `.claude/scheduled_tasks.json`. The Rust version says "Persists configuration to ~/.claude/cron/" which is similar but different path.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/cron_tool.rs`
 **File:** `src/tools/ScheduleCronTool/prompt.ts:68`
 
 > **Why not ported:** Architecture Difference — In TS, the CronCreate description mentions durable persistence to `.claude/scheduled_tasks.json` with session-only fallback. The Rust implementation takes a different architectural approach, so this specific prompt structure does not map directly. To add: evaluate whether the TS approach should be adopted or the current Rust approach is sufficient.
@@ -2477,7 +2477,7 @@ Use this when all teammates have finished their work and you want to clean up th
 
 ## [McpAuthTool/McpAuthTool.ts]
 ### MCP Auth Tool - Dynamic Description
-**Status: ❌ NOT IN RUST** — Reason: The Rust McpAuthTool at `crates/claude-tools/src/mcp_auth_tool.rs:51` has a generic description ("Manages MCP server authentication..."). The TS version dynamically generates per-server descriptions that include the server name and location, mentioning OAuth flow and authorization URL. The Rust version is not per-server dynamic.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/mcp_auth_tool.rs`
 **File:** `src/tools/McpAuthTool/McpAuthTool.ts:57`
 
 > **Why not ported:** Architecture Difference — In TS, the MCP Auth tool dynamically generates per-server descriptions including the server name, location, and OAuth flow instructions. The Rust implementation takes a different architectural approach, so this specific prompt structure does not map directly. To add: evaluate whether the TS approach should be adopted or the current Rust approach is sufficient.
