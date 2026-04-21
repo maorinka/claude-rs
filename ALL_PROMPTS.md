@@ -4487,7 +4487,7 @@ const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 
 ## services/rateLimitMessages.ts
 ### Rate Limit Messages
-**Status: ❌ NOT IN RUST** — Reason: rateLimitMessages service not implemented in Rust; rate limit handling exists at the API layer but user-facing messages are not ported
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/rate_limit_messages.rs` (message templates ported; dynamic computation + `UserType::Ant` dispatch still TODO when service-layer lands)
 **File:** `src/services/rateLimitMessages.ts:143`
 ```ts
 // Various rate limit messages constructed dynamically:
@@ -5178,7 +5178,7 @@ cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ## utils/sideQuestion.ts
 ### Side Question ("/btw") Wrapper Prompt
 **File:** `src/utils/sideQuestion.ts:61-77`
-**Status: ❌ NOT IN RUST** — Reason: The /btw (side question) feature is not implemented in the Rust port. This requires spawning a separate lightweight agent instance with no tools.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/side_question.rs` (wrapper prompt ported; caller (/btw spawn) not yet wired)
 ```ts
 const wrappedQuestion = `<system-reminder>This is a side question from the user. You must answer this question directly in a single response.
 
@@ -6397,7 +6397,7 @@ export const DIRS_EXIST_GUIDANCE =
 ```
 
 ### MEMORY.md Truncation Warning
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no MEMORY.md loading/truncation logic exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/entrypoint.rs:81`
 **File:** `src/memdir/memdir.ts:96`
 ```ts
 truncated +
@@ -6405,7 +6405,7 @@ truncated +
 ```
 
 ### Empty MEMORY.md Notice
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no MEMORY.md loading exists.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/memdir/entrypoint.rs:95` `empty_entrypoint_notice()`
 **File:** `src/memdir/memdir.ts:311`
 ```ts
 `Your ${ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here.`

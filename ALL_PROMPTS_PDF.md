@@ -4823,7 +4823,7 @@ const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 
 ## services/rateLimitMessages.ts
 ### Rate Limit Messages
-**Status: ❌ NOT IN RUST** — Reason: rateLimitMessages service not implemented in Rust; rate limit handling exists at the API layer but user-facing messages are not ported
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/rate_limit_messages.rs` (message templates ported; dynamic computation + `UserType::Ant` dispatch still TODO when service-layer lands)
 **File:** `src/services/rateLimitMessages.ts:143`
 
 > **Why not ported:** Feature Not Implemented — In TS, rateLimitMessages generates user-facing messages for rate limit events including limit reached, early warnings, and reset instructions. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: add user-facing rate limit messages matching the TS format with reset instructions.
@@ -5580,7 +5580,7 @@ cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ## utils/sideQuestion.ts
 ### Side Question ("/btw") Wrapper Prompt
 **File:** `src/utils/sideQuestion.ts:61-77`
-**Status: ❌ NOT IN RUST** — Reason: The /btw (side question) feature is not implemented in the Rust port. This requires spawning a separate lightweight agent instance with no tools.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/side_question.rs` (wrapper prompt ported; caller (/btw spawn) not yet wired)
 
 > **Why not ported:** Feature Not Implemented — In TS, the /btw feature spawns a lightweight no-tools agent instance to answer a side question without interrupting the main agent's work. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement IDE extension integration for VS Code/JetBrains with selected lines and opened file context.
 
@@ -7012,7 +7012,7 @@ export const DIRS_EXIST_GUIDANCE =
 ```
 
 ### MEMORY.md Truncation Warning
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no MEMORY.md loading/truncation logic exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/entrypoint.rs:81`
 **File:** `src/memdir/memdir.ts:96`
 
 > **Why not ported:** Feature Not Implemented — In TS, when MEMORY.md exceeds line limits, a truncation warning tells the model to keep index entries concise. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
@@ -7023,7 +7023,7 @@ truncated +
 ```
 
 ### Empty MEMORY.md Notice
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no MEMORY.md loading exists.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/memdir/entrypoint.rs:95` `empty_entrypoint_notice()`
 **File:** `src/memdir/memdir.ts:311`
 
 > **Why not ported:** Feature Not Implemented — In TS, this notice tells the model the memory index is empty and new memories will appear there. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.

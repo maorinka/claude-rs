@@ -332,7 +332,7 @@ export const DIRS_EXIST_GUIDANCE =
 ```
 
 ### MEMORY.md Truncation Warning
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no MEMORY.md loading/truncation logic exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/entrypoint.rs:81`
 **File:** `src/memdir/memdir.ts:96`
 ```ts
 truncated +
@@ -340,7 +340,7 @@ truncated +
 ```
 
 ### Empty MEMORY.md Notice
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no MEMORY.md loading exists.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/memdir/entrypoint.rs:95` `empty_entrypoint_notice()`
 **File:** `src/memdir/memdir.ts:311`
 ```ts
 `Your ${ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here.`

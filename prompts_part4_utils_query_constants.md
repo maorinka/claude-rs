@@ -636,7 +636,7 @@ cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ## utils/sideQuestion.ts
 ### Side Question ("/btw") Wrapper Prompt
 **File:** `src/utils/sideQuestion.ts:61-77`
-**Status: ❌ NOT IN RUST** — Reason: The /btw (side question) feature is not implemented in the Rust port. This requires spawning a separate lightweight agent instance with no tools.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/side_question.rs` (wrapper prompt ported; caller (/btw spawn) not yet wired)
 ```ts
 const wrappedQuestion = `<system-reminder>This is a side question from the user. You must answer this question directly in a single response.
 

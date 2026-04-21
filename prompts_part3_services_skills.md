@@ -1257,7 +1257,7 @@ const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 
 ## services/rateLimitMessages.ts
 ### Rate Limit Messages
-**Status: ❌ NOT IN RUST** — Reason: rateLimitMessages service not implemented in Rust; rate limit handling exists at the API layer but user-facing messages are not ported
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/rate_limit_messages.rs` (message templates ported; dynamic computation + `UserType::Ant` dispatch still TODO when service-layer lands)
 **File:** `src/services/rateLimitMessages.ts:143`
 ```ts
 // Various rate limit messages constructed dynamically:

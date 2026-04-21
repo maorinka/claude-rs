@@ -91,6 +91,15 @@ pub fn truncate_entrypoint_content(raw: &str) -> EntrypointTruncation {
     }
 }
 
+/// Notice shown in place of loaded content when MEMORY.md is
+/// empty. Mirrors TS `memdir/memdir.ts:311`.
+pub fn empty_entrypoint_notice() -> String {
+    format!(
+        "Your {ENTRYPOINT_NAME} is currently empty. \
+         When you save new memories, they will appear here."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +127,15 @@ mod tests {
         let t = truncate_entrypoint_content(&huge);
         assert!(t.was_byte_truncated);
         assert!(t.content.contains("WARNING"));
+    }
+
+    #[test]
+    fn empty_notice_contains_ts_phrasing() {
+        let s = empty_entrypoint_notice();
+        assert_eq!(
+            s,
+            "Your MEMORY.md is currently empty. \
+             When you save new memories, they will appear here."
+        );
     }
 }
