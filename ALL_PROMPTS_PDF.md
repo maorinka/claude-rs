@@ -4058,7 +4058,7 @@ Bad (branch name): "Analyzed adam/background-summary branch diff"`
 
 ## awaySummary.ts
 ### Away Summary Prompt (when user returns from being away)
-**Status: ❌ NOT IN RUST** — Reason: awaySummary service not implemented in Rust
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/away_summary_prompt.rs::build_away_summary_prompt` (builder ported; caller trigger-on-return not yet wired)
 **File:** `src/services/awaySummary.ts:19`
 
 > **Why not ported:** Feature Not Implemented — In TS, awaySummary generates a 1-3 sentence summary when the user returns, stating the high-level task and concrete next step. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement away detection and summary generation via a lightweight LLM call.
@@ -5635,7 +5635,7 @@ Bad (wrong case): {"title": "Fix Login Button On Mobile"}`
 ## utils/agenticSessionSearch.ts
 ### Session Search System Prompt
 **File:** `src/utils/agenticSessionSearch.ts:15-48`
-**Status: ❌ NOT IN RUST** — Reason: Agentic session search (LLM-powered session finding) is not implemented in the Rust port.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_search_prompt.rs::SESSION_SEARCH_SYSTEM_PROMPT` (ported; search caller not yet wired)
 
 > **Why not ported:** Infrastructure Gap — In TS, agentic session search uses an LLM to find relevant sessions by tag, title, branch, summary, and transcript content with semantic matching. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: implement LLM-powered session search with semantic matching across tags, titles, and transcripts.
 
@@ -5678,7 +5678,7 @@ Respond with ONLY the JSON object, no markdown formatting:
 
 ### Session Search User Message Template
 **File:** `src/utils/agenticSessionSearch.ts:248-253`
-**Status: ❌ NOT IN RUST** — Reason: Agentic session search not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_search_prompt.rs::session_search_user_message` (template helper ported)
 
 > **Why not ported:** Feature Not Implemented — In TS, agentic session search uses an LLM to find relevant sessions by tag, title, branch, summary, and transcript content with semantic matching. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement LLM-powered session search with semantic matching across tags, titles, and transcripts.
 
@@ -6659,7 +6659,7 @@ Directories with **no prompt content**: `src/bridge/`, `src/server/`, `src/remot
 
 ## [generateAgent.ts]
 ### Agent Creation System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust port has `crates/claude-tools/src/agents/definitions.rs` with hardcoded agent definitions, but lacks the dynamic agent creation/generation feature that uses an LLM to create new agent configs from user descriptions. The `AGENT_CREATION_SYSTEM_PROMPT` has no equivalent.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/agent_creation_prompt.rs` + `crates/claude-core/src/prompts/agent_creation.md` (full template ported; dynamic agent-generation caller not yet wired)
 **File:** `src/components/agents/generateAgent.ts:26`
 
 > **Why not ported:** Feature Not Implemented — In TS, the Agent Creation system prompt guides an LLM to generate complete agent configurations from user descriptions, including persona, instructions, identifier, and examples. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the dynamic agent generation pipeline with LLM-based config creation from user descriptions.
@@ -6867,7 +6867,7 @@ systemPrompt: asSystemPrompt([
 
 ## [findRelevantMemories.ts]
 ### Memory Selection System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The memory directory (memdir) system is not implemented in Rust. The Rust port has `crates/claude-core/src/teams/memory.rs` for basic team key-value memory storage, but lacks the LLM-based memory selection/recall system that uses this prompt.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/memory_selection_prompt.rs` (system prompt constant ported; Sonnet-backed selection caller not yet wired)
 **File:** `src/memdir/findRelevantMemories.ts:18`
 
 > **Why not ported:** Infrastructure Gap — In TS, the memory selection system uses an LLM to find relevant memories from the memory directory based on the user's query. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.

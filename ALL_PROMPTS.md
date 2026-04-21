@@ -3782,7 +3782,7 @@ Bad (branch name): "Analyzed adam/background-summary branch diff"`
 
 ## awaySummary.ts
 ### Away Summary Prompt (when user returns from being away)
-**Status: ❌ NOT IN RUST** — Reason: awaySummary service not implemented in Rust
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/away_summary_prompt.rs::build_away_summary_prompt` (builder ported; caller trigger-on-return not yet wired)
 **File:** `src/services/awaySummary.ts:19`
 ```ts
 function buildAwaySummaryPrompt(memory: string | null): string {
@@ -5227,7 +5227,7 @@ Bad (wrong case): {"title": "Fix Login Button On Mobile"}`
 ## utils/agenticSessionSearch.ts
 ### Session Search System Prompt
 **File:** `src/utils/agenticSessionSearch.ts:15-48`
-**Status: ❌ NOT IN RUST** — Reason: Agentic session search (LLM-powered session finding) is not implemented in the Rust port.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_search_prompt.rs::SESSION_SEARCH_SYSTEM_PROMPT` (ported; search caller not yet wired)
 ```ts
 const SESSION_SEARCH_SYSTEM_PROMPT = `Your goal is to find relevant sessions based on a user's search query.
 
@@ -5267,7 +5267,7 @@ Respond with ONLY the JSON object, no markdown formatting:
 
 ### Session Search User Message Template
 **File:** `src/utils/agenticSessionSearch.ts:248-253`
-**Status: ❌ NOT IN RUST** — Reason: Agentic session search not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_search_prompt.rs::session_search_user_message` (template helper ported)
 ```ts
 const userMessage = `Sessions:
 ${sessionList}
@@ -6080,7 +6080,7 @@ Directories with **no prompt content**: `src/bridge/`, `src/server/`, `src/remot
 
 ## [generateAgent.ts]
 ### Agent Creation System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust port has `crates/claude-tools/src/agents/definitions.rs` with hardcoded agent definitions, but lacks the dynamic agent creation/generation feature that uses an LLM to create new agent configs from user descriptions. The `AGENT_CREATION_SYSTEM_PROMPT` has no equivalent.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/agent_creation_prompt.rs` + `crates/claude-core/src/prompts/agent_creation.md` (full template ported; dynamic agent-generation caller not yet wired)
 **File:** `src/components/agents/generateAgent.ts:26`
 ```ts
 const AGENT_CREATION_SYSTEM_PROMPT = `You are an elite AI agent architect specializing in crafting high-performance agent configurations. Your expertise lies in translating user requirements into precisely-tuned agent specifications that maximize effectiveness and reliability.
@@ -6270,7 +6270,7 @@ systemPrompt: asSystemPrompt([
 
 ## [findRelevantMemories.ts]
 ### Memory Selection System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The memory directory (memdir) system is not implemented in Rust. The Rust port has `crates/claude-core/src/teams/memory.rs` for basic team key-value memory storage, but lacks the LLM-based memory selection/recall system that uses this prompt.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/memory_selection_prompt.rs` (system prompt constant ported; Sonnet-backed selection caller not yet wired)
 **File:** `src/memdir/findRelevantMemories.ts:18`
 ```ts
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to Claude Code as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.

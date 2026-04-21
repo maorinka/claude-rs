@@ -552,7 +552,7 @@ Bad (branch name): "Analyzed adam/background-summary branch diff"`
 
 ## awaySummary.ts
 ### Away Summary Prompt (when user returns from being away)
-**Status: ❌ NOT IN RUST** — Reason: awaySummary service not implemented in Rust
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/away_summary_prompt.rs::build_away_summary_prompt` (builder ported; caller trigger-on-return not yet wired)
 **File:** `src/services/awaySummary.ts:19`
 ```ts
 function buildAwaySummaryPrompt(memory: string | null): string {

@@ -685,7 +685,7 @@ Bad (wrong case): {"title": "Fix Login Button On Mobile"}`
 ## utils/agenticSessionSearch.ts
 ### Session Search System Prompt
 **File:** `src/utils/agenticSessionSearch.ts:15-48`
-**Status: ❌ NOT IN RUST** — Reason: Agentic session search (LLM-powered session finding) is not implemented in the Rust port.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_search_prompt.rs::SESSION_SEARCH_SYSTEM_PROMPT` (ported; search caller not yet wired)
 ```ts
 const SESSION_SEARCH_SYSTEM_PROMPT = `Your goal is to find relevant sessions based on a user's search query.
 
@@ -725,7 +725,7 @@ Respond with ONLY the JSON object, no markdown formatting:
 
 ### Session Search User Message Template
 **File:** `src/utils/agenticSessionSearch.ts:248-253`
-**Status: ❌ NOT IN RUST** — Reason: Agentic session search not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_search_prompt.rs::session_search_user_message` (template helper ported)
 ```ts
 const userMessage = `Sessions:
 ${sessionList}

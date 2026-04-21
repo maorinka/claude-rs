@@ -15,7 +15,7 @@ Directories with **no prompt content**: `src/bridge/`, `src/server/`, `src/remot
 
 ## [generateAgent.ts]
 ### Agent Creation System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust port has `crates/claude-tools/src/agents/definitions.rs` with hardcoded agent definitions, but lacks the dynamic agent creation/generation feature that uses an LLM to create new agent configs from user descriptions. The `AGENT_CREATION_SYSTEM_PROMPT` has no equivalent.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/agent_creation_prompt.rs` + `crates/claude-core/src/prompts/agent_creation.md` (full template ported; dynamic agent-generation caller not yet wired)
 **File:** `src/components/agents/generateAgent.ts:26`
 ```ts
 const AGENT_CREATION_SYSTEM_PROMPT = `You are an elite AI agent architect specializing in crafting high-performance agent configurations. Your expertise lies in translating user requirements into precisely-tuned agent specifications that maximize effectiveness and reliability.
@@ -205,7 +205,7 @@ systemPrompt: asSystemPrompt([
 
 ## [findRelevantMemories.ts]
 ### Memory Selection System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The memory directory (memdir) system is not implemented in Rust. The Rust port has `crates/claude-core/src/teams/memory.rs` for basic team key-value memory storage, but lacks the LLM-based memory selection/recall system that uses this prompt.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/memory_selection_prompt.rs` (system prompt constant ported; Sonnet-backed selection caller not yet wired)
 **File:** `src/memdir/findRelevantMemories.ts:18`
 ```ts
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to Claude Code as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
