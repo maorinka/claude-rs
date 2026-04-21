@@ -89,6 +89,7 @@ pub mod semver_utils;
 pub mod session;
 pub mod session_env_vars;
 pub mod session_memory;
+pub mod session_title;
 pub mod session_url;
 pub mod settings_sync;
 pub mod shell_output_limits;

@@ -5610,7 +5610,7 @@ ${question}`
 ## utils/sessionTitle.ts
 ### Session Title Generation Prompt
 **File:** `src/utils/sessionTitle.ts:56-68`
-**Status: ❌ NOT IN RUST** — Reason: Session title generation via LLM prompt is not implemented. The Rust port stores sessions but doesn't auto-generate titles.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_title.rs:13` (prompt constant ported; caller LLM query not yet wired — module note explains)
 
 > **Why not ported:** Feature Not Implemented — In TS, session titles are auto-generated via LLM (3-7 word sentence-case titles like 'Fix login button on mobile') for session list recognition. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement LLM-based session title auto-generation from conversation content.
 

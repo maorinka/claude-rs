@@ -663,7 +663,7 @@ ${question}`
 ## utils/sessionTitle.ts
 ### Session Title Generation Prompt
 **File:** `src/utils/sessionTitle.ts:56-68`
-**Status: ❌ NOT IN RUST** — Reason: Session title generation via LLM prompt is not implemented. The Rust port stores sessions but doesn't auto-generate titles.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/session_title.rs:13` (prompt constant ported; caller LLM query not yet wired — module note explains)
 ```ts
 const SESSION_TITLE_PROMPT = `Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.
 
