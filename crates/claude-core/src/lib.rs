@@ -10,6 +10,7 @@ pub mod app_state;
 pub mod argument_substitution;
 pub mod auth;
 pub mod auto_dream;
+pub mod auto_mode_critique_prompt;
 pub mod auto_mode_denials;
 pub mod away_summary_prompt;
 pub mod binary_check;

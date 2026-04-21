@@ -131,7 +131,7 @@ const prompt = `Create an agent configuration based on this request: "${userProm
 
 ## [autoMode.ts]
 ### Auto Mode Critique System Prompt
-**Status: ❌ NOT IN RUST** — Reason: Auto mode critique/review feature not implemented. The Rust port has permissions infrastructure (`crates/claude-core/src/permissions/`) with auto-mode types but no LLM-based critique system for reviewing user auto-mode rules.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/auto_mode_critique_prompt.rs::CRITIQUE_SYSTEM_PROMPT` (ported; CLI `auto-mode critique` caller not yet wired)
 **File:** `src/cli/handlers/autoMode.ts:49`
 ```ts
 const CRITIQUE_SYSTEM_PROMPT =
@@ -160,7 +160,7 @@ const CRITIQUE_SYSTEM_PROMPT =
 ```
 
 ### Auto Mode Critique User Message
-**Status: ❌ NOT IN RUST** — Reason: Auto mode critique feature not implemented; no LLM call exists to critique user auto-mode rules.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/auto_mode_critique_prompt.rs::critique_user_message` (user-message template helper ported)
 **File:** `src/cli/handlers/autoMode.ts:121`
 ```ts
 messages: [
