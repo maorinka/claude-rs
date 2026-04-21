@@ -1,17 +1,39 @@
-//! Claude-in-Chrome system-prompt hints — constants only.
+//! Claude-in-Chrome system-prompt hints + base prompt.
 //!
-//! Port of TS `utils/claudeInChrome/prompt.ts:76` and `:83`. The
-//! full Chrome browser-automation system prompt
-//! (`BASE_CHROME_PROMPT`) is long enough to be its own port
-//! task; this module exposes the two **skill-hint** variants
-//! that get appended to the main system prompt when the
-//! claude-in-chrome skill (or WebBrowser tool) is available.
+//! Port of TS `utils/claudeInChrome/prompt.ts`. This module
+//! exposes four constants:
 //!
-//! The hints nudge the model to invoke the `claude-in-chrome`
-//! skill via `Skill(skill: "claude-in-chrome")` before any of
-//! the `mcp__claude-in-chrome__*` MCP tools. Claude Code wires
-//! the hint variant picker elsewhere — when that wiring lands,
-//! it reads these constants directly.
+//! - `BASE_CHROME_PROMPT` — the full ~46-line system prompt
+//!   that describes how to use the `mcp__claude-in-chrome__*`
+//!   tools (GIF recording, console debugging, dialog avoidance,
+//!   tab context). Verbatim from TS `:1-46`; stored in
+//!   `prompts/chrome_base.md` and pulled in via `include_str!`.
+//! - `CHROME_TOOL_SEARCH_INSTRUCTIONS` — load-via-ToolSearch
+//!   instructions. TS `:53-61`.
+//! - `CLAUDE_IN_CHROME_SKILL_HINT` — default skill-nudge
+//!   variant. TS `:76`.
+//! - `CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER` — variant
+//!   when the built-in WebBrowser tool is also available.
+//!   TS `:83`.
+
+/// Full Chrome-automation system prompt. Appended to the main
+/// system prompt when Chrome tools are available. Verbatim from
+/// TS `utils/claudeInChrome/prompt.ts:1-46`.
+pub const BASE_CHROME_PROMPT: &str = include_str!("prompts/chrome_base.md");
+
+/// Load-via-ToolSearch instructions. Explains that the
+/// `mcp__claude-in-chrome__*` tools are deferred and must be
+/// loaded with `ToolSearch` before invocation. Verbatim from
+/// TS `utils/claudeInChrome/prompt.ts:53-61`.
+pub const CHROME_TOOL_SEARCH_INSTRUCTIONS: &str = "**IMPORTANT: Before using any chrome browser tools, you MUST first load them using ToolSearch.**
+
+Chrome browser tools are MCP tools that require loading before use. Before calling any mcp__claude-in-chrome__* tool:
+1. Use ToolSearch with `select:mcp__claude-in-chrome__<tool_name>` to load the specific tool
+2. Then call the tool
+
+For example, to get tab context:
+1. First: ToolSearch with query \"select:mcp__claude-in-chrome__tabs_context_mcp\"
+2. Then: Call mcp__claude-in-chrome__tabs_context_mcp";
 
 /// Default hint: used when only the `claude-in-chrome` skill is
 /// available. Port of TS
@@ -60,5 +82,21 @@ mod tests {
             // ASCII-only would fail. Verify at least mostly-ASCII content.
             assert!(hint.contains("Browser Automation"));
         }
+    }
+
+    #[test]
+    fn base_prompt_has_key_sections() {
+        assert!(BASE_CHROME_PROMPT.starts_with("# Claude in Chrome browser automation"));
+        assert!(BASE_CHROME_PROMPT.contains("## GIF recording"));
+        assert!(BASE_CHROME_PROMPT.contains("## Console log debugging"));
+        assert!(BASE_CHROME_PROMPT.contains("## Alerts and dialogs"));
+        assert!(BASE_CHROME_PROMPT.contains("## Avoid rabbit holes and loops"));
+        assert!(BASE_CHROME_PROMPT.contains("## Tab context and session startup"));
+    }
+
+    #[test]
+    fn tool_search_instructions_mention_toolsearch() {
+        assert!(CHROME_TOOL_SEARCH_INSTRUCTIONS.contains("ToolSearch"));
+        assert!(CHROME_TOOL_SEARCH_INSTRUCTIONS.contains("select:mcp__claude-in-chrome__"));
     }
 }

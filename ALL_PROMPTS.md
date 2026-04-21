@@ -5533,7 +5533,7 @@ The user interacts primarily with the team lead. Your work is coordinated throug
 ## utils/claudeInChrome/prompt.ts
 ### Chrome Browser Automation System Prompt
 **File:** `src/utils/claudeInChrome/prompt.ts:1-46`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation (Claude-in-Chrome) is not implemented in the Rust port. The web_browser_tool.rs mentions the extension but doesn't include the full automation system prompt.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::BASE_CHROME_PROMPT` + `crates/claude-core/src/prompts/chrome_base.md` (full 46-line prompt ported; MCP tool dispatcher not yet wired)
 ```ts
 export const BASE_CHROME_PROMPT = `# Claude in Chrome browser automation
 
@@ -5607,7 +5607,7 @@ export const CLAUDE_IN_CHROME_SKILL_HINT = `**Browser Automation**: Chrome brows
 
 ### Chrome Skill Hint with WebBrowser
 **File:** `src/utils/claudeInChrome/prompt.ts:83`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CHROME_TOOL_SEARCH_INSTRUCTIONS` (ToolSearch load instructions ported)
 ```ts
 export const CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER = `**Browser Automation**: Use WebBrowser for development (dev servers, JS eval, console, screenshots). Use claude-in-chrome for the user's real Chrome when you need logged-in sessions, OAuth, or computer-use — invoke Skill(skill: "claude-in-chrome") before any mcp__claude-in-chrome__* tool.`
 ```

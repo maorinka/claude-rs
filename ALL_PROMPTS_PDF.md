@@ -5983,7 +5983,7 @@ The user interacts primarily with the team lead. Your work is coordinated throug
 ## utils/claudeInChrome/prompt.ts
 ### Chrome Browser Automation System Prompt
 **File:** `src/utils/claudeInChrome/prompt.ts:1-46`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation (Claude-in-Chrome) is not implemented in the Rust port. The web_browser_tool.rs mentions the extension but doesn't include the full automation system prompt.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::BASE_CHROME_PROMPT` + `crates/claude-core/src/prompts/chrome_base.md` (full 46-line prompt ported; MCP tool dispatcher not yet wired)
 
 > **Why not ported:** Feature Not Implemented — In TS, the Chrome browser automation system provides guidelines for GIF recording, console log debugging, alert avoidance, tab management, and rabbit-hole prevention. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement Chrome browser automation integration with MCP tool loading and GIF recording guidelines.
 
@@ -6066,7 +6066,7 @@ export const CLAUDE_IN_CHROME_SKILL_HINT = `**Browser Automation**: Chrome brows
 
 ### Chrome Skill Hint with WebBrowser
 **File:** `src/utils/claudeInChrome/prompt.ts:83`
-**Status: ❌ NOT IN RUST** — Reason: Chrome browser automation not implemented. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CHROME_TOOL_SEARCH_INSTRUCTIONS` (ToolSearch load instructions ported)
 
 > **Why not ported:** Feature Not Implemented — In TS, the Claude in Chrome skill activates browser automation tools and instructs the model to start by calling tabs_context_mcp. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement Chrome browser automation integration with MCP tool loading and GIF recording guidelines.
 
