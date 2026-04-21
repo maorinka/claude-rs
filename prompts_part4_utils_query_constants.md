@@ -506,7 +506,7 @@ The user context may include a \`terminalFocus\` field indicating whether the us
 ## constants/outputStyles.ts
 ### Explanatory Feature Prompt (shared by Explanatory and Learning modes)
 **File:** `src/constants/outputStyles.ts:30-37`
-**Status: ❌ NOT IN RUST** — Reason: Output styles (Explanatory, Learning) are not ported. The /output-style command is deprecated in Rust.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/output_style_prompts.rs::EXPLANATORY_FEATURE_PROMPT`
 ```ts
 const EXPLANATORY_FEATURE_PROMPT = `
 ## Insights
@@ -520,7 +520,7 @@ These insights should be included in the conversation, not in the codebase. You 
 
 ### Explanatory Output Style Prompt
 **File:** `src/constants/outputStyles.ts:43-54`
-**Status: ❌ NOT IN RUST** — Reason: Output styles not ported. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/output_style_prompts.rs::explanatory_style_prompt` + `prompts/output_style_explanatory.md`
 ```ts
 prompt: `You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should provide educational insights about the codebase along the way.
 
@@ -532,7 +532,7 @@ ${EXPLANATORY_FEATURE_PROMPT}`,
 
 ### Learning Output Style Prompt
 **File:** `src/constants/outputStyles.ts:56-133`
-**Status: ❌ NOT IN RUST** — Reason: Output styles not ported. See above.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/output_style_prompts.rs::learning_style_prompt` + `prompts/output_style_learning.md`
 ```ts
 prompt: `You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should help users learn more about the codebase through hands-on practice and educational insights.
 
