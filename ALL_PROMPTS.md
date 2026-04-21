@@ -553,7 +553,7 @@ criticalSystemReminder_EXPERIMENTAL:
 
 ## [AgentTool/built-in/claudeCodeGuideAgent.ts]
 ### Claude Code Guide Agent System Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Claude Code Guide agent is not implemented as a built-in agent in Rust. This agent requires WebFetch/WebSearch tools and documentation URL constants (CLAUDE_CODE_DOCS_MAP_URL, CDP_DOCS_MAP_URL) that are not wired up yet.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/agents/prompts/claude_code_guide.md`
 **File:** `src/tools/AgentTool/built-in/claudeCodeGuideAgent.ts:23`
 ```ts
 function getClaudeCodeGuideBasePrompt(): string {
@@ -652,7 +652,7 @@ When answering questions, consider these configured features and proactively sug
 
 ## [AgentTool/built-in/statuslineSetup.ts]
 ### Statusline Setup Agent System Prompt
-**Status: ❌ NOT IN RUST** — Reason: Statusline Setup agent not implemented in Rust. The statusline feature (shell PS1 conversion) doesn't exist in the Rust port yet.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/agents/prompts/statusline_setup.md`
 **File:** `src/tools/AgentTool/built-in/statuslineSetup.ts:3`
 ```ts
 const STATUSLINE_SYSTEM_PROMPT = `You are a status line setup agent for Claude Code. Your job is to create or update the statusLine command in the user's Claude Code settings.
@@ -737,7 +737,7 @@ Preview content must be a self-contained HTML fragment (no <html>/<body> wrapper
 ```
 
 ### AskUserQuestion Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The full ASK_USER_QUESTION_TOOL_PROMPT (usage notes, multiSelect guidance, plan mode integration, recommended option guidance) is not present in Rust. The Rust tool only has the short description, not the extended prompt.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/ask_user.md`
 **File:** `src/tools/AskUserQuestionTool/prompt.ts:32`
 ```ts
 export const ASK_USER_QUESTION_TOOL_PROMPT = `Use this tool when you need to ask the user questions during execution. This allows you to:
@@ -913,7 +913,7 @@ Use the gh command via the Bash tool for other GitHub-related tasks including wo
 ```
 
 ### Bash Tool - Sandbox Section
-**Status: ❌ NOT IN RUST** — Reason: The sandbox section (command sandbox documentation, restrictions lines, `dangerouslyDisableSandbox` guidance, sandbox override evidence, TMPDIR usage) is not included in the Bash tool description in Rust. The Rust BashTool has sandbox execution support via `SandboxExecutor`, but the descriptive prompt section explaining sandbox behavior to the model is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/bash_sandbox_section.md`
 **File:** `src/tools/BashTool/prompt.ts:172`
 ```ts
 // When sandbox is enabled, includes:
@@ -1388,7 +1388,7 @@ Usage examples:
 ```
 
 ### ListMcpResources Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The separate PROMPT constant (detailed parameter documentation) is not present in Rust. The Rust tool only has the DESCRIPTION equivalent. The TS has both DESCRIPTION and PROMPT as separate constants. The Rust description covers the essential content.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/list_mcp_resources.md`
 **File:** `src/tools/ListMcpResourcesTool/prompt.ts:12`
 ```ts
 export const PROMPT = `
@@ -1446,7 +1446,7 @@ export const PROMPT = `Completely replaces the contents of a specific cell in a 
 
 ## [PowerShellTool/prompt.ts]
 ### PowerShell Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust PowerShellTool at `crates/claude-tools/src/powershell.rs:27` has only a basic description ("Execute a PowerShell command. Only available on Windows..."). The full TS prompt with PS syntax notes, interactive command warnings, here-string examples, edition-specific guidance, and dedicated-tool avoidance is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/powershell.md`
 **File:** `src/tools/PowerShellTool/prompt.ts:73`
 ```ts
 export async function getPrompt(): Promise<string> {
@@ -1562,7 +1562,7 @@ The response is the raw JSON from the API.`
 
 ## [ScheduleCronTool/prompt.ts]
 ### CronCreate Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust ScheduleCronTool at `crates/claude-tools/src/cron_tool.rs:69` has a basic description that covers cron expression syntax and parameters. However, the full TS prompt with one-shot vs recurring guidance, ":00 and :30 avoidance" jitter guidance, durability section, runtime behavior, and DEFAULT_MAX_AGE_DAYS expiry is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/cron_create.md`
 **File:** `src/tools/ScheduleCronTool/prompt.ts:74`
 ```ts
 export function buildCronCreatePrompt(durableEnabled: boolean): string {
@@ -1642,7 +1642,7 @@ export function buildCronListPrompt(durableEnabled: boolean): string {
 
 ## [SendMessageTool/prompt.ts]
 ### SendMessage Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust SendMessageTool at `crates/claude-tools/src/send_message.rs:226` has a basic description about file-based mailbox delivery. The full TS prompt with the detailed routing table (teammate name, broadcast, UDS socket, bridge session), protocol responses (shutdown_request/plan_approval_request), TaskUpdate guidance, and cross-session messaging is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/send_message.md`
 **File:** `src/tools/SendMessageTool/prompt.ts:5`
 ```ts
 export function getPrompt(): string {
@@ -1774,7 +1774,7 @@ async description(): Promise<string> {
 
 ## [TodoWriteTool/prompt.ts]
 ### TodoWrite Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TodoWriteTool at `crates/claude-tools/src/todo_write.rs:63` only has the short description (matching TS DESCRIPTION). The full TS PROMPT with detailed "When to Use" (7 scenarios), "When NOT to Use" (4 scenarios), "Task States and Management" (states, management rules, completion requirements, task breakdown), extensive examples, and dual-form guidance (content + activeForm) is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/todo_write.md`
 **File:** `src/tools/TodoWriteTool/prompt.ts:3`
 ```ts
 export const PROMPT = `Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
@@ -1885,7 +1885,7 @@ export function getPrompt(): string {
 
 ## [WebFetchTool/prompt.ts]
 ### WebFetch Tool Description
-**Status: ❌ NOT IN RUST** — Reason: The Rust WebFetchTool at `crates/claude-tools/src/web_fetch.rs:126` has a one-line description ("Fetch the contents of a URL and return the text content..."). The full TS DESCRIPTION with usage notes (MCP preference, URL validation, HTTPS upgrade, read-only, caching, redirect handling, GitHub CLI preference) is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/web_fetch.md`
 **File:** `src/tools/WebFetchTool/prompt.ts:3`
 ```ts
 export const DESCRIPTION = `
@@ -1943,7 +1943,7 @@ ${guidelines}
 
 ## [WebSearchTool/prompt.ts]
 ### WebSearch Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: WebSearch is a server-side tool in Rust (`crates/claude-tools/src/web_search.rs`). The Rust implementation correctly sends the `web_search_20250305` tool definition to the API server. However, the client-side prompt (Sources: section requirement, domain filtering note, current year guidance, US-only note) from the TS `getWebSearchPrompt()` is not included. The server tool definition exists but the behavioral prompt for the model is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/web_search.md`
 **File:** `src/tools/WebSearchTool/prompt.ts:5`
 ```ts
 export function getWebSearchPrompt(): string {
@@ -1982,7 +1982,7 @@ IMPORTANT - Use the correct year in search queries:
 
 ## [TaskCreateTool/prompt.ts]
 ### TaskCreate Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TaskCreateTool at `crates/claude-tools/src/task_tools.rs:116` has only a one-line description ("Create a new background task with a subject and description."). The full TS prompt with "When to Use" (complex multi-step, plan mode, user requests, multiple tasks), "When NOT to Use", task fields (subject, description, activeForm), tips (dependencies via TaskUpdate, teammate context), and plan-mode integration is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/task_create.md`
 **File:** `src/tools/TaskCreateTool/prompt.ts:6`
 ```ts
 export function getPrompt(): string {
@@ -2033,7 +2033,7 @@ ${teammateTips}- Check TaskList first to avoid creating duplicate tasks
 
 ## [TaskGetTool/prompt.ts]
 ### TaskGet Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TaskGetTool at `crates/claude-tools/src/task_tools.rs:325` has only a one-line description ("Get the details of a specific task by its ID."). The full TS prompt with "When to Use" (before starting work, understanding dependencies, after being assigned), output format (subject, description, status, blocks, blockedBy), and tips (verify blockedBy, use TaskList) is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/task_get.md`
 **File:** `src/tools/TaskGetTool/prompt.ts:3`
 ```ts
 export const PROMPT = `Use this tool to retrieve a task by its ID from the task list.
@@ -2064,7 +2064,7 @@ Returns full task details:
 
 ## [TaskListTool/prompt.ts]
 ### TaskList Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TaskListTool at `crates/claude-tools/src/task_tools.rs:191` has only a one-line description ("List all tasks, optionally filtered by status."). The full TS prompt with "When to Use" (available tasks, progress check, blocked tasks, teammate workflow), output format (id, subject, status, owner, blockedBy), ID-order preference, and teammate workflow section is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/task_list.md`
 **File:** `src/tools/TaskListTool/prompt.ts:5`
 ```ts
 export function getPrompt(): string {
@@ -2125,7 +2125,7 @@ export const DESCRIPTION = `
 
 ## [TaskUpdateTool/prompt.ts]
 ### TaskUpdate Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TaskUpdateTool at `crates/claude-tools/src/task_tools.rs:243` has only a one-line description ("Update the status or description of an existing task."). The full TS prompt with "When to Use" (mark resolved, delete, update details), completion rules, deletable status, updatable fields (status, subject, description, activeForm, owner, metadata, addBlocks, addBlockedBy), status workflow, staleness guidance, and examples is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/task_update.md`
 **File:** `src/tools/TaskUpdateTool/prompt.ts:3`
 ```ts
 export const PROMPT = `Use this tool to update a task in the task list.
@@ -2238,7 +2238,7 @@ async description() {
 
 ## [TeamCreateTool/prompt.ts]
 ### TeamCreate Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TeamCreateTool at `crates/claude-tools/src/team_tools.rs:23` has only a basic description ("Create a new team for coordinating multiple agents..."). The full TS prompt with detailed "When to Use" (proactive spawning, agent type selection, read-only vs full-capability agents), team workflow (task ownership, message delivery, idle state), teammate discovery, and task list coordination is missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/team_create.md`
 **File:** `src/tools/TeamCreateTool/prompt.ts:1`
 ```ts
 export function getPrompt(): string {
@@ -2275,7 +2275,7 @@ Create a new team to coordinate multiple agents working on a project. Teams have
 
 ## [TeamDeleteTool/prompt.ts]
 ### TeamDelete Tool Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust TeamDeleteTool (called TeamStopTool in Rust) at `crates/claude-tools/src/team_tools.rs:149` has a basic description ("Stop a team: kill all agent processes and mark the team as stopped."). The TS TeamDeleteTool has a more detailed prompt about removing team/task directories, clearing session context, and requiring graceful termination before delete.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/prompts/team_delete.md`
 **File:** `src/tools/TeamDeleteTool/prompt.ts:1`
 ```ts
 export function getPrompt(): string {
@@ -4130,7 +4130,7 @@ const SECTION_INTRO = [
 
 ## skills/bundled/loop.ts
 ### Loop Skill Prompt - Recurring task scheduling
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; loop skill prompt not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/loop.md`
 **File:** `src/skills/bundled/loop.ts:25`
 ```ts
 function buildPrompt(args: string): string {
@@ -4378,7 +4378,7 @@ Remember that settings are in:
 
 ## skills/bundled/stuck.ts
 ### Stuck Skill Prompt - Diagnose frozen/slow sessions (ant-only)
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; stuck skill not embedded (Anthropic-internal only)
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/stuck.md`
 **File:** `src/skills/bundled/stuck.ts:6`
 ```ts
 const STUCK_PROMPT = `# /stuck — diagnose frozen/slow Claude Code sessions

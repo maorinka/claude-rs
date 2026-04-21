@@ -43,16 +43,19 @@ STATUS_LINE = re.compile(
 CODE_BLOCK = re.compile(r"```(?:ts|typescript|tsx|js|javascript)?\n(.*?)```", re.DOTALL)
 
 
-def _iter_rs_files():
-    for p in CRATES.rglob("*.rs"):
-        if any(part == "target" for part in p.parts):
-            continue
-        yield p
+def _iter_source_files():
+    # Rust sources + prompt/markdown fragments that many tools embed via
+    # include_str!() — the prompt text lives in .md, not .rs.
+    for pat in ("*.rs", "*.md", "*.txt"):
+        for p in CRATES.rglob(pat):
+            if any(part == "target" for part in p.parts):
+                continue
+            yield p
 
 
 def _cache_rs_text() -> dict[Path, str]:
     cache: dict[Path, str] = {}
-    for p in _iter_rs_files():
+    for p in _iter_source_files():
         try:
             cache[p] = p.read_text(encoding="utf-8")
         except Exception:

@@ -900,7 +900,7 @@ const SECTION_INTRO = [
 
 ## skills/bundled/loop.ts
 ### Loop Skill Prompt - Recurring task scheduling
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; loop skill prompt not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/loop.md`
 **File:** `src/skills/bundled/loop.ts:25`
 ```ts
 function buildPrompt(args: string): string {
@@ -1148,7 +1148,7 @@ Remember that settings are in:
 
 ## skills/bundled/stuck.ts
 ### Stuck Skill Prompt - Diagnose frozen/slow sessions (ant-only)
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; stuck skill not embedded (Anthropic-internal only)
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/stuck.md`
 **File:** `src/skills/bundled/stuck.ts:6`
 ```ts
 const STUCK_PROMPT = `# /stuck — diagnose frozen/slow Claude Code sessions
