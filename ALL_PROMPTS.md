@@ -5654,7 +5654,7 @@ export const NO_RESPONSE_REQUESTED = 'No response requested.'
 
 ### PDF Reference Attachment Message
 **File:** `src/utils/messages.ts:3603-3608`
-**Status: ❌ NOT IN RUST** — Reason: PDF attachment messages are not implemented. The Read tool in Rust handles PDFs (with pages parameter in the tool description at `crates/claude-tools/src/read.rs:318`) but the attachment system that generates these context messages doesn't exist.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::pdf_reference_attachment`
 ```ts
 `PDF file: ${attachment.filename} (${attachment.pageCount} pages, ${formatFileSize(attachment.fileSize)}). ` +
 `This PDF is too large to read all at once. You MUST use the ${FILE_READ_TOOL_NAME} tool with the pages parameter ` +
@@ -5665,35 +5665,35 @@ export const NO_RESPONSE_REQUESTED = 'No response requested.'
 
 ### IDE Selected Lines Attachment
 **File:** `src/utils/messages.ts:3623`
-**Status: ❌ NOT IN RUST** — Reason: IDE integration (selected lines, opened files) is not implemented in the Rust CLI. This is an IDE extension feature.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::ide_selected_lines_attachment`
 ```ts
 content: `The user selected the lines ${attachment.lineStart} to ${attachment.lineEnd} from ${attachment.filename}:\n${content}\n\nThis may or may not be related to the current task.`,
 ```
 
 ### IDE Opened File Attachment
 **File:** `src/utils/messages.ts:3631`
-**Status: ❌ NOT IN RUST** — Reason: IDE integration not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::ide_opened_file_attachment`
 ```ts
 content: `The user opened the file ${attachment.filename} in the IDE. This may or may not be related to the current task.`,
 ```
 
 ### Plan File Reference Attachment
 **File:** `src/utils/messages.ts:3639`
-**Status: ❌ NOT IN RUST** — Reason: Plan file reference attachments (injecting plan file contents into context) are not implemented. Plan mode exists in the Rust port but without the attachment/context injection system.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::plan_file_reference_attachment`
 ```ts
 content: `A plan file exists from plan mode at: ${attachment.planFilePath}\n\nPlan contents:\n\n${attachment.planContent}\n\nIf this plan is relevant to the current work and not already complete, continue working on it.`,
 ```
 
 ### Invoked Skills Attachment
 **File:** `src/utils/messages.ts:3658`
-**Status: ❌ NOT IN RUST** — Reason: The attachment system for injecting invoked skills context is not implemented. Skills exist but their invocation context isn't tracked/injected.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::invoked_skills_attachment`
 ```ts
 content: `The following skills were invoked in this session. Continue to follow these guidelines:\n\n${skillsContent}`,
 ```
 
 ### Todo Reminder Attachment
 **File:** `src/utils/messages.ts:3668`
-**Status: ❌ NOT IN RUST** — Reason: Todo/task reminder attachment system not implemented. The TodoWrite tool exists but the periodic reminder injection doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::todo_reminder_attachment`
 ```ts
 let message = `The TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Also consider cleaning up the todo list if has become stale and no longer matches what you are working on. Only use it if it's relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user\n`
 if (todoItems.length > 0) {
@@ -5703,7 +5703,7 @@ if (todoItems.length > 0) {
 
 ### Task Reminder Attachment
 **File:** `src/utils/messages.ts:3688`
-**Status: ❌ NOT IN RUST** — Reason: Task reminder attachment not implemented. See Todo Reminder above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::TASK_REMINDER_ATTACHMENT`
 ```ts
 let message = `The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using ${TASK_CREATE_TOOL_NAME} to add new tasks and ${TASK_UPDATE_TOOL_NAME} to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user\n`
 ```
@@ -5717,21 +5717,21 @@ content: `The following skills are available for use with the Skill tool:\n\n${a
 
 ### Output Style Reminder Attachment
 **File:** `src/utils/messages.ts:3807`
-**Status: ❌ NOT IN RUST** — Reason: Output styles not ported. See outputStyles.ts section above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::output_style_reminder_attachment`
 ```ts
 content: `${outputStyle.name} output style is active. Remember to follow the specific guidelines for this style.`,
 ```
 
 ### Diagnostics Attachment
 **File:** `src/utils/messages.ts:3821`
-**Status: ❌ NOT IN RUST** — Reason: Diagnostics attachment (IDE diagnostic injection) is not implemented. This is an IDE extension feature.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::diagnostics_attachment`
 ```ts
 content: `<new-diagnostics>The following new diagnostic issues were detected:\n\n${diagnosticSummary}</new-diagnostics>`,
 ```
 
 ### Plan Mode Re-entry Attachment
 **File:** `src/utils/messages.ts:3830-3842`
-**Status: ❌ NOT IN RUST** — Reason: Plan mode re-entry attachment is not implemented. Plan mode exists in Rust but the context injection system for plan file re-entry does not.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::plan_mode_reentry_attachment`
 ```ts
 const content = `## Re-entering Plan Mode
 
@@ -5759,7 +5759,7 @@ You have exited plan mode. You can now make edits, run tools, and take actions.$
 
 ### Auto Mode Exit Attachment
 **File:** `src/utils/messages.ts:3864-3866`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode exit attachment not implemented. Auto mode infrastructure is not in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::AUTO_MODE_EXIT_ATTACHMENT`
 ```ts
 const content = `## Exited Auto Mode
 
@@ -5768,7 +5768,7 @@ You have exited auto mode. The user may now want to interact more directly. You 
 
 ### MCP Resource Attachment Messages
 **File:** `src/utils/messages.ts:3899-3908`
-**Status: ❌ NOT IN RUST** — Reason: MCP resource attachment messages are not implemented. MCP tool integration exists but the resource attachment/context injection system doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::MCP_RESOURCE_RE_READ_WARNING`
 ```ts
 // For text resources:
 { type: 'text', text: 'Full contents of resource:' },
@@ -5778,14 +5778,14 @@ You have exited auto mode. The user may now want to interact more directly. You 
 
 ### Agent Mention Attachment
 **File:** `src/utils/messages.ts:3949`
-**Status: ❌ NOT IN RUST** — Reason: Agent mention attachment system not implemented. The Agent tool exists but the attachment injection for agent mentions doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::agent_mention_attachment`
 ```ts
 content: `The user has expressed a desire to invoke the agent "${attachment.agentType}". Please invoke the agent appropriately, passing in the required context to it. `,
 ```
 
 ### Task Status Attachments (stopped, running, completed)
 **File:** `src/utils/messages.ts:3960-4017`
-**Status: ❌ NOT IN RUST** — Reason: Task status attachment messages (stopped/running/completed task context injection) are not implemented. The task/process tracking system exists but doesn't inject these status messages into conversation context.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::{task_stopped_attachment, task_running_prefix, task_running_tail, task_completed_header, task_completed_tail}`
 ```ts
 // Stopped:
 `Task "${attachment.description}" (${attachment.taskId}) was stopped by the user.`
@@ -5803,7 +5803,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Token/Budget Usage Attachments
 **File:** `src/utils/messages.ts:4059-4075`
-**Status: ❌ NOT IN RUST** — Reason: Token/budget usage context attachments not implemented. Token usage is tracked in the TUI status bar but not injected into the conversation context.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::{token_budget_attachment, usd_budget_attachment, output_tokens_attachment}`
 ```ts
 // Token usage:
 `Token usage: ${attachment.used}/${attachment.total}; ${attachment.remaining} remaining`
@@ -5824,28 +5824,28 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Compaction Reminder Attachment
 **File:** `src/utils/messages.ts:4142`
-**Status: ❌ NOT IN RUST** — Reason: Compaction reminder attachment not implemented as a separate context injection. The system prompt already mentions automatic summarization in the system section (added in this pass).
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::COMPACTION_REMINDER_ATTACHMENT`
 ```ts
 'Auto-compact is enabled. When the context window is nearly full, older messages will be automatically summarized so you can continue working seamlessly. There is no need to stop or rush — you have unlimited context through automatic compaction.'
 ```
 
 ### Date Change Attachment
 **File:** `src/utils/messages.ts:4165`
-**Status: ❌ NOT IN RUST** — Reason: Date change attachment not implemented. The current date is injected via `build_user_context_message` each turn but date change detection/notification isn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::date_change_attachment`
 ```ts
 `The date has changed. Today's date is now ${attachment.newDate}. DO NOT mention this to the user explicitly because they are already aware.`
 ```
 
 ### Ultrathink Effort Attachment
 **File:** `src/utils/messages.ts:4173`
-**Status: ❌ NOT IN RUST** — Reason: Ultrathink effort level attachment not implemented. The reasoning effort/thinking budget system exists at the API config level but the per-turn effort level context injection doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::ultrathink_effort_attachment`
 ```ts
 `The user has requested reasoning effort level: ${attachment.level}. Apply this to the current turn.`
 ```
 
 ### Deferred Tools Delta Attachment
 **File:** `src/utils/messages.ts:4180-4188`
-**Status: ❌ NOT IN RUST** — Reason: Deferred tools delta attachment not implemented. ToolSearch exists but the delta notification system for newly available/removed deferred tools doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::{deferred_tools_added_attachment, deferred_tools_removed_attachment}`
 ```ts
 `The following deferred tools are now available via ToolSearch:\n${attachment.addedLines.join('\n')}`
 // and:
@@ -6017,7 +6017,7 @@ Answer the user's query comprehensively, using the ${ASK_USER_QUESTION_TOOL_NAME
 
 ### Auto Mode Full Instructions
 **File:** `src/utils/messages.ts:3428-3438`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode full instructions not implemented. Auto mode infrastructure is not in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::AUTO_MODE_FULL_INSTRUCTIONS`
 ```ts
 const content = `## Auto Mode Active
 
@@ -6033,7 +6033,7 @@ Auto mode is active. The user chose continuous, autonomous execution. You should
 
 ### Auto Mode Sparse Reminder
 **File:** `src/utils/messages.ts:3446`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode sparse reminder not implemented. See auto mode above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::AUTO_MODE_SPARSE_REMINDER`
 ```ts
 const content = `Auto mode still active (see full instructions earlier in conversation). Execute autonomously, minimize interruptions, prefer action over planning.`
 ```
@@ -6043,7 +6043,7 @@ const content = `Auto mode still active (see full instructions earlier in conver
 ## utils/tokenBudget.ts
 ### Budget Continuation Message
 **File:** `src/utils/tokenBudget.ts:72`
-**Status: ❌ NOT IN RUST** — Reason: Token budget/target continuation system not implemented. See Token Budget Instruction above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::budget_continuation_message`
 ```ts
 return `Stopped at ${pct}% of token target (${fmt(turnTokens)} / ${fmt(budget)}). Keep working — do not summarize.`
 ```

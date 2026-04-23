@@ -6116,7 +6116,7 @@ export const NO_RESPONSE_REQUESTED = 'No response requested.'
 
 ### PDF Reference Attachment Message
 **File:** `src/utils/messages.ts:3603-3608`
-**Status: ❌ NOT IN RUST** — Reason: PDF attachment messages are not implemented. The Read tool in Rust handles PDFs (with pages parameter in the tool description at `crates/claude-tools/src/read.rs:318`) but the attachment system that generates these context messages doesn't exist.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::pdf_reference_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, large PDF files get an attachment message instructing the model to use the Read tool with page ranges instead of reading the entire file. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6130,7 +6130,7 @@ export const NO_RESPONSE_REQUESTED = 'No response requested.'
 
 ### IDE Selected Lines Attachment
 **File:** `src/utils/messages.ts:3623`
-**Status: ❌ NOT IN RUST** — Reason: IDE integration (selected lines, opened files) is not implemented in the Rust CLI. This is an IDE extension feature.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::ide_selected_lines_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, IDE integration injects context about user-selected lines or opened files from VS Code/JetBrains extensions. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement IDE extension integration for VS Code/JetBrains with selected lines and opened file context.
 
@@ -6140,7 +6140,7 @@ content: `The user selected the lines ${attachment.lineStart} to ${attachment.li
 
 ### IDE Opened File Attachment
 **File:** `src/utils/messages.ts:3631`
-**Status: ❌ NOT IN RUST** — Reason: IDE integration not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::ide_opened_file_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, IDE integration injects context about user-selected lines or opened files from VS Code/JetBrains extensions. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement IDE extension integration for VS Code/JetBrains with selected lines and opened file context.
 
@@ -6150,7 +6150,7 @@ content: `The user opened the file ${attachment.filename} in the IDE. This may o
 
 ### Plan File Reference Attachment
 **File:** `src/utils/messages.ts:3639`
-**Status: ❌ NOT IN RUST** — Reason: Plan file reference attachments (injecting plan file contents into context) are not implemented. Plan mode exists in the Rust port but without the attachment/context injection system.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::plan_file_reference_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, plan file reference attachments inject the plan file contents into context so the model can continue working on an existing plan. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6160,7 +6160,7 @@ content: `A plan file exists from plan mode at: ${attachment.planFilePath}\n\nPl
 
 ### Invoked Skills Attachment
 **File:** `src/utils/messages.ts:3658`
-**Status: ❌ NOT IN RUST** — Reason: The attachment system for injecting invoked skills context is not implemented. Skills exist but their invocation context isn't tracked/injected.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::invoked_skills_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, invoked skills are tracked and their guidelines re-injected into context so the model continues following them. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6170,7 +6170,7 @@ content: `The following skills were invoked in this session. Continue to follow 
 
 ### Todo Reminder Attachment
 **File:** `src/utils/messages.ts:3668`
-**Status: ❌ NOT IN RUST** — Reason: Todo/task reminder attachment system not implemented. The TodoWrite tool exists but the periodic reminder injection doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::todo_reminder_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, periodic reminders nudge the model to use TodoWrite/TaskCreate tools when working on tasks that benefit from progress tracking. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6183,7 +6183,7 @@ if (todoItems.length > 0) {
 
 ### Task Reminder Attachment
 **File:** `src/utils/messages.ts:3688`
-**Status: ❌ NOT IN RUST** — Reason: Task reminder attachment not implemented. See Todo Reminder above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::TASK_REMINDER_ATTACHMENT`
 
 > **Why not ported:** Feature Not Implemented — In TS, periodic reminders nudge the model to use TodoWrite/TaskCreate tools when working on tasks that benefit from progress tracking. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6203,7 +6203,7 @@ content: `The following skills are available for use with the Skill tool:\n\n${a
 
 ### Output Style Reminder Attachment
 **File:** `src/utils/messages.ts:3807`
-**Status: ❌ NOT IN RUST** — Reason: Output styles not ported. See outputStyles.ts section above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::output_style_reminder_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, output styles inject specialized behavior prompts (Explanatory with Insight boxes, Learning with hands-on coding exercises) into the system prompt. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement output style loading from `.claude/output-styles/*.md` and system prompt injection.
 
@@ -6213,7 +6213,7 @@ content: `${outputStyle.name} output style is active. Remember to follow the spe
 
 ### Diagnostics Attachment
 **File:** `src/utils/messages.ts:3821`
-**Status: ❌ NOT IN RUST** — Reason: Diagnostics attachment (IDE diagnostic injection) is not implemented. This is an IDE extension feature.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::diagnostics_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, IDE diagnostics (linting errors, type errors) are injected as context when new diagnostic issues are detected. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement IDE extension integration for VS Code/JetBrains with selected lines and opened file context.
 
@@ -6223,7 +6223,7 @@ content: `<new-diagnostics>The following new diagnostic issues were detected:\n\
 
 ### Plan Mode Re-entry Attachment
 **File:** `src/utils/messages.ts:3830-3842`
-**Status: ❌ NOT IN RUST** — Reason: Plan mode re-entry attachment is not implemented. Plan mode exists in Rust but the context injection system for plan file re-entry does not.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::plan_mode_reentry_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, plan mode re-entry injects the existing plan file path and instructs the model to evaluate whether to continue or start fresh. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6254,7 +6254,7 @@ You have exited plan mode. You can now make edits, run tools, and take actions.$
 
 ### Auto Mode Exit Attachment
 **File:** `src/utils/messages.ts:3864-3866`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode exit attachment not implemented. Auto mode infrastructure is not in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::AUTO_MODE_EXIT_ATTACHMENT`
 
 > **Why not ported:** Feature Not Implemented — In TS, auto mode exit tells the model to ask clarifying questions instead of making assumptions. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6266,7 +6266,7 @@ You have exited auto mode. The user may now want to interact more directly. You 
 
 ### MCP Resource Attachment Messages
 **File:** `src/utils/messages.ts:3899-3908`
-**Status: ❌ NOT IN RUST** — Reason: MCP resource attachment messages are not implemented. MCP tool integration exists but the resource attachment/context injection system doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::MCP_RESOURCE_RE_READ_WARNING`
 
 > **Why not ported:** Feature Not Implemented — In TS, MCP resource attachments inject the full resource contents into context with a 'do NOT read again' instruction. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6279,7 +6279,7 @@ You have exited auto mode. The user may now want to interact more directly. You 
 
 ### Agent Mention Attachment
 **File:** `src/utils/messages.ts:3949`
-**Status: ❌ NOT IN RUST** — Reason: Agent mention attachment system not implemented. The Agent tool exists but the attachment injection for agent mentions doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::agent_mention_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, agent mention attachments inject a hint when the user references a specific agent type in their message. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6289,7 +6289,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Task Status Attachments (stopped, running, completed)
 **File:** `src/utils/messages.ts:3960-4017`
-**Status: ❌ NOT IN RUST** — Reason: Task status attachment messages (stopped/running/completed task context injection) are not implemented. The task/process tracking system exists but doesn't inject these status messages into conversation context.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::{task_stopped_attachment, task_running_prefix, task_running_tail, task_completed_header, task_completed_tail}`
 
 > **Why not ported:** Feature Not Implemented — In TS, task status attachments inject stopped/running/completed notifications with output file paths and duplicate-prevention guidance. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6310,7 +6310,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Token/Budget Usage Attachments
 **File:** `src/utils/messages.ts:4059-4075`
-**Status: ❌ NOT IN RUST** — Reason: Token/budget usage context attachments not implemented. Token usage is tracked in the TUI status bar but not injected into the conversation context.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::{token_budget_attachment, usd_budget_attachment, output_tokens_attachment}`
 
 > **Why not ported:** Feature Not Implemented — In TS, token/budget usage is injected into context so the model is aware of remaining capacity. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6334,7 +6334,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Compaction Reminder Attachment
 **File:** `src/utils/messages.ts:4142`
-**Status: ❌ NOT IN RUST** — Reason: Compaction reminder attachment not implemented as a separate context injection. The system prompt already mentions automatic summarization in the system section (added in this pass).
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::COMPACTION_REMINDER_ATTACHMENT`
 
 > **Why not ported:** Feature Not Implemented — In TS, the compaction reminder tells the model that auto-compact will handle context overflow seamlessly. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6344,7 +6344,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Date Change Attachment
 **File:** `src/utils/messages.ts:4165`
-**Status: ❌ NOT IN RUST** — Reason: Date change attachment not implemented. The current date is injected via `build_user_context_message` each turn but date change detection/notification isn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::date_change_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, date change attachments notify the model when the date rolls over during a long session. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the background task notification system with XML message injection into the conversation.
 
@@ -6354,7 +6354,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Ultrathink Effort Attachment
 **File:** `src/utils/messages.ts:4173`
-**Status: ❌ NOT IN RUST** — Reason: Ultrathink effort level attachment not implemented. The reasoning effort/thinking budget system exists at the API config level but the per-turn effort level context injection doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::ultrathink_effort_attachment`
 
 > **Why not ported:** Feature Not Implemented — In TS, ultrathink effort attachments inject the user-requested reasoning effort level for the current turn. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the attachment/context injection system for injecting tool-specific context into conversation turns.
 
@@ -6364,7 +6364,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Deferred Tools Delta Attachment
 **File:** `src/utils/messages.ts:4180-4188`
-**Status: ❌ NOT IN RUST** — Reason: Deferred tools delta attachment not implemented. ToolSearch exists but the delta notification system for newly available/removed deferred tools doesn't.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::{deferred_tools_added_attachment, deferred_tools_removed_attachment}`
 
 > **Why not ported:** Feature Not Implemented — In TS, deferred tools delta attachments notify the model when new MCP tools become available or existing ones disconnect. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the background task notification system with XML message injection into the conversation.
 
@@ -6587,7 +6587,7 @@ Answer the user's query comprehensively, using the ${ASK_USER_QUESTION_TOOL_NAME
 
 ### Auto Mode Full Instructions
 **File:** `src/utils/messages.ts:3428-3438`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode full instructions not implemented. Auto mode infrastructure is not in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::AUTO_MODE_FULL_INSTRUCTIONS`
 
 > **Why not ported:** Feature Not Implemented — In TS, auto mode instructions direct the model to execute immediately, minimize interruptions, prefer action over planning, and avoid destructive/exfiltration actions. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the missing feature/subsystem and add the corresponding prompt text.
 
@@ -6606,7 +6606,7 @@ Auto mode is active. The user chose continuous, autonomous execution. You should
 
 ### Auto Mode Sparse Reminder
 **File:** `src/utils/messages.ts:3446`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode sparse reminder not implemented. See auto mode above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::AUTO_MODE_SPARSE_REMINDER`
 
 > **Why not ported:** Feature Not Implemented — In TS, the auto mode sparse reminder is a one-line condensed version for subsequent turns. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the missing feature/subsystem and add the corresponding prompt text.
 
@@ -6619,7 +6619,7 @@ const content = `Auto mode still active (see full instructions earlier in conver
 ## utils/tokenBudget.ts
 ### Budget Continuation Message
 **File:** `src/utils/tokenBudget.ts:72`
-**Status: ❌ NOT IN RUST** — Reason: Token budget/target continuation system not implemented. See Token Budget Instruction above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/attachment_messages.rs::budget_continuation_message`
 
 > **Why not ported:** Feature Not Implemented — In TS, the budget continuation message tells the model to keep working when it's only partway through its token target. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the token budget/target continuation system with per-turn budget tracking.
 

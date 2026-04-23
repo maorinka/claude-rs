@@ -9,6 +9,7 @@ pub mod api;
 pub mod api_preconnect;
 pub mod app_state;
 pub mod argument_substitution;
+pub mod attachment_messages;
 pub mod auth;
 pub mod auto_dream;
 pub mod auto_mode_critique_prompt;
