@@ -88,6 +88,7 @@ pub mod path_utils;
 pub mod peer_address;
 pub mod permission_explainer_prompt;
 pub mod permissions;
+pub mod plan_mode_workflow;
 pub mod plugins;
 pub mod policy_limits;
 pub mod privacy_level;

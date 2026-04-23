@@ -5854,7 +5854,7 @@ content: `The user has expressed a desire to invoke the agent "${attachment.agen
 
 ### Plan Mode Full Instructions (5-phase workflow)
 **File:** `src/utils/messages.ts:3207-3292`
-**Status: ❌ NOT IN RUST** — Reason: The full 5-phase plan mode instructions (with explore agents, plan agents, verification, plan file info) are not implemented. Plan mode in Rust uses a simple enter/exit mechanism without the structured workflow phases. The EnterPlanModeTool at `crates/claude-tools/src/plan_mode.rs:107` has basic instructions but not the full TS workflow.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/plan_mode_workflow.rs::plan_mode_v2_instructions`
 ```ts
 const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
 
@@ -5865,7 +5865,7 @@ You should build your plan incrementally by writing to or editing this file. NOT
 ## Plan Workflow
 
 ### Phase 1: Initial Understanding
-**Status: ❌ NOT IN RUST** — Reason: Part of the full plan mode workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_v2_instructions`.
 Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the ${EXPLORE_AGENT.agentType} subagent type.
 
 1. Focus on understanding the user's request and the code associated with their request. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.
@@ -5874,23 +5874,23 @@ Goal: Gain a comprehensive understanding of the user's request by reading throug
    [... launch guidelines ...]
 
 ### Phase 2: Design
-**Status: ❌ NOT IN RUST** — Reason: Part of the full plan mode workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_v2_instructions`.
 Goal: Design an implementation approach.
 
 Launch ${PLAN_AGENT.agentType} agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
 [... design guidelines ...]
 
 ### Phase 3: Review
-**Status: ❌ NOT IN RUST** — Reason: Part of the full plan mode workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_v2_instructions`.
 Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.
 [...]
 
 ### Phase 4: Final Plan
-**Status: ❌ NOT IN RUST** — Reason: Part of the full plan mode workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_v2_instructions`.
 [One of four variants: CONTROL, TRIM, CUT, or CAP — see plan phase 4 constants above]
 
 ### Phase 5: Call ${ExitPlanModeV2Tool.name}
-**Status: ❌ NOT IN RUST** — Reason: Part of the full plan mode workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_v2_instructions`.
 At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call ${ExitPlanModeV2Tool.name} to indicate to the user that you are done planning.
 [...]
 
@@ -5944,7 +5944,7 @@ Goal: Write your final plan to the plan file (the only file you can edit).
 
 ### Plan Mode Interview Instructions (iterative workflow)
 **File:** `src/utils/messages.ts:3323-3378`
-**Status: ❌ NOT IN RUST** — Reason: Plan mode interview (iterative pair-planning) workflow not implemented. See plan mode above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/plan_mode_workflow.rs::plan_mode_interview_instructions`
 ```ts
 const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
 
@@ -5956,7 +5956,7 @@ ${planFileInfo}
 You are pair-planning with the user. Explore the code to build context, ask the user questions when you hit decisions you can't make alone, and write your findings into the plan file as you go. The plan file (above) is the ONLY file you may edit — it starts as a rough skeleton and gradually becomes the final plan.
 
 ### The Loop
-**Status: ❌ NOT IN RUST** — Reason: Part of the plan mode interview workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_interview_instructions`.
 
 Repeat this cycle until the plan is complete:
 
@@ -5965,12 +5965,12 @@ Repeat this cycle until the plan is complete:
 3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, use ${ASK_USER_QUESTION_TOOL_NAME}. Then go back to step 1.
 
 ### First Turn
-**Status: ❌ NOT IN RUST** — Reason: Part of the plan mode interview workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_interview_instructions`.
 
 Start by quickly scanning a few key files to form an initial understanding of the task scope. Then write a skeleton plan (headers and rough notes) and ask the user your first round of questions. Don't explore exhaustively before engaging the user.
 
 ### Asking Good Questions
-**Status: ❌ NOT IN RUST** — Reason: Part of the plan mode interview workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_interview_instructions`.
 
 - Never ask what you could find out by reading the code
 - Batch related questions together (use multi-question ${ASK_USER_QUESTION_TOOL_NAME} calls)
@@ -5978,16 +5978,16 @@ Start by quickly scanning a few key files to form an initial understanding of th
 - Scale depth to the task — a vague feature request needs many rounds; a focused bug fix may need one or none
 
 ### Plan File Structure
-**Status: ❌ NOT IN RUST** — Reason: Part of the plan mode interview workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_interview_instructions`.
 [... same as Phase 4 CONTROL ...]
 
 ### When to Converge
-**Status: ❌ NOT IN RUST** — Reason: Part of the plan mode interview workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_interview_instructions`.
 
 Your plan is ready when you've addressed all ambiguities and it covers: what to change, which files to modify, what existing code to reuse (with file paths), and how to verify the changes. Call ${ExitPlanModeV2Tool.name} when the plan is ready for approval.
 
 ### Ending Your Turn
-**Status: ❌ NOT IN RUST** — Reason: Part of the plan mode interview workflow. See above.
+**Status: ✅ FOUND in Rust** — Embedded in `plan_mode_workflow::plan_mode_interview_instructions`.
 
 Your turn should only end by either:
 - Using ${ASK_USER_QUESTION_TOOL_NAME} to gather more information
