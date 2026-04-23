@@ -3900,7 +3900,7 @@ REMEMBER: Use the Edit tool in parallel and stop. Do not continue after the edit
 
 ## extractMemories/prompts.ts
 ### Memory Extraction Subagent Opener
-**Status: ❌ NOT IN RUST** — Reason: extractMemories service not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/extract_memories.rs::extract_memories_opener`
 **File:** `src/services/extractMemories/prompts.ts:29`
 
 > **Why not ported:** Feature Not Implemented — In TS, extractMemories is a subagent that analyzes recent messages and updates persistent memory files with a 4-type taxonomy (user, feedback, project, reference). The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
@@ -3946,7 +3946,7 @@ export function buildExtractAutoOnlyPrompt(
 ```
 
 ### buildExtractCombinedPrompt - Combined auto + team memory extraction
-**Status: ❌ NOT IN RUST** — Reason: extractMemories service not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/extract_memories.rs::build_extract_combined_prompt`
 **File:** `src/services/extractMemories/prompts.ts:101`
 
 > **Why not ported:** Feature Not Implemented — In TS, extractMemories is a subagent that analyzes recent messages and updates persistent memory files with a 4-type taxonomy (user, feedback, project, reference). The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
@@ -4076,7 +4076,7 @@ function buildAwaySummaryPrompt(memory: string | null): string {
 
 ## PromptSuggestion/promptSuggestion.ts
 ### SUGGESTION_PROMPT - Prompt for generating next-action suggestions
-**Status: ❌ NOT IN RUST** — Reason: PromptSuggestion service not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/prompt_suggestion.rs::SUGGESTION_PROMPT`
 **File:** `src/services/PromptSuggestion/promptSuggestion.ts:258`
 
 > **Why not ported:** Feature Not Implemented — In TS, PromptSuggestion predicts what the user would naturally type next, appearing as a Tab-to-accept hint in the input box. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the prompt suggestion service with a dedicated LLM call for next-action prediction.
@@ -4155,7 +4155,7 @@ const contextPrefix = lastAssistantText
 
 ## buddy/prompt.ts
 ### Companion (Buddy) Intro Text
-**Status: ❌ NOT IN RUST** — Reason: Buddy/Companion feature not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/buddy.rs::companion_intro_text`
 **File:** `src/buddy/prompt.ts:7`
 
 > **Why not ported:** Feature Not Implemented — In TS, the Companion/Buddy feature adds a small creature (e.g., a dragon named Cinder) beside the input box that comments in a speech bubble. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the companion/buddy feature with speech bubble rendering and persona injection.

@@ -3639,7 +3639,7 @@ REMEMBER: Use the Edit tool in parallel and stop. Do not continue after the edit
 
 ## extractMemories/prompts.ts
 ### Memory Extraction Subagent Opener
-**Status: ❌ NOT IN RUST** — Reason: extractMemories service not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/extract_memories.rs::extract_memories_opener`
 **File:** `src/services/extractMemories/prompts.ts:29`
 ```ts
 function opener(newMessageCount: number, existingMemories: string): string {
@@ -3679,7 +3679,7 @@ export function buildExtractAutoOnlyPrompt(
 ```
 
 ### buildExtractCombinedPrompt - Combined auto + team memory extraction
-**Status: ❌ NOT IN RUST** — Reason: extractMemories service not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/extract_memories.rs::build_extract_combined_prompt`
 **File:** `src/services/extractMemories/prompts.ts:101`
 ```ts
 // Same as auto-only but with TYPES_SECTION_COMBINED (per-type scope guidance)
@@ -3797,7 +3797,7 @@ function buildAwaySummaryPrompt(memory: string | null): string {
 
 ## PromptSuggestion/promptSuggestion.ts
 ### SUGGESTION_PROMPT - Prompt for generating next-action suggestions
-**Status: ❌ NOT IN RUST** — Reason: PromptSuggestion service not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/prompt_suggestion.rs::SUGGESTION_PROMPT`
 **File:** `src/services/PromptSuggestion/promptSuggestion.ts:258`
 ```ts
 const SUGGESTION_PROMPT = `[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]
@@ -3867,7 +3867,7 @@ const contextPrefix = lastAssistantText
 
 ## buddy/prompt.ts
 ### Companion (Buddy) Intro Text
-**Status: ❌ NOT IN RUST** — Reason: Buddy/Companion feature not implemented in Rust
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/buddy.rs::companion_intro_text`
 **File:** `src/buddy/prompt.ts:7`
 ```ts
 export function companionIntroText(name: string, species: string): string {

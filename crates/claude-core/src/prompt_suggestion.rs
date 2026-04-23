@@ -37,6 +37,43 @@ use crate::errors_util::{is_env_definitely_falsy, is_env_truthy};
 use crate::permissions::types::PermissionMode;
 use serde::{Deserialize, Serialize};
 
+/// System prompt sent to the speculation subagent that produces a
+/// single next-action suggestion. Shown back in the REPL as a
+/// greyed-out prediction of what the user would naturally type
+/// next. Verbatim port of TS
+/// `services/PromptSuggestion/promptSuggestion.ts:258`
+/// `SUGGESTION_PROMPT`.
+pub const SUGGESTION_PROMPT: &str = "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]
+
+FIRST: Look at the user's recent messages and original request.
+
+Your job is to predict what THEY would type - not what you think they should do.
+
+THE TEST: Would they think \"I was just about to type that\"?
+
+EXAMPLES:
+User asked \"fix the bug and run tests\", bug is fixed → \"run the tests\"
+After code written → \"try it out\"
+Claude offers options → suggest the one the user would likely pick, based on conversation
+Claude asks to continue → \"yes\" or \"go ahead\"
+Task complete, obvious follow-up → \"commit this\" or \"push it\"
+After error or misunderstanding → silence (let them assess/correct)
+
+Be specific: \"run the tests\" beats \"continue\".
+
+NEVER SUGGEST:
+- Evaluative (\"looks good\", \"thanks\")
+- Questions (\"what about...?\")
+- Claude-voice (\"Let me...\", \"I'll...\", \"Here's...\")
+- New ideas they didn't ask about
+- Multiple sentences
+
+Stay silent if the next step isn't obvious from what the user said.
+
+Format: 2-12 words, match the user's style. Or nothing.
+
+Reply with ONLY the suggestion, no quotes or explanation.";
+
 /// Experimental variant for suggestion prompt shape. TS
 /// `PromptVariant = 'user_intent' | 'stated_intent'`; TS always
 /// returns `'user_intent'` from `getPromptVariant()` today (the
@@ -527,5 +564,26 @@ mod tests {
             serde_json::to_value(EnablementSource::SwarmTeammate).unwrap(),
             serde_json::json!("swarm_teammate")
         );
+    }
+
+    // --- suggestion prompt text ------------------------------
+
+    #[test]
+    fn suggestion_prompt_has_expected_anchors() {
+        assert!(SUGGESTION_PROMPT.starts_with("[SUGGESTION MODE:"));
+        assert!(SUGGESTION_PROMPT.contains("THE TEST:"));
+        assert!(SUGGESTION_PROMPT.contains("NEVER SUGGEST:"));
+        assert!(SUGGESTION_PROMPT.contains("Format: 2-12 words"));
+        // Closing instruction must stay — it's the only line that
+        // guarantees the subagent doesn't wrap the suggestion in
+        // extra commentary.
+        assert!(SUGGESTION_PROMPT.ends_with("no quotes or explanation."));
+    }
+
+    #[test]
+    fn suggestion_prompt_preserves_ts_examples() {
+        assert!(SUGGESTION_PROMPT.contains("\"fix the bug and run tests\""));
+        assert!(SUGGESTION_PROMPT.contains("\"run the tests\""));
+        assert!(SUGGESTION_PROMPT.contains("\"commit this\""));
     }
 }

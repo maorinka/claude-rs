@@ -274,6 +274,19 @@ pub fn roll_with_seed(seed: &str) -> Roll {
     roll_from(&mut rng)
 }
 
+/// System-prompt intro the main agent reads when a companion is
+/// attached to the session. Distinguishes the main agent from the
+/// companion and keeps its replies out of the companion's lane.
+///
+/// Port of TS `src/buddy/prompt.ts:7` `companionIntroText`.
+pub fn companion_intro_text(name: &str, species: &str) -> String {
+    format!(
+        "# Companion\n\n\
+         A small {species} named {name} sits beside the user's input box and occasionally comments in a speech bubble. You're not {name} — it's a separate watcher.\n\n\
+         When the user addresses {name} directly (by name), its bubble will answer. Your job in that moment is to stay out of the way: respond in ONE line or less, or just answer any part of the message meant for you. Don't explain that you're not {name} — they know. Don't narrate what {name} might say — the bubble handles that.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +355,24 @@ mod tests {
         let b = roll("user-1");
         assert_eq!(a.bones.species, b.bones.species);
         assert_eq!(a.inspiration_seed, b.inspiration_seed);
+    }
+
+    #[test]
+    fn companion_intro_interpolates_name_and_species() {
+        let text = companion_intro_text("Pip", "hamster");
+        assert!(text.starts_with("# Companion"));
+        assert!(text.contains("A small hamster named Pip sits beside"));
+        assert!(text.contains("You're not Pip"));
+        // Name appears 5 times (title-less "Pip" in three bullets + two
+        // "You're not Pip" mentions). Minimum 4 to catch drift.
+        assert!(text.matches("Pip").count() >= 4);
+    }
+
+    #[test]
+    fn companion_intro_has_key_guidance() {
+        let text = companion_intro_text("Mo", "otter");
+        assert!(text.contains("speech bubble"));
+        assert!(text.contains("ONE line or less"));
+        assert!(text.contains("bubble handles that"));
     }
 }

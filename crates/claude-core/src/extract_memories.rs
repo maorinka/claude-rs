@@ -26,6 +26,13 @@ const GREP_TOOL_NAME: &str = "Grep";
 const BASH_TOOL_NAME: &str = "Bash";
 
 /// Shared opener used by both prompt variants. Matches TS `opener`.
+///
+/// Exposed as [`extract_memories_opener`] for callers that only need
+/// the shared preamble (e.g. auditing / snapshot tools).
+pub fn extract_memories_opener(new_message_count: u32, existing_memories: &str) -> String {
+    opener(new_message_count, existing_memories)
+}
+
 fn opener(new_message_count: u32, existing_memories: &str) -> String {
     let manifest = if !existing_memories.is_empty() {
         format!(
@@ -99,6 +106,27 @@ fn how_to_save(skip_index: bool) -> Vec<String> {
     }
 
     out
+}
+
+/// Build the combined auto + team memory prompt. Port of TS
+/// `buildExtractCombinedPrompt`.
+///
+/// TS short-circuits to `buildExtractAutoOnlyPrompt` when the
+/// `TEAMMEM` build feature is off. The Rust port does not enable
+/// `TEAMMEM` (team-memory TYPES_SECTION_COMBINED isn't ported yet),
+/// so this function always falls through to the auto-only variant.
+/// Kept as a separate symbol so call sites can opt into the
+/// combined pathway once the team-memory prompt block lands,
+/// without re-wiring their imports.
+pub fn build_extract_combined_prompt(
+    new_message_count: u32,
+    existing_memories: &str,
+    skip_index: bool,
+) -> String {
+    // Matches TS: `if (!feature('TEAMMEM')) return buildExtractAutoOnlyPrompt(...)`.
+    // The TEAMMEM-on branch requires `TYPES_SECTION_COMBINED` +
+    // team-scope wording that's on the deferred memdir milestone.
+    build_extract_auto_only_prompt(new_message_count, existing_memories, skip_index)
 }
 
 /// Build the extract-agent prompt for private-only memory (single
@@ -182,5 +210,31 @@ mod tests {
         assert!(p.contains("turn 1"));
         assert!(p.contains("turn 2"));
         assert!(p.contains("in parallel"));
+    }
+
+    #[test]
+    fn public_opener_matches_private_helper_output() {
+        let a = extract_memories_opener(12, "- foo.md");
+        let b = opener(12, "- foo.md");
+        assert_eq!(a, b);
+        assert!(a.contains("~12 messages"));
+        assert!(a.contains("## Existing memory files"));
+    }
+
+    #[test]
+    fn combined_prompt_falls_back_to_auto_only_without_teammem() {
+        // Rust port never has TEAMMEM on, so combined must equal
+        // auto-only for identical inputs.
+        let combined = build_extract_combined_prompt(15, "", false);
+        let auto_only = build_extract_auto_only_prompt(15, "", false);
+        assert_eq!(combined, auto_only);
+    }
+
+    #[test]
+    fn combined_prompt_respects_skip_index() {
+        let skip = build_extract_combined_prompt(5, "", true);
+        assert!(!skip.contains("two-step process"));
+        let full = build_extract_combined_prompt(5, "", false);
+        assert!(full.contains("two-step process"));
     }
 }
