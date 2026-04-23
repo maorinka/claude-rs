@@ -4304,7 +4304,7 @@ Wait for all three agents to complete. Aggregate their findings and fix each iss
 
 ## skills/bundled/updateConfig.ts
 ### UPDATE_CONFIG_PROMPT - Settings configuration skill
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; skill infrastructure exists but individual bundled skill prompts are not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/update_config_skill_prompt.rs::update_config_prompt`
 **File:** `src/skills/bundled/updateConfig.ts:307`
 
 > **Why not ported:** Feature Not Implemented — In TS, the update-config skill provides comprehensive documentation for modifying settings.json including hooks configuration with events, types, verification flow, and common patterns. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4334,7 +4334,7 @@ example workflows, common mistakes, troubleshooting ...]
 ```
 
 ### HOOKS_DOCS - Hooks configuration documentation
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; hooks runtime exists but the updateConfig skill prompt is not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/update_config_skill_prompt.rs::UPDATE_CONFIG_HOOKS_DOCS`
 **File:** `src/skills/bundled/updateConfig.ts:110`
 
 > **Why not ported:** Feature Not Implemented — In TS, HOOKS_DOCS provides the hook configuration schema, all hook events (PermissionRequest, PreToolUse, PostToolUse, etc.), and hook type definitions. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4385,7 +4385,7 @@ Hooks run commands at specific points in Claude Code's lifecycle.
 ```
 
 ### HOOK_VERIFICATION_FLOW - Step-by-step hook construction and testing
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; updateConfig skill prompt not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/update_config_skill_prompt.rs::UPDATE_CONFIG_HOOK_VERIFICATION_FLOW`
 **File:** `src/skills/bundled/updateConfig.ts:269`
 
 > **Why not ported:** Feature Not Implemented — In TS, this provides a step-by-step flow for constructing, testing, and verifying hooks: dedup check, command construction, pipe-test, JSON writing, syntax validation, and proving the hook fires. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.

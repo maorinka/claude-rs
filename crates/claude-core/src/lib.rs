@@ -133,6 +133,7 @@ pub mod treeify;
 pub mod truncate;
 pub mod types;
 pub mod undercover;
+pub mod update_config_skill_prompt;
 pub mod url_utils;
 pub mod user_agent;
 pub mod user_prompt_keywords;

@@ -780,7 +780,7 @@ Wait for all three agents to complete. Aggregate their findings and fix each iss
 
 ## skills/bundled/updateConfig.ts
 ### UPDATE_CONFIG_PROMPT - Settings configuration skill
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; skill infrastructure exists but individual bundled skill prompts are not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/update_config_skill_prompt.rs::update_config_prompt` + `prompts/update_config/main_prompt.md`
 **File:** `src/skills/bundled/updateConfig.ts:307`
 ```ts
 const UPDATE_CONFIG_PROMPT = `# Update Config Skill
@@ -807,7 +807,7 @@ example workflows, common mistakes, troubleshooting ...]
 ```
 
 ### HOOKS_DOCS - Hooks configuration documentation
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; hooks runtime exists but the updateConfig skill prompt is not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/update_config_skill_prompt.rs::UPDATE_CONFIG_HOOKS_DOCS` + `prompts/update_config/hooks_docs.md`
 **File:** `src/skills/bundled/updateConfig.ts:110`
 ```ts
 const HOOKS_DOCS = `## Hooks Configuration
@@ -855,7 +855,7 @@ Hooks run commands at specific points in Claude Code's lifecycle.
 ```
 
 ### HOOK_VERIFICATION_FLOW - Step-by-step hook construction and testing
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; updateConfig skill prompt not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/update_config_skill_prompt.rs::UPDATE_CONFIG_HOOK_VERIFICATION_FLOW` + `prompts/update_config/hook_verification_flow.md`
 **File:** `src/skills/bundled/updateConfig.ts:269`
 ```ts
 const HOOK_VERIFICATION_FLOW = `## Constructing a Hook (with verification)
