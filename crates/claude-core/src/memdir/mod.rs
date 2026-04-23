@@ -25,6 +25,7 @@ pub mod entrypoint;
 pub mod paths;
 pub mod prompt;
 pub mod scan;
+pub mod searching_past_context;
 pub mod team_mem_paths;
 pub mod types;
 

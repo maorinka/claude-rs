@@ -6283,7 +6283,7 @@ Return a list of filenames for the memories that will clearly be useful to Claud
 ```
 
 ### Memory Selection User Message
-**Status: ❌ NOT IN RUST** — Reason: Memory directory (memdir) system not implemented; no LLM-based memory selection exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memory_selection_prompt.rs::select_memories_user_message`
 **File:** `src/memdir/findRelevantMemories.ts:103`
 ```ts
 messages: [
@@ -6412,7 +6412,7 @@ truncated +
 ```
 
 ### Searching Past Context Section
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no past context search instructions exist.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/searching_past_context.rs::build_searching_past_context_section`
 **File:** `src/memdir/memdir.ts:375`
 ```ts
 export function buildSearchingPastContextSection(autoMemDir: string): string[] {
@@ -6680,7 +6680,7 @@ export const TRUSTING_RECALL_SECTION: readonly string[] = [
 ```
 
 ### Memory Frontmatter Example
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no memory frontmatter template exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/prompt.rs::memory_frontmatter_example`
 **File:** `src/memdir/memoryTypes.ts:261`
 ```ts
 export const MEMORY_FRONTMATTER_EXAMPLE: readonly string[] = [
@@ -6716,7 +6716,7 @@ export function memoryFreshnessText(mtimeMs: number): string {
 ```
 
 ### Memory Freshness Note (system-reminder wrapped variant)
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no memory freshness note generation exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/age.rs::memory_freshness_note`
 **File:** `src/memdir/memoryAge.ts:49`
 ```ts
 export function memoryFreshnessNote(mtimeMs: number): string {

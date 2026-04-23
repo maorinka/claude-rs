@@ -6883,7 +6883,7 @@ Return a list of filenames for the memories that will clearly be useful to Claud
 ```
 
 ### Memory Selection User Message
-**Status: ❌ NOT IN RUST** — Reason: Memory directory (memdir) system not implemented; no LLM-based memory selection exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memory_selection_prompt.rs::select_memories_user_message`
 **File:** `src/memdir/findRelevantMemories.ts:103`
 
 > **Why not ported:** Infrastructure Gap — In TS, the memory selection system uses an LLM to find relevant memories from the memory directory based on the user's query. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
@@ -7033,7 +7033,7 @@ truncated +
 ```
 
 ### Searching Past Context Section
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no past context search instructions exist.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/searching_past_context.rs::build_searching_past_context_section`
 **File:** `src/memdir/memdir.ts:375`
 
 > **Why not ported:** Feature Not Implemented — In TS, this section provides Grep commands for searching topic files and session transcript logs. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
@@ -7325,7 +7325,7 @@ export const TRUSTING_RECALL_SECTION: readonly string[] = [
 ```
 
 ### Memory Frontmatter Example
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no memory frontmatter template exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/prompt.rs::memory_frontmatter_example`
 **File:** `src/memdir/memoryTypes.ts:261`
 
 > **Why not ported:** Feature Not Implemented — In TS, the memory frontmatter example provides the YAML template for memory files with name, description, and type fields. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
@@ -7367,7 +7367,7 @@ export function memoryFreshnessText(mtimeMs: number): string {
 ```
 
 ### Memory Freshness Note (system-reminder wrapped variant)
-**Status: ❌ NOT IN RUST** — Reason: Memdir system not implemented; no memory freshness note generation exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/memdir/age.rs::memory_freshness_note`
 **File:** `src/memdir/memoryAge.ts:49`
 
 > **Why not ported:** Feature Not Implemented — In TS, memory freshness text warns the model when a memory is multiple days old, noting that claims may be outdated. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the persistent file-based memory system (memdir) with MEMORY.md index, topic files, frontmatter, and LLM-based recall.
