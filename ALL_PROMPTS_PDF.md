@@ -4564,7 +4564,7 @@ For each substantive entry in auto-memory, determine the best destination:
 
 ## skills/bundled/batch.ts
 ### Batch Skill - Parallel work orchestration prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; batch/parallel orchestration skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/batch_skill_prompt.rs::batch_prompt` + `crates/claude-core/src/prompts/batch_skill.md`
 **File:** `src/skills/bundled/batch.ts:19`
 
 > **Why not ported:** Feature Not Implemented — In TS, the /batch skill orchestrates parallelizable changes across a codebase using plan mode, worktree-isolated background agents, and progress tracking. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4601,7 +4601,7 @@ After launching all workers, render an initial status table...
 ```
 
 ### Worker Instructions (included in each batch worker's prompt)
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; batch worker instructions not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/batch_skill_prompt.rs::BATCH_WORKER_INSTRUCTIONS`
 **File:** `src/skills/bundled/batch.ts:13`
 
 > **Why not ported:** Feature Not Implemented — In TS, each batch worker receives instructions to simplify code, run tests, test end-to-end, commit, push, create a PR, and report the PR URL. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4619,7 +4619,7 @@ const WORKER_INSTRUCTIONS = `After you finish implementing the change:
 
 ## skills/bundled/skillify.ts
 ### Skillify Prompt - Capture session process as a reusable skill
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; skillify skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/skillify_prompt.rs::skillify_prompt` + `crates/claude-core/src/prompts/skillify.md`
 **File:** `src/skills/bundled/skillify.ts:22`
 
 > **Why not ported:** Feature Not Implemented — In TS, /skillify captures the current session's repeatable process as a reusable SKILL.md file through session analysis, user interview, and template generation. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4662,7 +4662,7 @@ Round 3: Breaking down each step, Round 4: Final questions ...]
 
 ## skills/bundled/debug.ts
 ### Debug Skill Prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; debug skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/debug_skill_prompt.rs::debug_prompt` + `crates/claude-core/src/prompts/debug_skill.md`
 **File:** `src/skills/bundled/debug.ts:69`
 
 > **Why not ported:** Feature Not Implemented — In TS, the /debug skill reads session debug logs, searches for errors/warnings, and suggests concrete fixes using the claude-code-guide subagent for documentation context. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4780,7 +4780,7 @@ The relevant documentation for your detected language is included below in \`<do
 
 ## skills/bundled/claudeInChrome.ts
 ### Claude in Chrome Skill Activation Message
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; claudeInChrome skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE` + `claude_in_chrome_skill_prompt()`
 **File:** `src/skills/bundled/claudeInChrome.ts:10`
 
 > **Why not ported:** Feature Not Implemented — In TS, the Claude in Chrome skill activates browser automation tools and instructs the model to start by calling tabs_context_mcp. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.

@@ -56,6 +56,35 @@ pub const CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER: &str =
      sessions, OAuth, or computer-use — invoke Skill(skill: \"claude-in-chrome\") before any \
      mcp__claude-in-chrome__* tool.";
 
+/// Activation-time reminder emitted by the `claude-in-chrome`
+/// bundled skill's `getPromptForCommand`. Appended after
+/// [`BASE_CHROME_PROMPT`] — together with an optional `## Task`
+/// section built from the skill's args. Port of TS
+/// `skills/bundled/claudeInChrome.ts:10-14`
+/// `SKILL_ACTIVATION_MESSAGE`.
+pub const CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE: &str = "
+Now that this skill is invoked, you have access to Chrome browser automation tools. You can now use the mcp__claude-in-chrome__* tools to interact with web pages.
+
+IMPORTANT: Start by calling mcp__claude-in-chrome__tabs_context_mcp to get information about the user's current browser tabs.
+";
+
+/// Build the full `claude-in-chrome` skill activation prompt.
+/// Port of TS `skills/bundled/claudeInChrome.ts:26-32`
+/// `getPromptForCommand`. Concatenates [`BASE_CHROME_PROMPT`] +
+/// [`CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE`] and, when `args`
+/// is non-empty, a `## Task\n\n<args>` section — matching TS's
+/// literal `${BASE_CHROME_PROMPT}\n${SKILL_ACTIVATION_MESSAGE}`
+/// and optional `\n## Task\n\n${args}` suffix.
+pub fn claude_in_chrome_skill_prompt(args: &str) -> String {
+    let mut prompt =
+        format!("{BASE_CHROME_PROMPT}\n{CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE}");
+    if !args.is_empty() {
+        prompt.push_str("\n## Task\n\n");
+        prompt.push_str(args);
+    }
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +127,21 @@ mod tests {
     fn tool_search_instructions_mention_toolsearch() {
         assert!(CHROME_TOOL_SEARCH_INSTRUCTIONS.contains("ToolSearch"));
         assert!(CHROME_TOOL_SEARCH_INSTRUCTIONS.contains("select:mcp__claude-in-chrome__"));
+    }
+
+    #[test]
+    fn skill_prompt_without_args_has_base_plus_activation() {
+        let p = claude_in_chrome_skill_prompt("");
+        assert!(p.contains("# Claude in Chrome browser automation"));
+        assert!(p.contains("Now that this skill is invoked"));
+        assert!(p.contains("mcp__claude-in-chrome__tabs_context_mcp"));
+        // No task section when args are empty.
+        assert!(!p.contains("## Task"));
+    }
+
+    #[test]
+    fn skill_prompt_with_args_appends_task_section() {
+        let p = claude_in_chrome_skill_prompt("open GitHub and take a screenshot");
+        assert!(p.contains("## Task\n\nopen GitHub and take a screenshot"));
     }
 }

@@ -1019,7 +1019,7 @@ For each substantive entry in auto-memory, determine the best destination:
 
 ## skills/bundled/batch.ts
 ### Batch Skill - Parallel work orchestration prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; batch/parallel orchestration skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/batch_skill_prompt.rs::batch_prompt` + `crates/claude-core/src/prompts/batch_skill.md`
 **File:** `src/skills/bundled/batch.ts:19`
 ```ts
 function buildPrompt(instruction: string): string {
@@ -1053,7 +1053,7 @@ After launching all workers, render an initial status table...
 ```
 
 ### Worker Instructions (included in each batch worker's prompt)
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; batch worker instructions not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/batch_skill_prompt.rs::BATCH_WORKER_INSTRUCTIONS`
 **File:** `src/skills/bundled/batch.ts:13`
 ```ts
 const WORKER_INSTRUCTIONS = `After you finish implementing the change:
@@ -1068,7 +1068,7 @@ const WORKER_INSTRUCTIONS = `After you finish implementing the change:
 
 ## skills/bundled/skillify.ts
 ### Skillify Prompt - Capture session process as a reusable skill
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; skillify skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/skillify_prompt.rs::skillify_prompt` + `crates/claude-core/src/prompts/skillify.md`
 **File:** `src/skills/bundled/skillify.ts:22`
 ```ts
 const SKILLIFY_PROMPT = `# Skillify {{userDescriptionBlock}}
@@ -1108,7 +1108,7 @@ Round 3: Breaking down each step, Round 4: Final questions ...]
 
 ## skills/bundled/debug.ts
 ### Debug Skill Prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; debug skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/debug_skill_prompt.rs::debug_prompt` + `crates/claude-core/src/prompts/debug_skill.md`
 **File:** `src/skills/bundled/debug.ts:69`
 ```ts
 const prompt = `# Debug Skill
@@ -1217,7 +1217,7 @@ The relevant documentation for your detected language is included below in \`<do
 
 ## skills/bundled/claudeInChrome.ts
 ### Claude in Chrome Skill Activation Message
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; claudeInChrome skill not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/claude_in_chrome_prompts.rs::CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE` + `claude_in_chrome_skill_prompt()`
 **File:** `src/skills/bundled/claudeInChrome.ts:10`
 ```ts
 const SKILL_ACTIVATION_MESSAGE = `
