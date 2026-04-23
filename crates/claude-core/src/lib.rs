@@ -121,6 +121,7 @@ pub mod subprocess_env;
 pub mod system_directories;
 pub mod system_theme;
 pub mod tagged_id;
+pub mod task_notification;
 pub mod task_types;
 pub mod teams;
 pub mod tempfile_path;

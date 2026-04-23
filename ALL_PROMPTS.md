@@ -6158,7 +6158,7 @@ Remember: The agents you create should be autonomous experts capable of handling
 ```
 
 ### Agent Memory Instructions (conditional addon to agent creation system prompt)
-**Status: ❌ NOT IN RUST** — Reason: Agent creation/generation feature not implemented in Rust; no dynamic agent generation pipeline exists to host this prompt.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/agent_creation_prompt.rs::AGENT_MEMORY_INSTRUCTIONS`
 **File:** `src/components/agents/generateAgent.ts:100`
 ```ts
 const AGENT_MEMORY_INSTRUCTIONS = `
@@ -6185,7 +6185,7 @@ const AGENT_MEMORY_INSTRUCTIONS = `
 ```
 
 ### Agent Generation User Prompt
-**Status: ❌ NOT IN RUST** — Reason: Agent creation/generation feature not implemented in Rust; no dynamic agent generation pipeline exists to host this prompt.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/agent_creation_prompt.rs::agent_generation_user_prompt`
 **File:** `src/components/agents/generateAgent.ts:133`
 ```ts
 const prompt = `Create an agent configuration based on this request: "${userPrompt}".${existingList}
@@ -6789,7 +6789,7 @@ export function buildCombinedMemoryPrompt(
 
 ## [LocalAgentTask.tsx]
 ### Agent Task Notification XML Message (sent to the model)
-**Status: ❌ NOT IN RUST** — Reason: The background task notification system (XML messages injected into the conversation when agent/shell tasks complete) is not implemented. The Rust port has `crates/claude-tools/src/task_tools.rs` for task CRUD but no XML notification messages sent to the model.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/task_notification.rs::{agent_task_summary, build_task_notification_xml}`
 **File:** `src/tasks/LocalAgentTask/LocalAgentTask.tsx:252`
 ```ts
 const message = `<${TASK_NOTIFICATION_TAG}>
@@ -6813,7 +6813,7 @@ const summary = status === 'completed'
 
 ## [LocalMainSessionTask.ts]
 ### Background Session Notification XML Message (sent to the model)
-**Status: ❌ NOT IN RUST** — Reason: Background task notification system not implemented; no XML notification messages for session completion exist.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/task_notification.rs::{background_session_summary, build_task_notification_xml}`
 **File:** `src/tasks/LocalMainSessionTask.ts:255`
 ```ts
 const message = `<${TASK_NOTIFICATION_TAG}>
@@ -6836,7 +6836,7 @@ const summary =
 
 ## [LocalShellTask.tsx]
 ### Stalled Shell Task Notification (interactive prompt detection)
-**Status: ❌ NOT IN RUST** — Reason: Background task notification system not implemented; no stalled/interactive-prompt detection and notification exists.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/task_notification.rs::{stalled_shell_summary, STALLED_SHELL_TAIL}`
 **File:** `src/tasks/LocalShellTask/LocalShellTask.tsx:75`
 ```ts
 const summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" appears to be waiting for interactive input`;
@@ -6852,7 +6852,7 @@ The command is likely blocked on an interactive prompt. Kill this task and re-ru
 ```
 
 ### Shell Task Completion Notification Summaries
-**Status: ❌ NOT IN RUST** — Reason: Background task notification system not implemented; no shell task completion summary messages exist.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/task_notification.rs::{shell_monitor_summary, shell_bash_summary}`
 **File:** `src/tasks/LocalShellTask/LocalShellTask.tsx:136` (approximate)
 
 For `monitor` kind:
