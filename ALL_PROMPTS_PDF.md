@@ -4409,7 +4409,7 @@ Given an event, matcher, target file, and desired behavior, follow this flow. Ea
 
 ## skills/bundled/keybindings.ts
 ### Keybindings Skill Prompt Sections
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; keybindings skill prompt not embedded
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/keybindings_skill_prompt.rs`
 **File:** `src/skills/bundled/keybindings.ts:149`
 
 > **Why not ported:** Feature Not Implemented — In TS, the keybindings skill provides comprehensive documentation for customizing keyboard shortcuts in ~/.claude/keybindings.json including chord bindings and keystroke syntax. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4465,7 +4465,7 @@ ${args}`
 
 ## skills/bundled/scheduleRemoteAgents.ts
 ### Schedule Remote Agents Prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; remote agents feature not implemented
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/schedule_remote_agents_prompt.rs::schedule_remote_agents_prompt`
 **File:** `src/skills/bundled/scheduleRemoteAgents.ts:136`
 
 > **Why not ported:** Feature Not Implemented — In TS, the schedule skill manages remote Claude Code agents (triggers) that run in Anthropic's cloud infrastructure on cron schedules with MCP connector support. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.

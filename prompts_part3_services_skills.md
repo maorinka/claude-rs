@@ -876,7 +876,7 @@ Given an event, matcher, target file, and desired behavior, follow this flow. Ea
 
 ## skills/bundled/keybindings.ts
 ### Keybindings Skill Prompt Sections
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; keybindings skill prompt not embedded
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/keybindings_skill_prompt.rs` ports all 8 SECTION_* constants + `markdown_table()` + `assemble_keybindings_prompt()`. Dynamic reference tables (reserved shortcuts, contexts, actions) remain caller-supplied until the keybinding infrastructure lands.
 **File:** `src/skills/bundled/keybindings.ts:149`
 ```ts
 const SECTION_INTRO = [
@@ -926,7 +926,7 @@ ${args}`
 
 ## skills/bundled/scheduleRemoteAgents.ts
 ### Schedule Remote Agents Prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; remote agents feature not implemented
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/schedule_remote_agents_prompt.rs::schedule_remote_agents_prompt` + `prompts/schedule_remote_agents.md`. Text helpers (`sanitize_connector_name`, `format_setup_notes`, `build_first_step`) are public. Full skill registration awaits the RemoteTrigger tool + cloud-environments infra.
 **File:** `src/skills/bundled/scheduleRemoteAgents.ts:136`
 ```ts
 function buildPrompt(opts: { ... }): string {
