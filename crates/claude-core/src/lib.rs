@@ -21,6 +21,7 @@ pub mod buddy;
 pub mod cache_paths;
 pub mod cache_safe_params;
 pub mod circular_buffer;
+pub mod claude_api_skill_prompt;
 pub mod claude_code_hints;
 pub mod claude_in_chrome_prompts;
 pub mod cli_args;

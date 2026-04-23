@@ -723,7 +723,7 @@ if (scratchpadDir && isScratchpadGateEnabled()) {
 
 ## skills/bundled/simplify.ts
 ### SIMPLIFY_PROMPT - Code review and cleanup skill
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; skill infrastructure exists (skill_tool.rs, plugins/skill.rs) but individual bundled skill prompts are not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/simplify.md` + registered by `register_simplify_skill()` in `bundled_skills/mod.rs`
 **File:** `src/skills/bundled/simplify.ts:4`
 ```ts
 const SIMPLIFY_PROMPT = `# Simplify: Code Review and Cleanup
@@ -981,7 +981,7 @@ ${environmentsInfo}
 
 ## skills/bundled/remember.ts
 ### Memory Review Skill Prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; memory review skill prompt not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/remember.md` + `register_remember_skill()`
 **File:** `src/skills/bundled/remember.ts:9`
 ```ts
 const SKILL_PROMPT = `# Memory Review
@@ -1186,7 +1186,7 @@ Signs of a stuck session:
 
 ## skills/bundled/claudeApi.ts
 ### Claude API Skill - Inline reading guide
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; claudeApi skill not embedded
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/claude_api_skill_prompt.rs::INLINE_READING_GUIDE` + `LANGUAGE_INDICATORS` + `detect_language` + `apply_language_to_reading_guide`. SDK docs (~247 KB of .md blobs) not yet bundled — the skill itself is not registered.
 **File:** `src/skills/bundled/claudeApi.ts:96`
 ```ts
 const INLINE_READING_GUIDE = `## Reference Documentation
@@ -1294,7 +1294,7 @@ return (
 
 ## services/compact/sessionMemoryCompact.ts
 ### Session Memory Compaction Summary Content
-**Status: ❌ NOT IN RUST** — Reason: sessionMemoryCompact service not implemented in Rust; SessionMemory feature is not ported
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/session_memory.rs::truncated_sections_note` (compose with `compact::prompt::build_compact_user_summary_message` + `truncate_for_compact`)
 **File:** `src/services/compact/sessionMemoryCompact.ts:464`
 ```ts
 // Uses getCompactUserSummaryMessage from prompt.ts with:

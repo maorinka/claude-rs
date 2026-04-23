@@ -4244,7 +4244,7 @@ if (scratchpadDir && isScratchpadGateEnabled()) {
 
 ## skills/bundled/simplify.ts
 ### SIMPLIFY_PROMPT - Code review and cleanup skill
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; skill infrastructure exists (skill_tool.rs, plugins/skill.rs) but individual bundled skill prompts are not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/simplify.md` + `register_simplify_skill()`
 **File:** `src/skills/bundled/simplify.ts:4`
 
 > **Why not ported:** Feature Not Implemented — In TS, the /simplify skill launches three parallel review agents (Code Reuse, Code Quality, Efficiency) to analyze git changes and fix issues. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4523,7 +4523,7 @@ ${environmentsInfo}
 
 ## skills/bundled/remember.ts
 ### Memory Review Skill Prompt
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; memory review skill prompt not embedded
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/bundled_skills/remember.md` + `register_remember_skill()`
 **File:** `src/skills/bundled/remember.ts:9`
 
 > **Why not ported:** Feature Not Implemented — In TS, the /remember skill reviews all memory layers (CLAUDE.md, auto-memory, team memory) and proposes classified changes for user approval. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4746,7 +4746,7 @@ Signs of a stuck session:
 
 ## skills/bundled/claudeApi.ts
 ### Claude API Skill - Inline reading guide
-**Status: ❌ NOT IN RUST** — Reason: Bundled skills not implemented as prompt constants in Rust; claudeApi skill not embedded
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/claude_api_skill_prompt.rs::INLINE_READING_GUIDE` + `LANGUAGE_INDICATORS` + `detect_language`
 **File:** `src/skills/bundled/claudeApi.ts:96`
 
 > **Why not ported:** Feature Not Implemented — In TS, the Claude API skill provides inline reading guides for building apps with the Claude API, referencing documentation by language and task type. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: embed bundled skill prompts as constants or load them from resource files in the skill infrastructure.
@@ -4866,7 +4866,7 @@ return (
 
 ## services/compact/sessionMemoryCompact.ts
 ### Session Memory Compaction Summary Content
-**Status: ❌ NOT IN RUST** — Reason: sessionMemoryCompact service not implemented in Rust; SessionMemory feature is not ported
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/session_memory.rs::truncated_sections_note`
 **File:** `src/services/compact/sessionMemoryCompact.ts:464`
 
 > **Why not ported:** Feature Not Implemented — In TS, SessionMemory maintains a structured notes file with sections for current state, task spec, files, workflow, errors, learnings, key results, and a worklog. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the SessionMemory service with structured notes file management and periodic update triggers.

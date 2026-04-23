@@ -255,6 +255,18 @@ pub fn build_update_prompt(current_notes: &str, notes_path: &str) -> String {
     format!("{}{}", base, reminders)
 }
 
+/// Note appended to the compact summary when
+/// `truncate_for_compact` dropped at least one oversized section.
+/// Port of TS `services/compact/sessionMemoryCompact.ts:473` — the
+/// `\n\nSome session memory sections were truncated for length...`
+/// suffix. Takes the user-facing session memory path as an
+/// argument so the caller doesn't need to know the formatting.
+pub fn truncated_sections_note(memory_path: &str) -> String {
+    format!(
+        "\n\nSome session memory sections were truncated for length. The full session memory can be viewed at: {memory_path}"
+    )
+}
+
 /// Truncate oversized sections when embedding session memory into a
 /// post-compact message. Returns the trimmed content + a flag
 /// indicating whether any truncation happened. Matches TS
@@ -400,5 +412,21 @@ mod tests {
         // returns DEFAULT_SESSION_MEMORY_TEMPLATE which we compare
         // against.
         assert!(is_empty(DEFAULT_SESSION_MEMORY_TEMPLATE));
+    }
+
+    #[test]
+    fn truncated_sections_note_has_double_newline_prefix_and_path() {
+        // Must start with `\n\n` to append cleanly onto an existing
+        // summary body.
+        let note = truncated_sections_note("/tmp/session-memory.md");
+        assert!(note.starts_with("\n\nSome session memory sections"));
+        assert!(note.contains("truncated for length"));
+        assert!(note.ends_with("/tmp/session-memory.md"));
+    }
+
+    #[test]
+    fn truncated_sections_note_preserves_arbitrary_paths() {
+        let win = truncated_sections_note(r"C:\Users\me\.claude\session-memory.md");
+        assert!(win.contains(r"C:\Users\me\.claude\session-memory.md"));
     }
 }
