@@ -2859,7 +2859,7 @@ const result = await queryHaiku({
   // ...
 })
 ```
-**Status: NOT IN RUST** -- Reason: Session name generation via Haiku model query is not implemented in the Rust port. The Rust /rename command (`crates/claude-core/src/commands/builtin.rs:1585`) accepts a user-supplied name but does not auto-generate kebab-case names from conversation content. This would require a secondary model query API (queryHaiku) that doesn't exist in the Rust port.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/command_prompt_snippets.rs::SESSION_NAME_GENERATION_SYSTEM_PROMPT`.
 
 > **Why not ported:** Infrastructure Gap — In TS, session names are auto-generated from conversation content using a Haiku model query that produces short kebab-case names. The supporting infrastructure needed for this feature (such as secondary LLM calls, dynamic prompt assembly, or attachment injection) has not been built in the Rust port yet. To add: implement a secondary/auxiliary model query API (queryHaiku equivalent) for lightweight LLM calls.
 
@@ -2881,7 +2881,7 @@ Keep it concise - 3-5 sentences. Preserve specific details like file names, erro
 TRANSCRIPT CHUNK:
 `
 ```
-**Status: NOT IN RUST** -- Reason: The /insights command in Rust (`crates/claude-core/src/commands/builtin.rs:2188`) is a simplified single-prompt implementation. The TS SUMMARIZE_CHUNK_PROMPT is part of a multi-step pipeline (chunk summarization -> facet extraction -> section generation -> synthesis) that requires transcript loading, chunking, and multiple sequential model queries. This pipeline infrastructure does not exist in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::SUMMARIZE_CHUNK_PROMPT`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -2920,7 +2920,7 @@ CRITICAL GUIDELINES:
 SESSION:
 `
 ```
-**Status: NOT IN RUST** -- Reason: Same as SUMMARIZE_CHUNK_PROMPT above. The FACET_EXTRACTION_PROMPT is part of the multi-step insights pipeline. The Rust /insights command uses a simplified single-prompt approach.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::FACET_EXTRACTION_PROMPT`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -2947,7 +2947,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT matching this schema:
   "brief_summary": "One sentence: what user wanted and whether they got it"
 }`
 ```
-**Status: NOT IN RUST** -- Reason: Same as above. Part of the multi-step insights pipeline not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::FACET_EXTRACTION_JSON_SUFFIX` + `facet_extraction_json_prompt()`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -2973,7 +2973,7 @@ Include 4-5 areas. Skip internal CC operations.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. The Rust /insights command does not implement per-section model queries.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_PROJECT_AREAS`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -2996,7 +2996,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_INTERACTION_STYLE`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3023,7 +3023,7 @@ Include 3 impressive workflows.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_WHAT_WORKS`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3050,7 +3050,7 @@ Include 3 friction categories with 2 examples each.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_FRICTION_ANALYSIS`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3105,7 +3105,7 @@ IMPORTANT for features_to_try: Pick 2-3 from the CC FEATURES REFERENCE above. In
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_SUGGESTIONS`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3132,7 +3132,7 @@ Include 3 opportunities. Think BIG - autonomous workflows, parallel agents, iter
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_ON_THE_HORIZON`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3158,7 +3158,7 @@ Include 2-3 improvements based on friction patterns observed.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Anthropic-internal (ant-only) prompt. Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_CC_TEAM_IMPROVEMENTS` (ant-only).
 
 > **Why not ported:** Ant-Only Feature — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. This feature is restricted to internal Anthropic users (USER_TYPE === 'ant') and is not relevant to the open-source Rust port. To add: implement user-type differentiation and internal-only feature gates.
 
@@ -3184,7 +3184,7 @@ Include 2-3 improvements based on friction patterns observed.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Anthropic-internal (ant-only) prompt. Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_MODEL_BEHAVIOR_IMPROVEMENTS` (ant-only).
 
 > **Why not ported:** Ant-Only Feature — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. This feature is restricted to internal Anthropic users (USER_TYPE === 'ant') and is not relevant to the open-source Rust port. To add: implement user-type differentiation and internal-only feature gates.
 
@@ -3209,7 +3209,7 @@ Find something genuinely interesting or amusing from the session summaries.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_FUN_ENDING`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3263,7 +3263,7 @@ ${patternsText}
 ## On the Horizon (ambitious workflows for better models)
 ${horizonText}`
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline (the "At a Glance" synthesis prompt). Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::at_a_glance_prompt()`.
 
 > **Why not ported:** Feature Not Implemented — In TS, the 'At a Glance' prompt synthesizes all insights sections into a coaching-tone summary covering what's working, what's hindering, quick wins, and ambitious workflows. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3300,7 +3300,7 @@ Want to dig into any section or try one of the suggestions?
   },
 ]
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline (final output injection with report URL, HTML path, facets directory). The Rust /insights command (`crates/claude-core/src/commands/builtin.rs:2188`) uses a simplified single-prompt approach that asks the model to analyze the current session instead of generating an HTML report.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::insights_final_report_message()`.
 
 > **Why not ported:** Feature Not Implemented — In TS, this is part of the multi-step /insights pipeline that processes session transcripts through chunking, facet extraction, per-section model queries, and synthesis into an HTML report. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the multi-step insights pipeline with transcript chunking, facet extraction, per-section model queries, and HTML report synthesis.
 
@@ -3319,7 +3319,7 @@ async getPromptForCommand(args): Promise<ContentBlockParam[]> {
   }];
 }
 ```
-**Status: NOT IN RUST** -- Reason: The /statusline command is not implemented in the Rust port. It requires spawning a subagent with type "statusline-setup" to configure shell PS1, which depends on the AGENT_TOOL_NAME infrastructure and statusline subagent type that don't exist in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/command_prompt_snippets.rs::statusline_command_prompt`.
 
 > **Why not ported:** Feature Not Implemented — In TS, the Statusline Setup agent converts the user's shell PS1 configuration into a Claude Code status line using shell command conversion and ANSI color preservation. The entire feature or subsystem that hosts this prompt does not exist in the Rust port yet. To add: implement the statusline feature with PS1 conversion and the statusline-setup subagent.
 
@@ -3396,7 +3396,7 @@ Do not attempt to run the command. Simply inform the user about the plugin insta
   ]
 }
 ```
-**Status: NOT IN RUST** -- Reason: The createMovedToPluginCommand function is Anthropic-internal (ant-only, guarded by `USER_TYPE === 'ant'`). It redirects deprecated commands to the claude-code-marketplace plugin system. The Rust port does not implement this redirect mechanism.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/command_prompt_snippets.rs::moved_to_plugin_redirect(plugin_name, plugin_command)`.
 
 > **Why not ported:** Ant-Only Feature — In TS, this redirects deprecated commands to the claude-code-marketplace plugin system for internal Anthropic users. This feature is restricted to internal Anthropic users (USER_TYPE === 'ant') and is not relevant to the open-source Rust port. To add: implement user-type differentiation and internal-only feature gates.
 

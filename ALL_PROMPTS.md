@@ -2664,7 +2664,7 @@ const result = await queryHaiku({
   // ...
 })
 ```
-**Status: NOT IN RUST** -- Reason: Session name generation via Haiku model query is not implemented in the Rust port. The Rust /rename command (`crates/claude-core/src/commands/builtin.rs:1585`) accepts a user-supplied name but does not auto-generate kebab-case names from conversation content. This would require a secondary model query API (queryHaiku) that doesn't exist in the Rust port.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/command_prompt_snippets.rs::SESSION_NAME_GENERATION_SYSTEM_PROMPT`.
 
 ---
 
@@ -2683,7 +2683,7 @@ Keep it concise - 3-5 sentences. Preserve specific details like file names, erro
 TRANSCRIPT CHUNK:
 `
 ```
-**Status: NOT IN RUST** -- Reason: The /insights command in Rust (`crates/claude-core/src/commands/builtin.rs:2188`) is a simplified single-prompt implementation. The TS SUMMARIZE_CHUNK_PROMPT is part of a multi-step pipeline (chunk summarization -> facet extraction -> section generation -> synthesis) that requires transcript loading, chunking, and multiple sequential model queries. This pipeline infrastructure does not exist in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::SUMMARIZE_CHUNK_PROMPT`.
 
 ---
 
@@ -2719,7 +2719,7 @@ CRITICAL GUIDELINES:
 SESSION:
 `
 ```
-**Status: NOT IN RUST** -- Reason: Same as SUMMARIZE_CHUNK_PROMPT above. The FACET_EXTRACTION_PROMPT is part of the multi-step insights pipeline. The Rust /insights command uses a simplified single-prompt approach.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::FACET_EXTRACTION_PROMPT`.
 
 ---
 
@@ -2766,7 +2766,7 @@ Include 4-5 areas. Skip internal CC operations.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. The Rust /insights command does not implement per-section model queries.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_PROJECT_AREAS`.
 
 ---
 
@@ -2786,7 +2786,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_INTERACTION_STYLE`.
 
 ---
 
@@ -2810,7 +2810,7 @@ Include 3 impressive workflows.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_WHAT_WORKS`.
 
 ---
 
@@ -2834,7 +2834,7 @@ Include 3 friction categories with 2 examples each.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_FRICTION_ANALYSIS`.
 
 ---
 
@@ -2886,7 +2886,7 @@ IMPORTANT for features_to_try: Pick 2-3 from the CC FEATURES REFERENCE above. In
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_SUGGESTIONS`.
 
 ---
 
@@ -2910,7 +2910,7 @@ Include 3 opportunities. Think BIG - autonomous workflows, parallel agents, iter
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_ON_THE_HORIZON`.
 
 ---
 
@@ -2933,7 +2933,7 @@ Include 2-3 improvements based on friction patterns observed.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Anthropic-internal (ant-only) prompt. Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_CC_TEAM_IMPROVEMENTS` (ant-only caller-gated).
 
 ---
 
@@ -2956,7 +2956,7 @@ Include 2-3 improvements based on friction patterns observed.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Anthropic-internal (ant-only) prompt. Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_MODEL_BEHAVIOR_IMPROVEMENTS` (ant-only caller-gated).
 
 ---
 
@@ -2978,7 +2978,7 @@ Find something genuinely interesting or amusing from the session summaries.`,
   maxTokens: 8192,
 },
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline. Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::INSIGHT_SECTION_FUN_ENDING`.
 
 ---
 
@@ -3029,7 +3029,7 @@ ${patternsText}
 ## On the Horizon (ambitious workflows for better models)
 ${horizonText}`
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline (the "At a Glance" synthesis prompt). Not implemented in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::at_a_glance_prompt()` with `AtAGlanceInputs`.
 
 ---
 
@@ -3063,7 +3063,7 @@ Want to dig into any section or try one of the suggestions?
   },
 ]
 ```
-**Status: NOT IN RUST** -- Reason: Part of the multi-step insights pipeline (final output injection with report URL, HTML path, facets directory). The Rust /insights command (`crates/claude-core/src/commands/builtin.rs:2188`) uses a simplified single-prompt approach that asks the model to analyze the current session instead of generating an HTML report.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/insights_prompts.rs::insights_final_report_message()`.
 
 ---
 
@@ -3079,7 +3079,7 @@ async getPromptForCommand(args): Promise<ContentBlockParam[]> {
   }];
 }
 ```
-**Status: NOT IN RUST** -- Reason: The /statusline command is not implemented in the Rust port. It requires spawning a subagent with type "statusline-setup" to configure shell PS1, which depends on the AGENT_TOOL_NAME infrastructure and statusline subagent type that don't exist in Rust.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/command_prompt_snippets.rs::statusline_command_prompt`.
 
 ---
 
@@ -3153,7 +3153,7 @@ Do not attempt to run the command. Simply inform the user about the plugin insta
   ]
 }
 ```
-**Status: NOT IN RUST** -- Reason: The createMovedToPluginCommand function is Anthropic-internal (ant-only, guarded by `USER_TYPE === 'ant'`). It redirects deprecated commands to the claude-code-marketplace plugin system. The Rust port does not implement this redirect mechanism.
+**Status: FOUND in Rust (prompt-only)** -- `crates/claude-core/src/command_prompt_snippets.rs::moved_to_plugin_redirect(plugin_name, plugin_command)` (ant-only caller-gated).
 
 ---
 
