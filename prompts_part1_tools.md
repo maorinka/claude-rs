@@ -31,7 +31,7 @@ ${effectiveAgents.map(agent => formatAgentLine(agent)).join('\n')}`
 ```
 
 ### Agent Tool - "When to fork" section (fork subagent enabled)
-**Status: ❌ NOT IN RUST** — Reason: Fork subagent feature not implemented in Rust. No fork detection, no fork examples, no whenToFork section.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/agent_fork_prompt.rs::AGENT_WHEN_TO_FORK_SECTION`. Fork runtime infrastructure is not yet wired into `agent_tool.rs::build_agent_prompt()`; the text is ready to splice in when the in-process fork subagent lands.
 **File:** `src/tools/AgentTool/prompt.ts:81`
 ```ts
 const whenToForkSection = forkEnabled
@@ -76,7 +76,7 @@ ${forkEnabled ? 'For fresh agents, terse' : 'Terse'} command-style prompts produ
 ```
 
 ### Agent Tool - Fork Examples
-**Status: ❌ NOT IN RUST** — Reason: Fork subagent feature not implemented in Rust.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/agent_fork_prompt.rs::AGENT_FORK_EXAMPLES` (+ `AGENT_WRITING_PROMPT_FORK_PREFIX` and `AGENT_WRITING_PROMPT_FORK_TERSE_LINE` for the fork-aware "Writing the prompt" variants).
 **File:** `src/tools/AgentTool/prompt.ts:115`
 ```ts
 const forkExamples = `Example usage:
@@ -1522,7 +1522,7 @@ Parameters:
 
 ## [RemoteTriggerTool/prompt.ts]
 ### RemoteTrigger Tool Description and Prompt
-**Status: ❌ NOT IN RUST** — Reason: The Rust RemoteTriggerTool at `crates/claude-tools/src/remote_trigger.rs:27` has a different description focused on dispatching prompts to cloud execution, not managing scheduled triggers. The TS version is an API proxy for the CCR trigger API (list/get/create/update/run actions). The Rust tool dispatches actual remote tasks instead.
+**Status: ✅ FOUND in Rust (prompt-only)** — `crates/claude-core/src/remote_trigger_api_prompt.rs::REMOTE_TRIGGER_API_DESCRIPTION` + `REMOTE_TRIGGER_API_PROMPT`. The live `RemoteTriggerTool` at `crates/claude-tools/src/remote_trigger.rs` still implements the cloud-task-dispatch surface; the API-proxy flavor's text is parked in claude-core for the `/schedule` skill + future migration.
 **File:** `src/tools/RemoteTriggerTool/prompt.ts:1`
 ```ts
 export const DESCRIPTION =
@@ -2191,7 +2191,7 @@ Set up task dependencies:
 
 ## [TaskOutputTool/TaskOutputTool.tsx]
 ### TaskOutput Tool Prompt (Deprecated)
-**Status: ❌ NOT IN RUST** — Reason: The Rust TaskOutputTool at `crates/claude-tools/src/task_tools.rs:487` has only a one-line description ("Get the output of a completed or running task by its ID."). The TS deprecation notice (prefer Read on output file path), block parameter, and task-notification guidance are missing.
+**Status: ✅ FOUND in Rust** — `crates/claude-tools/src/task_tools.rs::TaskOutputTool::description` now returns the full TS prompt text (deprecation notice + Read-on-output-path guidance + block parameter documentation). `block` added as optional bool in the schema (default `true`).
 **File:** `src/tools/TaskOutputTool/TaskOutputTool.tsx:172`
 ```ts
 async prompt() {

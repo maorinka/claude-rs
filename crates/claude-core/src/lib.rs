@@ -1,6 +1,7 @@
 pub mod advisor;
 pub mod agent_creation_prompt;
 pub mod agent_definition;
+pub mod agent_fork_prompt;
 pub mod agent_id;
 pub mod agent_summary;
 pub mod analytics;
@@ -94,6 +95,7 @@ pub mod query_context;
 pub mod rate_limit_messages;
 pub mod remote;
 pub mod remote_managed_settings;
+pub mod remote_trigger_api_prompt;
 pub mod sandbox;
 pub mod sanitization;
 pub mod schedule_remote_agents_prompt;

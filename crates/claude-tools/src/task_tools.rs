@@ -526,7 +526,21 @@ impl ToolExecutor for TaskOutputTool {
     }
 
     fn description(&self) -> String {
-        "[Deprecated] — prefer Read on the task output file path".to_string()
+        // Port of TS `TaskOutputTool/TaskOutputTool.tsx:172` `prompt()`.
+        // The TS tool distinguishes `description()` (one-liner shown
+        // in tool lists) from `prompt()` (model-facing guidance);
+        // the Rust `ToolExecutor` has only `description()`, so we
+        // return the full prompt text here — same pattern as
+        // `FileReadTool` (read.rs:325-327).
+        "DEPRECATED: Prefer using the Read tool on the task's output file path instead. Background tasks return their output file path in the tool result, and you receive a <task-notification> with the same path when the task completes — Read that file directly.\n\n\
+         - Retrieves output from a running or completed task (background shell, agent, or remote session)\n\
+         - Takes a task_id parameter identifying the task\n\
+         - Returns the task output along with status information\n\
+         - Use block=true (default) to wait for task completion\n\
+         - Use block=false for non-blocking check of current status\n\
+         - Task IDs can be found using the /tasks command\n\
+         - Works with all task types: background shells, async agents, and remote sessions"
+            .to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -536,6 +550,11 @@ impl ToolExecutor for TaskOutputTool {
                 "taskId": {
                     "type": "string",
                     "description": "ID of the task to get output for"
+                },
+                "block": {
+                    "type": "boolean",
+                    "description": "When true (default), wait for the task to complete before returning. When false, return the current status and partial output without waiting.",
+                    "default": true
                 }
             },
             "required": ["taskId"]
