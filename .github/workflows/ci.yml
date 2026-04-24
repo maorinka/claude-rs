@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The ubuntu-latest runner image pre-sets RUSTC_WRAPPER=sccache, but
+  # sccache is not on PATH by default. Empty string disables the wrapper.
+  RUSTC_WRAPPER: ""
 
 jobs:
   fmt:
