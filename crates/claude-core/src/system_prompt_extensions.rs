@@ -290,14 +290,46 @@ pub fn build_output_style_section(name: Option<&str>, prompt: Option<&str>) -> O
     Some(format!("# Output Style: {n}\n{p}"))
 }
 
-/// Auto-mode (YOLO) classifier tool name. Port of TS
-/// `src/utils/permissions/yoloClassifier.ts:262` (`YOLO_CLASSIFIER_TOOL_NAME`).
-pub const YOLO_CLASSIFIER_TOOL_NAME: &str = "classify_action";
+/// Auto-mode (YOLO) classifier tool name. Verbatim port of TS
+/// `src/utils/permissions/yoloClassifier.ts:260`: `classify_result`.
+pub const YOLO_CLASSIFIER_TOOL_NAME: &str = "classify_result";
 
 /// Auto-mode classifier tool description. Port of TS
-/// `yoloClassifier.ts:264`.
+/// `yoloClassifier.ts:265`.
 pub const YOLO_CLASSIFIER_TOOL_DESCRIPTION: &str =
     "Report the security classification result for the agent action";
+
+/// Full Auto-mode classifier tool JSON schema. Verbatim port of TS
+/// `yoloClassifier.ts:262-285` (`YOLO_CLASSIFIER_TOOL_SCHEMA`). The TS
+/// value is typed `BetaToolUnion` with `type: 'custom'`; the Rust port
+/// returns a `serde_json::Value` so callers can splice it into API
+/// request bodies without needing a dedicated type today. Shape,
+/// property ordering, and the `required` list match TS exactly.
+pub fn yolo_classifier_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "custom",
+        "name": YOLO_CLASSIFIER_TOOL_NAME,
+        "description": YOLO_CLASSIFIER_TOOL_DESCRIPTION,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "thinking": {
+                    "type": "string",
+                    "description": "Brief step-by-step reasoning."
+                },
+                "shouldBlock": {
+                    "type": "boolean",
+                    "description": "Whether the action should be blocked (true) or allowed (false)"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief explanation of the classification decision"
+                }
+            },
+            "required": ["thinking", "shouldBlock", "reason"]
+        }
+    })
+}
 
 /// Command-prefix extraction Haiku-classifier system prompt. Port of
 /// TS `src/utils/shell/prefix.ts:220-232`. TS picks between two framings
@@ -525,8 +557,22 @@ mod tests {
 
     #[test]
     fn yolo_classifier_identifier_literals() {
-        assert_eq!(YOLO_CLASSIFIER_TOOL_NAME, "classify_action");
+        assert_eq!(YOLO_CLASSIFIER_TOOL_NAME, "classify_result");
         assert!(YOLO_CLASSIFIER_TOOL_DESCRIPTION.contains("security classification"));
+    }
+
+    #[test]
+    fn yolo_classifier_tool_schema_matches_ts_shape() {
+        let s = yolo_classifier_tool_schema();
+        assert_eq!(s["type"], "custom");
+        assert_eq!(s["name"], "classify_result");
+        let props = &s["input_schema"]["properties"];
+        assert_eq!(props["thinking"]["type"], "string");
+        assert_eq!(props["shouldBlock"]["type"], "boolean");
+        assert_eq!(props["reason"]["type"], "string");
+        let req = s["input_schema"]["required"].as_array().unwrap();
+        let req_strs: Vec<_> = req.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(req_strs, vec!["thinking", "shouldBlock", "reason"]);
     }
 
     #[test]

@@ -21,6 +21,7 @@
 //!     wires differently. A simple env-var + HOME fallback is ported here.
 
 pub mod age;
+pub mod daily_log_prompt;
 pub mod entrypoint;
 pub mod paths;
 pub mod prompt;
@@ -30,6 +31,7 @@ pub mod team_mem_paths;
 pub mod types;
 
 pub use age::{memory_age, memory_age_days, memory_freshness_note, memory_freshness_text};
+pub use daily_log_prompt::{build_assistant_daily_log_prompt, DailyLogPromptInputs};
 pub use entrypoint::{
     truncate_entrypoint_content, EntrypointTruncation, MAX_ENTRYPOINT_BYTES, MAX_ENTRYPOINT_LINES,
 };

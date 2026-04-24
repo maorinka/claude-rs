@@ -5340,7 +5340,7 @@ Explain this command in context.`
 ## utils/permissions/yoloClassifier.ts
 ### Auto Mode Classifier Tool Schema
 **File:** `src/utils/permissions/yoloClassifier.ts:262-285`
-**Status: ⚠️ PARTIAL in Rust** — Tool name + description parked at `crates/claude-core/src/system_prompt_extensions.rs::YOLO_CLASSIFIER_TOOL_NAME` / `_TOOL_DESCRIPTION`. The full JSON `input_schema` (thinking/shouldBlock/reason) and the LLM-classifier caller are still to wire.
+**Status: ✅ ADDED to Rust (schema parked)** — `crates/claude-core/src/system_prompt_extensions.rs::yolo_classifier_tool_schema()` returns the full `BetaToolUnion` shape as `serde_json::Value`, with `thinking` / `shouldBlock` / `reason` properties and the `required` list matching TS exactly. Constants `YOLO_CLASSIFIER_TOOL_NAME` (`classify_result`) + `_TOOL_DESCRIPTION` also exposed. The LLM-classifier caller is still to wire — the Rust auto-mode path at `permissions/evaluator.rs:465` uses static rules.
 ```ts
 const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   type: 'custom',
@@ -6436,7 +6436,7 @@ export function buildSearchingPastContextSection(autoMemDir: string): string[] {
 ```
 
 ### Assistant Daily Log Prompt (KAIROS mode)
-**Status: ❌ NOT IN RUST** — Reason: Memdir system and KAIROS mode not implemented; no daily log prompt exists.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/memdir/daily_log_prompt.rs::build_assistant_daily_log_prompt(DailyLogPromptInputs)`. Verbatim port of the TS line-by-line builder; reuses the existing `WHAT_NOT_TO_SAVE_SECTION` + `ENTRYPOINT_NAME` constants and accepts caller-provided `buildSearchingPastContextSection` output for the feature-gated tail. KAIROS runtime (auto-memory daily log path resolution + system-prompt injection) is still unwired.
 **File:** `src/memdir/memdir.ts:327`
 ```ts
 function buildAssistantDailyLogPrompt(skipIndex = false): string {
