@@ -260,51 +260,87 @@ pub const PERMISSION_EXPLAINER_TOOL_NAME: &str = "explain_command";
 /// Permission-explainer tool description.
 pub const PERMISSION_EXPLAINER_TOOL_DESCRIPTION: &str = "Provide an explanation of a shell command";
 
-/// Scratchpad directory instructions. Port of TS
-/// `constants/prompts.ts:804-818`. The `{scratchpad_dir}` placeholder
-/// is substituted by the session-specific path when the run-time
-/// caller (not yet implemented in Rust) splices this into the system
-/// prompt. Use `build_scratchpad_instructions(dir)` to produce the
-/// final string — direct use of this constant is only for reviewers
-/// checking the verbatim TS wording.
-pub const SCRATCHPAD_INSTRUCTIONS_TEMPLATE: &str = "# Scratchpad Directory
-
-IMPORTANT: Always use this scratchpad directory for temporary files instead of `/tmp` or other system temp directories:
-`{scratchpad_dir}`
-
-Use this directory for ALL temporary file needs:
-- Storing intermediate results or data during multi-step tasks
-- Writing temporary scripts or configuration files
-- Saving outputs that don't belong in the user's project
-- Creating working files during analysis or processing
-- Any file that would otherwise go to `/tmp`
-
-Only use `/tmp` if the user explicitly requests it.
-
-The scratchpad directory is session-specific, isolated from the user's project, and can be used freely without permission prompts.";
-
-/// Substitute the scratchpad directory path into the template.
-/// Matches TS `getScratchpadInstructions(scratchpadDir)`.
-pub fn build_scratchpad_instructions(scratchpad_dir: &str) -> String {
-    SCRATCHPAD_INSTRUCTIONS_TEMPLATE.replace("{scratchpad_dir}", scratchpad_dir)
+/// Language preference section. Port of TS
+/// `src/constants/prompts.ts:143-148`. Takes the `languagePreference`
+/// setting string (e.g. `"Japanese"`, `"French"`) and returns the
+/// exact prompt the TS builder emits. Returns `None` when no
+/// preference is configured (TS returns `null` in the same case).
+/// Settings-level `languagePreference` is not yet wired in Rust; this
+/// helper only produces the prompt string once a caller supplies it.
+pub fn build_language_section(language_preference: Option<&str>) -> Option<String> {
+    let lang = language_preference?;
+    if lang.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "# Language\nAlways respond in {lang}. Use {lang} for all explanations, comments, and communications with the user. Technical terms and code identifiers should remain in their original form."
+    ))
 }
 
-/// Function-result clearing notice. Port of TS
-/// `constants/prompts.ts:836-838`. Injected when the context manager
-/// is configured to evict old tool results — TS computes this from
-/// `config.keepRecent`, which is not yet implemented in Rust. The
-/// Rust port currently uses full compaction instead; this constant
-/// exists so the final system prompt can include the exact TS
-/// wording once selective eviction lands.
-pub const FUNCTION_RESULT_CLEARING_TEMPLATE: &str = "# Function Result Clearing
-
-Old tool results will be automatically cleared from context to free up space. The {keep_recent} most recent results are always kept.";
-
-/// Substitute the `keepRecent` count into the template. Matches TS
-/// `getFunctionResultClearingSection(config)`.
-pub fn build_function_result_clearing_section(keep_recent: u32) -> String {
-    FUNCTION_RESULT_CLEARING_TEMPLATE.replace("{keep_recent}", &keep_recent.to_string())
+/// Output-style section wrapper. Port of TS
+/// `src/constants/prompts.ts:151-157`: `getOutputStyleSection`. Wraps a
+/// style's `prompt` field under a `# Output Style: {name}` heading
+/// when a style is configured; returns `None` otherwise. Output-style
+/// loading infrastructure (`loadOutputStylesDir`) is not yet wired in
+/// Rust; this helper only produces the wrapper once a caller has the
+/// name + prompt.
+pub fn build_output_style_section(name: Option<&str>, prompt: Option<&str>) -> Option<String> {
+    let n = name?;
+    let p = prompt?;
+    Some(format!("# Output Style: {n}\n{p}"))
 }
+
+/// Auto-mode (YOLO) classifier tool name. Port of TS
+/// `src/utils/permissions/yoloClassifier.ts:262` (`YOLO_CLASSIFIER_TOOL_NAME`).
+pub const YOLO_CLASSIFIER_TOOL_NAME: &str = "classify_action";
+
+/// Auto-mode classifier tool description. Port of TS
+/// `yoloClassifier.ts:264`.
+pub const YOLO_CLASSIFIER_TOOL_DESCRIPTION: &str =
+    "Report the security classification result for the agent action";
+
+/// Command-prefix extraction Haiku-classifier system prompt. Port of
+/// TS `src/utils/shell/prefix.ts:220-232`. TS picks between two framings
+/// based on `useSystemPromptPolicySpec`; the policy-spec variant bakes
+/// the policy into the system prompt so the user message stays small.
+pub fn build_command_prefix_classifier_system_prompt(
+    tool_name: &str,
+    policy_spec: &str,
+    use_system_prompt_policy_spec: bool,
+) -> String {
+    if use_system_prompt_policy_spec {
+        format!(
+            "Your task is to process {tool_name} commands that an AI coding agent wants to run.\n\n{policy_spec}"
+        )
+    } else {
+        format!(
+            "Your task is to process {tool_name} commands that an AI coding agent wants to run.\n\nThis policy spec defines how to determine the prefix of a {tool_name} command:"
+        )
+    }
+}
+
+/// Command-prefix extraction Haiku-classifier user prompt. Port of TS
+/// `prefix.ts:218` (user message). Mirrors the same TS branch on
+/// `useSystemPromptPolicySpec`.
+pub fn build_command_prefix_classifier_user_prompt(
+    command: &str,
+    policy_spec: &str,
+    use_system_prompt_policy_spec: bool,
+) -> String {
+    if use_system_prompt_policy_spec {
+        format!("Command: {command}")
+    } else {
+        format!("{policy_spec}\n\nCommand: {command}")
+    }
+}
+
+/// Terminal-focus context hint. Port of TS `src/screens/REPL.tsx:2776`:
+/// when proactive/KAIROS mode is active and the terminal is unfocused,
+/// this string is injected as `terminalFocus` into the user context so
+/// the model knows not to expect immediate user attention. TS uses the
+/// em-dash `—`; Rust uses the same Unicode code point (`\u{2014}`).
+pub const TERMINAL_FOCUS_UNFOCUSED_HINT: &str =
+    "The terminal is unfocused \u{2014} the user is not actively watching.";
 
 /// Sanity: Agent tool name the teammate addendum bakes in.
 #[doc(hidden)]
@@ -461,19 +497,61 @@ mod tests {
     }
 
     #[test]
-    fn scratchpad_instructions_substitutes_dir() {
-        let s = build_scratchpad_instructions("/sessions/abc/scratch");
-        assert!(s.contains("`/sessions/abc/scratch`"));
-        assert!(!s.contains("{scratchpad_dir}"));
-        assert!(s.contains("# Scratchpad Directory"));
-        assert!(s.contains("Only use `/tmp` if the user explicitly requests it."));
+    fn language_section_builds_when_pref_present() {
+        let s = build_language_section(Some("Japanese")).unwrap();
+        assert!(s.starts_with("# Language\n"));
+        assert!(s.contains("Always respond in Japanese."));
+        assert!(s.contains("Use Japanese for all explanations"));
     }
 
     #[test]
-    fn function_result_clearing_substitutes_count() {
-        let s = build_function_result_clearing_section(12);
-        assert!(s.contains("The 12 most recent results"));
-        assert!(!s.contains("{keep_recent}"));
-        assert!(s.contains("# Function Result Clearing"));
+    fn language_section_absent_on_none_or_empty() {
+        assert!(build_language_section(None).is_none());
+        assert!(build_language_section(Some("")).is_none());
+    }
+
+    #[test]
+    fn output_style_section_wraps_name_and_prompt() {
+        let s = build_output_style_section(Some("Explanatory"), Some("body text"))
+            .expect("should produce Some when both fields present");
+        assert_eq!(s, "# Output Style: Explanatory\nbody text");
+    }
+
+    #[test]
+    fn output_style_section_absent_when_name_or_prompt_missing() {
+        assert!(build_output_style_section(None, Some("body")).is_none());
+        assert!(build_output_style_section(Some("X"), None).is_none());
+    }
+
+    #[test]
+    fn yolo_classifier_identifier_literals() {
+        assert_eq!(YOLO_CLASSIFIER_TOOL_NAME, "classify_action");
+        assert!(YOLO_CLASSIFIER_TOOL_DESCRIPTION.contains("security classification"));
+    }
+
+    #[test]
+    fn command_prefix_system_prompt_branches() {
+        let with = build_command_prefix_classifier_system_prompt("Bash", "POLICY", true);
+        assert!(with.contains("Your task is to process Bash commands"));
+        assert!(with.ends_with("POLICY"));
+
+        let without = build_command_prefix_classifier_system_prompt("Bash", "POLICY", false);
+        assert!(without
+            .contains("This policy spec defines how to determine the prefix of a Bash command:"));
+        assert!(!without.ends_with("POLICY"));
+    }
+
+    #[test]
+    fn command_prefix_user_prompt_branches() {
+        let with = build_command_prefix_classifier_user_prompt("ls -la", "POLICY", true);
+        assert_eq!(with, "Command: ls -la");
+        let without = build_command_prefix_classifier_user_prompt("ls -la", "POLICY", false);
+        assert_eq!(without, "POLICY\n\nCommand: ls -la");
+    }
+
+    #[test]
+    fn terminal_focus_hint_uses_em_dash() {
+        assert!(TERMINAL_FOCUS_UNFOCUSED_HINT.contains('\u{2014}'));
+        assert!(TERMINAL_FOCUS_UNFOCUSED_HINT.contains("terminal is unfocused"));
     }
 }

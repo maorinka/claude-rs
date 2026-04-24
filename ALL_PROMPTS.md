@@ -4588,7 +4588,7 @@ function getSystemRemindersSection(): string {
 
 ### Language Section
 **File:** `src/constants/prompts.ts:143-148`
-**Status: ❌ NOT IN RUST** — Reason: Language preference setting infrastructure does not exist in the Rust port yet. No config mechanism for `languagePreference` has been implemented. Would need a settings/config system first.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::build_language_section(Option<&str>)`. Emits the exact TS string for a given preference; settings-level `languagePreference` wiring is still missing — the caller must supply it for now.
 ```ts
 function getLanguageSection(
   languagePreference: string | undefined,
@@ -4602,7 +4602,7 @@ Always respond in ${languagePreference}. Use ${languagePreference} for all expla
 
 ### Output Style Section
 **File:** `src/constants/prompts.ts:151-157`
-**Status: ❌ NOT IN RUST** — Reason: Output style configuration (Explanatory, Learning, etc.) has not been ported to Rust. The /output-style command exists but is marked deprecated. Would require the full OutputStyleConfig infrastructure.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::build_output_style_section(name, prompt)`. Wraps `(name, prompt)` into the `# Output Style: <name>\n<prompt>` string verbatim; OutputStyleConfig loader/dispatcher is still to wire.
 ```ts
 function getOutputStyleSection(
   outputStyleConfig: OutputStyleConfig | null,
@@ -4952,7 +4952,7 @@ export async function enhanceSystemPromptWithEnvDetails(
 
 ### Scratchpad Instructions
 **File:** `src/constants/prompts.ts:804-818`
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::SCRATCHPAD_INSTRUCTIONS_TEMPLATE` + `build_scratchpad_instructions(dir)`. Full prompt ported; session-specific scratchpad directory allocation not yet wired.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::scratchpad_instructions(dir)`. Full prompt ported; session-specific scratchpad directory allocation not yet wired.
 ```ts
 return `# Scratchpad Directory
 
@@ -4973,7 +4973,7 @@ The scratchpad directory is session-specific, isolated from the user's project, 
 
 ### Function Result Clearing Section
 **File:** `src/constants/prompts.ts:836-838`
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::FUNCTION_RESULT_CLEARING_TEMPLATE` + `build_function_result_clearing_section(keep_recent)`. Full prompt ported; selective eviction infra still uses full compaction.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::function_result_clearing_section(keep_recent)`. Full prompt ported; selective eviction infra still uses full compaction.
 ```ts
 return `# Function Result Clearing
 
@@ -5095,7 +5095,7 @@ Example TodoList flow:
    ✓ "Integrate contribution and complete feature"
 
 ### Request Format
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 \`\`\`
 ${figures.bullet} **Learn by Doing**
 **Context:** [what's built and why this decision matters]
@@ -5104,18 +5104,18 @@ ${figures.bullet} **Learn by Doing**
 \`\`\`
 
 ### Key Guidelines
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 - Frame contributions as valuable design decisions, not busy work
 - You must first add a TODO(human) section into the codebase with your editing tools before making the Learn by Doing request      
 - Make sure there is one and only one TODO(human) section in the code
 - Don't take any action or output anything after the Learn by Doing request. Wait for human implementation before proceeding.
 
 ### Example Requests
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 [...extensive examples omitted for brevity...]
 
 ### After Contributions
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 Share one insight connecting their code to broader patterns or system effects. Avoid praise or repetition.
 
 ## Insights
@@ -5158,7 +5158,7 @@ currentDate: `Today's date is ${getLocalISODate()}.`,
 
 ### System Context - Cache Breaker
 **File:** `src/context.ts:143-146`
-**Status: ❌ NOT IN RUST** — Reason: Cache breaker injection is not implemented. The Rust port doesn't have the prompt cache invalidation mechanism that uses `[CACHE_BREAKER: ...]` tokens.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::cache_breaker(&str)` produces the `[CACHE_BREAKER: <injection>]` literal. Caller-side prompt-cache invalidation mechanism not yet wired.
 ```ts
 cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ```
@@ -5168,7 +5168,7 @@ cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ## utils/systemPrompt.ts
 ### Custom Agent Instructions (proactive mode)
 **File:** `src/utils/systemPrompt.ts:110`
-**Status: ❌ NOT IN RUST** — Reason: Custom agent instructions for proactive mode are not implemented. Proactive mode infrastructure is not in Rust.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::custom_agent_instructions_section(&str)` emits `\n# Custom Agent Instructions\n<prompt>`. Proactive-mode runtime wiring is still absent.
 ```ts
 `\n# Custom Agent Instructions\n${agentSystemPrompt}`
 ```
@@ -5324,7 +5324,7 @@ const EXPLAIN_COMMAND_TOOL = {
 
 ### Permission Explainer User Prompt Template
 **File:** `src/utils/permissions/permissionExplainer.ts:167-173`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer not implemented. See above.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::permission_explainer_user_prompt(...)`. Elides Description/Context lines exactly when the inputs are absent; caller still to wire.
 ```ts
 const userPrompt = `Tool: ${toolName}
 ${toolDescription ? `Description: ${toolDescription}\n` : ''}
@@ -5340,7 +5340,7 @@ Explain this command in context.`
 ## utils/permissions/yoloClassifier.ts
 ### Auto Mode Classifier Tool Schema
 **File:** `src/utils/permissions/yoloClassifier.ts:262-285`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode (YOLO) classifier is not fully implemented. The Rust permission evaluator has an auto mode path (`permissions/evaluator.rs:465`) but it doesn't use an LLM classifier with tool schema; it relies on static rules.
+**Status: ⚠️ PARTIAL in Rust** — Tool name + description parked at `crates/claude-core/src/system_prompt_extensions.rs::YOLO_CLASSIFIER_TOOL_NAME` / `_TOOL_DESCRIPTION`. The full JSON `input_schema` (thinking/shouldBlock/reason) and the LLM-classifier caller are still to wire.
 ```ts
 const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   type: 'custom',
@@ -5403,7 +5403,7 @@ export function buildDefaultExternalSystemPrompt(): string {
 ## utils/shell/prefix.ts
 ### Command Prefix Extraction Prompt (Haiku classifier)
 **File:** `src/utils/shell/prefix.ts:220-232`
-**Status: ❌ NOT IN RUST** — Reason: LLM-based command prefix extraction (Haiku classifier for permission policies) is not implemented. The Rust port uses static prefix extraction in `crates/claude-tools/src/bash_security.rs` without LLM calls.
+**Status: ✅ ADDED to Rust (builders parked)** — `crates/claude-core/src/system_prompt_extensions.rs::build_command_prefix_classifier_system_prompt` / `_user_prompt`. Both TS branches on `useSystemPromptPolicySpec` are reproduced verbatim; the Haiku-call wiring itself still lives in the static `bash_security.rs` path.
 ```ts
 const response = await queryHaiku({
   systemPrompt: asSystemPrompt(
@@ -6873,7 +6873,7 @@ summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" was stopped`;
 
 ## [REPL.tsx]
 ### Terminal Focus Context (injected into user context)
-**Status: ❌ NOT IN RUST** — Reason: Proactive/KAIROS mode not implemented in the Rust TUI; no terminal focus tracking or context injection exists.
+**Status: ✅ ADDED to Rust (constant parked)** — `crates/claude-core/src/system_prompt_extensions.rs::TERMINAL_FOCUS_UNFOCUSED_HINT`. Verbatim TS wording with em-dash. TUI focus-tracking ref itself still absent.
 **File:** `src/screens/REPL.tsx:2776`
 ```ts
 ...((feature('PROACTIVE') || feature('KAIROS')) && proactiveModule?.isProactiveActive() && !terminalFocusRef.current ? {
@@ -6882,7 +6882,7 @@ summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" was stopped`;
 ```
 
 ### Partial Compact Warning Message
-**Status: ❌ NOT IN RUST** — Reason: The Rust TUI does not have logic for selecting snipped/pre-compact messages and displaying this specific warning. The compact system exists (`crates/claude-core/src/compact/`) but lacks this user-facing warning message.
+**Status: ✅ ADDED to Rust (constant parked)** — `crates/claude-core/src/compact/mod.rs::SNIPPED_OR_PRECOMPACT_WARNING`. Verbatim wording; the TUI message-selector that fires it is not yet wired.
 **File:** `src/screens/REPL.tsx:4928`
 ```ts
 createSystemMessage('That message is no longer in the active context (snipped or pre-compact). Choose a more recent message.', 'warning')
