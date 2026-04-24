@@ -5501,7 +5501,7 @@ Rules:
 
 ### Skill Improvement Apply System Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:233-234`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement not implemented. See above.
+**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_APPLY_SYSTEM_PROMPT`. Verbatim port; caller not wired.
 ```ts
 systemPrompt: asSystemPrompt([
   'You edit skill definition files to incorporate user preferences. Output only the updated file content.',
