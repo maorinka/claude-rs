@@ -260,6 +260,52 @@ pub const PERMISSION_EXPLAINER_TOOL_NAME: &str = "explain_command";
 /// Permission-explainer tool description.
 pub const PERMISSION_EXPLAINER_TOOL_DESCRIPTION: &str = "Provide an explanation of a shell command";
 
+/// Scratchpad directory instructions. Port of TS
+/// `constants/prompts.ts:804-818`. The `{scratchpad_dir}` placeholder
+/// is substituted by the session-specific path when the run-time
+/// caller (not yet implemented in Rust) splices this into the system
+/// prompt. Use `build_scratchpad_instructions(dir)` to produce the
+/// final string — direct use of this constant is only for reviewers
+/// checking the verbatim TS wording.
+pub const SCRATCHPAD_INSTRUCTIONS_TEMPLATE: &str = "# Scratchpad Directory
+
+IMPORTANT: Always use this scratchpad directory for temporary files instead of `/tmp` or other system temp directories:
+`{scratchpad_dir}`
+
+Use this directory for ALL temporary file needs:
+- Storing intermediate results or data during multi-step tasks
+- Writing temporary scripts or configuration files
+- Saving outputs that don't belong in the user's project
+- Creating working files during analysis or processing
+- Any file that would otherwise go to `/tmp`
+
+Only use `/tmp` if the user explicitly requests it.
+
+The scratchpad directory is session-specific, isolated from the user's project, and can be used freely without permission prompts.";
+
+/// Substitute the scratchpad directory path into the template.
+/// Matches TS `getScratchpadInstructions(scratchpadDir)`.
+pub fn build_scratchpad_instructions(scratchpad_dir: &str) -> String {
+    SCRATCHPAD_INSTRUCTIONS_TEMPLATE.replace("{scratchpad_dir}", scratchpad_dir)
+}
+
+/// Function-result clearing notice. Port of TS
+/// `constants/prompts.ts:836-838`. Injected when the context manager
+/// is configured to evict old tool results — TS computes this from
+/// `config.keepRecent`, which is not yet implemented in Rust. The
+/// Rust port currently uses full compaction instead; this constant
+/// exists so the final system prompt can include the exact TS
+/// wording once selective eviction lands.
+pub const FUNCTION_RESULT_CLEARING_TEMPLATE: &str = "# Function Result Clearing
+
+Old tool results will be automatically cleared from context to free up space. The {keep_recent} most recent results are always kept.";
+
+/// Substitute the `keepRecent` count into the template. Matches TS
+/// `getFunctionResultClearingSection(config)`.
+pub fn build_function_result_clearing_section(keep_recent: u32) -> String {
+    FUNCTION_RESULT_CLEARING_TEMPLATE.replace("{keep_recent}", &keep_recent.to_string())
+}
+
 /// Sanity: Agent tool name the teammate addendum bakes in.
 #[doc(hidden)]
 pub fn _agent_tool_name_sanity() -> &'static str {
@@ -412,5 +458,22 @@ mod tests {
     fn numeric_length_anchors_states_cap() {
         assert!(NUMERIC_LENGTH_ANCHORS.contains("≤25 words"));
         assert!(NUMERIC_LENGTH_ANCHORS.contains("≤100 words"));
+    }
+
+    #[test]
+    fn scratchpad_instructions_substitutes_dir() {
+        let s = build_scratchpad_instructions("/sessions/abc/scratch");
+        assert!(s.contains("`/sessions/abc/scratch`"));
+        assert!(!s.contains("{scratchpad_dir}"));
+        assert!(s.contains("# Scratchpad Directory"));
+        assert!(s.contains("Only use `/tmp` if the user explicitly requests it."));
+    }
+
+    #[test]
+    fn function_result_clearing_substitutes_count() {
+        let s = build_function_result_clearing_section(12);
+        assert!(s.contains("The 12 most recent results"));
+        assert!(!s.contains("{keep_recent}"));
+        assert!(s.contains("# Function Result Clearing"));
     }
 }
