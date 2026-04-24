@@ -63,7 +63,13 @@ mod tests {
 
     #[test]
     fn inserts_after_last_tool_result() {
-        let mut v = vec![text("before"), tr("a"), text("middle"), tr("b"), text("after")];
+        let mut v = vec![
+            text("before"),
+            tr("a"),
+            text("middle"),
+            tr("b"),
+            text("after"),
+        ];
         insert_block_after_tool_results(&mut v, text("INSERTED"));
         assert_eq!(
             v,
@@ -93,10 +99,7 @@ mod tests {
     fn no_tool_results_inserts_before_last_block() {
         let mut v = vec![text("one"), text("two"), text("three")];
         insert_block_after_tool_results(&mut v, text("X"));
-        assert_eq!(
-            v,
-            vec![text("one"), text("two"), text("X"), text("three")]
-        );
+        assert_eq!(v, vec![text("one"), text("two"), text("X"), text("three")]);
     }
 
     #[test]
@@ -118,9 +121,6 @@ mod tests {
         // Non-object entries should not match tool_result detection.
         let mut v = vec![json!("raw string"), text("one")];
         insert_block_after_tool_results(&mut v, text("X"));
-        assert_eq!(
-            v,
-            vec![json!("raw string"), text("X"), text("one")]
-        );
+        assert_eq!(v, vec![json!("raw string"), text("X"), text("one")]);
     }
 }

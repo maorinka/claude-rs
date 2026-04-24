@@ -229,8 +229,7 @@ const CODE_REVIEWER_WHEN_TO_USE: &str = "Use this agent to get an independent co
 
 pub const CLAUDE_CODE_GUIDE_AGENT_TYPE: &str = "claude-code-guide";
 
-const CLAUDE_CODE_GUIDE_SYSTEM_PROMPT: &str =
-    include_str!("prompts/claude_code_guide.md");
+const CLAUDE_CODE_GUIDE_SYSTEM_PROMPT: &str = include_str!("prompts/claude_code_guide.md");
 
 const CLAUDE_CODE_GUIDE_WHEN_TO_USE: &str = "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage.";
 
@@ -240,8 +239,7 @@ const CLAUDE_CODE_GUIDE_WHEN_TO_USE: &str = "Use this agent when the user asks q
 
 pub const STATUSLINE_SETUP_AGENT_TYPE: &str = "statusline-setup";
 
-const STATUSLINE_SETUP_SYSTEM_PROMPT: &str =
-    include_str!("prompts/statusline_setup.md");
+const STATUSLINE_SETUP_SYSTEM_PROMPT: &str = include_str!("prompts/statusline_setup.md");
 
 const STATUSLINE_SETUP_WHEN_TO_USE: &str =
     "Use this agent to configure the user's Claude Code status line setting.";

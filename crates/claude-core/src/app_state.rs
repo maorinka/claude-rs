@@ -212,14 +212,27 @@ pub struct AppState {
 /// variant should **add a variant**.
 #[derive(Debug)]
 pub enum AppStateUpdate {
-    UpsertTask { id: String, task: Value },
-    RemoveTask { id: String },
-    MarkToolUseInProgress { tool_use_id: String, in_progress: bool },
-    AddResponseChars { chars: usize },
+    UpsertTask {
+        id: String,
+        task: Value,
+    },
+    RemoveTask {
+        id: String,
+    },
+    MarkToolUseInProgress {
+        tool_use_id: String,
+        in_progress: bool,
+    },
+    AddResponseChars {
+        chars: usize,
+    },
     ResetResponseLength,
     AppendFileEdit(FileEdit),
     AppendAttribution(AttributionEntry),
-    RegisterAgent { name: String, agent_id: String },
+    RegisterAgent {
+        name: String,
+        agent_id: String,
+    },
     /// Injected system-level transcript message (hook output, permission
     /// retry notice, etc.). Opaque `Value` because the message-type
     /// graph lives outside the actor store; the host renders via its
@@ -236,7 +249,10 @@ impl AppStateUpdate {
             Self::RemoveTask { id } => {
                 state.tasks.remove(&id);
             }
-            Self::MarkToolUseInProgress { tool_use_id, in_progress } => {
+            Self::MarkToolUseInProgress {
+                tool_use_id,
+                in_progress,
+            } => {
                 if in_progress {
                     state.in_progress_tool_uses.insert(tool_use_id);
                 } else {

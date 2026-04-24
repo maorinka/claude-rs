@@ -114,9 +114,7 @@ pub fn handle_remote_auth_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::auth_cache::{
-        clear_mcp_auth_cache, is_mcp_auth_cached, shared_test_lock,
-    };
+    use crate::mcp::auth_cache::{clear_mcp_auth_cache, is_mcp_auth_cached, shared_test_lock};
     use crate::mcp::types::{
         ConfigScope, McpHttpServerConfig, McpServerConfig, McpSseServerConfig,
         ScopedMcpServerConfig,
@@ -238,8 +236,7 @@ mod tests {
         clear_mcp_auth_cache();
 
         let cfg = http_config();
-        let conn =
-            handle_remote_auth_failure("vault", &cfg, RemoteTransportKind::Http);
+        let conn = handle_remote_auth_failure("vault", &cfg, RemoteTransportKind::Http);
         assert!(matches!(conn.status, McpConnectionStatus::NeedsAuth));
         assert!(is_mcp_auth_cached("vault"));
     }

@@ -24,8 +24,8 @@ pub use defaults::default_bindings;
 pub use loader::{get_keybindings_path, load_keybindings, load_keybindings_from_str, LoadResult};
 pub use matching::{matches, ParsedBinding};
 pub use parser::{
-    chord_to_string, keystroke_to_string, parse_bindings, parse_chord, parse_keystroke,
-    Chord, KeybindingBlock, ParsedKeystroke,
+    chord_to_string, keystroke_to_string, parse_bindings, parse_chord, parse_keystroke, Chord,
+    KeybindingBlock, ParsedKeystroke,
 };
 pub use reserved::{
     get_reserved_shortcuts, normalize_key_for_comparison, ReservedShortcut, Severity,

@@ -76,8 +76,7 @@ IMPORTANT: Start by calling mcp__claude-in-chrome__tabs_context_mcp to get infor
 /// literal `${BASE_CHROME_PROMPT}\n${SKILL_ACTIVATION_MESSAGE}`
 /// and optional `\n## Task\n\n${args}` suffix.
 pub fn claude_in_chrome_skill_prompt(args: &str) -> String {
-    let mut prompt =
-        format!("{BASE_CHROME_PROMPT}\n{CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE}");
+    let mut prompt = format!("{BASE_CHROME_PROMPT}\n{CLAUDE_IN_CHROME_SKILL_ACTIVATION_MESSAGE}");
     if !args.is_empty() {
         prompt.push_str("\n## Task\n\n");
         prompt.push_str(args);
@@ -105,7 +104,10 @@ mod tests {
 
     #[test]
     fn hints_are_nonempty_ascii() {
-        for hint in [CLAUDE_IN_CHROME_SKILL_HINT, CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER] {
+        for hint in [
+            CLAUDE_IN_CHROME_SKILL_HINT,
+            CLAUDE_IN_CHROME_SKILL_HINT_WITH_WEBBROWSER,
+        ] {
             assert!(!hint.is_empty());
             // Note: em-dash is present in the WITH_WEBBROWSER variant, so
             // ASCII-only would fail. Verify at least mostly-ASCII content.

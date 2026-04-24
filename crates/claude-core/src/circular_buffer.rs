@@ -90,7 +90,11 @@ impl<T: Clone> CircularBuffer<T> {
         if self.capacity == 0 || self.size == 0 {
             return Vec::new();
         }
-        let start = if self.size < self.capacity { 0 } else { self.head };
+        let start = if self.size < self.capacity {
+            0
+        } else {
+            self.head
+        };
         let available = count.min(self.size);
         let mut out = Vec::with_capacity(available);
         for i in 0..available {
@@ -107,7 +111,11 @@ impl<T: Clone> CircularBuffer<T> {
         if self.capacity == 0 || self.size == 0 {
             return Vec::new();
         }
-        let start = if self.size < self.capacity { 0 } else { self.head };
+        let start = if self.size < self.capacity {
+            0
+        } else {
+            self.head
+        };
         let mut out = Vec::with_capacity(self.size);
         for i in 0..self.size {
             let index = (start + i) % self.capacity;

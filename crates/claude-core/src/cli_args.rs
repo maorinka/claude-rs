@@ -21,10 +21,7 @@
 /// `flag_name` MUST include leading dashes (e.g. `--settings`). The
 /// matcher is an exact-string compare; partial/prefix forms are not
 /// supported on purpose — this runs before clap's grammar exists.
-pub fn eager_parse_cli_flag<'a>(
-    flag_name: &str,
-    argv: &'a [impl AsRef<str>],
-) -> Option<&'a str> {
+pub fn eager_parse_cli_flag<'a>(flag_name: &str, argv: &'a [impl AsRef<str>]) -> Option<&'a str> {
     let eq_prefix = format!("{flag_name}=");
     for (i, arg) in argv.iter().enumerate() {
         let arg = arg.as_ref();
@@ -41,11 +38,7 @@ pub fn eager_parse_cli_flag<'a>(
 // Return `rest` as a slice of the original argv entry at index `i`.
 // The `rest` we have is the owned-by-argv string — we just need to
 // reborrow it with the lifetime of the slice.
-fn unsafe_slice_after_prefix<'a>(
-    argv: &'a [impl AsRef<str>],
-    i: usize,
-    rest: &str,
-) -> &'a str {
+fn unsafe_slice_after_prefix<'a>(argv: &'a [impl AsRef<str>], i: usize, rest: &str) -> &'a str {
     let full = argv[i].as_ref();
     let start = full.len() - rest.len();
     &full[start..]

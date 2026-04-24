@@ -56,12 +56,18 @@ pub fn record_auto_mode_denial(denial: AutoModeDenial) {
 
 /// Snapshot the current denial list (newest first).
 pub fn get_auto_mode_denials() -> Vec<AutoModeDenial> {
-    STORE.lock().expect("auto_mode_denials mutex poisoned").clone()
+    STORE
+        .lock()
+        .expect("auto_mode_denials mutex poisoned")
+        .clone()
 }
 
 /// Test-only reset.
 pub fn clear_auto_mode_denials() {
-    STORE.lock().expect("auto_mode_denials mutex poisoned").clear();
+    STORE
+        .lock()
+        .expect("auto_mode_denials mutex poisoned")
+        .clear();
 }
 
 #[cfg(test)]
@@ -88,11 +94,7 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap();
         clear_auto_mode_denials();
         for i in 0..MAX_DENIALS + 5 {
-            record_auto_mode_denial(AutoModeDenial::new(
-                "tool",
-                &format!("cmd-{i}"),
-                "reason",
-            ));
+            record_auto_mode_denial(AutoModeDenial::new("tool", &format!("cmd-{i}"), "reason"));
         }
         let out = get_auto_mode_denials();
         assert_eq!(out.len(), MAX_DENIALS);

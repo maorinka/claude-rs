@@ -238,7 +238,9 @@ mod tests {
 
     #[test]
     fn is_provider_managed_prefix_match() {
-        assert!(is_provider_managed_env_var("VERTEX_REGION_CLAUDE_4_5_SONNET"));
+        assert!(is_provider_managed_env_var(
+            "VERTEX_REGION_CLAUDE_4_5_SONNET"
+        ));
         assert!(is_provider_managed_env_var("VERTEX_REGION_CLAUDE_foo_bar"));
         // Prefix-only: the bare prefix (= exact string) also matches.
         assert!(is_provider_managed_env_var("VERTEX_REGION_CLAUDE_"));
@@ -297,6 +299,8 @@ mod tests {
         // Security contract: settings can't unset the flag once the host
         // sets it (TS comment at constants.ts:16). Classifying the flag
         // itself as provider-managed is what makes that stripping work.
-        assert!(is_provider_managed_env_var("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"));
+        assert!(is_provider_managed_env_var(
+            "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"
+        ));
     }
 }

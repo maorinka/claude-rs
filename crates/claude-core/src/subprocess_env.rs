@@ -134,8 +134,14 @@ mod tests {
         extra.insert("HTTPS_PROXY".to_string(), "http://proxy".to_string());
 
         let env = subprocess_env(&extra);
-        assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("test-key"));
-        assert_eq!(env.get("HTTPS_PROXY").map(String::as_str), Some("http://proxy"));
+        assert_eq!(
+            env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("test-key")
+        );
+        assert_eq!(
+            env.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://proxy")
+        );
 
         std::env::remove_var("ANTHROPIC_API_KEY");
     }
@@ -187,10 +193,16 @@ mod tests {
         // Even if the extra map would re-introduce a scrubbed var, the
         // scrub runs AFTER the merge — but TS code does the merge
         // before the scrub too. Assert parity:
-        extra.insert("ANTHROPIC_API_KEY".to_string(), "should-be-removed".to_string());
+        extra.insert(
+            "ANTHROPIC_API_KEY".to_string(),
+            "should-be-removed".to_string(),
+        );
 
         let env = subprocess_env(&extra);
-        assert_eq!(env.get("HTTPS_PROXY").map(String::as_str), Some("http://relay:8080"));
+        assert_eq!(
+            env.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://relay:8080")
+        );
         // Extras that collide with the scrub list STILL get scrubbed —
         // matches TS behaviour (scrub runs on the merged object).
         assert!(!env.contains_key("ANTHROPIC_API_KEY"));

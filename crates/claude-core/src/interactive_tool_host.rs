@@ -111,9 +111,7 @@ impl ToolHost for InteractiveToolHost {
     }
 
     async fn update_attribution(&self, entry: AttributionEntry) {
-        let _ = self
-            .state
-            .update(AppStateUpdate::AppendAttribution(entry));
+        let _ = self.state.update(AppStateUpdate::AppendAttribution(entry));
     }
 
     async fn append_system_message(&self, msg: Value) {
@@ -190,7 +188,10 @@ mod tests {
         host.record_response_chars(500).await;
         host.record_response_chars(250).await;
         settle().await;
-        assert_eq!(host.app_state_snapshot().await.unwrap().response_length, 750);
+        assert_eq!(
+            host.app_state_snapshot().await.unwrap().response_length,
+            750
+        );
     }
 
     #[tokio::test]
@@ -262,9 +263,7 @@ mod tests {
             )
             .await;
         assert!(resp.is_none());
-        let e = host
-            .handle_elicitation("server", Value::Null, cancel)
-            .await;
+        let e = host.handle_elicitation("server", Value::Null, cancel).await;
         assert!(e.is_none());
     }
 

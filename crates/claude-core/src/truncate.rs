@@ -250,10 +250,7 @@ mod tests {
 
     #[test]
     fn truncate_path_middle_fits_returns_identity() {
-        assert_eq!(
-            truncate_path_middle("short/path.ts", 100),
-            "short/path.ts"
-        );
+        assert_eq!(truncate_path_middle("short/path.ts", 100), "short/path.ts");
     }
 
     #[test]

@@ -145,7 +145,9 @@ mod tests {
     #[test]
     fn test_loopback_allowed() {
         assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
-        assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(127, 255, 255, 255))));
+        assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+            127, 255, 255, 255
+        ))));
         assert!(!is_blocked_address(IpAddr::V6(Ipv6Addr::LOCALHOST)));
     }
 
@@ -157,21 +159,31 @@ mod tests {
         assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         // 172.16/12
         assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
-        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(172, 31, 255, 255))));
+        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+            172, 31, 255, 255
+        ))));
         // 192.168/16
-        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 1
+        ))));
         // 169.254/16 — cloud metadata
-        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
         // 100.64/10 — CGNAT
         assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
-        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(100, 127, 255, 255))));
+        assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+            100, 127, 255, 255
+        ))));
     }
 
     #[test]
     fn test_public_ip_allowed() {
         assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
-        assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))));
+        assert!(!is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+            93, 184, 216, 34
+        ))));
     }
 
     #[test]

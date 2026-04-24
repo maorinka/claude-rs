@@ -380,7 +380,7 @@ fn validate_malformed_token_injection(ctx: &ValidationContext) -> SecurityBehavi
             '}' => brace_depth -= 1,
             '[' => bracket_depth += 1,
             ']' => bracket_depth -= 1,
-            _ => {},
+            _ => {}
         }
     }
     // Odd quote counts or unbalanced delimiters with separators is suspicious
@@ -979,9 +979,9 @@ pub fn validate_command_security(command: &str) -> SecurityBehavior {
                 // TS returns passthrough for early-allow to let the command
                 // proceed without further checks
                 return SecurityBehavior::Passthrough;
-            },
+            }
             SecurityBehavior::Ask(_) => return r,
-            _ => {},
+            _ => {}
         }
     }
 

@@ -31,11 +31,7 @@ use crate::tool_names::AGENT_TOOL_NAME;
 /// `PDF file: …` attachment text. Built only when a PDF
 /// attachment appears in the user's message. Port of TS
 /// `utils/messages.ts:3603-3608`.
-pub fn pdf_reference_attachment(
-    filename: &str,
-    page_count: u32,
-    file_size_human: &str,
-) -> String {
+pub fn pdf_reference_attachment(filename: &str, page_count: u32, file_size_human: &str) -> String {
     format!(
         "PDF file: {filename} ({page_count} pages, {file_size_human}). \
          This PDF is too large to read all at once. You MUST use the Read tool with the pages parameter \
@@ -69,10 +65,7 @@ pub fn ide_opened_file_attachment(filename: &str) -> String {
 /// Plan-file reference attachment — injected when a prior
 /// session's plan file exists. Port of TS
 /// `utils/messages.ts:3639`.
-pub fn plan_file_reference_attachment(
-    plan_file_path: &str,
-    plan_content: &str,
-) -> String {
+pub fn plan_file_reference_attachment(plan_file_path: &str, plan_content: &str) -> String {
     format!(
         "A plan file exists from plan mode at: {plan_file_path}\n\nPlan contents:\n\n{plan_content}\n\nIf this plan is relevant to the current work and not already complete, continue working on it."
     )
@@ -234,16 +227,16 @@ pub fn date_change_attachment(new_date: &str) -> String {
 /// `utils/messages.ts:4173`. `level` comes from the user
 /// selector (e.g. `"high"`, `"ultra"`).
 pub fn ultrathink_effort_attachment(level: &str) -> String {
-    format!("The user has requested reasoning effort level: {level}. Apply this to the current turn.")
+    format!(
+        "The user has requested reasoning effort level: {level}. Apply this to the current turn."
+    )
 }
 
 /// Deferred-tools added-delta attachment. Port of TS
 /// `utils/messages.ts:4180`. `added_lines` is pre-joined with
 /// `\n` by the caller.
 pub fn deferred_tools_added_attachment(added_lines: &str) -> String {
-    format!(
-        "The following deferred tools are now available via ToolSearch:\n{added_lines}"
-    )
+    format!("The following deferred tools are now available via ToolSearch:\n{added_lines}")
 }
 
 /// Deferred-tools removed-delta attachment. Port of TS

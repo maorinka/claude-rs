@@ -53,10 +53,7 @@ fn is_in_process_teammate_task(task: &Value) -> bool {
 /// `task.type === 'in_process_teammate'` + `task.identity.agentName`,
 /// returns `task.id`. Returns `None` when no match found or when
 /// the shape isn't recognisable.
-pub fn find_in_process_teammate_task_id(
-    agent_name: &str,
-    app_state: &Value,
-) -> Option<String> {
+pub fn find_in_process_teammate_task_id(agent_name: &str, app_state: &Value) -> Option<String> {
     let tasks = app_state.get("tasks")?.as_object()?;
     for task in tasks.values() {
         if !is_in_process_teammate_task(task) {
@@ -82,11 +79,7 @@ pub fn find_in_process_teammate_task_id(
 /// the task in place. Returns `true` iff the task was found and
 /// updated — lets callers log "task vanished mid-response" cases
 /// that TS silently no-ops on.
-pub fn set_awaiting_plan_approval(
-    app_state: &mut Value,
-    task_id: &str,
-    awaiting: bool,
-) -> bool {
+pub fn set_awaiting_plan_approval(app_state: &mut Value, task_id: &str, awaiting: bool) -> bool {
     let Some(tasks) = app_state.get_mut("tasks").and_then(|v| v.as_object_mut()) else {
         return false;
     };
@@ -217,7 +210,10 @@ mod tests {
         }));
         let updated = set_awaiting_plan_approval(&mut state, "t1", true);
         assert!(updated);
-        assert_eq!(state["tasks"]["t1"]["awaitingPlanApproval"].as_bool(), Some(true));
+        assert_eq!(
+            state["tasks"]["t1"]["awaitingPlanApproval"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]

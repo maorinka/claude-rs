@@ -122,8 +122,9 @@ mod tests {
     fn when_to_fork_keeps_cache_discipline_rule() {
         // The "don't set model on a fork" rule is load-bearing —
         // swapping models defeats cache sharing.
-        assert!(AGENT_WHEN_TO_FORK_SECTION
-            .contains("Don't set `model` on a fork — a different model can't reuse the parent's cache."));
+        assert!(AGENT_WHEN_TO_FORK_SECTION.contains(
+            "Don't set `model` on a fork — a different model can't reuse the parent's cache."
+        ));
     }
 
     #[test]

@@ -117,12 +117,12 @@ pub fn validate_elicitation_input(input: &str, schema: &PrimitiveSchema) -> Vali
         } => validate_string(input, *min_length, *max_length, *format),
         PrimitiveSchema::Number { minimum, maximum } => {
             validate_number(input, *minimum, *maximum, false)
-        },
+        }
         PrimitiveSchema::Integer { minimum, maximum } => {
             let min = minimum.map(|v| v as f64);
             let max = maximum.map(|v| v as f64);
             validate_number(input, min, max, true)
-        },
+        }
         PrimitiveSchema::Boolean => validate_boolean(input),
         PrimitiveSchema::Enum { values, .. } => {
             if values.iter().any(|v| v == input) {
@@ -130,7 +130,7 @@ pub fn validate_elicitation_input(input: &str, schema: &PrimitiveSchema) -> Vali
             } else {
                 ValidationResult::err(format!("Must be one of: {}", values.join(", ")))
             }
-        },
+        }
     }
 }
 
@@ -183,7 +183,7 @@ fn format_error_message(f: StringFormat) -> String {
         StringFormat::Date => "Must be a valid date, e.g. 2024-03-15, today, next Monday".into(),
         StringFormat::DateTime => {
             "Must be a valid date-time, e.g. 2024-03-15T14:30:00Z, tomorrow at 3pm".into()
-        },
+        }
     }
 }
 
@@ -363,7 +363,7 @@ fn number_hint(type_name: &str, min: Option<f64>, max: Option<f64>, is_integer: 
         (None, None) => {
             let example = if is_integer { "42" } else { "3.14" };
             format!("({}, e.g. {})", type_name, example)
-        },
+        }
     }
 }
 

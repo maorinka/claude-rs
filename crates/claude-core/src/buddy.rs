@@ -345,7 +345,7 @@ mod tests {
             match roll_with_seed(&format!("bulk-{}", i)).bones.rarity {
                 Rarity::Common => common += 1,
                 Rarity::Legendary => legendary += 1,
-                _ => {},
+                _ => {}
             }
         }
         assert!(

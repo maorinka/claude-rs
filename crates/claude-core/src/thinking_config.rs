@@ -49,7 +49,9 @@ mod tests {
 
     #[test]
     fn enabled_roundtrips_with_budget_camel_case() {
-        let cfg = ThinkingConfig::Enabled { budget_tokens: 8000 };
+        let cfg = ThinkingConfig::Enabled {
+            budget_tokens: 8000,
+        };
         let v = serde_json::to_value(&cfg).unwrap();
         // TS uses camelCase `budgetTokens`; Rust rename to match.
         assert_eq!(v, json!({ "type": "enabled", "budgetTokens": 8000 }));

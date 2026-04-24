@@ -11,7 +11,11 @@ fn if_condition_matches_tool_name_only() {
         "tool_name": "Bash",
         "tool_input": {"command": "ls -la"}
     });
-    assert!(evaluate_if_condition("Bash", &HookEvent::PreToolUse, &input));
+    assert!(evaluate_if_condition(
+        "Bash",
+        &HookEvent::PreToolUse,
+        &input
+    ));
 }
 
 #[test]
@@ -20,7 +24,11 @@ fn if_condition_rejects_wrong_tool_name() {
         "tool_name": "Read",
         "tool_input": {"file_path": "/tmp/foo"}
     });
-    assert!(!evaluate_if_condition("Bash", &HookEvent::PreToolUse, &input));
+    assert!(!evaluate_if_condition(
+        "Bash",
+        &HookEvent::PreToolUse,
+        &input
+    ));
 }
 
 #[test]
@@ -29,7 +37,11 @@ fn if_condition_with_prefix_pattern() {
         "tool_name": "Bash",
         "tool_input": {"command": "git push origin main"}
     });
-    assert!(evaluate_if_condition("Bash(git )", &HookEvent::PreToolUse, &input));
+    assert!(evaluate_if_condition(
+        "Bash(git )",
+        &HookEvent::PreToolUse,
+        &input
+    ));
 }
 
 #[test]
@@ -38,7 +50,11 @@ fn if_condition_with_glob_pattern() {
         "tool_name": "Bash",
         "tool_input": {"command": "rm -rf /tmp/test"}
     });
-    assert!(evaluate_if_condition("Bash(rm *)", &HookEvent::PreToolUse, &input));
+    assert!(evaluate_if_condition(
+        "Bash(rm *)",
+        &HookEvent::PreToolUse,
+        &input
+    ));
 }
 
 #[test]
@@ -50,7 +66,11 @@ fn if_condition_non_tool_event_returns_false() {
 #[test]
 fn if_condition_no_tool_name_in_input_returns_false() {
     let input = serde_json::json!({"other": "data"});
-    assert!(!evaluate_if_condition("Bash", &HookEvent::PreToolUse, &input));
+    assert!(!evaluate_if_condition(
+        "Bash",
+        &HookEvent::PreToolUse,
+        &input
+    ));
 }
 
 // ── glob_match tests ────────────────────────────────────────────────────
@@ -83,9 +103,15 @@ fn glob_match_exact() {
 fn ssrf_blocks_private_ranges() {
     assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
     assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
-    assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
-    assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
-    assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200))));
+    assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+        192, 168, 1, 1
+    ))));
+    assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+        169, 254, 169, 254
+    ))));
+    assert!(is_blocked_address(IpAddr::V4(Ipv4Addr::new(
+        100, 100, 100, 200
+    ))));
 }
 
 #[test]
@@ -102,7 +128,11 @@ fn ssrf_allows_public_ips() {
 
 #[test]
 fn ssrf_blocks_ipv6_private() {
-    assert!(is_blocked_address(IpAddr::V6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1))));
-    assert!(is_blocked_address(IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1))));
+    assert!(is_blocked_address(IpAddr::V6(Ipv6Addr::new(
+        0xfc00, 0, 0, 0, 0, 0, 0, 1
+    ))));
+    assert!(is_blocked_address(IpAddr::V6(Ipv6Addr::new(
+        0xfe80, 0, 0, 0, 0, 0, 0, 1
+    ))));
     assert!(is_blocked_address(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
 }

@@ -20,8 +20,7 @@ use crate::tool_names::AGENT_TOOL_NAME;
 /// Raw prompt template with `${AGENT_TOOL_NAME}` placeholders
 /// intact. Prefer [`agent_creation_system_prompt`] for the
 /// substituted form.
-pub const AGENT_CREATION_SYSTEM_PROMPT_TEMPLATE: &str =
-    include_str!("prompts/agent_creation.md");
+pub const AGENT_CREATION_SYSTEM_PROMPT_TEMPLATE: &str = include_str!("prompts/agent_creation.md");
 
 /// Build the agent-creation system prompt with
 /// `${AGENT_TOOL_NAME}` resolved to the current

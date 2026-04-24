@@ -35,8 +35,7 @@ pub fn validate_bindings(blocks: &[KeybindingBlock]) -> Vec<KeybindingWarning> {
     let reserved = get_reserved_shortcuts();
 
     for block in blocks {
-        let mut seen: std::collections::HashMap<String, &String> =
-            std::collections::HashMap::new();
+        let mut seen: std::collections::HashMap<String, &String> = std::collections::HashMap::new();
         for (key, action) in &block.bindings {
             let normalized = normalize_key_for_comparison(key);
 
@@ -120,10 +119,7 @@ mod tests {
     #[test]
     fn detects_duplicate_within_context() {
         // Use BTreeMap + same normalized key under different case.
-        let blocks = vec![block(
-            "Chat",
-            &[("CTRL+K", "a"), ("ctrl+k", "b")],
-        )];
+        let blocks = vec![block("Chat", &[("CTRL+K", "a"), ("ctrl+k", "b")])];
         let warnings = validate_bindings(&blocks);
         assert!(warnings
             .iter()

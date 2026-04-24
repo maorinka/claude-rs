@@ -150,21 +150,17 @@ pub fn shell_bash_summary(
             let tail = exit_code
                 .map(|c| format!(" (exit code {c})"))
                 .unwrap_or_default();
-            format!(
-                "{BACKGROUND_BASH_SUMMARY_PREFIX}\"{description}\" completed{tail}"
-            )
+            format!("{BACKGROUND_BASH_SUMMARY_PREFIX}\"{description}\" completed{tail}")
         }
         AgentTaskStatus::Failed => {
             let tail = exit_code
                 .map(|c| format!(" with exit code {c}"))
                 .unwrap_or_default();
-            format!(
-                "{BACKGROUND_BASH_SUMMARY_PREFIX}\"{description}\" failed{tail}"
-            )
+            format!("{BACKGROUND_BASH_SUMMARY_PREFIX}\"{description}\" failed{tail}")
         }
-        AgentTaskStatus::Stopped => format!(
-            "{BACKGROUND_BASH_SUMMARY_PREFIX}\"{description}\" was stopped"
-        ),
+        AgentTaskStatus::Stopped => {
+            format!("{BACKGROUND_BASH_SUMMARY_PREFIX}\"{description}\" was stopped")
+        }
     }
 }
 
@@ -381,10 +377,7 @@ mod tests {
 
     #[test]
     fn escape_xml_replaces_all_five_metachars() {
-        assert_eq!(
-            escape_xml("a<b>&\"'c"),
-            "a&lt;b&gt;&amp;&quot;&apos;c"
-        );
+        assert_eq!(escape_xml("a<b>&\"'c"), "a&lt;b&gt;&amp;&quot;&apos;c");
     }
 
     #[test]

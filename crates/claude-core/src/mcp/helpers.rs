@@ -37,8 +37,7 @@ pub const MCP_STREAMABLE_HTTP_ACCEPT: &str = "application/json, text/event-strea
 /// IDE tools that pass the `isIncludedMcpTool` filter. Every other
 /// `mcp__ide__*` tool is dropped before the tool list reaches the
 /// model. Mirrors TS `ALLOWED_IDE_TOOLS` at `client.ts:568`.
-pub const ALLOWED_IDE_TOOLS: &[&str] =
-    &["mcp__ide__executeCode", "mcp__ide__getDiagnostics"];
+pub const ALLOWED_IDE_TOOLS: &[&str] = &["mcp__ide__executeCode", "mcp__ide__getDiagnostics"];
 
 // ─── Env-var readers ─────────────────────────────────────────────────
 
@@ -167,8 +166,7 @@ pub fn mcp_streamable_http_post(
 /// variants. Falls back to the debug form if serialization somehow
 /// fails — a cache-key collision is preferable to a panic here.
 pub fn get_server_cache_key(name: &str, server_ref: &ScopedMcpServerConfig) -> String {
-    let body = serde_json::to_string(server_ref)
-        .unwrap_or_else(|_| format!("{:?}", server_ref));
+    let body = serde_json::to_string(server_ref).unwrap_or_else(|_| format!("{:?}", server_ref));
     format!("{}-{}", name, body)
 }
 
@@ -241,11 +239,7 @@ pub fn tool_description_for_model(tool: &McpToolDefinition) -> String {
 /// Returns `None` when the meta field is absent, non-string, or
 /// trims to the empty string.
 pub fn extract_search_hint(tool: &McpToolDefinition) -> Option<String> {
-    let raw = tool
-        .meta
-        .as_ref()?
-        .get("anthropic/searchHint")?
-        .as_str()?;
+    let raw = tool.meta.as_ref()?.get("anthropic/searchHint")?.as_str()?;
     // Whitespace run → single space; trim end; drop if now empty.
     let collapsed: String = {
         let mut out = String::with_capacity(raw.len());
@@ -296,10 +290,7 @@ pub fn extract_always_load(tool: &McpToolDefinition) -> bool {
 /// — serializing two equivalent configs could produce different
 /// JSON strings and spuriously compare unequal. `HashMap`'s
 /// `PartialEq` impl is order-insensitive.
-pub fn are_mcp_configs_equal(
-    a: &ScopedMcpServerConfig,
-    b: &ScopedMcpServerConfig,
-) -> bool {
+pub fn are_mcp_configs_equal(a: &ScopedMcpServerConfig, b: &ScopedMcpServerConfig) -> bool {
     a.config == b.config
 }
 
@@ -655,12 +646,16 @@ mod tests {
     #[test]
     fn included_tool_ide_allowlist() {
         assert!(is_included_mcp_tool(&tool_named("mcp__ide__executeCode")));
-        assert!(is_included_mcp_tool(&tool_named("mcp__ide__getDiagnostics")));
+        assert!(is_included_mcp_tool(&tool_named(
+            "mcp__ide__getDiagnostics"
+        )));
     }
 
     #[test]
     fn included_tool_ide_other_tools_are_dropped() {
-        assert!(!is_included_mcp_tool(&tool_named("mcp__ide__listOpenFiles")));
+        assert!(!is_included_mcp_tool(&tool_named(
+            "mcp__ide__listOpenFiles"
+        )));
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__closeTab")));
         assert!(!is_included_mcp_tool(&tool_named("mcp__ide__")));
     }
@@ -728,7 +723,11 @@ mod tests {
         assert!(s.ends_with(TRUNCATION_SUFFIX));
         let body = s.strip_suffix(TRUNCATION_SUFFIX).unwrap();
         let chars = body.chars().count();
-        assert_eq!(chars, 1024, "astral pairs must not be split, got {} chars", chars);
+        assert_eq!(
+            chars, 1024,
+            "astral pairs must not be split, got {} chars",
+            chars
+        );
     }
 
     #[test]
@@ -809,8 +808,7 @@ mod tests {
             },
             "_meta": { "anthropic/alwaysLoad": true }
         });
-        let parsed: McpToolDefinition =
-            serde_json::from_value(wire).expect("deserialize");
+        let parsed: McpToolDefinition = serde_json::from_value(wire).expect("deserialize");
         let a = parsed.annotations.as_ref().expect("annotations present");
         assert_eq!(a.read_only_hint, Some(true));
         assert_eq!(a.destructive_hint, Some(false));
@@ -861,8 +859,14 @@ mod tests {
             args: vec![],
             env: None,
         });
-        let a = ScopedMcpServerConfig { config: cfg.clone(), scope: ConfigScope::Project };
-        let b = ScopedMcpServerConfig { config: cfg, scope: ConfigScope::User };
+        let a = ScopedMcpServerConfig {
+            config: cfg.clone(),
+            scope: ConfigScope::Project,
+        };
+        let b = ScopedMcpServerConfig {
+            config: cfg,
+            scope: ConfigScope::User,
+        };
         assert!(
             are_mcp_configs_equal(&a, &b),
             "scope must not affect equivalence"

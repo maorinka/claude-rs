@@ -293,18 +293,18 @@ where
                 return ResolvedPermission::Allow {
                     updated_input: hook_decision.updated_input.clone(),
                 };
-            },
+            }
             RuleCheckResult::Deny(msg) => {
                 debug!("Hook approved tool use, but deny rule overrides: {:?}", msg);
                 return ResolvedPermission::Deny { message: msg };
-            },
+            }
             RuleCheckResult::Ask => {
                 debug!("Hook approved tool use, but ask rule requires prompt");
                 return ResolvedPermission::RequiresUserConfirmation {
                     updated_input: hook_decision.updated_input.clone(),
                     force_decision: None,
                 };
-            },
+            }
         }
     }
 
@@ -399,7 +399,7 @@ mod tests {
         match result {
             ResolvedPermission::Deny { message } => {
                 assert_eq!(message, Some("dangerous command".to_string()));
-            },
+            }
             _ => panic!("Expected Deny, got {:?}", result),
         }
     }
@@ -433,7 +433,7 @@ mod tests {
         match result {
             ResolvedPermission::Deny { message } => {
                 assert_eq!(message, Some("nope".to_string()));
-            },
+            }
             _ => panic!("Expected Deny"),
         }
     }
@@ -452,7 +452,7 @@ mod tests {
         match result {
             ResolvedPermission::RequiresUserConfirmation { force_decision, .. } => {
                 assert_eq!(force_decision, Some("please confirm".to_string()));
-            },
+            }
             _ => panic!("Expected RequiresUserConfirmation"),
         }
     }

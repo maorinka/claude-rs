@@ -28,8 +28,7 @@ const SCHEDULE_PROMPT_TEMPLATE: &str = include_str!("prompts/schedule_remote_age
 
 /// Fixed question body shown in the initial AskUserQuestion
 /// dialog. Port of TS `BASE_QUESTION` (scheduleRemoteAgents.ts:111).
-pub const SCHEDULE_BASE_QUESTION: &str =
-    "What would you like to do with scheduled remote agents?";
+pub const SCHEDULE_BASE_QUESTION: &str = "What would you like to do with scheduled remote agents?";
 
 /// Fallback shown in the connectors section when the user has no
 /// claude.ai MCP connectors connected. Port of TS
@@ -159,15 +158,12 @@ pub fn build_first_step(setup_notes: &str, user_args: &str) -> String {
 /// `buildPrompt(opts)` at scheduleRemoteAgents.ts:135-322.
 pub fn schedule_remote_agents_prompt(inputs: &ScheduleRemoteAgentsInputs<'_>) -> String {
     let first_step = build_first_step(inputs.setup_notes, inputs.user_args);
-    let setup_notes_section =
-        if !inputs.user_args.is_empty() && !inputs.setup_notes.is_empty() {
-            format!("\n## Setup Notes\n\n{}\n", inputs.setup_notes)
-        } else {
-            String::new()
-        };
-    let git_repo_or_placeholder = inputs
-        .git_repo_url
-        .unwrap_or("https://github.com/ORG/REPO");
+    let setup_notes_section = if !inputs.user_args.is_empty() && !inputs.setup_notes.is_empty() {
+        format!("\n## Setup Notes\n\n{}\n", inputs.setup_notes)
+    } else {
+        String::new()
+    };
+    let git_repo_or_placeholder = inputs.git_repo_url.unwrap_or("https://github.com/ORG/REPO");
     let git_repo_workflow_hint = match inputs.git_repo_url {
         Some(url) => format!(
             " The default git repo is already set to `{url}`. Ask the user if this is the right repo or if they need a different one."

@@ -228,14 +228,14 @@ pub fn dark_daltonized_theme() -> Theme {
         bg: Color::Reset,
         fg: Color::Reset,
 
-        claude: Color::Rgb(255, 153, 51),       // Orange adjusted for deuteranopia
+        claude: Color::Rgb(255, 153, 51), // Orange adjusted for deuteranopia
         claude_shimmer: Color::Rgb(255, 183, 101),
 
         prompt_border: Color::Rgb(136, 136, 136),
 
-        error: Color::Rgb(255, 102, 102),        // Bright red
-        warning: Color::Rgb(255, 204, 0),        // Yellow-orange for deuteranopia
-        success: Color::Rgb(51, 153, 255),       // Blue instead of green
+        error: Color::Rgb(255, 102, 102),  // Bright red
+        warning: Color::Rgb(255, 204, 0),  // Yellow-orange for deuteranopia
+        success: Color::Rgb(51, 153, 255), // Blue instead of green
 
         text: Color::Reset,
         inverse_text: Color::Rgb(0, 0, 0),
@@ -247,11 +247,11 @@ pub fn dark_daltonized_theme() -> Theme {
         tool_name: Color::Reset,
         thinking: Color::Rgb(153, 153, 153),
 
-        diff_added: Color::Rgb(0, 68, 102),      // Dark blue
-        diff_removed: Color::Rgb(102, 0, 0),     // Dark red
+        diff_added: Color::Rgb(0, 68, 102),  // Dark blue
+        diff_removed: Color::Rgb(102, 0, 0), // Dark red
 
         border: Color::Rgb(80, 80, 80),
-        permission: Color::Rgb(153, 204, 255),   // Light blue
+        permission: Color::Rgb(153, 204, 255), // Light blue
     }
 }
 
@@ -264,14 +264,14 @@ pub fn light_daltonized_theme() -> Theme {
         bg: Color::Reset,
         fg: Color::Reset,
 
-        claude: Color::Rgb(255, 153, 51),        // Orange adjusted for deuteranopia
+        claude: Color::Rgb(255, 153, 51), // Orange adjusted for deuteranopia
         claude_shimmer: Color::Rgb(255, 183, 101),
 
         prompt_border: Color::Rgb(153, 153, 153),
 
-        error: Color::Rgb(204, 0, 0),            // Pure red for better distinction
-        warning: Color::Rgb(255, 153, 0),        // Orange adjusted for deuteranopia
-        success: Color::Rgb(0, 102, 153),        // Blue instead of green
+        error: Color::Rgb(204, 0, 0), // Pure red for better distinction
+        warning: Color::Rgb(255, 153, 0), // Orange adjusted for deuteranopia
+        success: Color::Rgb(0, 102, 153), // Blue instead of green
 
         text: Color::Reset,
         inverse_text: Color::Rgb(255, 255, 255),
@@ -283,11 +283,11 @@ pub fn light_daltonized_theme() -> Theme {
         tool_name: Color::Reset,
         thinking: Color::Rgb(102, 102, 102),
 
-        diff_added: Color::Rgb(153, 204, 255),   // Light blue instead of green
+        diff_added: Color::Rgb(153, 204, 255), // Light blue instead of green
         diff_removed: Color::Rgb(255, 204, 204), // Light red
 
         border: Color::Rgb(175, 175, 175),
-        permission: Color::Rgb(51, 102, 255),    // Bright blue
+        permission: Color::Rgb(51, 102, 255), // Bright blue
     }
 }
 
@@ -300,30 +300,30 @@ pub fn dark_ansi_theme() -> Theme {
         bg: Color::Reset,
         fg: Color::Reset,
 
-        claude: Color::LightRed,                  // ansi:redBright
-        claude_shimmer: Color::LightYellow,        // ansi:yellowBright
+        claude: Color::LightRed,            // ansi:redBright
+        claude_shimmer: Color::LightYellow, // ansi:yellowBright
 
-        prompt_border: Color::White,               // ansi:white
+        prompt_border: Color::White, // ansi:white
 
-        error: Color::LightRed,                    // ansi:redBright
-        warning: Color::LightYellow,               // ansi:yellowBright
-        success: Color::LightGreen,                // ansi:greenBright
+        error: Color::LightRed,      // ansi:redBright
+        warning: Color::LightYellow, // ansi:yellowBright
+        success: Color::LightGreen,  // ansi:greenBright
 
-        text: Color::Reset,                        // ansi:whiteBright (terminal default on dark)
-        inverse_text: Color::Black,                // ansi:black
-        inactive: Color::White,                    // ansi:white
-        subtle: Color::White,                      // ansi:white
+        text: Color::Reset,         // ansi:whiteBright (terminal default on dark)
+        inverse_text: Color::Black, // ansi:black
+        inactive: Color::White,     // ansi:white
+        subtle: Color::White,       // ansi:white
         muted: Color::White,
 
-        user_message_bg: Color::DarkGray,          // ansi:blackBright
+        user_message_bg: Color::DarkGray, // ansi:blackBright
         tool_name: Color::Reset,
-        thinking: Color::White,                    // ansi:white
+        thinking: Color::White, // ansi:white
 
-        diff_added: Color::Green,                  // ansi:green
-        diff_removed: Color::Red,                  // ansi:red
+        diff_added: Color::Green, // ansi:green
+        diff_removed: Color::Red, // ansi:red
 
-        border: Color::White,                      // ansi:white
-        permission: Color::LightBlue,              // ansi:blueBright
+        border: Color::White,         // ansi:white
+        permission: Color::LightBlue, // ansi:blueBright
     }
 }
 
@@ -336,30 +336,30 @@ pub fn light_ansi_theme() -> Theme {
         bg: Color::Reset,
         fg: Color::Reset,
 
-        claude: Color::LightRed,                   // ansi:redBright
-        claude_shimmer: Color::LightYellow,         // ansi:yellowBright
+        claude: Color::LightRed,            // ansi:redBright
+        claude_shimmer: Color::LightYellow, // ansi:yellowBright
 
-        prompt_border: Color::White,                // ansi:white
+        prompt_border: Color::White, // ansi:white
 
-        error: Color::Red,                          // ansi:red
-        warning: Color::Yellow,                     // ansi:yellow
-        success: Color::Green,                      // ansi:green
+        error: Color::Red,      // ansi:red
+        warning: Color::Yellow, // ansi:yellow
+        success: Color::Green,  // ansi:green
 
-        text: Color::Reset,                         // ansi:black (terminal default on light)
-        inverse_text: Color::White,                 // ansi:white
-        inactive: Color::DarkGray,                  // ansi:blackBright
-        subtle: Color::DarkGray,                    // ansi:blackBright
+        text: Color::Reset,         // ansi:black (terminal default on light)
+        inverse_text: Color::White, // ansi:white
+        inactive: Color::DarkGray,  // ansi:blackBright
+        subtle: Color::DarkGray,    // ansi:blackBright
         muted: Color::DarkGray,
 
-        user_message_bg: Color::White,              // ansi:white
+        user_message_bg: Color::White, // ansi:white
         tool_name: Color::Reset,
-        thinking: Color::DarkGray,                  // ansi:blackBright
+        thinking: Color::DarkGray, // ansi:blackBright
 
-        diff_added: Color::Green,                   // ansi:green
-        diff_removed: Color::Red,                   // ansi:red
+        diff_added: Color::Green, // ansi:green
+        diff_removed: Color::Red, // ansi:red
 
-        border: Color::DarkGray,                    // ansi:blackBright
-        permission: Color::Blue,                    // ansi:blue
+        border: Color::DarkGray, // ansi:blackBright
+        permission: Color::Blue, // ansi:blue
     }
 }
 

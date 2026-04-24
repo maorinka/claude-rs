@@ -240,11 +240,11 @@ impl ToolExecutor for AgentTool {
                 Ok(wt_path) => {
                     info!(worktree = %wt_path.display(), "Created worktree for agent");
                     (wt_path.clone(), Some(wt_path))
-                },
+                }
                 Err(e) => {
                     warn!("Failed to create worktree, falling back to cwd: {}", e);
                     (ctx.working_directory.clone(), None)
-                },
+                }
             }
         } else {
             (ctx.working_directory.clone(), None)
@@ -271,21 +271,21 @@ impl ToolExecutor for AgentTool {
                 } else {
                     parent_mode.clone()
                 }
-            },
+            }
         };
 
         match &effective_mode {
             PermissionMode::BypassPermissions => {
                 cmd.arg("--dangerously-skip-permissions");
-            },
+            }
             PermissionMode::AcceptEdits => {
                 cmd.env("CLAUDE_PERMISSION_MODE", "acceptEdits");
-            },
+            }
             PermissionMode::Plan => {
                 cmd.env("CLAUDE_PERMISSION_MODE", "plan");
-            },
+            }
             // Default / Auto / Bubble / DontAsk: no special flag; child defaults to Default.
-            _ => {},
+            _ => {}
         }
 
         if let Some(m) = model {
@@ -341,7 +341,7 @@ impl ToolExecutor for AgentTool {
                             Ok(n) => {
                                 let text = String::from_utf8_lossy(&buf[..n]);
                                 append_output(&task_id_for_reader, &text);
-                            },
+                            }
                             Err(_) => break,
                         }
                     }
@@ -357,10 +357,10 @@ impl ToolExecutor for AgentTool {
                             success = status.success(),
                             "Background agent completed"
                         );
-                    },
+                    }
                     Err(e) => {
                         warn!(task_id = task_id_clone, error = %e, "Background agent failed");
-                    },
+                    }
                 }
                 // Clean up worktree if we created one
                 if let Some(ref wt) = worktree_path {

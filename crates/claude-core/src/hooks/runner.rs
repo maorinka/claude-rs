@@ -153,13 +153,8 @@ impl HookRunner {
         agent_type: Option<&str>,
         timeout_ms: Option<u64>,
     ) -> AggregatedHookResult {
-        let hook_input = self.build_hook_input(
-            event,
-            extra_fields,
-            permission_mode,
-            agent_id,
-            agent_type,
-        );
+        let hook_input =
+            self.build_hook_input(event, extra_fields, permission_mode, agent_id, agent_type);
 
         let timeout = timeout_ms.unwrap_or(TOOL_HOOK_EXECUTION_TIMEOUT_MS);
 
@@ -174,11 +169,7 @@ impl HookRunner {
             None => event.to_string(),
         };
 
-        debug!(
-            "Running {} hooks for {}",
-            matching.len(),
-            hook_name
-        );
+        debug!("Running {} hooks for {}", matching.len(), hook_name);
 
         let json_input = match serde_json::to_string(&hook_input) {
             Ok(s) => s,
@@ -190,26 +181,19 @@ impl HookRunner {
 
         // Run all hooks in parallel
         let batch_start = Instant::now();
-        let hook_futures = matching
-            .into_iter()
-            .map(|matched| {
-                let json_input = json_input.clone();
-                let hook_name = hook_name.clone();
-                let cwd = self.cwd.clone();
-                let event = event.clone();
-                async move {
-                    exec_hook(
-                        &matched,
-                        &event,
-                        &hook_name,
-                        &json_input,
-                        &cwd,
-                        timeout,
-                    )
-                    .await
-                }
-            })
-            .collect::<Vec<_>>();
+        let hook_futures =
+            matching
+                .into_iter()
+                .map(|matched| {
+                    let json_input = json_input.clone();
+                    let hook_name = hook_name.clone();
+                    let cwd = self.cwd.clone();
+                    let event = event.clone();
+                    async move {
+                        exec_hook(&matched, &event, &hook_name, &json_input, &cwd, timeout).await
+                    }
+                })
+                .collect::<Vec<_>>();
 
         let results: Vec<HookResult> = join_all(hook_futures).await;
         let duration = batch_start.elapsed();
@@ -240,13 +224,7 @@ impl HookRunner {
         permission_mode: Option<&str>,
         timeout_ms: Option<u64>,
     ) -> Vec<HookOutsideReplResult> {
-        let hook_input = self.build_hook_input(
-            event,
-            extra_fields,
-            permission_mode,
-            None,
-            None,
-        );
+        let hook_input = self.build_hook_input(event, extra_fields, permission_mode, None, None);
 
         let timeout = timeout_ms.unwrap_or(TOOL_HOOK_EXECUTION_TIMEOUT_MS);
 
@@ -278,15 +256,8 @@ impl HookRunner {
                 let event = event.clone();
                 let command_display = matched.hook.display_text();
                 async move {
-                    let result = exec_hook(
-                        &matched,
-                        &event,
-                        &hook_name,
-                        &json_input,
-                        &cwd,
-                        timeout,
-                    )
-                    .await;
+                    let result =
+                        exec_hook(&matched, &event, &hook_name, &json_input, &cwd, timeout).await;
                     HookOutsideReplResult {
                         command: command_display,
                         succeeded: result.outcome == HookOutcome::Success,
@@ -505,26 +476,19 @@ async fn exec_command_hook(
             })
         }
         ParsedHookOutput::Json(HookJsonOutput::Sync(json)) => {
-            let mut result = process_hook_json_output(
-                &json,
-                command,
-                hook_name,
-                event,
-            );
+            let mut result = process_hook_json_output(&json, command, hook_name, event);
             result.stdout = stdout;
             result.stderr = stderr;
             result.exit_code = Some(exit_code);
             Ok(result)
         }
-        ParsedHookOutput::ValidationError(err) => {
-            Ok(HookResult {
-                outcome: HookOutcome::NonBlockingError,
-                stderr: format!("JSON validation failed: {}", err),
-                stdout,
-                exit_code: Some(1),
-                ..Default::default()
-            })
-        }
+        ParsedHookOutput::ValidationError(err) => Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: format!("JSON validation failed: {}", err),
+            stdout,
+            exit_code: Some(1),
+            ..Default::default()
+        }),
         ParsedHookOutput::PlainText => {
             // Non-JSON output — interpret by exit code
             match exit_code {
@@ -633,9 +597,8 @@ async fn exec_http_hook(
     // ── SSRF guard ────────────────────────────────────────────────────────────
     // Resolve the hostname and reject private/link-local ranges before making
     // any network connection. This mirrors TS's ssrfGuardedLookup.
-    let parsed_url = url::Url::parse(&hook.url).map_err(|e| {
-        anyhow::anyhow!("HTTP hook has invalid URL '{}': {}", hook.url, e)
-    })?;
+    let parsed_url = url::Url::parse(&hook.url)
+        .map_err(|e| anyhow::anyhow!("HTTP hook has invalid URL '{}': {}", hook.url, e))?;
     let host = parsed_url.host_str().unwrap_or("");
     let port = parsed_url.port_or_known_default().unwrap_or(80);
 
@@ -697,10 +660,7 @@ async fn exec_http_hook(
     };
 
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_default();
+    let body = response.text().await.unwrap_or_default();
 
     if !status.is_success() {
         return Ok(HookResult {
@@ -722,12 +682,7 @@ async fn exec_http_hook(
             ..Default::default()
         }),
         ParsedHookOutput::Json(HookJsonOutput::Sync(json)) => {
-            let mut result = process_hook_json_output(
-                &json,
-                &hook.url,
-                hook_name,
-                event,
-            );
+            let mut result = process_hook_json_output(&json, &hook.url, hook_name, event);
             result.stdout = body;
             result.exit_code = Some(status.as_u16() as i32);
             Ok(result)
@@ -947,23 +902,17 @@ fn process_hook_json_output(
                             result.permission_behavior = Some(PermissionBehavior::Ask);
                         }
                         _ => {
-                            warn!(
-                                "Unknown hook permissionDecision: {}",
-                                pd
-                            );
+                            warn!("Unknown hook permissionDecision: {}", pd);
                         }
                     }
                 }
-                result.hook_permission_decision_reason =
-                    permission_decision_reason.clone();
+                result.hook_permission_decision_reason = permission_decision_reason.clone();
                 if let Some(ref ui) = updated_input {
                     result.updated_input = Some(ui.clone());
                 }
                 result.additional_context = additional_context.clone();
             }
-            HookSpecificOutput::UserPromptSubmit {
-                additional_context,
-            } => {
+            HookSpecificOutput::UserPromptSubmit { additional_context } => {
                 result.additional_context = additional_context.clone();
             }
             HookSpecificOutput::SessionStart {
@@ -975,14 +924,10 @@ fn process_hook_json_output(
                 result.initial_user_message = initial_user_message.clone();
                 result.watch_paths = watch_paths.clone();
             }
-            HookSpecificOutput::Setup {
-                additional_context,
-            } => {
+            HookSpecificOutput::Setup { additional_context } => {
                 result.additional_context = additional_context.clone();
             }
-            HookSpecificOutput::SubagentStart {
-                additional_context,
-            } => {
+            HookSpecificOutput::SubagentStart { additional_context } => {
                 result.additional_context = additional_context.clone();
             }
             HookSpecificOutput::PostToolUse {
@@ -994,17 +939,13 @@ fn process_hook_json_output(
                     result.updated_mcp_tool_output = Some(out.clone());
                 }
             }
-            HookSpecificOutput::PostToolUseFailure {
-                additional_context,
-            } => {
+            HookSpecificOutput::PostToolUseFailure { additional_context } => {
                 result.additional_context = additional_context.clone();
             }
             HookSpecificOutput::PermissionDenied { retry } => {
                 result.retry = *retry;
             }
-            HookSpecificOutput::Notification {
-                additional_context,
-            } => {
+            HookSpecificOutput::Notification { additional_context } => {
                 result.additional_context = additional_context.clone();
             }
             HookSpecificOutput::PermissionRequest { decision } => {
@@ -1152,7 +1093,10 @@ pub fn get_pre_tool_hook_blocking_message(
     hook_name: &str,
     blocking_error: &HookBlockingError,
 ) -> String {
-    format!("{} hook error: {}", hook_name, blocking_error.blocking_error)
+    format!(
+        "{} hook error: {}",
+        hook_name, blocking_error.blocking_error
+    )
 }
 
 /// Format a Stop hook blocking error message.
@@ -1162,12 +1106,18 @@ pub fn get_stop_hook_message(blocking_error: &HookBlockingError) -> String {
 
 /// Format a TeammateIdle hook blocking error message.
 pub fn get_teammate_idle_hook_message(blocking_error: &HookBlockingError) -> String {
-    format!("TeammateIdle hook feedback:\n{}", blocking_error.blocking_error)
+    format!(
+        "TeammateIdle hook feedback:\n{}",
+        blocking_error.blocking_error
+    )
 }
 
 /// Format a TaskCreated hook blocking error message.
 pub fn get_task_created_hook_message(blocking_error: &HookBlockingError) -> String {
-    format!("TaskCreated hook feedback:\n{}", blocking_error.blocking_error)
+    format!(
+        "TaskCreated hook feedback:\n{}",
+        blocking_error.blocking_error
+    )
 }
 
 /// Format a TaskCompleted hook blocking error message.
@@ -1179,9 +1129,7 @@ pub fn get_task_completed_hook_message(blocking_error: &HookBlockingError) -> St
 }
 
 /// Format a UserPromptSubmit hook blocking error message.
-pub fn get_user_prompt_submit_hook_blocking_message(
-    blocking_error: &HookBlockingError,
-) -> String {
+pub fn get_user_prompt_submit_hook_blocking_message(blocking_error: &HookBlockingError) -> String {
     format!(
         "UserPromptSubmit operation blocked by hook:\n{}",
         blocking_error.blocking_error
@@ -1252,7 +1200,8 @@ mod tests {
             reason: Some("test reason".to_string()),
             ..Default::default()
         };
-        let result = process_hook_json_output(&json, "test_cmd", "test_hook", &HookEvent::PreToolUse);
+        let result =
+            process_hook_json_output(&json, "test_cmd", "test_hook", &HookEvent::PreToolUse);
         assert_eq!(result.permission_behavior, Some(PermissionBehavior::Deny));
         assert!(result.blocking_error.is_some());
         assert_eq!(
@@ -1267,7 +1216,8 @@ mod tests {
             decision: Some("approve".to_string()),
             ..Default::default()
         };
-        let result = process_hook_json_output(&json, "test_cmd", "test_hook", &HookEvent::PreToolUse);
+        let result =
+            process_hook_json_output(&json, "test_cmd", "test_hook", &HookEvent::PreToolUse);
         assert_eq!(result.permission_behavior, Some(PermissionBehavior::Allow));
         assert!(result.blocking_error.is_none());
     }
@@ -1334,10 +1284,7 @@ mod tests {
             get_pre_tool_hook_blocking_message("PreToolUse:Write", &be),
             "PreToolUse:Write hook error: bad thing"
         );
-        assert_eq!(
-            get_stop_hook_message(&be),
-            "Stop hook feedback:\nbad thing"
-        );
+        assert_eq!(get_stop_hook_message(&be), "Stop hook feedback:\nbad thing");
         assert_eq!(
             get_user_prompt_submit_hook_blocking_message(&be),
             "UserPromptSubmit operation blocked by hook:\nbad thing"

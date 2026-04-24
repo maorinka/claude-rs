@@ -161,7 +161,10 @@ mod tests {
         clear_env();
         reset_fired_latch();
         std::env::set_var("CLAUDE_CODE_USE_BEDROCK", "1");
-        assert_eq!(decide_preconnect(), PreconnectDecision::SkippedCloudProvider);
+        assert_eq!(
+            decide_preconnect(),
+            PreconnectDecision::SkippedCloudProvider
+        );
         std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
     }
 
@@ -171,7 +174,10 @@ mod tests {
         clear_env();
         reset_fired_latch();
         std::env::set_var("CLAUDE_CODE_USE_VERTEX", "1");
-        assert_eq!(decide_preconnect(), PreconnectDecision::SkippedCloudProvider);
+        assert_eq!(
+            decide_preconnect(),
+            PreconnectDecision::SkippedCloudProvider
+        );
         std::env::remove_var("CLAUDE_CODE_USE_VERTEX");
     }
 
@@ -181,7 +187,10 @@ mod tests {
         clear_env();
         reset_fired_latch();
         std::env::set_var("CLAUDE_CODE_USE_FOUNDRY", "true");
-        assert_eq!(decide_preconnect(), PreconnectDecision::SkippedCloudProvider);
+        assert_eq!(
+            decide_preconnect(),
+            PreconnectDecision::SkippedCloudProvider
+        );
         std::env::remove_var("CLAUDE_CODE_USE_FOUNDRY");
     }
 

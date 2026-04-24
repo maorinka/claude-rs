@@ -134,7 +134,7 @@ pub fn matches_pattern(match_query: &str, matcher: &str) -> bool {
         Err(_) => {
             debug!("Invalid regex pattern in hook matcher: {}", matcher);
             false
-        },
+        }
     }
 }
 
@@ -230,7 +230,7 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     match parts.as_slice() {
         [prefix, suffix] => {
             text.starts_with(prefix) && (suffix.is_empty() || text.ends_with(suffix))
-        },
+        }
         _ => text == pattern,
     }
 }
@@ -260,7 +260,7 @@ fn hook_dedup_key(hook: &HookCommand) -> String {
                 None => "bash".to_string(),
             };
             format!("command\0{}\0{}\0{}", shell, h.command, if_cond)
-        },
+        }
         HookCommand::Prompt(h) => format!("prompt\0{}\0{}", h.prompt, if_cond),
         HookCommand::Http(h) => format!("http\0{}\0{}", h.url, if_cond),
         HookCommand::Agent(h) => format!("agent\0{}\0{}", h.prompt, if_cond),

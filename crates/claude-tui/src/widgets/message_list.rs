@@ -483,7 +483,7 @@ fn render_message(
             )));
 
             lines.push(Line::from(""));
-        },
+        }
         MessageEntry::User { text } => {
             // Original: marginTop=1 (blank line), then user text with
             // backgroundColor=userMessageBackground filling the full width.
@@ -503,7 +503,7 @@ fn render_message(
                     )]));
                 }
             }
-        },
+        }
         MessageEntry::Assistant { text } => {
             // Original TS: marginTop=1 (blank line), then BLACK_CIRCLE in
             // minWidth=2 followed by markdown content. The circle prefix is 2
@@ -531,7 +531,7 @@ fn render_message(
                 spans.extend(md_line.spans.clone());
                 lines.push(Line::from(spans));
             }
-        },
+        }
         MessageEntry::ToolUse {
             name,
             input_summary,
@@ -591,7 +591,7 @@ fn render_message(
                     ]));
                 }
             }
-        },
+        }
         MessageEntry::ToolResult {
             name: _,
             output,
@@ -658,7 +658,7 @@ fn render_message(
                     )));
                 }
             }
-        },
+        }
         MessageEntry::Thinking { text } => {
             // Original: "∴ Thinking" in dimColor + italic.
             // When expanded (verbose/show_thinking): thinking text in dim markdown, paddingLeft=2.
@@ -701,7 +701,7 @@ fn render_message(
                     ),
                 ]));
             }
-        },
+        }
         MessageEntry::System { text } => {
             // System messages: plain text in inactive/muted color, word-wrapped.
             let sys_width = (width as usize).max(1);
@@ -713,7 +713,7 @@ fn render_message(
                     )]));
                 }
             }
-        },
+        }
     }
 
     lines

@@ -115,7 +115,11 @@ fn grow_branch(
                 grow_branch(inner, &next_prefix, depth + 1, options, lines);
             }
             Value::Array(arr) => {
-                push_scalar_line(&mut line, should_add_colon, &format!("[Array({})]", arr.len()));
+                push_scalar_line(
+                    &mut line,
+                    should_add_colon,
+                    &format!("[Array({})]", arr.len()),
+                );
                 lines.push(line);
             }
             _ if options.show_values => {
@@ -158,19 +162,28 @@ mod tests {
 
     #[test]
     fn empty_object_returns_placeholder() {
-        assert_eq!(treeify(&json!({}), &TreeifyOptions::with_values()), "(empty)");
+        assert_eq!(
+            treeify(&json!({}), &TreeifyOptions::with_values()),
+            "(empty)"
+        );
     }
 
     #[test]
     fn scalar_root_passes_through() {
         assert_eq!(treeify(&json!("hi"), &TreeifyOptions::with_values()), "hi");
         assert_eq!(treeify(&json!(42), &TreeifyOptions::with_values()), "42");
-        assert_eq!(treeify(&json!(null), &TreeifyOptions::with_values()), "null");
+        assert_eq!(
+            treeify(&json!(null), &TreeifyOptions::with_values()),
+            "null"
+        );
     }
 
     #[test]
     fn single_empty_key_renders_just_value() {
-        let out = treeify(&json!({ "": "status text" }), &TreeifyOptions::with_values());
+        let out = treeify(
+            &json!({ "": "status text" }),
+            &TreeifyOptions::with_values(),
+        );
         assert_eq!(out, "└ status text");
     }
 

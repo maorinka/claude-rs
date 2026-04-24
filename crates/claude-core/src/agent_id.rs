@@ -46,11 +46,7 @@ pub fn generate_request_id(request_type: &str, agent_id: &str) -> String {
 }
 
 /// Build a request ID with an explicit timestamp (Unix ms).
-pub fn format_request_id(
-    request_type: &str,
-    timestamp_ms: i64,
-    agent_id: &str,
-) -> String {
+pub fn format_request_id(request_type: &str, timestamp_ms: i64, agent_id: &str) -> String {
     format!("{request_type}-{timestamp_ms}@{agent_id}")
 }
 

@@ -92,7 +92,11 @@ pub struct ToolUseContextOptions {
     pub agent_definitions: Value,
 
     /// Budget cap in USD; `None` → unlimited.
-    #[serde(rename = "maxBudgetUsd", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "maxBudgetUsd",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_budget_usd: Option<f64>,
 
     /// Overrides the default system prompt entirely.
@@ -222,7 +226,9 @@ mod tests {
     #[test]
     fn thinking_config_roundtrip_through_options() {
         let opts = ToolUseContextOptions {
-            thinking_config: ThinkingConfig::Enabled { budget_tokens: 16_000 },
+            thinking_config: ThinkingConfig::Enabled {
+                budget_tokens: 16_000,
+            },
             ..ToolUseContextOptions::minimal("m")
         };
         let v = serde_json::to_value(&opts).unwrap();
@@ -233,7 +239,9 @@ mod tests {
         let back: ToolUseContextOptions = serde_json::from_value(v).unwrap();
         assert!(matches!(
             back.thinking_config,
-            ThinkingConfig::Enabled { budget_tokens: 16_000 }
+            ThinkingConfig::Enabled {
+                budget_tokens: 16_000
+            }
         ));
     }
 

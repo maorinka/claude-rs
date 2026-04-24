@@ -45,7 +45,10 @@ pub fn build_summary_prompt(previous_summary: Option<&str>) -> String {
 /// runForkedAgent (or its Rust equivalent, once wired) and extracts
 /// the first assistant text.
 pub type SummaryFn = Arc<
-    dyn Fn(Option<String>, CancellationToken) -> futures_util::future::BoxFuture<'static, Result<Option<String>>>
+    dyn Fn(
+            Option<String>,
+            CancellationToken,
+        ) -> futures_util::future::BoxFuture<'static, Result<Option<String>>>
         + Send
         + Sync,
 >;
@@ -77,10 +80,7 @@ impl Drop for SummarizationHandle {
 /// every ~SUMMARY_INTERVAL_MS. Each successful summary is passed to
 /// `on_summary`. The timer is RESET on completion (not initiation) so
 /// overlapping summaries can't stack up — matches TS behaviour.
-pub fn start_agent_summarization<F>(
-    summarize: SummaryFn,
-    on_summary: F,
-) -> SummarizationHandle
+pub fn start_agent_summarization<F>(summarize: SummaryFn, on_summary: F) -> SummarizationHandle
 where
     F: Fn(String) + Send + Sync + 'static,
 {

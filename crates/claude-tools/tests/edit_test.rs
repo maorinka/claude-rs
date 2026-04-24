@@ -6,9 +6,13 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
-    ToolUseContext::for_test(dir.path().to_path_buf(), std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(
+        dir.path().to_path_buf(),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default)
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 async fn call_tool(
@@ -213,11 +217,10 @@ async fn test_edit_preserves_crlf_line_endings() {
 
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
-    ctx.read_file_state.lock().unwrap().record_read(
-        file_path.to_str().unwrap(),
-        false,
-        None,
-    );
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     // Model sends LF-normalised old_string + new_string.
     let result = call_tool(
@@ -250,11 +253,10 @@ async fn test_edit_preserves_lf_line_endings() {
 
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
-    ctx.read_file_state.lock().unwrap().record_read(
-        file_path.to_str().unwrap(),
-        false,
-        None,
-    );
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     let result = call_tool(
         &tool,
@@ -289,11 +291,10 @@ async fn test_edit_new_string_with_crlf_does_not_double_normalize() {
 
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
-    ctx.read_file_state.lock().unwrap().record_read(
-        file_path.to_str().unwrap(),
-        false,
-        None,
-    );
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     // new_string already contains CRLF.
     let result = call_tool(
@@ -314,10 +315,7 @@ async fn test_edit_new_string_with_crlf_does_not_double_normalize() {
         as_str, "a\r\nx\r\ny\r\n",
         "CRLF should not double up (no CRCRLF)"
     );
-    assert!(
-        !as_str.contains("\r\r"),
-        "sanity: no double-CR in output"
-    );
+    assert!(!as_str.contains("\r\r"), "sanity: no double-CR in output");
 }
 
 /// The `originalFile` field in the tool result must report the
@@ -333,11 +331,10 @@ async fn test_edit_originalfile_is_lf_normalised_for_crlf_disk() {
 
     let tool = FileEditTool;
     let ctx = make_ctx(&dir);
-    ctx.read_file_state.lock().unwrap().record_read(
-        file_path.to_str().unwrap(),
-        false,
-        None,
-    );
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false, None);
 
     let result = call_tool(
         &tool,
@@ -470,14 +467,15 @@ async fn edit_guard_blocks_new_team_memory_file_with_secret() {
     let team_dir = claude_core::memdir::team_mem_paths::get_team_mem_path(&cwd);
     std::fs::create_dir_all(&team_dir).unwrap();
 
-    let ctx = ToolUseContext::for_test(cwd.clone(), std::sync::Arc::new(std::sync::Mutex::new(
+    let ctx = ToolUseContext::for_test(
+        cwd.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default);
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    );
     let tool = FileEditTool;
-    let file_path = team_dir
-        .join("brand_new.md")
-        .to_string_lossy()
-        .to_string();
+    let file_path = team_dir.join("brand_new.md").to_string_lossy().to_string();
 
     let result = call_tool(
         &tool,
@@ -490,7 +488,10 @@ async fn edit_guard_blocks_new_team_memory_file_with_secret() {
     )
     .await;
 
-    assert!(result.is_error, "new-file Edit with secret must be rejected");
+    assert!(
+        result.is_error,
+        "new-file Edit with secret must be rejected"
+    );
     assert!(result.data["error"]
         .as_str()
         .unwrap()
@@ -523,9 +524,13 @@ async fn edit_guard_blocks_existing_team_memory_file_with_secret() {
     std::fs::write(&file_path_buf, "original\n").unwrap();
     let file_path = file_path_buf.to_string_lossy().to_string();
 
-    let ctx = ToolUseContext::for_test(cwd.clone(), std::sync::Arc::new(std::sync::Mutex::new(
+    let ctx = ToolUseContext::for_test(
+        cwd.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default);
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    );
     // Record a read so the staleness check passes — but the guard
     // should fire BEFORE staleness anyway per TS ordering.
     ctx.read_file_state

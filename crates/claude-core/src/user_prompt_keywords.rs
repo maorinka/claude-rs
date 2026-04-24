@@ -24,7 +24,8 @@ static NEGATIVE_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// `\b(keep going|go on)\b`, case-insensitive.
-static KEEP_GOING_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\b(keep going|go on)\b").unwrap());
+static KEEP_GOING_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b(keep going|go on)\b").unwrap());
 
 /// Returns `true` when the input contains a profanity / frustration
 /// marker. TS `matchesNegativeKeyword`.

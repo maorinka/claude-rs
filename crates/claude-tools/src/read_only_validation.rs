@@ -209,7 +209,7 @@ fn loose_tokens(cmd: &str) -> Vec<String> {
                 if !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
                 }
-            },
+            }
             c => cur.push(c),
         }
     }
@@ -256,7 +256,7 @@ pub fn classify_command(cmd: &str) -> Classification {
             match classify_single(&seg) {
                 Classification::Mutating => saw_mutating = true,
                 Classification::Unknown => saw_unknown = true,
-                Classification::ReadOnly => {},
+                Classification::ReadOnly => {}
             }
         }
         return if saw_mutating {
@@ -296,8 +296,8 @@ fn split_pipeline(cmd: &str) -> Vec<String> {
                 }
                 i += 1;
                 continue;
-            },
-            _ => {},
+            }
+            _ => {}
         }
         cur.push(c);
         i += 1;

@@ -34,16 +34,24 @@ pub const ADVISOR: &str = "advisor-tool-2026-03-01";
 /// Matches TS `BEDROCK_EXTRA_PARAMS_HEADERS`.
 pub fn bedrock_extra_params_headers() -> &'static HashSet<&'static str> {
     static CELL: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    CELL.get_or_init(|| [INTERLEAVED_THINKING, CONTEXT_1M, TOOL_SEARCH_3P].into_iter().collect())
+    CELL.get_or_init(|| {
+        [INTERLEAVED_THINKING, CONTEXT_1M, TOOL_SEARCH_3P]
+            .into_iter()
+            .collect()
+    })
 }
 
 /// Betas allowed on the Vertex `countTokens` API. Other betas cause 400s.
 pub fn vertex_count_tokens_allowed_betas() -> &'static HashSet<&'static str> {
     static CELL: OnceLock<HashSet<&'static str>> = OnceLock::new();
     CELL.get_or_init(|| {
-        [CLAUDE_CODE_20250219, INTERLEAVED_THINKING, CONTEXT_MANAGEMENT]
-            .into_iter()
-            .collect()
+        [
+            CLAUDE_CODE_20250219,
+            INTERLEAVED_THINKING,
+            CONTEXT_MANAGEMENT,
+        ]
+        .into_iter()
+        .collect()
     })
 }
 

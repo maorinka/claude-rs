@@ -70,7 +70,7 @@ fn validate_cron_expression(expr: &str) -> bool {
                 }
             } else {
                 match part.parse::<u32>() {
-                    Ok(v) if v >= min && v <= max => {},
+                    Ok(v) if v >= min && v <= max => {}
                     _ => return false,
                 }
             }
@@ -144,7 +144,7 @@ impl ToolExecutor for ScheduleCronTool {
                     data: json!({ "error": "missing required field: cron" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         let prompt = match input.get("prompt").and_then(|v| v.as_str()) {
@@ -154,7 +154,7 @@ impl ToolExecutor for ScheduleCronTool {
                     data: json!({ "error": "missing required field: prompt" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         if !validate_cron_expression(cron_expr) {
@@ -185,7 +185,7 @@ impl ToolExecutor for ScheduleCronTool {
                     data: json!({ "error": "Could not determine home directory" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         let cron_dir = home.join(".claude").join("cron");
@@ -334,7 +334,7 @@ impl ToolExecutor for CronDeleteTool {
                     data: json!({ "error": "missing required field: id" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         // Reject path traversal
@@ -352,7 +352,7 @@ impl ToolExecutor for CronDeleteTool {
                     data: json!({ "error": "Could not determine home directory" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         let file_path = home
@@ -427,7 +427,7 @@ impl ToolExecutor for CronListTool {
                     data: json!({ "jobs": [], "count": 0, "message": "Could not determine home directory." }),
                     is_error: false,
                 });
-            },
+            }
         };
 
         let cron_dir = home.join(".claude").join("cron");
@@ -440,7 +440,7 @@ impl ToolExecutor for CronListTool {
                     data: json!({ "jobs": [], "count": 0, "message": "No scheduled jobs." }),
                     is_error: false,
                 });
-            },
+            }
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {

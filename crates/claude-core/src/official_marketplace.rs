@@ -30,6 +30,9 @@ mod tests {
     #[test]
     fn source_repo_pins() {
         assert_eq!(OFFICIAL_MARKETPLACE_SOURCE, "github");
-        assert_eq!(OFFICIAL_MARKETPLACE_REPO, "anthropics/claude-plugins-official");
+        assert_eq!(
+            OFFICIAL_MARKETPLACE_REPO,
+            "anthropics/claude-plugins-official"
+        );
     }
 }

@@ -90,10 +90,7 @@ pub struct McpToolCallError {
 }
 
 impl McpToolCallError {
-    pub fn new(
-        message: impl Into<String>,
-        telemetry_message: impl Into<String>,
-    ) -> Self {
+    pub fn new(message: impl Into<String>, telemetry_message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             telemetry_message: telemetry_message.into(),

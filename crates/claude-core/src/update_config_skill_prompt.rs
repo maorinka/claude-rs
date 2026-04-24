@@ -31,8 +31,7 @@ pub const UPDATE_CONFIG_SETTINGS_EXAMPLES_DOCS: &str =
 /// Hooks-configuration reference (structure, events, types,
 /// stdin/stdout JSON, common patterns). Port of TS `HOOKS_DOCS`
 /// in updateConfig.ts:110-267.
-pub const UPDATE_CONFIG_HOOKS_DOCS: &str =
-    include_str!("prompts/update_config/hooks_docs.md");
+pub const UPDATE_CONFIG_HOOKS_DOCS: &str = include_str!("prompts/update_config/hooks_docs.md");
 
 /// Seven-step hook construction + verification flow (dedup,
 /// pipe-test, validate, fire-proof, handoff). Port of TS
@@ -44,8 +43,7 @@ pub const UPDATE_CONFIG_HOOK_VERIFICATION_FLOW: &str =
 /// placeholders that [`update_config_prompt`] fills with the
 /// three blocks above. Port of TS `UPDATE_CONFIG_PROMPT` in
 /// updateConfig.ts:307-443.
-const UPDATE_CONFIG_PROMPT_TEMPLATE: &str =
-    include_str!("prompts/update_config/main_prompt.md");
+const UPDATE_CONFIG_PROMPT_TEMPLATE: &str = include_str!("prompts/update_config/main_prompt.md");
 
 /// Build the full `/update-config` prompt, optionally appending a
 /// JSON-schema block + user-request section. Port of TS
@@ -91,9 +89,7 @@ pub fn update_config_prompt(settings_json_schema: Option<&str>, args: &str) -> S
 /// `task` is the instruction text that follows the `[hooks-only]`
 /// prefix. Empty strings omit the `## Task` section.
 pub fn hooks_only_prompt(task: &str) -> String {
-    let mut out = format!(
-        "{UPDATE_CONFIG_HOOKS_DOCS}\n\n{UPDATE_CONFIG_HOOK_VERIFICATION_FLOW}"
-    );
+    let mut out = format!("{UPDATE_CONFIG_HOOKS_DOCS}\n\n{UPDATE_CONFIG_HOOK_VERIFICATION_FLOW}");
     if !task.is_empty() {
         out.push_str("\n\n## Task\n\n");
         out.push_str(task);
@@ -201,10 +197,7 @@ mod tests {
             "UserPromptSubmit",
             "SessionStart",
         ] {
-            assert!(
-                d.contains(event),
-                "hooks_docs missing event `{event}`"
-            );
+            assert!(d.contains(event), "hooks_docs missing event `{event}`");
         }
     }
 }

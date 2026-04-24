@@ -208,7 +208,10 @@ pub fn default_bindings() -> Vec<KeybindingBlock> {
                 ("escape", "select:cancel"),
             ],
         ),
-        block("Plugin", &[("space", "plugin:toggle"), ("i", "plugin:install")]),
+        block(
+            "Plugin",
+            &[("space", "plugin:toggle"), ("i", "plugin:install")],
+        ),
     ]
 }
 
@@ -220,23 +223,34 @@ mod tests {
     fn default_includes_global_interrupt() {
         let b = default_bindings();
         let global = b.iter().find(|bl| bl.context == "Global").unwrap();
-        assert_eq!(global.bindings.get("ctrl+c").map(String::as_str), Some("app:interrupt"));
-        assert_eq!(global.bindings.get("ctrl+d").map(String::as_str), Some("app:exit"));
+        assert_eq!(
+            global.bindings.get("ctrl+c").map(String::as_str),
+            Some("app:interrupt")
+        );
+        assert_eq!(
+            global.bindings.get("ctrl+d").map(String::as_str),
+            Some("app:exit")
+        );
     }
 
     #[test]
     fn default_includes_chat_mode_cycle() {
         let b = default_bindings();
         let chat = b.iter().find(|bl| bl.context == "Chat").unwrap();
-        assert_eq!(chat.bindings.get("shift+tab").map(String::as_str), Some("chat:cycleMode"));
-        assert_eq!(chat.bindings.get("enter").map(String::as_str), Some("chat:submit"));
+        assert_eq!(
+            chat.bindings.get("shift+tab").map(String::as_str),
+            Some("chat:cycleMode")
+        );
+        assert_eq!(
+            chat.bindings.get("enter").map(String::as_str),
+            Some("chat:submit")
+        );
     }
 
     #[test]
     fn context_coverage() {
         let b = default_bindings();
-        let names: std::collections::HashSet<_> =
-            b.iter().map(|bl| bl.context.as_str()).collect();
+        let names: std::collections::HashSet<_> = b.iter().map(|bl| bl.context.as_str()).collect();
         for required in &[
             "Global",
             "Chat",

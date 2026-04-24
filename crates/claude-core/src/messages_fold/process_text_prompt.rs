@@ -186,16 +186,21 @@ mod tests {
             "type": "image",
             "source": { "type": "base64", "media_type": "image/png", "data": "abc" }
         })];
-        let r = process_text_prompt(&json!("here you go"), &images, &[1, 2], &[], None, None, None);
+        let r = process_text_prompt(
+            &json!("here you go"),
+            &images,
+            &[1, 2],
+            &[],
+            None,
+            None,
+            None,
+        );
         let content = r.messages[0]["message"]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
         assert_eq!(content[0]["type"].as_str(), Some("text"));
         assert_eq!(content[0]["text"].as_str(), Some("here you go"));
         assert_eq!(content[1]["type"].as_str(), Some("image"));
-        assert_eq!(
-            r.messages[0]["imagePasteIds"].as_array().unwrap().len(),
-            2
-        );
+        assert_eq!(r.messages[0]["imagePasteIds"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -282,12 +287,24 @@ mod tests {
     #[test]
     fn empty_image_paste_ids_not_included() {
         let r = process_text_prompt(&json!("x"), &[], &[], &[], None, None, None);
-        assert!(r.messages[0].as_object().unwrap().get("imagePasteIds").is_none());
+        assert!(r.messages[0]
+            .as_object()
+            .unwrap()
+            .get("imagePasteIds")
+            .is_none());
     }
 
     #[test]
     fn negative_keyword_surfaced() {
-        let r = process_text_prompt(&json!("this is fucking broken"), &[], &[], &[], None, None, None);
+        let r = process_text_prompt(
+            &json!("this is fucking broken"),
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+        );
         assert!(r.is_negative);
     }
 

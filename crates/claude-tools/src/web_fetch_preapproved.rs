@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn path_scoped_boundaries_enforced() {
         // must NOT match — no slash boundary after "anthropics"
-        assert!(!is_preapproved_host("github.com", "/anthropics-evil/malware"));
+        assert!(!is_preapproved_host(
+            "github.com",
+            "/anthropics-evil/malware"
+        ));
         // and the bare host itself isn't approved
         assert!(!is_preapproved_host("github.com", "/torvalds/linux"));
     }

@@ -23,9 +23,7 @@ use url::Url;
 pub enum UrlValidationError {
     #[error("Invalid URL format: {url}")]
     InvalidFormat { url: String },
-    #[error(
-        "Invalid URL protocol: must use http:// or https://, got {protocol}:"
-    )]
+    #[error("Invalid URL protocol: must use http:// or https://, got {protocol}:")]
     UnsupportedProtocol { protocol: String },
 }
 
@@ -125,6 +123,9 @@ mod tests {
         // no way to observe that from outside, so the test relies on
         // the error variant matching. No side effects on the host.
         let err = open_browser("file:///tmp/x").unwrap_err();
-        assert!(matches!(err, UrlValidationError::UnsupportedProtocol { .. }));
+        assert!(matches!(
+            err,
+            UrlValidationError::UnsupportedProtocol { .. }
+        ));
     }
 }

@@ -337,7 +337,10 @@ mod tests {
         std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
 
         register_loop_skill();
-        let l = list_skills().into_iter().find(|s| s.name == "loop").unwrap();
+        let l = list_skills()
+            .into_iter()
+            .find(|s| s.name == "loop")
+            .unwrap();
         assert_eq!(l.argument_header.as_deref(), Some("Input"));
         assert!(l.empty_args_message.as_deref().is_some());
         assert!(l

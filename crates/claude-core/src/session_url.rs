@@ -69,10 +69,7 @@ mod tests {
 
     #[test]
     fn plain_uuid_resumes_in_place() {
-        let p = parse_session_identifier(
-            "550e8400-e29b-41d4-a716-446655440000",
-        )
-        .unwrap();
+        let p = parse_session_identifier("550e8400-e29b-41d4-a716-446655440000").unwrap();
         assert_eq!(
             p.session_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
@@ -85,10 +82,7 @@ mod tests {
 
     #[test]
     fn url_routes_to_ingress_with_fresh_session() {
-        let p = parse_session_identifier(
-            "https://api.example.com/v1/session/ingress",
-        )
-        .unwrap();
+        let p = parse_session_identifier("https://api.example.com/v1/session/ingress").unwrap();
         assert!(p.is_url);
         assert!(!p.is_jsonl_file);
         assert_eq!(
@@ -103,10 +97,7 @@ mod tests {
         // The .jsonl check must fire first.
         let p = parse_session_identifier(r"C:\Users\alex\sess.jsonl").unwrap();
         assert!(p.is_jsonl_file);
-        assert_eq!(
-            p.jsonl_file.as_deref(),
-            Some(r"C:\Users\alex\sess.jsonl")
-        );
+        assert_eq!(p.jsonl_file.as_deref(), Some(r"C:\Users\alex\sess.jsonl"));
         assert!(!p.is_url);
     }
 

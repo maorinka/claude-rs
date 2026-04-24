@@ -203,9 +203,7 @@ impl ToolExecutor for TaskCreateTool {
                 let msg = aggregated
                     .blocking_errors
                     .iter()
-                    .map(|e| {
-                        claude_core::hooks::get_task_created_hook_message(e)
-                    })
+                    .map(claude_core::hooks::get_task_created_hook_message)
                     .collect::<Vec<_>>()
                     .join("\n");
                 return Ok(error_result(msg));

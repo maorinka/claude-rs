@@ -16,11 +16,7 @@ pub const OSC8_END: &str = "\x07";
 /// Build a clickable OSC 8 hyperlink. When `supports_hyperlinks`
 /// is false, returns `url` unchanged. When `content` is `None`
 /// the URL itself is used as the visible text.
-pub fn create_hyperlink(
-    url: &str,
-    content: Option<&str>,
-    supports_hyperlinks: bool,
-) -> String {
+pub fn create_hyperlink(url: &str, content: Option<&str>, supports_hyperlinks: bool) -> String {
     if !supports_hyperlinks {
         return url.to_string();
     }
@@ -44,18 +40,14 @@ mod tests {
     #[test]
     fn wraps_in_osc8_when_supported() {
         let out = create_hyperlink("https://x", Some("click"), true);
-        let want = format!(
-            "{OSC8_START}https://x{OSC8_END}click{OSC8_START}{OSC8_END}"
-        );
+        let want = format!("{OSC8_START}https://x{OSC8_END}click{OSC8_START}{OSC8_END}");
         assert_eq!(out, want);
     }
 
     #[test]
     fn uses_url_as_text_when_content_missing() {
         let out = create_hyperlink("https://x", None, true);
-        let want = format!(
-            "{OSC8_START}https://x{OSC8_END}https://x{OSC8_START}{OSC8_END}"
-        );
+        let want = format!("{OSC8_START}https://x{OSC8_END}https://x{OSC8_START}{OSC8_END}");
         assert_eq!(out, want);
     }
 

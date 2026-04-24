@@ -97,8 +97,7 @@ fn resolve_dot_segments(p: &Path) -> PathBuf {
         match comp {
             Component::ParentDir => {
                 // Preserve root if we'd otherwise pop past it.
-                let was_rooted =
-                    matches!(out.components().next(), Some(Component::RootDir));
+                let was_rooted = matches!(out.components().next(), Some(Component::RootDir));
                 let popped = out.pop();
                 if was_rooted && !popped {
                     // We were sitting at `/` with no subpath — stay at root.

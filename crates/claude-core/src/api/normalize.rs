@@ -58,11 +58,7 @@ fn merge_message_content(dst: &mut Value, src: &Value) {
         }
         Value::String(s) => {
             let text_block = serde_json::json!({"type": "text", "text": s.clone()});
-            dst["content"] = Value::Array(
-                std::iter::once(text_block)
-                    .chain(src_blocks)
-                    .collect(),
-            );
+            dst["content"] = Value::Array(std::iter::once(text_block).chain(src_blocks).collect());
         }
         _ => {}
     }

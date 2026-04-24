@@ -47,18 +47,14 @@ pub enum WorkSecretError {
 impl fmt::Display for WorkSecretError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WorkSecretError::InvalidBase64 => {
-                f.write_str("work secret is not valid base64url")
-            }
-            WorkSecretError::InvalidJson => {
-                f.write_str("work secret did not decode to JSON")
-            }
+            WorkSecretError::InvalidBase64 => f.write_str("work secret is not valid base64url"),
+            WorkSecretError::InvalidJson => f.write_str("work secret did not decode to JSON"),
             WorkSecretError::UnsupportedVersion(got) => {
                 write!(f, "unsupported work secret version: {got}")
             }
-            WorkSecretError::MissingIngressToken => f.write_str(
-                "invalid work secret: missing or empty session_ingress_token",
-            ),
+            WorkSecretError::MissingIngressToken => {
+                f.write_str("invalid work secret: missing or empty session_ingress_token")
+            }
             WorkSecretError::MissingApiBaseUrl => {
                 f.write_str("invalid work secret: missing api_base_url")
             }
@@ -76,8 +72,7 @@ pub fn decode_work_secret(secret: &str) -> Result<WorkSecret, WorkSecretError> {
     let bytes = URL_SAFE_NO_PAD
         .decode(trimmed)
         .map_err(|_| WorkSecretError::InvalidBase64)?;
-    let text =
-        std::str::from_utf8(&bytes).map_err(|_| WorkSecretError::InvalidJson)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| WorkSecretError::InvalidJson)?;
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|_| WorkSecretError::InvalidJson)?;
 
@@ -112,8 +107,7 @@ pub fn decode_work_secret(secret: &str) -> Result<WorkSecret, WorkSecretError> {
 /// session-ingress, no Envoy rewrite); `wss://` + `/v1/` elsewhere
 /// (Envoy rewrites `/v1/` → `/v2/`).
 pub fn build_sdk_url(api_base_url: &str, session_id: &str) -> String {
-    let is_localhost =
-        api_base_url.contains("localhost") || api_base_url.contains("127.0.0.1");
+    let is_localhost = api_base_url.contains("localhost") || api_base_url.contains("127.0.0.1");
     let protocol = if is_localhost { "ws" } else { "wss" };
     let version = if is_localhost { "v2" } else { "v1" };
     let host = strip_scheme_and_trailing_slashes(api_base_url);
@@ -243,10 +237,7 @@ mod tests {
     #[test]
     fn build_sdk_url_production_uses_wss_and_v1() {
         let url = build_sdk_url("https://api.anthropic.com", "sess-1");
-        assert_eq!(
-            url,
-            "wss://api.anthropic.com/v1/session_ingress/ws/sess-1"
-        );
+        assert_eq!(url, "wss://api.anthropic.com/v1/session_ingress/ws/sess-1");
     }
 
     #[test]
@@ -282,27 +273,18 @@ mod tests {
 
     #[test]
     fn same_session_id_cross_tag() {
-        assert!(same_session_id(
-            "session_abcd1234efgh",
-            "cse_abcd1234efgh"
-        ));
+        assert!(same_session_id("session_abcd1234efgh", "cse_abcd1234efgh"));
     }
 
     #[test]
     fn same_session_id_staging_prefix() {
         // `session_staging_body` → rsplit on `_` gives `body`.
-        assert!(same_session_id(
-            "session_staging_abcd1234",
-            "cse_abcd1234"
-        ));
+        assert!(same_session_id("session_staging_abcd1234", "cse_abcd1234"));
     }
 
     #[test]
     fn same_session_id_differs() {
-        assert!(!same_session_id(
-            "session_aaaaaaaa",
-            "session_bbbbbbbb"
-        ));
+        assert!(!same_session_id("session_aaaaaaaa", "session_bbbbbbbb"));
     }
 
     #[test]

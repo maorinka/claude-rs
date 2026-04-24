@@ -91,12 +91,15 @@ fn blocks_from_json(raw: &serde_json::Value) -> Result<Vec<KeybindingBlock>, Key
                 )
             })?
             .to_string();
-        let raw_map = obj.get("bindings").and_then(|v| v.as_object()).ok_or_else(|| {
-            parse_error(
-                format!("bindings[{i}].bindings is missing or not an object"),
-                Some("Add a \"bindings\" object mapping key -> action"),
-            )
-        })?;
+        let raw_map = obj
+            .get("bindings")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| {
+                parse_error(
+                    format!("bindings[{i}].bindings is missing or not an object"),
+                    Some("Add a \"bindings\" object mapping key -> action"),
+                )
+            })?;
 
         let mut bmap = BTreeMap::new();
         for (k, v) in raw_map {
@@ -233,7 +236,10 @@ mod tests {
     #[test]
     fn bad_json_returns_parse_error() {
         let r = load_keybindings_from_str("not json at all");
-        assert!(r.warnings.iter().any(|w| w.message.contains("Failed to parse")));
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("Failed to parse")));
     }
 
     #[test]

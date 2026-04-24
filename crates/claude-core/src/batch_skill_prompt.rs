@@ -35,7 +35,8 @@ pub const BATCH_NOT_A_GIT_REPO_MESSAGE: &str =
 
 /// Fallback message when the skill is invoked without args.
 /// Port of TS `batch.ts:93-98` `MISSING_INSTRUCTION_MESSAGE`.
-pub const BATCH_MISSING_INSTRUCTION_MESSAGE: &str = "Provide an instruction describing the batch change you want to make.
+pub const BATCH_MISSING_INSTRUCTION_MESSAGE: &str =
+    "Provide an instruction describing the batch change you want to make.
 
 Examples:
   /batch migrate from react to vue

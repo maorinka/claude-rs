@@ -31,8 +31,9 @@ static SHORTHAND_END_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\s\+(\d+(?:\.\d+)?)\s*(k|m|b)\s*[.!?]?\s*$").unwrap());
 
 /// `\b(use|spend)\s+(<num>)\s*(k|m|b)\s*tokens?\b`, case-insensitive.
-static VERBOSE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b(?:use|spend)\s+(\d+(?:\.\d+)?)\s*(k|m|b)\s*tokens?\b").unwrap());
+static VERBOSE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:use|spend)\s+(\d+(?:\.\d+)?)\s*(k|m|b)\s*tokens?\b").unwrap()
+});
 
 fn apply_multiplier(value: &str, suffix: &str) -> Option<u64> {
     let v: f64 = value.parse().ok()?;
@@ -164,10 +165,7 @@ mod tests {
 
     #[test]
     fn shorthand_end_parses() {
-        assert_eq!(
-            parse_token_budget("write a poem +500k"),
-            Some(500_000)
-        );
+        assert_eq!(parse_token_budget("write a poem +500k"), Some(500_000));
         assert_eq!(parse_token_budget("take your time +1M."), Some(1_000_000));
         assert_eq!(parse_token_budget("go big +2B!"), Some(2_000_000_000));
     }
@@ -182,10 +180,7 @@ mod tests {
             parse_token_budget("we should spend 500k tokens"),
             Some(500_000)
         );
-        assert_eq!(
-            parse_token_budget("Spend 2.5B tokens"),
-            Some(2_500_000_000)
-        );
+        assert_eq!(parse_token_budget("Spend 2.5B tokens"), Some(2_500_000_000));
     }
 
     #[test]
@@ -242,10 +237,7 @@ mod tests {
         // Two verbose matches in one string.
         let text = "use 1M tokens and also spend 2k tokens please";
         let spans = find_token_budget_positions(text);
-        let hits: Vec<&str> = spans
-            .iter()
-            .map(|s| &text[s.start..s.end])
-            .collect();
+        let hits: Vec<&str> = spans.iter().map(|s| &text[s.start..s.end]).collect();
         assert_eq!(hits, vec!["use 1M tokens", "spend 2k tokens"]);
     }
 

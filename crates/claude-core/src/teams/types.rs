@@ -413,25 +413,13 @@ pub trait PaneBackend: Send + Sync {
     ) -> anyhow::Result<()>;
 
     /// Rebalances panes to achieve the desired layout.
-    async fn rebalance_panes(
-        &self,
-        window_target: &str,
-        has_leader: bool,
-    ) -> anyhow::Result<()>;
+    async fn rebalance_panes(&self, window_target: &str, has_leader: bool) -> anyhow::Result<()>;
 
     /// Kills/closes a specific pane.
-    async fn kill_pane(
-        &self,
-        pane_id: &str,
-        use_external_session: bool,
-    ) -> bool;
+    async fn kill_pane(&self, pane_id: &str, use_external_session: bool) -> bool;
 
     /// Hides a pane by breaking it out into a hidden window.
-    async fn hide_pane(
-        &self,
-        pane_id: &str,
-        use_external_session: bool,
-    ) -> bool;
+    async fn hide_pane(&self, pane_id: &str, use_external_session: bool) -> bool;
 
     /// Shows a previously hidden pane by joining it back into the main window.
     async fn show_pane(
@@ -460,7 +448,11 @@ pub trait TeammateExecutor: Send + Sync {
     async fn spawn(&self, config: &TeammateSpawnConfig) -> anyhow::Result<TeammateSpawnResult>;
 
     /// Send a message to a teammate.
-    async fn send_message(&self, agent_id: &str, message: &TeammateExecMessage) -> anyhow::Result<()>;
+    async fn send_message(
+        &self,
+        agent_id: &str,
+        message: &TeammateExecMessage,
+    ) -> anyhow::Result<()>;
 
     /// Terminate a teammate (graceful shutdown request).
     async fn terminate(&self, agent_id: &str, reason: Option<&str>) -> bool;

@@ -64,7 +64,7 @@ impl fmt::Display for ShellParseError {
             ShellParseError::UnterminatedDoubleQuote => f.write_str("unterminated double quote"),
             ShellParseError::TrailingBackslash => {
                 f.write_str("trailing backslash without next character")
-            },
+            }
         }
     }
 }
@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn unterminated_single_is_error() {
         match try_parse_shell_command("echo 'hi") {
-            ShellParseResult::Err(_) => {},
+            ShellParseResult::Err(_) => {}
             _ => panic!("expected error"),
         }
     }
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn unterminated_double_is_error() {
         match try_parse_shell_command(r#"echo "hi"#) {
-            ShellParseResult::Err(_) => {},
+            ShellParseResult::Err(_) => {}
             _ => panic!("expected error"),
         }
     }

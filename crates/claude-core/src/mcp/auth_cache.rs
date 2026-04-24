@@ -150,7 +150,9 @@ pub fn set_mcp_auth_cache_entry(server_id: &str) {
     let mut cache = load_cache();
     cache.insert(
         server_id.to_string(),
-        McpAuthCacheEntry { timestamp: now_ms() },
+        McpAuthCacheEntry {
+            timestamp: now_ms(),
+        },
     );
     let path = get_mcp_auth_cache_path();
     if let Some(parent) = path.parent() {
@@ -321,11 +323,7 @@ mod tests {
         // Every id must be present and unexpired.
         for i in 0..n {
             let id = format!("svc-{:02}", i);
-            assert!(
-                is_mcp_auth_cached(&id),
-                "concurrent writer lost id {}",
-                id
-            );
+            assert!(is_mcp_auth_cached(&id), "concurrent writer lost id {}", id);
         }
     }
 

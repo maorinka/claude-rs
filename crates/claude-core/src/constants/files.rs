@@ -15,29 +15,21 @@ use std::collections::HashSet;
 static BINARY_EXTENSIONS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
         // Images
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "tif",
-        // Videos
-        "mp4", "mov", "avi", "mkv", "webm", "wmv", "flv", "m4v", "mpeg", "mpg",
-        // Audio
-        "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma", "aiff", "opus",
-        // Archives
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "tif", // Videos
+        "mp4", "mov", "avi", "mkv", "webm", "wmv", "flv", "m4v", "mpeg", "mpg", // Audio
+        "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma", "aiff", "opus", // Archives
         "zip", "tar", "gz", "bz2", "7z", "rar", "xz", "z", "tgz", "iso",
         // Executables/binaries
-        "exe", "dll", "so", "dylib", "bin", "o", "a", "obj", "lib", "app",
-        "msi", "deb", "rpm",
+        "exe", "dll", "so", "dylib", "bin", "o", "a", "obj", "lib", "app", "msi", "deb", "rpm",
         // Documents (PDF is here; tools should exclude it when they can render PDFs)
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
         // Fonts
-        "ttf", "otf", "woff", "woff2", "eot",
-        // Bytecode / VM artifacts
+        "ttf", "otf", "woff", "woff2", "eot", // Bytecode / VM artifacts
         "pyc", "pyo", "class", "jar", "war", "ear", "node", "wasm", "rlib",
         // Database files
-        "sqlite", "sqlite3", "db", "mdb", "idx",
-        // Design / 3D
-        "psd", "ai", "eps", "sketch", "fig", "xd", "blend", "3ds", "max",
-        // Flash
-        "swf", "fla",
-        // Lock/profiling data
+        "sqlite", "sqlite3", "db", "mdb", "idx", // Design / 3D
+        "psd", "ai", "eps", "sketch", "fig", "xd", "blend", "3ds", "max", // Flash
+        "swf", "fla", // Lock/profiling data
         "lockb", "dat", "data",
     ]
     .into_iter()
@@ -165,6 +157,9 @@ mod tests {
         // executables(13) + documents(10) + fonts(5) + bytecode(9) +
         // database(5) + design(9) + flash(2) + lock(3) = 94 extensions
         // We should have all of them.
-        assert!(count >= 90, "Expected at least 90 binary extensions, got {count}");
+        assert!(
+            count >= 90,
+            "Expected at least 90 binary extensions, got {count}"
+        );
     }
 }

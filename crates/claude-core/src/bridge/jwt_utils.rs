@@ -30,9 +30,7 @@ pub const SESSION_INGRESS_PREFIX: &str = "sk-ant-si-";
 /// - the decoded bytes are not valid UTF-8, or
 /// - the UTF-8 is not a JSON value.
 pub fn decode_jwt_payload(token: &str) -> Option<Value> {
-    let jwt = token
-        .strip_prefix(SESSION_INGRESS_PREFIX)
-        .unwrap_or(token);
+    let jwt = token.strip_prefix(SESSION_INGRESS_PREFIX).unwrap_or(token);
     let mut parts = jwt.split('.');
     let _header = parts.next()?;
     let payload = parts.next()?;

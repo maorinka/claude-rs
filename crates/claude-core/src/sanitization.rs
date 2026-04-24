@@ -35,11 +35,11 @@ static DANGEROUS_CATEGORIES: Lazy<Regex> =
 static EXPLICIT_RANGES: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
         "[",
-        r"\u{200B}-\u{200F}",   // Zero-width spaces, LTR/RTL marks
-        r"\u{202A}-\u{202E}",   // Directional formatting characters
-        r"\u{2066}-\u{2069}",   // Directional isolates
-        r"\u{FEFF}",            // Byte order mark
-        r"\u{E000}-\u{F8FF}",   // BMP private-use area
+        r"\u{200B}-\u{200F}", // Zero-width spaces, LTR/RTL marks
+        r"\u{202A}-\u{202E}", // Directional formatting characters
+        r"\u{2066}-\u{2069}", // Directional isolates
+        r"\u{FEFF}",          // Byte order mark
+        r"\u{E000}-\u{F8FF}", // BMP private-use area
         "]",
     ))
     .unwrap()
@@ -125,19 +125,28 @@ mod tests {
 
     #[test]
     fn ascii_passthrough() {
-        assert_eq!(partially_sanitize_unicode("hello world").unwrap(), "hello world");
+        assert_eq!(
+            partially_sanitize_unicode("hello world").unwrap(),
+            "hello world"
+        );
     }
 
     #[test]
     fn strips_zero_width_spaces() {
         // U+200B, U+200C, U+200D — all in the \u{200B}-\u{200F} range.
         let input = "safe\u{200B}content\u{200C}here\u{200D}";
-        assert_eq!(partially_sanitize_unicode(input).unwrap(), "safecontenthere");
+        assert_eq!(
+            partially_sanitize_unicode(input).unwrap(),
+            "safecontenthere"
+        );
     }
 
     #[test]
     fn strips_bom() {
-        assert_eq!(partially_sanitize_unicode("\u{FEFF}hello").unwrap(), "hello");
+        assert_eq!(
+            partially_sanitize_unicode("\u{FEFF}hello").unwrap(),
+            "hello"
+        );
     }
 
     #[test]
@@ -153,7 +162,11 @@ mod tests {
         for cp in 0x202Au32..=0x202E {
             let ch = char::from_u32(cp).unwrap();
             let input = format!("x{ch}y");
-            assert_eq!(partially_sanitize_unicode(&input).unwrap(), "xy", "failed at U+{cp:04X}");
+            assert_eq!(
+                partially_sanitize_unicode(&input).unwrap(),
+                "xy",
+                "failed at U+{cp:04X}"
+            );
         }
     }
 
@@ -163,7 +176,11 @@ mod tests {
         for cp in 0x2066u32..=0x2069 {
             let ch = char::from_u32(cp).unwrap();
             let input = format!("x{ch}y");
-            assert_eq!(partially_sanitize_unicode(&input).unwrap(), "xy", "failed at U+{cp:04X}");
+            assert_eq!(
+                partially_sanitize_unicode(&input).unwrap(),
+                "xy",
+                "failed at U+{cp:04X}"
+            );
         }
     }
 

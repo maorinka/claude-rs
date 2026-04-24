@@ -236,7 +236,7 @@ pub fn build_request_body(
                     "type": "enabled",
                     "budget_tokens": clamped,
                 }))
-            },
+            }
             ThinkingConfig::Adaptive => Some(json!({ "type": "adaptive" })),
         }
     } else {

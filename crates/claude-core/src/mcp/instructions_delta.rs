@@ -85,8 +85,7 @@ pub fn compute_delta(
 ) -> Option<McpInstructionsDelta> {
     // Build the rendered block for each server that has any
     // instructions to announce (either server-authored or client-side).
-    let connected_names: BTreeSet<String> =
-        connected.iter().map(|c| c.name.clone()).collect();
+    let connected_names: BTreeSet<String> = connected.iter().map(|c| c.name.clone()).collect();
 
     let mut blocks: HashMap<String, String> = HashMap::new();
     for c in connected {

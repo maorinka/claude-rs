@@ -29,10 +29,7 @@ where
 
 /// Group by an ordered key. Useful when callers want deterministic
 /// iteration (e.g. generating stable test output).
-pub fn group_by_ordered<I, T, K, F>(
-    items: I,
-    mut key_selector: F,
-) -> BTreeMap<K, Vec<T>>
+pub fn group_by_ordered<I, T, K, F>(items: I, mut key_selector: F) -> BTreeMap<K, Vec<T>>
 where
     I: IntoIterator<Item = T>,
     K: Ord,
@@ -59,25 +56,26 @@ mod tests {
 
     #[test]
     fn uses_index_in_selector() {
-        let got = group_by_ordered(
-            vec!["a", "b", "c", "d"],
-            |_, i| if i < 2 { "head" } else { "tail" },
-        );
+        let got = group_by_ordered(vec!["a", "b", "c", "d"], |_, i| {
+            if i < 2 {
+                "head"
+            } else {
+                "tail"
+            }
+        });
         assert_eq!(got.get("head"), Some(&vec!["a", "b"]));
         assert_eq!(got.get("tail"), Some(&vec!["c", "d"]));
     }
 
     #[test]
     fn empty_input_returns_empty_map() {
-        let got: HashMap<i32, Vec<i32>> =
-            group_by_hash(std::iter::empty::<i32>(), |n, _| *n);
+        let got: HashMap<i32, Vec<i32>> = group_by_hash(std::iter::empty::<i32>(), |n, _| *n);
         assert!(got.is_empty());
     }
 
     #[test]
     fn ordered_variant_iterates_sorted() {
-        let got =
-            group_by_ordered(vec![3, 1, 2, 1, 3], |n, _| *n);
+        let got = group_by_ordered(vec![3, 1, 2, 1, 3], |n, _| *n);
         let keys: Vec<i32> = got.keys().copied().collect();
         assert_eq!(keys, vec![1, 2, 3]);
         assert_eq!(got.get(&1), Some(&vec![1, 1]));

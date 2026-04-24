@@ -88,10 +88,8 @@ fn parse_osc_rgb(data: &str) -> Option<Rgb> {
 }
 
 fn parse_rgb_colon(data: &str) -> Option<Rgb> {
-    let re = regex::Regex::new(
-        r"(?i)^rgba?:([0-9a-f]{1,4})/([0-9a-f]{1,4})/([0-9a-f]{1,4})",
-    )
-    .ok()?;
+    let re =
+        regex::Regex::new(r"(?i)^rgba?:([0-9a-f]{1,4})/([0-9a-f]{1,4})/([0-9a-f]{1,4})").ok()?;
     let cap = re.captures(data)?;
     Some(Rgb {
         r: hex_component(cap.get(1)?.as_str()),
@@ -163,8 +161,14 @@ mod tests {
 
     #[test]
     fn rgb_black_is_dark() {
-        assert_eq!(theme_from_osc_color("rgb:0000/0000/0000"), Some(SystemTheme::Dark));
-        assert_eq!(theme_from_osc_color("rgb:00/00/00"), Some(SystemTheme::Dark));
+        assert_eq!(
+            theme_from_osc_color("rgb:0000/0000/0000"),
+            Some(SystemTheme::Dark)
+        );
+        assert_eq!(
+            theme_from_osc_color("rgb:00/00/00"),
+            Some(SystemTheme::Dark)
+        );
     }
 
     #[test]

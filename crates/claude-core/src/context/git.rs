@@ -93,8 +93,11 @@ async fn detect_main_branch(project_root: &Path) -> String {
         }
     }
     // Fallback to 'master'
-    if let Ok(output) =
-        git_output(project_root, &["rev-parse", "--verify", "refs/heads/master"]).await
+    if let Ok(output) = git_output(
+        project_root,
+        &["rev-parse", "--verify", "refs/heads/master"],
+    )
+    .await
     {
         if !output.trim().is_empty() {
             return "master".to_string();

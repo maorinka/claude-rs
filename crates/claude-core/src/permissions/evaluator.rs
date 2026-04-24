@@ -29,11 +29,8 @@ pub trait ToolPermissions {
 
     /// Check tool-specific permissions for the given input.
     /// Returns a PermissionResult (which can be Passthrough for "no opinion").
-    fn check_permissions(
-        &self,
-        input: &Value,
-        context: &ToolPermissionContext,
-    ) -> PermissionResult;
+    fn check_permissions(&self, input: &Value, context: &ToolPermissionContext)
+        -> PermissionResult;
 
     /// Whether this tool requires user interaction even in bypass mode.
     fn requires_user_interaction(&self) -> bool {
@@ -226,8 +223,7 @@ fn tool_matches_rule(tool: &dyn ToolPermissions, rule: &PermissionRule) -> bool 
     let tool_mcp = mcp_info_from_string(&name_for_match);
 
     if let (Some(rule_info), Some(tool_info)) = (rule_mcp, tool_mcp) {
-        return (rule_info.tool_name.is_none()
-            || rule_info.tool_name.as_deref() == Some("*"))
+        return (rule_info.tool_name.is_none() || rule_info.tool_name.as_deref() == Some("*"))
             && rule_info.server_name == tool_info.server_name;
     }
 
@@ -389,8 +385,7 @@ pub fn evaluate_permission(
 
     // 2a. BypassPermissions mode or plan mode with bypass available
     let should_bypass = context.mode == PermissionMode::BypassPermissions
-        || (context.mode == PermissionMode::Plan
-            && context.is_bypass_permissions_mode_available);
+        || (context.mode == PermissionMode::Plan && context.is_bypass_permissions_mode_available);
 
     if should_bypass {
         let updated_input = get_updated_input_or_fallback(&tool_permission_result, input);
@@ -761,10 +756,8 @@ mod tests {
     #[test]
     fn test_deny_rule_takes_precedence() {
         let mut ctx = empty_ctx();
-        ctx.always_deny_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
+        ctx.always_deny_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
 
         let tool = TestTool::new("Bash", false);
         let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
@@ -774,10 +767,8 @@ mod tests {
     #[test]
     fn test_allow_rule() {
         let mut ctx = empty_ctx();
-        ctx.always_allow_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
+        ctx.always_allow_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
 
         let tool = TestTool::new("Bash", false);
         let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
@@ -787,14 +778,10 @@ mod tests {
     #[test]
     fn test_deny_before_allow() {
         let mut ctx = empty_ctx();
-        ctx.always_deny_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
-        ctx.always_allow_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
+        ctx.always_deny_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
+        ctx.always_allow_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
 
         let tool = TestTool::new("Bash", false);
         let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
@@ -862,14 +849,10 @@ mod tests {
     #[test]
     fn test_ask_rule_takes_precedence_over_allow() {
         let mut ctx = empty_ctx();
-        ctx.always_ask_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
-        ctx.always_allow_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
+        ctx.always_ask_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
+        ctx.always_allow_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
 
         let tool = TestTool::new("Bash", false);
         let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
@@ -881,10 +864,8 @@ mod tests {
     fn test_deny_rule_beats_bypass_mode() {
         let mut ctx = empty_ctx();
         ctx.mode = PermissionMode::BypassPermissions;
-        ctx.always_deny_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
+        ctx.always_deny_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
 
         let tool = TestTool::new("Bash", false);
         let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
@@ -981,10 +962,8 @@ mod tests {
     #[test]
     fn test_check_rule_based_permissions_deny_rule() {
         let mut ctx = empty_ctx();
-        ctx.always_deny_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Bash".to_string()],
-        );
+        ctx.always_deny_rules
+            .insert(PermissionRuleSource::Session, vec!["Bash".to_string()]);
         let tool = TestTool::new("Bash", false);
         let result = check_rule_based_permissions(&tool, &serde_json::json!({}), &ctx);
         assert!(result.is_some());

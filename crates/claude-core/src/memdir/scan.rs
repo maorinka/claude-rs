@@ -40,7 +40,7 @@ fn parse_frontmatter_fields(src: &str) -> (Option<String>, Option<String>) {
             match key {
                 "description" => description = Some(val),
                 "type" => ty = Some(val),
-                _ => {},
+                _ => {}
             }
         }
     }

@@ -74,8 +74,7 @@ impl TipHistory {
 
     /// Record that `tip_id` was shown during the current startup.
     pub fn record_shown(&mut self, tip_id: &str) {
-        self.shown_at
-            .insert(tip_id.to_string(), self.num_startups);
+        self.shown_at.insert(tip_id.to_string(), self.num_startups);
     }
 
     /// How many sessions ago was this tip last shown? `u32::MAX` if never.

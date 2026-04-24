@@ -18,7 +18,10 @@ const AUTO_MEM_ENTRYPOINT: &str = "MEMORY.md";
 ///   - otherwise true (settings-based opt-out not yet wired)
 pub fn auto_memory_enabled() -> bool {
     fn truthy(v: &str) -> bool {
-        matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
     }
     if std::env::var("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
         .ok()

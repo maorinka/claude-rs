@@ -193,11 +193,11 @@ impl McpClient {
                             handlers_clone.clone(),
                             writer_clone.clone(),
                         );
-                    },
+                    }
                     Err(e) => {
                         debug!(server = server_name, "MCP server stdout read error: {}", e);
                         break;
-                    },
+                    }
                 }
             }
             debug!(server = server_name, "MCP server reader task ended");
@@ -340,7 +340,7 @@ impl McpClient {
                                         }
                                     }
                                 }
-                            },
+                            }
                             Err(e) => {
                                 let msg = e.to_string();
                                 debug!(server = server_name, "SSE stream error: {}", msg);
@@ -363,10 +363,10 @@ impl McpClient {
                                     pending.clear();
                                 }
                                 break;
-                            },
+                            }
                         }
                     }
-                },
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     debug!(server = server_name, "SSE connection failed: {}", msg);
@@ -379,7 +379,7 @@ impl McpClient {
                     // mirrors TS, whose onerror handler treats
                     // setup and mid-stream errors the same way.
                     let _ = lifecycle_clone.lock().await.record_error(&msg);
-                },
+                }
             }
             debug!(server = server_name, "SSE reader task ended");
         });
@@ -565,16 +565,16 @@ impl McpClient {
                             handlers_clone.clone(),
                             write_tx_clone.clone(),
                         );
-                    },
+                    }
                     Ok(Message::Close(_)) => {
                         debug!(server = reader_server_name, "WebSocket closed by peer");
                         break;
-                    },
+                    }
                     Ok(_) => {
                         // Ignore binary / ping / pong — MCP uses
                         // text JSON only. tungstenite auto-pongs
                         // pings internally.
-                    },
+                    }
                     Err(e) => {
                         let msg = e.to_string();
                         debug!(
@@ -595,7 +595,7 @@ impl McpClient {
                             pending.clear();
                         }
                         break;
-                    },
+                    }
                 }
             }
             // Silence unused-Arc warnings for the adapter slot.
@@ -737,9 +737,9 @@ impl McpClient {
                             self.name,
                             method
                         ))
-                    },
+                    }
                 }
-            },
+            }
 
             McpTransport::Sse {
                 http,
@@ -824,9 +824,9 @@ impl McpClient {
                             self.name,
                             method
                         ))
-                    },
+                    }
                 }
-            },
+            }
 
             McpTransport::Http {
                 url,
@@ -875,7 +875,7 @@ impl McpClient {
                             "Failed to POST to MCP HTTP server '{}' at {}",
                             self.name, url
                         )));
-                    },
+                    }
                 };
 
                 // Capture session ID from response header
@@ -936,7 +936,7 @@ impl McpClient {
                 })?;
 
                 Ok(response)
-            },
+            }
             McpTransport::Ws { write_tx, .. } => {
                 // G18b: lifecycle short-circuit same shape as
                 // SSE — a closed transport fails fast.
@@ -982,9 +982,9 @@ impl McpClient {
                             self.name,
                             method
                         ))
-                    },
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -1006,7 +1006,7 @@ impl McpClient {
                 } else {
                     return Err(anyhow!("MCP server '{}' writer is closed", self.name));
                 }
-            },
+            }
 
             McpTransport::Sse {
                 http,
@@ -1048,7 +1048,7 @@ impl McpClient {
                         self.name
                     )
                 })?;
-            },
+            }
 
             McpTransport::Http {
                 url,
@@ -1086,7 +1086,7 @@ impl McpClient {
                         self.name
                     )
                 })?;
-            },
+            }
             McpTransport::Ws { write_tx, .. } => {
                 if self.lifecycle.lock().await.has_triggered_close() {
                     return Err(anyhow!(
@@ -1103,7 +1103,7 @@ impl McpClient {
                         e
                     ));
                 }
-            },
+            }
         }
 
         debug!(server = self.name, method = method, "Sent MCP notification");
@@ -1173,7 +1173,7 @@ impl McpClient {
             Ok(r) => r,
             Err(e) => {
                 return Err(classify_call_tool_error(e, &self.name, transport_hint));
-            },
+            }
         };
 
         if let Some(result) = response.result {
@@ -1523,7 +1523,7 @@ impl McpClient {
                 } else {
                     false
                 }
-            },
+            }
             McpTransport::Sse { .. } => {
                 // SSE is alive if the reader task hasn't finished
                 if let Some(ref handle) = self.reader_handle {
@@ -1531,12 +1531,12 @@ impl McpClient {
                 } else {
                     false
                 }
-            },
+            }
             McpTransport::Http { .. } => {
                 // HTTP transport is stateless -- always "alive" as long as
                 // we have the URL configured
                 true
-            },
+            }
             McpTransport::Ws { .. } => {
                 // Same liveness rule as SSE: the reader task
                 // exits when the socket closes (either via a
@@ -1546,7 +1546,7 @@ impl McpClient {
                 } else {
                     false
                 }
-            },
+            }
         }
     }
 }
@@ -1900,7 +1900,7 @@ fn dispatch_ws_inbound_line(
                 "Unparseable WS line (dropped): {} ({})", line, e
             );
             return;
-        },
+        }
     };
 
     let has_result = value.get("result").is_some() || value.get("error").is_some();
@@ -1918,7 +1918,7 @@ fn dispatch_ws_inbound_line(
                 "Reader has no tokio runtime; dropping WS message: {}", line
             );
             return;
-        },
+        }
     };
 
     if has_result {
@@ -1931,14 +1931,14 @@ fn dispatch_ws_inbound_line(
                     }
                 });
                 return;
-            },
+            }
             Err(e) => {
                 debug!(
                     server = server_name,
                     "Malformed response-shaped WS message (dropped): {} ({})", line, e
                 );
                 return;
-            },
+            }
         }
     }
 
@@ -1986,7 +1986,7 @@ fn dispatch_ws_inbound_line(
                         "Failed to serialize WS response: {}", e
                     );
                     return;
-                },
+                }
             };
             if let Err(e) = write_tx.send(line) {
                 debug!(
@@ -2026,7 +2026,7 @@ fn dispatch_inbound_line(
                 "Unparseable MCP line (dropped): {} ({})", line, e
             );
             return;
-        },
+        }
     };
 
     let has_result = value.get("result").is_some() || value.get("error").is_some();
@@ -2044,7 +2044,7 @@ fn dispatch_inbound_line(
                 "Reader has no tokio runtime; dropping message: {}", line
             );
             return;
-        },
+        }
     };
 
     // Response path — takes precedence when both `id` and a
@@ -2059,7 +2059,7 @@ fn dispatch_inbound_line(
                     }
                 });
                 return;
-            },
+            }
             Err(e) => {
                 // Response-shaped but fails structural decode (e.g.
                 // non-numeric id — JsonRpcResponse.id is u64). The
@@ -2071,7 +2071,7 @@ fn dispatch_inbound_line(
                     "Malformed response-shaped message (dropped): {} ({})", line, e
                 );
                 return;
-            },
+            }
         }
     }
 
@@ -2112,7 +2112,7 @@ fn dispatch_inbound_line(
                             data: None,
                         }),
                     }
-                },
+                }
             };
 
             let line = match serde_json::to_string(&response) {
@@ -2123,7 +2123,7 @@ fn dispatch_inbound_line(
                         "Failed to serialize response: {}", e
                     );
                     return;
-                },
+                }
             };
             let mut w = writer.lock().await;
             if let Some(ref mut w) = *w {

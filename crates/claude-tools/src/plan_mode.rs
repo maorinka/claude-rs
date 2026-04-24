@@ -83,10 +83,7 @@ fn ensure_plan_file_path() -> PathBuf {
     let _ = std::fs::create_dir_all(&plans_dir);
 
     // Generate a slug from timestamp
-    let slug = format!(
-        "plan-{}",
-        chrono::Utc::now().format("%Y%m%d-%H%M%S")
-    );
+    let slug = format!("plan-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
     let path = plans_dir.join(format!("{}.md", slug));
 
     *guard = Some(path.clone());
@@ -508,9 +505,11 @@ mod tests {
     static PLAN_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
-                crate::registry::ReadFileState::new(),
-            )), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     fn reset_plan_state() {

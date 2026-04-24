@@ -403,9 +403,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
-                crate::registry::ReadFileState::new(),
-            )), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]

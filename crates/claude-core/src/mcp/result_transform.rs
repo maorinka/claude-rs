@@ -120,10 +120,7 @@ mod tests {
     fn schema_arrays_use_first_element_shape() {
         assert_eq!(infer_compact_schema(&json!([]), 2), "[]");
         assert_eq!(infer_compact_schema(&json!([1, 2, 3]), 2), "[number]");
-        assert_eq!(
-            infer_compact_schema(&json!(["a", "b"]), 2),
-            "[string]"
-        );
+        assert_eq!(infer_compact_schema(&json!(["a", "b"]), 2), "[string]");
         // Nested array of objects.
         assert_eq!(
             infer_compact_schema(&json!([{"id": 1, "name": "x"}]), 3),
@@ -150,10 +147,7 @@ mod tests {
         // (scalars ignore depth so they still print). Arrays of
         // objects at depth 1 recurse to depth 0 on the inner
         // object → "{...}".
-        assert_eq!(
-            infer_compact_schema(&json!([{"a": 1}]), 1),
-            "[{...}]"
-        );
+        assert_eq!(infer_compact_schema(&json!([{"a": 1}]), 1), "[{...}]");
     }
 
     #[test]
@@ -167,11 +161,7 @@ mod tests {
         // ", ...".
         let commas = s.matches(',').count();
         // 10 entries = 9 separators + ", ..." marker = 10 commas.
-        assert!(
-            commas >= 10,
-            "expected >= 10 commas in {}",
-            s
-        );
+        assert!(commas >= 10, "expected >= 10 commas in {}", s);
         assert!(s.ends_with(", ...}"));
     }
 

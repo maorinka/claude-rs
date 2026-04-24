@@ -100,7 +100,7 @@ mod cost_tracking {
                     text
                 );
                 assert!(text.contains("100000"), "should show tokens, got: {}", text);
-            },
+            }
             _ => panic!("expected Action variant"),
         }
     }
@@ -436,10 +436,10 @@ mod mcp_transports {
                     error.is_some(),
                     "should have error message for failed SSE connection"
                 );
-            },
+            }
             _ => {
                 // If it somehow connected (unlikely), that's also fine
-            },
+            }
         }
     }
 

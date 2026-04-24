@@ -143,12 +143,7 @@ mod tests {
 
     #[test]
     fn build_prompt_substitutes_all_known_variables() {
-        let p = build_magic_docs_update_prompt(
-            "# current body",
-            "/tmp/doc.md",
-            "My Doc",
-            None,
-        );
+        let p = build_magic_docs_update_prompt("# current body", "/tmp/doc.md", "My Doc", None);
         assert!(p.contains("/tmp/doc.md"));
         assert!(p.contains("# current body"));
         assert!(p.contains("# MAGIC DOC: My Doc"));

@@ -123,10 +123,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_over_length() {
-        let long = format!(
-            "https://example.com/{}",
-            "a".repeat(MAX_URL_LENGTH + 1)
-        );
+        let long = format!("https://example.com/{}", "a".repeat(MAX_URL_LENGTH + 1));
         assert!(!validate_url(&long));
     }
 

@@ -242,7 +242,7 @@ impl PermissionRuleValue {
             Some(content) => {
                 let escaped = escape_rule_content(content);
                 format!("{}({})", self.tool_name, escaped)
-            },
+            }
         }
     }
 
@@ -552,7 +552,7 @@ impl PermissionResult {
                     blocked_path: None,
                     is_bash_security_check_for_misparsing: None,
                 })
-            },
+            }
         }
     }
 
@@ -846,7 +846,7 @@ pub fn create_permission_request_message(
                     "Classifier '{}' requires approval for this {} command: {}",
                     classifier, tool_name, reason
                 )
-            },
+            }
             PermissionDecisionReason::Hook {
                 hook_name, reason, ..
             } => match reason {
@@ -863,7 +863,7 @@ pub fn create_permission_request_message(
                     "Permission rule '{}' from {} requires approval for this {} command",
                     rule_string, source_string, tool_name
                 )
-            },
+            }
             PermissionDecisionReason::SubcommandResults { reasons } => {
                 let needs_approval: Vec<&String> = reasons
                     .iter()
@@ -885,7 +885,7 @@ pub fn create_permission_request_message(
                         tool_name
                     )
                 }
-            },
+            }
             PermissionDecisionReason::PermissionPromptTool {
                 permission_prompt_tool_name,
             } => {
@@ -893,10 +893,10 @@ pub fn create_permission_request_message(
                     "Tool '{}' requires approval for this {} command",
                     permission_prompt_tool_name, tool_name
                 )
-            },
+            }
             PermissionDecisionReason::SandboxOverride { .. } => {
                 "Run outside of the sandbox".to_string()
-            },
+            }
             PermissionDecisionReason::WorkingDir { reason } => reason.clone(),
             PermissionDecisionReason::SafetyCheck { reason, .. } => reason.clone(),
             PermissionDecisionReason::Other { reason } => reason.clone(),
@@ -906,7 +906,7 @@ pub fn create_permission_request_message(
                     mode.title(),
                     tool_name
                 )
-            },
+            }
             PermissionDecisionReason::AsyncAgent { reason } => reason.clone(),
         }
     } else {

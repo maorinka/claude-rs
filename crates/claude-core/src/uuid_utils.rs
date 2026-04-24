@@ -14,8 +14,7 @@ use regex::Regex;
 /// Matches the canonical 8-4-4-4-12 hex-digit UUID shape, case
 /// insensitive. TS `uuid.ts:4-5` pins the same pattern.
 static UUID_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-        .unwrap()
+    Regex::new(r"^(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").unwrap()
 });
 
 /// Returns `Some(s)` if `maybe_uuid` is a syntactically valid UUID,
@@ -117,8 +116,7 @@ mod tests {
     fn create_agent_id_is_random() {
         // 2^64 collision space — a handful of consecutive calls should
         // never collide unless the RNG is broken.
-        let ids: std::collections::HashSet<_> =
-            (0..8).map(|_| create_agent_id(None)).collect();
+        let ids: std::collections::HashSet<_> = (0..8).map(|_| create_agent_id(None)).collect();
         assert_eq!(ids.len(), 8);
     }
 

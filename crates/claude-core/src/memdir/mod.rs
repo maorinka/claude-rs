@@ -30,12 +30,15 @@ pub mod team_mem_paths;
 pub mod types;
 
 pub use age::{memory_age, memory_age_days, memory_freshness_note, memory_freshness_text};
-pub use entrypoint::{truncate_entrypoint_content, EntrypointTruncation, MAX_ENTRYPOINT_BYTES, MAX_ENTRYPOINT_LINES};
-pub use paths::{auto_memory_enabled, get_auto_mem_entrypoint, get_auto_mem_path, get_memory_base_dir};
+pub use entrypoint::{
+    truncate_entrypoint_content, EntrypointTruncation, MAX_ENTRYPOINT_BYTES, MAX_ENTRYPOINT_LINES,
+};
+pub use paths::{
+    auto_memory_enabled, get_auto_mem_entrypoint, get_auto_mem_path, get_memory_base_dir,
+};
 pub use prompt::{
-    build_memory_lines, memory_frontmatter_example, MEMORY_DRIFT_CAVEAT,
-    TRUSTING_RECALL_SECTION, TYPES_SECTION_INDIVIDUAL, WHAT_NOT_TO_SAVE_SECTION,
-    WHEN_TO_ACCESS_SECTION,
+    build_memory_lines, memory_frontmatter_example, MEMORY_DRIFT_CAVEAT, TRUSTING_RECALL_SECTION,
+    TYPES_SECTION_INDIVIDUAL, WHAT_NOT_TO_SAVE_SECTION, WHEN_TO_ACCESS_SECTION,
 };
 pub use scan::{format_memory_manifest, scan_memory_files, MemoryHeader};
 pub use types::{parse_memory_type, MemoryType, MEMORY_TYPES};

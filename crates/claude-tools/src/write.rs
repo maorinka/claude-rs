@@ -151,13 +151,11 @@ Usage:
         // TS's AsyncLocalStorage-backed getCwd()) — not ambient process
         // state. The guard short-circuits cheaply when TEAMMEM is off or
         // the path isn't a team-memory path.
-        if let Some(msg) =
-            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
-                path,
-                content,
-                &ctx.working_directory,
-            )
-        {
+        if let Some(msg) = claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
+            path,
+            content,
+            &ctx.working_directory,
+        ) {
             return Ok(ToolResultData {
                 data: json!({ "error": msg }),
                 is_error: true,

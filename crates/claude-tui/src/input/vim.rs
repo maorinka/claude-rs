@@ -301,7 +301,7 @@ impl VimBuffer {
                     }
                 }
                 None
-            },
+            }
             FindType::BackwardTo | FindType::BackwardAfter => {
                 if self.cursor == 0 {
                     return None;
@@ -319,7 +319,7 @@ impl VimBuffer {
                     }
                 }
                 None
-            },
+            }
         }
     }
     pub fn search(&self, pattern: &str, direction: SearchDirection) -> Option<usize> {
@@ -333,7 +333,7 @@ impl VimBuffer {
                     .find(pattern)
                     .map(|i| start + i)
                     .or_else(|| self.text[..self.cursor].find(pattern))
-            },
+            }
             SearchDirection::Backward => self.text[..self.cursor].rfind(pattern).or_else(|| {
                 let s = (self.cursor + 1).min(self.text.len());
                 self.text[s..].rfind(pattern).map(|i| s + i)
@@ -366,7 +366,7 @@ pub fn find_text_object(
             } else {
                 None
             }
-        },
+        }
     }
 }
 
@@ -529,7 +529,7 @@ fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
                 } else {
                     pos
                 }
-            },
+            }
             "k" => {
                 if pos == 0 {
                     return 0;
@@ -542,22 +542,22 @@ fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
                     let ps = text[..pe].rfind('\n').map_or(0, |i| i + 1);
                     ps + col.min(pe - ps)
                 }
-            },
+            }
             "w" => {
                 let mut b = VimBuffer::new(text.to_string(), pos);
                 b.next_word();
                 b.cursor
-            },
+            }
             "b" => {
                 let mut b = VimBuffer::new(text.to_string(), pos);
                 b.prev_word();
                 b.cursor
-            },
+            }
             "e" => {
                 let mut b = VimBuffer::new(text.to_string(), pos);
                 b.end_of_word();
                 b.cursor
-            },
+            }
             "W" => {
                 let mut i = pos;
                 while i < len && !bytes[i].is_ascii_whitespace() {
@@ -567,7 +567,7 @@ fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
                     i += 1;
                 }
                 i.min(len.saturating_sub(1))
-            },
+            }
             "B" => {
                 let mut i = pos.saturating_sub(1);
                 while i > 0 && bytes[i].is_ascii_whitespace() {
@@ -577,7 +577,7 @@ fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
                     i -= 1;
                 }
                 i
-            },
+            }
             "E" => {
                 let mut i = pos + 1;
                 while i < len && bytes[i].is_ascii_whitespace() {
@@ -587,13 +587,13 @@ fn resolve_motion(buf: &VimBuffer, key: &str, count: usize) -> usize {
                     i += 1;
                 }
                 i.min(len.saturating_sub(1))
-            },
+            }
             "0" => text[..pos].rfind('\n').map_or(0, |i| i + 1),
             "^" => {
                 let ls = text[..pos].rfind('\n').map_or(0, |i| i + 1);
                 let r = &text[ls..];
                 ls + r.len() - r.trim_start().len()
-            },
+            }
             "$" => text[pos..].find('\n').map_or(len.saturating_sub(1), |i| {
                 (pos + i).saturating_sub(1).max(pos)
             }),
@@ -630,15 +630,15 @@ fn apply_operator(
         Operator::Yank => {
             buf.cursor = from;
             OperatorEffect::None
-        },
+        }
         Operator::Delete => {
             buf.text = format!("{}{}", &buf.text[..from], &buf.text[to..]);
             buf.cursor = from.min(buf.text.len().saturating_sub(1));
             OperatorEffect::None
-        },
+        }
         Operator::Change => {
             buf.text = format!("{}{}", &buf.text[..from], &buf.text[to..]);
             OperatorEffect::EnterInsert { offset: from }
-        },
+        }
     }
 }

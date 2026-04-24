@@ -78,7 +78,7 @@ pub async fn generate_tool_use_summary(
                 "User's intent (from assistant's last message): {}\n\n",
                 &txt[..cut]
             )
-        },
+        }
         _ => String::new(),
     };
 

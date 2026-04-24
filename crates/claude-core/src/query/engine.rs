@@ -179,8 +179,7 @@ impl QueryEngine {
                 count = duplicates.len(),
                 "Removing duplicate tool_result blocks"
             );
-            let mut seen: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             for msg in &mut self.messages {
                 if msg["role"].as_str() != Some("user") {
                     continue;
@@ -199,7 +198,11 @@ impl QueryEngine {
                     });
                 }
                 // Remove empty user messages left after dedup
-                if msg["content"].as_array().map(|a| a.is_empty()).unwrap_or(false) {
+                if msg["content"]
+                    .as_array()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false)
+                {
                     *msg = serde_json::json!(null);
                 }
             }
@@ -207,8 +210,7 @@ impl QueryEngine {
         }
 
         // Pass 3: add placeholder results for orphaned tool_use blocks
-        let result_ids: std::collections::HashSet<String> =
-            result_count.keys().cloned().collect();
+        let result_ids: std::collections::HashSet<String> = result_count.keys().cloned().collect();
         let orphans: Vec<String> = tool_use_ids
             .into_iter()
             .filter(|id| !result_ids.contains(id))
@@ -355,7 +357,8 @@ impl QueryEngine {
                 Ok(resp) => break 'api_call resp,
                 Err(e) => {
                     // Issue 11: catch prompt-too-long errors and attempt reactive compaction once.
-                    if e.downcast_ref::<crate::types::error::PromptTooLongError>().is_some()
+                    if e.downcast_ref::<crate::types::error::PromptTooLongError>()
+                        .is_some()
                         && !self.has_attempted_reactive_compact
                     {
                         self.has_attempted_reactive_compact = true;
@@ -379,7 +382,9 @@ impl QueryEngine {
                     // Only treat prompt-too-long as a graceful Done.
                     // All other errors (auth, network, 429, 529, etc.) must
                     // propagate so callers can retry or surface the real error.
-                    if e.downcast_ref::<crate::types::error::PromptTooLongError>().is_some() {
+                    if e.downcast_ref::<crate::types::error::PromptTooLongError>()
+                        .is_some()
+                    {
                         self.state = QueryState::Terminal {
                             stop_reason: StopReason::EndTurn,
                             transition: TransitionReason::Error(

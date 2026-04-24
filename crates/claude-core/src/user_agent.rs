@@ -28,8 +28,7 @@ pub fn get_claude_code_user_agent() -> String {
 /// struct and a clean signature avoids needing a workload singleton.
 pub fn get_user_agent(workload: Option<&str>) -> String {
     let user_type = std::env::var("USER_TYPE").unwrap_or_default();
-    let entrypoint =
-        std::env::var("CLAUDE_CODE_ENTRYPOINT").unwrap_or_else(|_| "cli".into());
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").unwrap_or_else(|_| "cli".into());
     let agent_sdk_version = std::env::var("CLAUDE_AGENT_SDK_VERSION")
         .map(|v| format!(", agent-sdk/{}", v))
         .unwrap_or_default();
@@ -71,11 +70,7 @@ pub fn get_mcp_user_agent() -> String {
     } else {
         format!(" ({})", parts.join(", "))
     };
-    format!(
-        "claude-code/{}{}",
-        env!("CARGO_PKG_VERSION"),
-        suffix
-    )
+    format!("claude-code/{}{}", env!("CARGO_PKG_VERSION"), suffix)
 }
 
 /// User-Agent for WebFetch requests to arbitrary sites.

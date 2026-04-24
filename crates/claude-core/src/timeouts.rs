@@ -85,10 +85,7 @@ mod tests {
     fn default_non_positive_falls_back() {
         for v in ["0", "-5", "not-a-number"] {
             let e = env(&[("BASH_DEFAULT_TIMEOUT_MS", v)]);
-            assert_eq!(
-                get_default_bash_timeout_ms(Some(&e)),
-                DEFAULT_TIMEOUT_MS
-            );
+            assert_eq!(get_default_bash_timeout_ms(Some(&e)), DEFAULT_TIMEOUT_MS);
         }
     }
 
@@ -102,10 +99,7 @@ mod tests {
     fn max_env_override_applies() {
         let e = env(&[("BASH_MAX_TIMEOUT_MS", "90000")]);
         // override < default (120_000) → clamped to default.
-        assert_eq!(
-            get_max_bash_timeout_ms(Some(&e)),
-            DEFAULT_TIMEOUT_MS
-        );
+        assert_eq!(get_max_bash_timeout_ms(Some(&e)), DEFAULT_TIMEOUT_MS);
     }
 
     #[test]

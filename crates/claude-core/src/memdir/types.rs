@@ -50,9 +50,18 @@ mod tests {
     #[test]
     fn parses_known_types() {
         assert_eq!(parse_memory_type(Some("user")), Some(MemoryType::User));
-        assert_eq!(parse_memory_type(Some("feedback")), Some(MemoryType::Feedback));
-        assert_eq!(parse_memory_type(Some("project")), Some(MemoryType::Project));
-        assert_eq!(parse_memory_type(Some("reference")), Some(MemoryType::Reference));
+        assert_eq!(
+            parse_memory_type(Some("feedback")),
+            Some(MemoryType::Feedback)
+        );
+        assert_eq!(
+            parse_memory_type(Some("project")),
+            Some(MemoryType::Project)
+        );
+        assert_eq!(
+            parse_memory_type(Some("reference")),
+            Some(MemoryType::Reference)
+        );
     }
 
     #[test]

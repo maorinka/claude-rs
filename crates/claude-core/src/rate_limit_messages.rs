@@ -145,7 +145,10 @@ mod tests {
             approaching_with_reset("5-hour limit", "2pm"),
             "Approaching 5-hour limit · resets 2pm"
         );
-        assert_eq!(approaching_no_reset("5-hour limit"), "Approaching 5-hour limit");
+        assert_eq!(
+            approaching_no_reset("5-hour limit"),
+            "Approaching 5-hour limit"
+        );
     }
 
     #[test]

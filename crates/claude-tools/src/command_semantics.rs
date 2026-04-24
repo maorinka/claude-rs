@@ -100,8 +100,8 @@ fn split_command(command: &str) -> Vec<&str> {
                 i += step;
                 start = i;
                 continue;
-            },
-            _ => {},
+            }
+            _ => {}
         }
         i += 1;
     }

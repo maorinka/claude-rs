@@ -237,9 +237,11 @@ mod tests {
 
         rt.block_on(async {
             let tool = BriefTool;
-            let ctx = crate::registry::ToolUseContext::for_test(std::path::PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
-                    crate::registry::ReadFileState::new(),
-                )), crate::registry::PermissionMode::Default);
+            let ctx = crate::registry::ToolUseContext::for_test(
+                std::path::PathBuf::from("/tmp"),
+                std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
+                crate::registry::PermissionMode::Default,
+            );
             let cancel = CancellationToken::new();
 
             // Enable brief mode
@@ -289,9 +291,11 @@ mod tests {
 
         rt.block_on(async {
             let tool = BriefTool;
-            let ctx = crate::registry::ToolUseContext::for_test(std::path::PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
-                    crate::registry::ReadFileState::new(),
-                )), crate::registry::PermissionMode::Default);
+            let ctx = crate::registry::ToolUseContext::for_test(
+                std::path::PathBuf::from("/tmp"),
+                std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
+                crate::registry::PermissionMode::Default,
+            );
             let cancel = CancellationToken::new();
 
             let result = tool.call(&json!({}), &ctx, cancel, None).await.unwrap();

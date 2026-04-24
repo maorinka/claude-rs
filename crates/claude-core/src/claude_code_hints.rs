@@ -112,10 +112,7 @@ pub fn extract_claude_code_hints(output: &str, command: &str) -> HintExtractionR
 /// `Some(None)` when the tag shape matched but the hint was
 /// rejected (still causes the line to be stripped), `None` when
 /// the line doesn't look like a hint at all.
-fn parse_whole_line_hint(
-    line: &str,
-    source_command: &str,
-) -> Option<Option<ClaudeCodeHint>> {
+fn parse_whole_line_hint(line: &str, source_command: &str) -> Option<Option<ClaudeCodeHint>> {
     let body = line.trim_matches([' ', '\t']);
     let attr_body = body.strip_prefix("<claude-code-hint")?;
     let attr_body = attr_body.strip_suffix("/>")?;

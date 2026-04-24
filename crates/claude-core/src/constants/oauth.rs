@@ -185,7 +185,10 @@ impl std::fmt::Display for OauthConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OauthConfigError::DisallowedCustomUrl => {
-                write!(f, "CLAUDE_CODE_CUSTOM_OAUTH_URL is not an approved endpoint.")
+                write!(
+                    f,
+                    "CLAUDE_CODE_CUSTOM_OAUTH_URL is not an approved endpoint."
+                )
             }
         }
     }
@@ -232,8 +235,8 @@ pub fn get_oauth_config() -> Result<OauthConfig, OauthConfigError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ENV_LOCK;
+    use super::*;
 
     fn clear_env() {
         for k in &[
@@ -313,10 +316,7 @@ mod tests {
     fn custom_url_rejects_unknown_base() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_env();
-        std::env::set_var(
-            "CLAUDE_CODE_CUSTOM_OAUTH_URL",
-            "https://evil.example/",
-        );
+        std::env::set_var("CLAUDE_CODE_CUSTOM_OAUTH_URL", "https://evil.example/");
         let err = get_oauth_config().unwrap_err();
         assert!(matches!(err, OauthConfigError::DisallowedCustomUrl));
         clear_env();

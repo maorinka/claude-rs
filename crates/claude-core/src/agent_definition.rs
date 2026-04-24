@@ -113,7 +113,11 @@ impl std::fmt::Debug for PromptSource {
         match self {
             Self::Static(s) => {
                 let preview: String = s.chars().take(40).collect();
-                write!(f, "Static({preview:?}{})", if s.len() > 40 { "..." } else { "" })
+                write!(
+                    f,
+                    "Static({preview:?}{})",
+                    if s.len() > 40 { "..." } else { "" }
+                )
             }
             Self::Dynamic(_) => write!(f, "Dynamic(<closure>)"),
         }

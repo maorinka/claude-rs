@@ -217,7 +217,10 @@ mod tests {
         let hash = hash_pasted_text("needs dir");
         store_pasted_text(&hash, "needs dir").await;
         assert!(tmp.path().join(PASTE_STORE_DIR).exists());
-        assert_eq!(retrieve_pasted_text(&hash).await.as_deref(), Some("needs dir"));
+        assert_eq!(
+            retrieve_pasted_text(&hash).await.as_deref(),
+            Some("needs dir")
+        );
 
         teardown();
     }
@@ -258,15 +261,22 @@ mod tests {
         cleanup_old_pastes(cutoff).await;
 
         // Older file gone; newer survives.
-        if retrieve_pasted_text(&hash_pasted_text("old")).await.is_some() {
+        if retrieve_pasted_text(&hash_pasted_text("old"))
+            .await
+            .is_some()
+        {
             // macOS HFS+ at 1s resolution can defeat this assertion; log but
             // don't fail on slow filesystems. Bail silently — the assertion
             // on `new` surviving is the one that would catch over-eager
             // deletion (the real bug worth guarding against).
         } else {
-            assert!(retrieve_pasted_text(&hash_pasted_text("old")).await.is_none());
+            assert!(retrieve_pasted_text(&hash_pasted_text("old"))
+                .await
+                .is_none());
         }
-        assert!(retrieve_pasted_text(&hash_pasted_text("new")).await.is_some());
+        assert!(retrieve_pasted_text(&hash_pasted_text("new"))
+            .await
+            .is_some());
 
         teardown();
     }

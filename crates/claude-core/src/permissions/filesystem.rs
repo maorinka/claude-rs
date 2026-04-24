@@ -71,10 +71,10 @@ fn normalize_path(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::CurDir => {}, // skip .
+            Component::CurDir => {} // skip .
             Component::ParentDir => {
                 result.pop();
-            },
+            }
             other => result.push(other),
         }
     }
@@ -573,10 +573,10 @@ fn root_path_for_source(source: &PermissionRuleSource, cwd: &Path) -> String {
                 .unwrap_or_else(|| PathBuf::from("/"))
                 .to_string_lossy()
                 .to_string()
-        },
+        }
         PermissionRuleSource::ProjectSettings | PermissionRuleSource::LocalSettings => {
             cwd.to_string_lossy().to_string()
-        },
+        }
         PermissionRuleSource::FlagSettings => cwd.to_string_lossy().to_string(),
     }
 }

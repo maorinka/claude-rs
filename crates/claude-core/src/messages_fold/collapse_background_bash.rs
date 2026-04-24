@@ -277,7 +277,10 @@ mod tests {
     #[test]
     fn extract_tag_multiline() {
         let html = "<summary>line one\nline two</summary>";
-        assert_eq!(extract_tag(html, "summary").as_deref(), Some("line one\nline two"));
+        assert_eq!(
+            extract_tag(html, "summary").as_deref(),
+            Some("line one\nline two")
+        );
     }
 
     #[test]

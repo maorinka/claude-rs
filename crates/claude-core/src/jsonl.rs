@@ -75,10 +75,7 @@ mod tests {
     fn parses_multiple_lines() {
         let input = "{\"a\":1}\n{\"b\":2}\n{\"c\":3}";
         let out = parse_jsonl(input);
-        assert_eq!(
-            out,
-            vec![json!({"a": 1}), json!({"b": 2}), json!({"c": 3})]
-        );
+        assert_eq!(out, vec![json!({"a": 1}), json!({"b": 2}), json!({"c": 3})]);
     }
 
     #[test]
@@ -151,8 +148,14 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                Row { id: 1, name: "alice".to_string() },
-                Row { id: 2, name: "bob".to_string() }
+                Row {
+                    id: 1,
+                    name: "alice".to_string()
+                },
+                Row {
+                    id: 2,
+                    name: "bob".to_string()
+                }
             ]
         );
     }

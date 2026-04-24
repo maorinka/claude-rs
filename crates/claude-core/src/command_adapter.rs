@@ -205,10 +205,8 @@ mod tests {
 
     #[tokio::test]
     async fn message_result_maps_to_text_user_display() {
-        let cmd = LegacyBuiltinCommand::new(
-            builtin_metadata("echo", "Echo args"),
-            Box::new(EchoHandler),
-        );
+        let cmd =
+            LegacyBuiltinCommand::new(builtin_metadata("echo", "Echo args"), Box::new(EchoHandler));
         let opts = sample_options();
         let out = cmd
             .execute(CommandContext {

@@ -117,7 +117,11 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp/my-repo"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp/my-repo"),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]

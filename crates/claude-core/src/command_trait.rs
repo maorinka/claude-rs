@@ -155,9 +155,7 @@ pub enum CommandOutcome {
     /// `content_blocks` is the already-assembled
     /// `ContentBlockParam[]` (kept as opaque `Value` since
     /// the block types come from the Anthropic SDK).
-    Prompt {
-        content_blocks: Vec<Value>,
-    },
+    Prompt { content_blocks: Vec<Value> },
     /// TS `LocalCommand` text output. Displayed per `display`.
     Text {
         value: String,
@@ -180,9 +178,7 @@ pub enum CommandOutcome {
     /// (`Value`) — core cares that the command wants to show
     /// something; it doesn't care what. This replaces TS
     /// `LocalJSXCommand` without embedding JSX in core.
-    Render {
-        spec: Value,
-    },
+    Render { spec: Value },
 }
 
 fn default_display() -> CommandResultDisplay {
@@ -389,10 +385,7 @@ mod tests {
         fn metadata(&self) -> &CommandMetadata {
             &self.0
         }
-        async fn execute(
-            &self,
-            ctx: CommandContext<'_>,
-        ) -> Result<CommandOutcome, CommandError> {
+        async fn execute(&self, ctx: CommandContext<'_>) -> Result<CommandOutcome, CommandError> {
             Ok(CommandOutcome::Text {
                 value: format!("{}: {}", self.0.name, ctx.args),
                 display: CommandResultDisplay::System,
@@ -473,10 +466,7 @@ mod tests {
             fn is_enabled(&self) -> bool {
                 false
             }
-            async fn execute(
-                &self,
-                _: CommandContext<'_>,
-            ) -> Result<CommandOutcome, CommandError> {
+            async fn execute(&self, _: CommandContext<'_>) -> Result<CommandOutcome, CommandError> {
                 Ok(CommandOutcome::Skip)
             }
         }

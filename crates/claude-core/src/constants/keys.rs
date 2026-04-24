@@ -22,8 +22,8 @@ pub fn get_growthbook_client_key() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ENV_LOCK;
+    use super::*;
 
     #[test]
     fn external_user_gets_external_key() {

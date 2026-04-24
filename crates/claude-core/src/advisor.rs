@@ -146,9 +146,7 @@ pub fn can_user_configure_advisor(config: &AdvisorConfig) -> bool {
 /// Experiment-dictated (baseModel, advisorModel) pair — returned only
 /// when the feature is on, the user is NOT configuring manually, and
 /// both models are non-empty. TS at `advisor.ts:75-85`.
-pub fn get_experiment_advisor_models(
-    config: &AdvisorConfig,
-) -> Option<(String, String)> {
+pub fn get_experiment_advisor_models(config: &AdvisorConfig) -> Option<(String, String)> {
     if !is_advisor_enabled(config) || can_user_configure_advisor(config) {
         return None;
     }
@@ -221,7 +219,10 @@ mod tests {
     impl ScopedEnv {
         fn new() -> Self {
             let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            Self { _guard: guard, keys: Vec::new() }
+            Self {
+                _guard: guard,
+                keys: Vec::new(),
+            }
         }
         fn set(&mut self, k: &str, v: &str) {
             std::env::set_var(k, v);
@@ -298,7 +299,10 @@ mod tests {
         let cfg = AdvisorConfig::default();
         assert!(!is_advisor_enabled(&cfg));
         // enabled=Some(true) → true
-        let cfg = AdvisorConfig { enabled: Some(true), ..Default::default() };
+        let cfg = AdvisorConfig {
+            enabled: Some(true),
+            ..Default::default()
+        };
         assert!(is_advisor_enabled(&cfg));
     }
 
@@ -310,8 +314,14 @@ mod tests {
         env.set("CLAUDE_CODE_USE_FOUNDRY", "");
         env.set("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "");
         env.set("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "1");
-        let cfg = AdvisorConfig { enabled: Some(true), ..Default::default() };
-        assert!(!is_advisor_enabled(&cfg), "kill switch must override growthbook");
+        let cfg = AdvisorConfig {
+            enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(
+            !is_advisor_enabled(&cfg),
+            "kill switch must override growthbook"
+        );
     }
 
     #[test]
@@ -320,7 +330,10 @@ mod tests {
         env.set("CLAUDE_CODE_USE_BEDROCK", "1");
         env.set("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "");
         env.set("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "");
-        let cfg = AdvisorConfig { enabled: Some(true), ..Default::default() };
+        let cfg = AdvisorConfig {
+            enabled: Some(true),
+            ..Default::default()
+        };
         assert!(
             !is_advisor_enabled(&cfg),
             "advisor beta is 1P-only; must stay disabled on Bedrock"
@@ -335,7 +348,10 @@ mod tests {
         env.set("CLAUDE_CODE_USE_FOUNDRY", "1");
         env.set("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "");
         env.set("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "");
-        let cfg = AdvisorConfig { enabled: Some(true), ..Default::default() };
+        let cfg = AdvisorConfig {
+            enabled: Some(true),
+            ..Default::default()
+        };
         assert!(
             is_advisor_enabled(&cfg),
             "Foundry counts as first-party for the advisor beta"

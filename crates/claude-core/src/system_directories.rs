@@ -107,7 +107,9 @@ pub fn get_system_directories(opts: &SystemDirectoriesOptions<'_>) -> SystemDire
         }
         Platform::Linux | Platform::Wsl => SystemDirectories {
             home: defaults.home,
-            desktop: get("XDG_DESKTOP_DIR").map(PathBuf::from).unwrap_or(defaults.desktop),
+            desktop: get("XDG_DESKTOP_DIR")
+                .map(PathBuf::from)
+                .unwrap_or(defaults.desktop),
             documents: get("XDG_DOCUMENTS_DIR")
                 .map(PathBuf::from)
                 .unwrap_or(defaults.documents),
@@ -208,7 +210,10 @@ mod tests {
             platform: Some(Platform::Wsl),
             get_env: Some(&env),
         });
-        assert_eq!(dirs.downloads, PathBuf::from("/mnt/c/Users/alice/Downloads"));
+        assert_eq!(
+            dirs.downloads,
+            PathBuf::from("/mnt/c/Users/alice/Downloads")
+        );
         // Defaults for unset XDG vars.
         assert_eq!(dirs.desktop, fake_home().join("Desktop"));
     }

@@ -25,17 +25,11 @@
 ///
 /// Full port of TS `extractBashCommentLabel`.
 pub fn extract_bash_comment_label(command: &str) -> Option<String> {
-    let first_line = command
-        .split('\n')
-        .next()
-        .unwrap_or(command)
-        .trim();
+    let first_line = command.split('\n').next().unwrap_or(command).trim();
     if !first_line.starts_with('#') || first_line.starts_with("#!") {
         return None;
     }
-    let stripped = first_line
-        .trim_start_matches('#')
-        .trim_start();
+    let stripped = first_line.trim_start_matches('#').trim_start();
     if stripped.is_empty() {
         None
     } else {
@@ -112,7 +106,11 @@ pub fn extract_output_redirections(command: &str) -> Vec<Redirection> {
             '"' if !in_single => in_double = !in_double,
             '>' if !in_single && !in_double => {
                 // Ignore `2>`, `&>`, `>&`, `>(` (process sub).
-                let prev = if i > 0 { Some(bytes[i - 1] as char) } else { None };
+                let prev = if i > 0 {
+                    Some(bytes[i - 1] as char)
+                } else {
+                    None
+                };
                 if matches!(prev, Some('0'..='9') | Some('&')) {
                     i += 1;
                     continue;
@@ -147,7 +145,10 @@ pub fn extract_output_redirections(command: &str) -> Vec<Redirection> {
                 if i > target_start {
                     let target = command[target_start..i].to_string();
                     if !target.is_empty() {
-                        out.push(Redirection { target, operator: op });
+                        out.push(Redirection {
+                            target,
+                            operator: op,
+                        });
                     }
                 }
                 continue;

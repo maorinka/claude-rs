@@ -6,8 +6,8 @@
 //! ratatui key-event shape. These lookup helpers are pure and usable
 //! today from status-line / help-text rendering code.
 
-use super::parser::chord_to_string;
 use super::matching::ParsedBinding;
+use super::parser::chord_to_string;
 
 /// Return the display text for the configured binding of `action` in
 /// `context`, or None if no binding is registered. Mirrors TS

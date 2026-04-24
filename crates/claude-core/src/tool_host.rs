@@ -305,12 +305,12 @@ mod tests {
             }
 
             async fn mark_tool_use_in_progress(&self, id: &str, in_progress: bool) {
-                let _ = self.state.update(
-                    crate::app_state::AppStateUpdate::MarkToolUseInProgress {
-                        tool_use_id: id.into(),
-                        in_progress,
-                    },
-                );
+                let _ =
+                    self.state
+                        .update(crate::app_state::AppStateUpdate::MarkToolUseInProgress {
+                            tool_use_id: id.into(),
+                            in_progress,
+                        });
             }
 
             async fn record_response_chars(&self, chars: usize) {

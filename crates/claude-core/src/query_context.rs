@@ -163,10 +163,7 @@ pub fn strip_in_progress_assistant(messages: &[Value]) -> &[Value] {
 /// a clean `bool` — `true` = enable by default, `false` = disable.
 /// Callers that need the three-state TS semantic pre-convert with
 /// `should_enable_thinking_by_default() != Some(false)`.
-pub fn default_thinking_config(
-    explicit: Option<Value>,
-    should_enable_by_default: bool,
-) -> Value {
+pub fn default_thinking_config(explicit: Option<Value>, should_enable_by_default: bool) -> Value {
     if let Some(cfg) = explicit {
         return cfg;
     }
@@ -202,20 +199,28 @@ mod tests {
         assert!(parts.default_system_prompt.is_empty());
         assert!(parts.system_context.is_empty());
         // user_context always survives.
-        assert_eq!(parts.user_context.get("cwd").map(String::as_str), Some("/home/u"));
+        assert_eq!(
+            parts.user_context.get("cwd").map(String::as_str),
+            Some("/home/u")
+        );
     }
 
     #[test]
     fn select_keeps_all_without_custom() {
-        let parts = select_system_prompt_parts(
-            vec!["default part".into()],
-            user_ctx(),
-            sys_ctx(),
-            None,
+        let parts =
+            select_system_prompt_parts(vec!["default part".into()], user_ctx(), sys_ctx(), None);
+        assert_eq!(
+            parts.default_system_prompt,
+            vec!["default part".to_string()]
         );
-        assert_eq!(parts.default_system_prompt, vec!["default part".to_string()]);
-        assert_eq!(parts.system_context.get("platform").map(String::as_str), Some("linux"));
-        assert_eq!(parts.user_context.get("cwd").map(String::as_str), Some("/home/u"));
+        assert_eq!(
+            parts.system_context.get("platform").map(String::as_str),
+            Some("linux")
+        );
+        assert_eq!(
+            parts.user_context.get("cwd").map(String::as_str),
+            Some("/home/u")
+        );
     }
 
     #[test]

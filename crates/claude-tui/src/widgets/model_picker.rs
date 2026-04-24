@@ -294,10 +294,7 @@ impl<'a> Widget for ModelPickerWidget<'a> {
                     Style::default().fg(Color::DarkGray),
                 )
             } else {
-                (
-                    Style::default(),
-                    Style::default().fg(Color::DarkGray),
-                )
+                (Style::default(), Style::default().fg(Color::DarkGray))
             };
 
             let current_marker = if is_current { " ←" } else { "" };
@@ -305,7 +302,10 @@ impl<'a> Widget for ModelPickerWidget<'a> {
             let line = Line::from(vec![
                 Span::styled(pointer, name_style),
                 Span::styled(format!("{:<18}", option.display_name), name_style),
-                Span::styled(format!("{}{}", option.description, current_marker), desc_style),
+                Span::styled(
+                    format!("{}{}", option.description, current_marker),
+                    desc_style,
+                ),
             ]);
 
             buf.set_line(inner.x, inner.y + row, &line, inner.width);
@@ -321,16 +321,21 @@ impl<'a> Widget for ModelPickerWidget<'a> {
                 if opt.supports_effort {
                     let effort = self.picker.effort;
                     // Show all effort levels, highlight current
-                    let mut spans = vec![
-                        Span::styled("  ", Style::default()),
-                    ];
-                    for level in &[EffortLevel::Low, EffortLevel::Medium, EffortLevel::High, EffortLevel::Max] {
+                    let mut spans = vec![Span::styled("  ", Style::default())];
+                    for level in &[
+                        EffortLevel::Low,
+                        EffortLevel::Medium,
+                        EffortLevel::High,
+                        EffortLevel::Max,
+                    ] {
                         if *level == EffortLevel::Max && !opt.supports_max_effort {
                             continue;
                         }
                         let is_active = *level == effort;
                         let style = if is_active {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::DarkGray)
                         };

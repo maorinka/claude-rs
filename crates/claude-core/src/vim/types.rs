@@ -165,10 +165,8 @@ pub fn is_operator_key(key: char) -> Option<Operator> {
 }
 
 /// Text-object scope keys → scope.
-pub const TEXT_OBJ_SCOPES: &[(char, TextObjScope)] = &[
-    ('i', TextObjScope::Inner),
-    ('a', TextObjScope::Around),
-];
+pub const TEXT_OBJ_SCOPES: &[(char, TextObjScope)] =
+    &[('i', TextObjScope::Inner), ('a', TextObjScope::Around)];
 
 pub fn is_text_obj_scope_key(key: char) -> Option<TextObjScope> {
     TEXT_OBJ_SCOPES

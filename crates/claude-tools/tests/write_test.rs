@@ -5,9 +5,13 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
-    ToolUseContext::for_test(dir.to_path_buf(), std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(
+        dir.to_path_buf(),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default)
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 async fn call_tool(tool: &FileWriteTool, input: Value, ctx: &ToolUseContext) -> ToolResultData {
@@ -239,10 +243,7 @@ async fn guard_skips_writes_outside_team_memory() {
     )
     .await;
 
-    assert!(
-        !result.is_error,
-        "non-team-path writes must skip the guard"
-    );
+    assert!(!result.is_error, "non-team-path writes must skip the guard");
 }
 
 /// After a FileWrite, the stored `read_file_state.content` must be

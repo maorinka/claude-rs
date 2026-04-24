@@ -15,11 +15,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 
-type ComputeFn = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send + Sync>>
-        + Send
-        + Sync,
->;
+type ComputeFn =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send + Sync>> + Send + Sync>;
 
 pub struct SystemPromptSection {
     pub name: String,
@@ -44,11 +41,7 @@ impl SystemPromptSection {
     /// Volatile section — recomputed every turn. Busts the prompt cache
     /// when the value changes. Reason must be provided so reviewers can
     /// see why cache-breaking is acceptable.
-    pub fn dangerous_uncached<F, Fut>(
-        name: impl Into<String>,
-        _reason: &str,
-        f: F,
-    ) -> Self
+    pub fn dangerous_uncached<F, Fut>(name: impl Into<String>, _reason: &str, f: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Option<String>> + Send + Sync + 'static,
@@ -123,7 +116,11 @@ mod tests {
         let b = resolve_sections(std::slice::from_ref(&s)).await;
         assert_eq!(a, vec![Some("value".to_string())]);
         assert_eq!(b, vec![Some("value".to_string())]);
-        assert_eq!(CALLS.load(Ordering::SeqCst), 1, "should have been called once");
+        assert_eq!(
+            CALLS.load(Ordering::SeqCst),
+            1,
+            "should have been called once"
+        );
         clear_sections();
     }
 
@@ -133,14 +130,11 @@ mod tests {
         clear_sections();
         static CALLS: AtomicU32 = AtomicU32::new(0);
         CALLS.store(0, Ordering::SeqCst);
-        let s = SystemPromptSection::dangerous_uncached(
-            "volatile",
-            "test recomputation",
-            || async {
+        let s =
+            SystemPromptSection::dangerous_uncached("volatile", "test recomputation", || async {
                 let n = CALLS.fetch_add(1, Ordering::SeqCst);
                 Some(format!("iter {}", n))
-            },
-        );
+            });
         let a = resolve_sections(std::slice::from_ref(&s)).await;
         let b = resolve_sections(std::slice::from_ref(&s)).await;
         assert_ne!(a, b);

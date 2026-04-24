@@ -19,10 +19,7 @@ use serde_json::Value;
 /// under the Settings `extra` map on the Rust side — actually, Settings
 /// doesn't have one. Stored in-config only for now if the main structs
 /// don't surface the field). Returns true when state changes.
-pub fn migrate_bypass_permissions(
-    global: &mut GlobalConfig,
-    _settings: &mut Settings,
-) -> bool {
+pub fn migrate_bypass_permissions(global: &mut GlobalConfig, _settings: &mut Settings) -> bool {
     match global.extra.get("bypassPermissionsModeAccepted") {
         Some(Value::Bool(true)) => {
             // Record the migrated state in global.extra under the new name,
@@ -31,9 +28,10 @@ pub fn migrate_bypass_permissions(
             // a matching field yet, so we mirror the value into global.extra
             // as a waypoint. Removing the old key makes the migration
             // idempotent.
-            global
-                .extra
-                .insert("skipDangerousModePermissionPrompt".into(), Value::Bool(true));
+            global.extra.insert(
+                "skipDangerousModePermissionPrompt".into(),
+                Value::Bool(true),
+            );
             global.extra.remove("bypassPermissionsModeAccepted");
             true
         }

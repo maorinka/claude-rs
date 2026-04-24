@@ -170,10 +170,7 @@ mod tests {
         // Whatever the ambient state, deep and shallow lookups agree:
         // they either both hit the same ancestor repo or both return None.
         match (nested_result, dir_result) {
-            (Some(a), Some(b)) => assert_eq!(
-                a.canonicalize().unwrap(),
-                b.canonicalize().unwrap()
-            ),
+            (Some(a), Some(b)) => assert_eq!(a.canonicalize().unwrap(), b.canonicalize().unwrap()),
             (None, None) => {}
             (a, b) => panic!("asymmetric: nested={a:?} dir={b:?}"),
         }

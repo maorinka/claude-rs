@@ -5,9 +5,13 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx() -> ToolUseContext {
-    ToolUseContext::for_test(PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(
+        PathBuf::from("/tmp"),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default)
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 async fn search(query: &str) -> claude_core::types::events::ToolResultData {

@@ -83,7 +83,7 @@ async fn run_command(cmd: &str, args: &[&str]) -> (String, String, i32) {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let code = output.status.code().unwrap_or(-1);
             (stdout, stderr, code)
-        },
+        }
         Err(e) => (String::new(), e.to_string(), -1),
     }
 }
@@ -939,7 +939,7 @@ impl TeammateExecutor for InProcessBackend {
                     agent_id
                 );
                 return false;
-            },
+            }
         };
 
         if already_cancelled {
@@ -1149,7 +1149,7 @@ pub fn build_inherited_cli_flags(
     match chrome_flag_override {
         Some(true) => flags.push("--chrome".to_string()),
         Some(false) => flags.push("--no-chrome".to_string()),
-        None => {},
+        None => {}
     }
 
     flags.join(" ")

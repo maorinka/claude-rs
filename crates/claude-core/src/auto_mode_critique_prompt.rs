@@ -71,7 +71,9 @@ mod tests {
     #[test]
     fn user_message_wraps_classifier_prompt() {
         let m = critique_user_message("<classifier system>", "- allow: do X\n- soft_deny: do Y\n");
-        assert!(m.contains("<classifier_system_prompt>\n<classifier system>\n</classifier_system_prompt>"));
+        assert!(m.contains(
+            "<classifier_system_prompt>\n<classifier system>\n</classifier_system_prompt>"
+        ));
         assert!(m.contains("- allow: do X"));
         assert!(m.ends_with("Please critique these custom rules."));
     }

@@ -169,10 +169,7 @@ impl McpManager {
                 // `client.ts:2311-2319`. Stdio doesn't reach
                 // this branch (partitioned into `local_fut`).
                 if super::auth_cache::is_mcp_auth_cached(&name) {
-                    debug!(
-                        server = name,
-                        "Skipping connection (cached needs-auth)"
-                    );
+                    debug!(server = name, "Skipping connection (cached needs-auth)");
                     let conn = McpServerConnection {
                         name: name.clone(),
                         status: McpConnectionStatus::NeedsAuth,
@@ -281,8 +278,7 @@ impl McpManager {
             // side. Route both variants through the same
             // `connect_sse` to avoid duplicating the reader +
             // lifecycle wiring.
-            McpServerConfig::SseIde(sse_config)
-            | McpServerConfig::Sse(sse_config) => {
+            McpServerConfig::SseIde(sse_config) | McpServerConfig::Sse(sse_config) => {
                 match McpClient::connect_sse(name, sse_config).await {
                     Ok(client) => {
                         let capabilities = client.capabilities().cloned().unwrap_or_default();
@@ -429,9 +425,7 @@ impl McpManager {
                 // User-Agent: inserted only when the user
                 // hasn't supplied their own — don't stomp a
                 // caller's deliberate override.
-                let user_set_ua = headers
-                    .keys()
-                    .any(|k| k.eq_ignore_ascii_case("User-Agent"));
+                let user_set_ua = headers.keys().any(|k| k.eq_ignore_ascii_case("User-Agent"));
                 if !user_set_ua {
                     headers.insert(
                         "User-Agent".to_string(),
@@ -546,9 +540,7 @@ impl McpManager {
                         // unconditionally (matches TS's
                         // `!tool.name.startsWith('mcp__ide__') ||
                         // allowlist.includes(tool.name)`).
-                        if is_ide
-                            && !super::helpers::is_included_mcp_tool(&tool)
-                        {
+                        if is_ide && !super::helpers::is_included_mcp_tool(&tool) {
                             debug!(
                                 server = server_name,
                                 tool = %tool.name,
@@ -982,9 +974,7 @@ mod tests {
             },
         );
 
-        let results = manager
-            .connect_all_respecting_auth_cache(configs)
-            .await;
+        let results = manager.connect_all_respecting_auth_cache(configs).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].status, McpConnectionStatus::NeedsAuth),
@@ -1030,9 +1020,7 @@ mod tests {
             },
         );
 
-        let results = manager
-            .connect_all_respecting_auth_cache(configs)
-            .await;
+        let results = manager.connect_all_respecting_auth_cache(configs).await;
         assert_eq!(results.len(), 1);
         // Stdio doesn't short-circuit — the connect attempt runs
         // and fails on the missing binary, surfacing as Failed.

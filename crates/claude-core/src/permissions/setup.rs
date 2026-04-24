@@ -89,7 +89,7 @@ pub fn is_dangerous_bash_permission(tool_name: &str, rule_content: Option<&str>)
     // Tool-level allow (Bash with no content, or Bash(*))
     match rule_content {
         None | Some("") => return true,
-        _ => {},
+        _ => {}
     }
 
     let content = rule_content.unwrap().trim().to_lowercase();
@@ -144,7 +144,7 @@ pub fn is_dangerous_powershell_permission(tool_name: &str, rule_content: Option<
 
     match rule_content {
         None | Some("") => return true,
-        _ => {},
+        _ => {}
     }
 
     let content = rule_content.unwrap().trim().to_lowercase();
@@ -562,11 +562,11 @@ pub fn parse_tool_list_from_cli(tools: &[String]) -> Vec<String> {
                 '(' => {
                     in_parens = true;
                     current.push(ch);
-                },
+                }
                 ')' => {
                     in_parens = false;
                     current.push(ch);
-                },
+                }
                 ',' => {
                     if in_parens {
                         current.push(ch);
@@ -577,7 +577,7 @@ pub fn parse_tool_list_from_cli(tools: &[String]) -> Vec<String> {
                         }
                         current.clear();
                     }
-                },
+                }
                 ' ' => {
                     if in_parens {
                         current.push(ch);
@@ -588,10 +588,10 @@ pub fn parse_tool_list_from_cli(tools: &[String]) -> Vec<String> {
                         }
                         current.clear();
                     }
-                },
+                }
                 _ => {
                     current.push(ch);
-                },
+                }
             }
         }
 

@@ -111,8 +111,7 @@ pub fn parse_github_repository(input: &str) -> Option<String> {
     }
 
     // Plain `owner/repo`: no scheme, no `@`, contains `/`.
-    if !trimmed.contains("://") && !trimmed.contains('@') && trimmed.contains('/')
-    {
+    if !trimmed.contains("://") && !trimmed.contains('@') && trimmed.contains('/') {
         let parts: Vec<&str> = trimmed.split('/').collect();
         if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
             let repo = parts[1].strip_suffix(".git").unwrap_or(parts[1]);
@@ -179,8 +178,7 @@ mod tests {
 
     #[test]
     fn parses_https_url() {
-        let p =
-            parse_git_remote("https://github.com/owner/repo.git").unwrap();
+        let p = parse_git_remote("https://github.com/owner/repo.git").unwrap();
         assert_eq!(p.host, "github.com");
         assert_eq!(p.owner, "owner");
         assert_eq!(p.name, "repo");
@@ -194,8 +192,7 @@ mod tests {
 
     #[test]
     fn parses_ssh_url_with_userinfo() {
-        let p =
-            parse_git_remote("ssh://git@ghe.corp.com/owner/repo.git").unwrap();
+        let p = parse_git_remote("ssh://git@ghe.corp.com/owner/repo.git").unwrap();
         assert_eq!(p.host, "ghe.corp.com");
         assert_eq!(p.owner, "owner");
         assert_eq!(p.name, "repo");
@@ -211,24 +208,20 @@ mod tests {
     fn preserves_port_on_https_only() {
         let https = parse_git_remote("https://host.io:8443/o/r").unwrap();
         assert_eq!(https.host, "host.io:8443");
-        let ssh =
-            parse_git_remote("ssh://git@host.io:2222/o/r.git").unwrap();
+        let ssh = parse_git_remote("ssh://git@host.io:2222/o/r.git").unwrap();
         assert_eq!(ssh.host, "host.io");
     }
 
     #[test]
     fn handles_repo_names_with_dots() {
-        let p =
-            parse_git_remote("https://github.com/acme/cc.kurs.web").unwrap();
+        let p = parse_git_remote("https://github.com/acme/cc.kurs.web").unwrap();
         assert_eq!(p.name, "cc.kurs.web");
     }
 
     #[test]
     fn rejects_hostname_without_real_tld() {
         // SSH alias form.
-        assert!(
-            parse_git_remote("git@github.com-work:o/r.git").is_none()
-        );
+        assert!(parse_git_remote("git@github.com-work:o/r.git").is_none());
         // Hyphenated last segment.
         assert!(parse_git_remote("https://alias-host/o/r.git").is_none());
     }
@@ -260,9 +253,7 @@ mod tests {
 
     #[test]
     fn parse_github_repository_rejects_ghe() {
-        assert!(
-            parse_github_repository("https://ghe.corp.com/o/r.git").is_none()
-        );
+        assert!(parse_github_repository("https://ghe.corp.com/o/r.git").is_none());
     }
 
     #[test]

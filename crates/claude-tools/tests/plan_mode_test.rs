@@ -13,9 +13,13 @@ use tokio_util::sync::CancellationToken;
 static PLAN_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_ctx() -> ToolUseContext {
-    ToolUseContext::for_test(PathBuf::from("/tmp"), std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(
+        PathBuf::from("/tmp"),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default)
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 #[tokio::test]

@@ -42,11 +42,7 @@ use std::path::Path;
 /// kinds so the user can tell what was flagged without the
 /// message quoting the actual secret value — matches TS's
 /// `labels = matches.map(m => m.label).join(', ')` shape.
-pub fn check_team_mem_secrets(
-    file_path: &Path,
-    content: &str,
-    cwd: &Path,
-) -> Option<String> {
+pub fn check_team_mem_secrets(file_path: &Path, content: &str, cwd: &Path) -> Option<String> {
     if !is_env_truthy("TEAMMEM") {
         return None;
     }
@@ -57,10 +53,7 @@ pub fn check_team_mem_secrets(
     if matches.is_empty() {
         return None;
     }
-    let labels: Vec<String> = matches
-        .iter()
-        .map(|m| m.label.clone())
-        .collect();
+    let labels: Vec<String> = matches.iter().map(|m| m.label.clone()).collect();
     Some(format!(
         "Content contains potential secrets ({}) and cannot be written to team memory. \
          Team memory is shared with all repository collaborators. \
@@ -151,8 +144,7 @@ mod tests {
         enable_team_mem(&g);
         let cwd = Path::new("/Users/alex/proj");
         let path = get_team_mem_path(cwd).join("leaked.md");
-        let out = check_team_mem_secrets(&path, AWS_KEY, cwd)
-            .expect("must flag secret");
+        let out = check_team_mem_secrets(&path, AWS_KEY, cwd).expect("must flag secret");
         // scan_for_secrets returns entries with non-empty labels;
         // the guard message should splice them between the parens.
         let open = out.find('(').expect("label-open paren");
@@ -174,8 +166,7 @@ mod tests {
         enable_team_mem(&g);
         let cwd = Path::new("/Users/alex/proj");
         let path = get_team_mem_path(cwd).join("leaked.md");
-        let out = check_team_mem_secrets(&path, AWS_KEY, cwd)
-            .expect("must flag secret");
+        let out = check_team_mem_secrets(&path, AWS_KEY, cwd).expect("must flag secret");
         // Message shape: prefix, labels-in-parens, two suffix sentences.
         let scan = crate::secret_scanner::scan_for_secrets(AWS_KEY);
         let labels: Vec<String> = scan.iter().map(|m| m.label.clone()).collect();

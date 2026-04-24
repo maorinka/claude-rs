@@ -62,7 +62,11 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp/test-project"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp/test-project"),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
     #[tokio::test]
     async fn ctx_inspect_summary() {

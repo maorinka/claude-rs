@@ -58,7 +58,9 @@ pub fn truncate_entrypoint_content(raw: &str) -> EntrypointTruncation {
 
     if truncated.len() > MAX_ENTRYPOINT_BYTES {
         let slice = &truncated[..MAX_ENTRYPOINT_BYTES.min(truncated.len())];
-        let cut_at = slice.rfind('\n').unwrap_or(MAX_ENTRYPOINT_BYTES.min(truncated.len()));
+        let cut_at = slice
+            .rfind('\n')
+            .unwrap_or(MAX_ENTRYPOINT_BYTES.min(truncated.len()));
         truncated.truncate(cut_at);
     }
 
@@ -69,11 +71,7 @@ pub fn truncate_entrypoint_content(raw: &str) -> EntrypointTruncation {
             format_file_size(MAX_ENTRYPOINT_BYTES)
         ),
         (true, false) => format!("{} lines (limit: {})", line_count, MAX_ENTRYPOINT_LINES),
-        (true, true) => format!(
-            "{} lines and {}",
-            line_count,
-            format_file_size(byte_count)
-        ),
+        (true, true) => format!("{} lines and {}", line_count, format_file_size(byte_count)),
         (false, false) => unreachable!("early return above"),
     };
 
@@ -114,7 +112,10 @@ mod tests {
 
     #[test]
     fn line_truncation_fires() {
-        let many: String = (0..250).map(|i| format!("line{}", i)).collect::<Vec<_>>().join("\n");
+        let many: String = (0..250)
+            .map(|i| format!("line{}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let t = truncate_entrypoint_content(&many);
         assert!(t.was_line_truncated);
         assert!(t.content.contains("WARNING"));

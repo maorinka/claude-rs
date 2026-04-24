@@ -73,9 +73,7 @@ pub fn validate_bounded_int_env_var(
                 EnvVarValidationResult {
                     effective: upper_limit,
                     status: EnvVarStatus::Capped,
-                    message: Some(format!(
-                        "Capped from {n} to {upper_limit}"
-                    )),
+                    message: Some(format!("Capped from {n} to {upper_limit}")),
                 }
             } else {
                 EnvVarValidationResult {

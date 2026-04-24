@@ -226,10 +226,7 @@ mod tests {
     fn first_party_base_url_staging_only_for_ant() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_provider_env();
-        std::env::set_var(
-            "ANTHROPIC_BASE_URL",
-            "https://api-staging.anthropic.com",
-        );
+        std::env::set_var("ANTHROPIC_BASE_URL", "https://api-staging.anthropic.com");
         assert!(!is_first_party_anthropic_base_url());
         std::env::set_var("USER_TYPE", "ant");
         assert!(is_first_party_anthropic_base_url());
@@ -258,10 +255,7 @@ mod tests {
     fn as_str_round_trips_for_telemetry_gauge() {
         assert_eq!(PrivacyLevel::Default.as_str(), "default");
         assert_eq!(PrivacyLevel::NoTelemetry.as_str(), "no-telemetry");
-        assert_eq!(
-            PrivacyLevel::EssentialTraffic.as_str(),
-            "essential-traffic"
-        );
+        assert_eq!(PrivacyLevel::EssentialTraffic.as_str(), "essential-traffic");
         assert_eq!(ApiProvider::FirstParty.as_str(), "firstParty");
         assert_eq!(ApiProvider::Bedrock.as_str(), "bedrock");
     }

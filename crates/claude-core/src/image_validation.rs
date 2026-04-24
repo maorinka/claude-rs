@@ -196,10 +196,7 @@ mod tests {
         let too_big = API_IMAGE_MAX_BASE64_SIZE + 1;
         let msgs = vec![user_msg_with_content(json!([image_block(too_big)]))];
         let err = validate_images_for_api(&msgs).unwrap_err();
-        let ImageValidationError::SizeLimitExceeded {
-            images,
-            max_size,
-        } = err;
+        let ImageValidationError::SizeLimitExceeded { images, max_size } = err;
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].index, 1);
         assert_eq!(images[0].size, too_big);
@@ -245,7 +242,10 @@ mod tests {
         ]))];
         let err = validate_images_for_api(&msgs).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.starts_with("2 images exceed the API limit"), "unexpected: {msg}");
+        assert!(
+            msg.starts_with("2 images exceed the API limit"),
+            "unexpected: {msg}"
+        );
         assert!(msg.contains("Image 1"));
         assert!(msg.contains("Image 2"));
     }

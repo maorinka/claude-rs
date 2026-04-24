@@ -121,14 +121,14 @@ async fn receive_messages_in(home: &Path, agent_id: &str) -> Result<Vec<MailboxM
                         warn!("Failed to delete mailbox message {:?}: {}", path, e);
                     }
                     messages.push(msg);
-                },
+                }
                 Err(e) => {
                     warn!("Skipping unparseable mailbox file {:?}: {}", path, e);
-                },
+                }
             },
             Err(e) => {
                 warn!("Could not read mailbox file {:?}: {}", path, e);
-            },
+            }
         }
     }
 
@@ -281,7 +281,7 @@ impl ToolExecutor for SendMessageTool {
                     data: json!({ "error": "missing or empty required field: to" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         // Reject '@' in recipient -- matches TS validation
@@ -301,7 +301,7 @@ impl ToolExecutor for SendMessageTool {
                     data: json!({ "error": "missing required field: content" }),
                     is_error: true,
                 });
-            },
+            }
         };
 
         let summary = input

@@ -110,11 +110,7 @@ where
     G: FnOnce(&T) -> Map<String, Value>,
 {
     let start = Instant::now();
-    log_for_diagnostics_no_pii(
-        DiagnosticLogLevel::Info,
-        &format!("{event}_started"),
-        None,
-    );
+    log_for_diagnostics_no_pii(DiagnosticLogLevel::Info, &format!("{event}_started"), None);
 
     match fut().await {
         Ok(result) => {
@@ -282,7 +278,10 @@ mod tests {
         assert_eq!(out, Ok(42));
 
         let events = read_events(&path);
-        let names: Vec<&str> = events.iter().map(|v| v["event"].as_str().unwrap()).collect();
+        let names: Vec<&str> = events
+            .iter()
+            .map(|v| v["event"].as_str().unwrap())
+            .collect();
         assert_eq!(names, vec!["work_started", "work_completed"]);
         assert!(events[1]["data"]["duration_ms"].is_number());
     }
@@ -304,7 +303,10 @@ mod tests {
         assert_eq!(result, Err("boom"));
 
         let events = read_events(&path);
-        let names: Vec<&str> = events.iter().map(|v| v["event"].as_str().unwrap()).collect();
+        let names: Vec<&str> = events
+            .iter()
+            .map(|v| v["event"].as_str().unwrap())
+            .collect();
         assert_eq!(names, vec!["work_started", "work_failed"]);
         assert_eq!(events[1]["level"], "error");
         assert!(events[1]["data"]["duration_ms"].is_number());

@@ -258,12 +258,7 @@ mod tests {
 
     #[test]
     fn interview_has_five_section_headings() {
-        let p = plan_mode_interview_instructions(
-            false,
-            "/p.md",
-            "Read, Grep, Glob",
-            false,
-        );
+        let p = plan_mode_interview_instructions(false, "/p.md", "Read, Grep, Glob", false);
         for s in &[
             "### The Loop",
             "### First Turn",
@@ -278,12 +273,7 @@ mod tests {
 
     #[test]
     fn interview_interpolates_read_only_tools_list() {
-        let p = plan_mode_interview_instructions(
-            false,
-            "/p.md",
-            "Read, Grep, Glob",
-            false,
-        );
+        let p = plan_mode_interview_instructions(false, "/p.md", "Read, Grep, Glob", false);
         assert!(p.contains("Use Read, Grep, Glob to read code"));
     }
 

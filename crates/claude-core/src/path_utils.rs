@@ -69,14 +69,14 @@ pub fn normalize_path(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
-            Component::CurDir => {},
+            Component::CurDir => {}
             Component::ParentDir => {
                 if !matches!(out.components().next_back(), Some(Component::RootDir))
                     && !out.as_os_str().is_empty()
                 {
                     out.pop();
                 }
-            },
+            }
             other => out.push(other),
         }
     }

@@ -120,8 +120,7 @@ pub fn aggregate_hook_results(results: Vec<HookResult>) -> AggregatedHookResult 
             }
 
             // updatedInput: propagate from allow or ask decisions
-            if (*behavior == PermissionBehavior::Allow
-                || *behavior == PermissionBehavior::Ask)
+            if (*behavior == PermissionBehavior::Allow || *behavior == PermissionBehavior::Ask)
                 && result.updated_input.is_some()
             {
                 aggregated.updated_input = result.updated_input.clone();

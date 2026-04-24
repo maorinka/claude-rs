@@ -71,13 +71,8 @@ pub fn messages_dir(cache_root: &std::path::Path, cwd: &str) -> PathBuf {
 /// `<cache_root>/<project-dir>/mcp-logs-<sanitised server name>`.
 /// Server name is also sanitised so Windows drive-letter colons
 /// and other reserved chars don't poison the path.
-pub fn mcp_logs_dir(
-    cache_root: &std::path::Path,
-    cwd: &str,
-    server_name: &str,
-) -> PathBuf {
-    base_logs_dir(cache_root, cwd)
-        .join(format!("mcp-logs-{}", sanitize_path_segment(server_name)))
+pub fn mcp_logs_dir(cache_root: &std::path::Path, cwd: &str, server_name: &str) -> PathBuf {
+    base_logs_dir(cache_root, cwd).join(format!("mcp-logs-{}", sanitize_path_segment(server_name)))
 }
 
 fn to_base36(mut n: u64) -> String {
@@ -109,20 +104,14 @@ mod tests {
 
     #[test]
     fn sanitize_keeps_alnum_as_is() {
-        assert_eq!(
-            sanitize_path_segment("abc123DEF"),
-            "abc123DEF"
-        );
+        assert_eq!(sanitize_path_segment("abc123DEF"), "abc123DEF");
     }
 
     #[test]
     fn sanitize_handles_dots_and_colons() {
         // Windows drive letter + path: `C:\path\to\srv`.
         // `:` and `\` both map to `-`, so the pair `:\` becomes `--`.
-        assert_eq!(
-            sanitize_path_segment(r"C:\path\to\srv"),
-            "C--path-to-srv"
-        );
+        assert_eq!(sanitize_path_segment(r"C:\path\to\srv"), "C--path-to-srv");
         // A simpler case with just `:` between letters.
         assert_eq!(sanitize_path_segment("server:one"), "server-one");
     }
@@ -133,11 +122,13 @@ mod tests {
         let out = sanitize_path_segment(&input);
         assert!(out.len() > MAX_SANITIZED_LENGTH);
         // Prefix is the first MAX chars.
-        assert_eq!(&out[..MAX_SANITIZED_LENGTH], &"x".repeat(MAX_SANITIZED_LENGTH));
+        assert_eq!(
+            &out[..MAX_SANITIZED_LENGTH],
+            &"x".repeat(MAX_SANITIZED_LENGTH)
+        );
         // After the dash suffix comes the base36 djb2 hash.
         let suffix = &out[MAX_SANITIZED_LENGTH + 1..];
-        let expected_suffix =
-            to_base36(djb2_hash(&input).unsigned_abs() as u64);
+        let expected_suffix = to_base36(djb2_hash(&input).unsigned_abs() as u64);
         assert_eq!(suffix, expected_suffix);
     }
 

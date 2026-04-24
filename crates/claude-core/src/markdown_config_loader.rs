@@ -24,13 +24,8 @@ use crate::frontmatter::{parse_frontmatter, Frontmatter, FrontmatterValue};
 /// Subdirs under `.claude/` that hold user-loadable markdown config.
 /// Matches TS CLAUDE_CONFIG_DIRECTORIES (minus the TEMPLATES feature
 /// flag — always include templates if you're porting the flag).
-pub const CLAUDE_CONFIG_DIRECTORIES: &[&str] = &[
-    "commands",
-    "agents",
-    "output-styles",
-    "skills",
-    "workflows",
-];
+pub const CLAUDE_CONFIG_DIRECTORIES: &[&str] =
+    &["commands", "agents", "output-styles", "skills", "workflows"];
 
 /// Where did this markdown file come from? Matches a narrow subset of
 /// TS SettingSource — the loader only ever labels user/project.
@@ -92,8 +87,11 @@ pub fn parse_tool_list(value: Option<&FrontmatterValue>) -> Option<Vec<String>> 
         FrontmatterValue::Null => None,
         FrontmatterValue::String(s) if s.is_empty() => Some(Vec::new()),
         FrontmatterValue::String(s) => {
-            let tools: Vec<String> =
-                s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+            let tools: Vec<String> = s
+                .split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect();
             if tools.iter().any(|t| t == "*") {
                 Some(vec!["*".into()])
             } else {
@@ -188,10 +186,7 @@ mod tests {
 
     #[test]
     fn extract_description_uses_fallback_on_empty_input() {
-        assert_eq!(
-            extract_description_from_markdown("", "default"),
-            "default"
-        );
+        assert_eq!(extract_description_from_markdown("", "default"), "default");
     }
 
     #[test]

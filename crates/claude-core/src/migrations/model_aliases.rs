@@ -41,7 +41,7 @@ pub fn migrate_fennec_to_opus(ctx: &MigrationContext, settings: &mut Settings) -
         Some(m) if m != model => {
             settings.model = Some(m);
             true
-        },
+        }
         _ => false,
     }
 }

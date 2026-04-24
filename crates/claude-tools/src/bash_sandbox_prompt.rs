@@ -25,8 +25,7 @@
 
 /// Static TS `getSimpleSandboxSection()` template with
 /// `{SANDBOX_RESTRICTIONS}` placeholder.
-pub const BASH_SANDBOX_SECTION_TEMPLATE: &str =
-    include_str!("prompts/bash_sandbox_section.md");
+pub const BASH_SANDBOX_SECTION_TEMPLATE: &str = include_str!("prompts/bash_sandbox_section.md");
 
 /// Format the sandbox section by substituting `restrictions` for
 /// the `{SANDBOX_RESTRICTIONS}` placeholder. `restrictions` should
@@ -56,9 +55,7 @@ mod tests {
 
     #[test]
     fn format_substitutes_restrictions() {
-        let out = format_sandbox_section(
-            "Filesystem: {\"read\":{}, \"write\":{}}\nNetwork: {}",
-        );
+        let out = format_sandbox_section("Filesystem: {\"read\":{}, \"write\":{}}\nNetwork: {}");
         assert!(!out.contains("{SANDBOX_RESTRICTIONS}"));
         assert!(out.contains("Filesystem:"));
         assert!(out.contains("Network:"));

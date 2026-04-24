@@ -200,7 +200,7 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
                         parts.push(trimmed);
                     }
                     current.clear();
-                },
+                }
                 '|' if chars.peek() == Some(&'|') => {
                     chars.next(); // consume second '|'
                     let trimmed = current.trim().to_string();
@@ -208,24 +208,24 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
                         parts.push(trimmed);
                     }
                     current.clear();
-                },
+                }
                 '|' => {
                     let trimmed = current.trim().to_string();
                     if !trimmed.is_empty() {
                         parts.push(trimmed);
                     }
                     current.clear();
-                },
+                }
                 ';' => {
                     let trimmed = current.trim().to_string();
                     if !trimmed.is_empty() {
                         parts.push(trimmed);
                     }
                     current.clear();
-                },
+                }
                 _ => {
                     current.push(ch);
-                },
+                }
             }
         } else {
             current.push(ch);
@@ -864,7 +864,7 @@ mod tests {
             PermissionCheckResult::Ask(cmds) => {
                 assert_eq!(cmds.len(), 1);
                 assert!(cmds[0].contains("rm"));
-            },
+            }
             other => panic!("expected Ask, got {:?}", other),
         }
     }
@@ -876,7 +876,7 @@ mod tests {
             PermissionCheckResult::Ask(cmds) => {
                 assert_eq!(cmds.len(), 1);
                 assert!(cmds[0].contains("rm"));
-            },
+            }
             other => panic!("expected Ask, got {:?}", other),
         }
     }

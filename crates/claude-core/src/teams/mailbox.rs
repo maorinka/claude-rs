@@ -118,7 +118,7 @@ async fn acquire_lock(lock_path: &Path) -> Result<LockGuard> {
                 return Ok(LockGuard {
                     path: lock_path.to_path_buf(),
                 });
-            },
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if retry >= LOCK_MAX_RETRIES {
                     // Try to clean up a potentially stale lock.
@@ -135,14 +135,14 @@ async fn acquire_lock(lock_path: &Path) -> Result<LockGuard> {
                 );
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 retry += 1;
-            },
+            }
             Err(e) => {
                 return Err(anyhow::anyhow!(
                     "lock open error for {:?}: {}",
                     lock_path,
                     e
                 ));
-            },
+            }
         }
     }
 }
@@ -175,20 +175,20 @@ pub async fn read_mailbox(agent_name: &str, team_name: Option<&str>) -> Vec<Team
                     messages.len()
                 );
                 messages
-            },
+            }
             Err(e) => {
                 warn!("[TeammateMailbox] parse error for {:?}: {}", inbox_path, e);
                 Vec::new()
-            },
+            }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             debug!("[TeammateMailbox] readMailbox: file does not exist");
             Vec::new()
-        },
+        }
         Err(e) => {
             warn!("Failed to read inbox for {}: {}", agent_name, e);
             Vec::new()
-        },
+        }
     }
 }
 
@@ -230,14 +230,14 @@ pub async fn write_to_mailbox(
     if !inbox_path.exists() {
         match tokio::fs::write(&inbox_path, "[]").await {
             Ok(_) => debug!("[TeammateMailbox] writeToMailbox: created new inbox file"),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => {
                 warn!(
                     "[TeammateMailbox] writeToMailbox: failed to create inbox file: {}",
                     e
                 );
                 return Err(e.into());
-            },
+            }
         }
     }
 
@@ -385,12 +385,12 @@ pub async fn clear_mailbox(agent_name: &str, team_name: Option<&str>) -> Result<
         Ok(_) => {
             debug!("[TeammateMailbox] Cleared inbox for {}", agent_name);
             Ok(())
-        },
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => {
             warn!("Failed to clear inbox for {}: {}", agent_name, e);
             Err(e.into())
-        },
+        }
     }
 }
 

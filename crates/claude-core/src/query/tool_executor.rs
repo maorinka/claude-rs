@@ -81,10 +81,10 @@ impl StreamingToolExecutor {
                         // Adjust counts (simplified — we don't track per-task concurrency here)
                     }
                     self.completed.push(completed);
-                },
+                }
                 Err(e) => {
                     tracing::warn!("Tool task panicked: {}", e);
-                },
+                }
             }
         }
 

@@ -164,7 +164,7 @@ impl HookCommand {
                     h.prompt.clone()
                 };
                 format!("prompt: {}", truncated)
-            },
+            }
             HookCommand::Http(h) => format!("http: {}", h.url),
             HookCommand::Agent(h) => {
                 let truncated = if h.prompt.len() > 60 {
@@ -173,7 +173,7 @@ impl HookCommand {
                     h.prompt.clone()
                 };
                 format!("agent: {}", truncated)
-            },
+            }
         }
     }
 

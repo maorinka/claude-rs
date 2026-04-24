@@ -147,7 +147,7 @@ fn extract_expressions(command: &str) -> Vec<String> {
                 if !cur.is_empty() {
                     tokens.push(std::mem::take(&mut cur));
                 }
-            },
+            }
             c => cur.push(c),
         }
     }

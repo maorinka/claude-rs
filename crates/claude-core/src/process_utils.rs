@@ -53,13 +53,7 @@ pub fn is_process_running(pid: i32) -> bool {
         // since this is cold-path (lock-recovery).
         use std::process::Command;
         let out = Command::new("tasklist")
-            .args([
-                "/FI",
-                &format!("PID eq {pid}"),
-                "/NH",
-                "/FO",
-                "CSV",
-            ])
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output();
         match out {
             Ok(o) => {

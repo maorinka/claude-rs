@@ -191,7 +191,7 @@ fn process_block(
             } else {
                 stats.assistant_messages += tokens;
             }
-        },
+        }
         "tool_use" => {
             let Some(name) = obj.get("name").and_then(Value::as_str) else {
                 return;
@@ -214,7 +214,7 @@ fn process_block(
                     read_tool_paths.insert(id.to_owned(), path.to_owned());
                 }
             }
-        },
+        }
         "tool_result" => {
             let Some(tool_use_id) = obj.get("tool_use_id").and_then(Value::as_str) else {
                 return;
@@ -232,7 +232,7 @@ fn process_block(
                     entry.1 += tokens;
                 }
             }
-        },
+        }
         // All the rest — TS case fall-through to `stats.other += tokens`.
         "image"
         | "server_tool_use"
@@ -251,12 +251,12 @@ fn process_block(
         | "tool_search_tool_result"
         | "compaction" => {
             stats.other += tokens;
-        },
+        }
         _ => {
             // Unknown kinds: TS falls through (default case with no
             // matching branch leaves the stat untouched). Tokens still
             // count into `total` above, matching TS.
-        },
+        }
     }
 }
 

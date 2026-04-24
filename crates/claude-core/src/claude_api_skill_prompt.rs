@@ -61,7 +61,13 @@ impl DetectedLanguage {
 pub const LANGUAGE_INDICATORS: &[(DetectedLanguage, &[&str])] = &[
     (
         DetectedLanguage::Python,
-        &[".py", "requirements.txt", "pyproject.toml", "setup.py", "Pipfile"],
+        &[
+            ".py",
+            "requirements.txt",
+            "pyproject.toml",
+            "setup.py",
+            "Pipfile",
+        ],
     ),
     (
         DetectedLanguage::Typescript,

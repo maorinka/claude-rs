@@ -12,8 +12,7 @@ use claude_core::types::events::ToolResultData;
 /// (the detailed parameter documentation — distinct from TS
 /// `DESCRIPTION` which is the short blurb). Rust port surfaces
 /// the detailed variant to the model.
-pub const LIST_MCP_RESOURCES_PROMPT: &str =
-    include_str!("prompts/list_mcp_resources.md");
+pub const LIST_MCP_RESOURCES_PROMPT: &str = include_str!("prompts/list_mcp_resources.md");
 
 pub struct ListMcpResourcesTool;
 
@@ -164,7 +163,11 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]

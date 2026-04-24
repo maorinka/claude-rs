@@ -30,8 +30,14 @@ fn coerce(input: &str) -> Option<Version> {
     let re = regex::Regex::new(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?([.\-+][0-9A-Za-z.\-+]*)?").ok()?;
     let cap = re.captures(input)?;
     let major: u64 = cap.get(1)?.as_str().parse().ok()?;
-    let minor: u64 = cap.get(2).map(|m| m.as_str().parse().unwrap_or(0)).unwrap_or(0);
-    let patch: u64 = cap.get(3).map(|m| m.as_str().parse().unwrap_or(0)).unwrap_or(0);
+    let minor: u64 = cap
+        .get(2)
+        .map(|m| m.as_str().parse().unwrap_or(0))
+        .unwrap_or(0);
+    let patch: u64 = cap
+        .get(3)
+        .map(|m| m.as_str().parse().unwrap_or(0))
+        .unwrap_or(0);
     let suffix = cap.get(4).map(|m| m.as_str()).unwrap_or("");
     let canonical = format!("{major}.{minor}.{patch}{suffix}");
     Version::parse(&canonical).ok()
@@ -80,10 +86,7 @@ fn normalise_range_separators(range: &str) -> String {
     // Collapse runs of whitespace between tokens into `,`. Leading
     // space on operators like `>= 1.0.0` is fine — we only split on
     // whitespace that separates full comparators.
-    range
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(",")
+    range.split_whitespace().collect::<Vec<_>>().join(",")
 }
 
 /// Matches TS `order(a, b)` returning `-1 | 0 | 1`. Rust returns an

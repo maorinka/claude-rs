@@ -36,7 +36,8 @@ TRANSCRIPT CHUNK:
 
 /// Facet-extractor prompt (no JSON schema appended). Port of TS
 /// `FACET_EXTRACTION_PROMPT` at insights.ts:430-456.
-pub const FACET_EXTRACTION_PROMPT: &str = "Analyze this Claude Code session and extract structured facets.
+pub const FACET_EXTRACTION_PROMPT: &str =
+    "Analyze this Claude Code session and extract structured facets.
 
 CRITICAL GUIDELINES:
 

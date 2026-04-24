@@ -317,14 +317,8 @@ mod tests {
         t.record_error("401 Unauthorized"); // non-terminal → reset
         assert_eq!(t.consecutive_errors(), 0);
         // Two fresh terminal must NOT fire close.
-        assert_eq!(
-            t.record_error("ECONNRESET"),
-            LifecycleDecision::Continue
-        );
-        assert_eq!(
-            t.record_error("ECONNRESET"),
-            LifecycleDecision::Continue
-        );
+        assert_eq!(t.record_error("ECONNRESET"), LifecycleDecision::Continue);
+        assert_eq!(t.record_error("ECONNRESET"), LifecycleDecision::Continue);
         // Third fires.
         assert_eq!(
             t.record_error("ECONNRESET"),

@@ -125,11 +125,7 @@ fn merge_group(group: Vec<&Value>) -> Value {
     // m.hookCount, 0)` on a `number` field.
     let hook_count: u64 = group
         .iter()
-        .map(|m| {
-            m.get("hookCount")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-        })
+        .map(|m| m.get("hookCount").and_then(Value::as_u64).unwrap_or(0))
         .sum();
     base.insert("hookCount".into(), Value::from(hook_count));
 
@@ -150,9 +146,11 @@ fn merge_group(group: Vec<&Value>) -> Value {
     base.insert("hookErrors".into(), Value::Array(hook_errors));
 
     // OR-reduce preventedContinuation / hasOutput.
-    let prevented = group
-        .iter()
-        .any(|m| m.get("preventedContinuation").and_then(Value::as_bool).unwrap_or(false));
+    let prevented = group.iter().any(|m| {
+        m.get("preventedContinuation")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
     base.insert("preventedContinuation".into(), Value::from(prevented));
 
     let has_output = group
@@ -299,8 +297,12 @@ mod tests {
     fn prevented_continuation_ors() {
         let mut a = summary("Stop", 1, vec!["a"]);
         let mut b = summary("Stop", 1, vec!["b"]);
-        a.as_object_mut().unwrap().insert("preventedContinuation".into(), Value::from(false));
-        b.as_object_mut().unwrap().insert("preventedContinuation".into(), Value::from(true));
+        a.as_object_mut()
+            .unwrap()
+            .insert("preventedContinuation".into(), Value::from(false));
+        b.as_object_mut()
+            .unwrap()
+            .insert("preventedContinuation".into(), Value::from(true));
 
         let out = collapse_hook_summaries(&[a, b]);
         assert_eq!(out.len(), 1);
@@ -311,8 +313,12 @@ mod tests {
     fn has_output_ors() {
         let mut a = summary("PostToolUse", 1, vec!["a"]);
         let mut b = summary("PostToolUse", 1, vec!["b"]);
-        a.as_object_mut().unwrap().insert("hasOutput".into(), Value::from(true));
-        b.as_object_mut().unwrap().insert("hasOutput".into(), Value::from(false));
+        a.as_object_mut()
+            .unwrap()
+            .insert("hasOutput".into(), Value::from(true));
+        b.as_object_mut()
+            .unwrap()
+            .insert("hasOutput".into(), Value::from(false));
 
         let out = collapse_hook_summaries(&[a, b]);
         assert_eq!(out[0]["hasOutput"].as_bool(), Some(true));
@@ -323,8 +329,12 @@ mod tests {
         // TS comment says max is closer to wall-clock for parallel hooks.
         let mut a = summary("PostToolUse", 1, vec!["a"]);
         let mut b = summary("PostToolUse", 1, vec!["b"]);
-        a.as_object_mut().unwrap().insert("totalDurationMs".into(), Value::from(100u64));
-        b.as_object_mut().unwrap().insert("totalDurationMs".into(), Value::from(150u64));
+        a.as_object_mut()
+            .unwrap()
+            .insert("totalDurationMs".into(), Value::from(100u64));
+        b.as_object_mut()
+            .unwrap()
+            .insert("totalDurationMs".into(), Value::from(150u64));
 
         let out = collapse_hook_summaries(&[a, b]);
         assert_eq!(out[0]["totalDurationMs"].as_u64(), Some(150));

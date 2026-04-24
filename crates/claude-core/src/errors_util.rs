@@ -275,7 +275,9 @@ mod tests {
         for code in [1, 20, 40, 62] {
             assert!(is_fs_inaccessible(&io::Error::from_raw_os_error(code)));
         }
-        assert!(!is_fs_inaccessible(&io::Error::from(io::ErrorKind::InvalidData)));
+        assert!(!is_fs_inaccessible(&io::Error::from(
+            io::ErrorKind::InvalidData
+        )));
     }
 
     #[test]

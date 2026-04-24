@@ -26,7 +26,10 @@ fn default_mode_asks_for_destructive_tool() {
     let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
     // Destructive tools in Default mode should prompt (Ask) or be handled by rules
     assert!(
-        matches!(decision, PermissionDecision::Ask(_) | PermissionDecision::Allow(_)),
+        matches!(
+            decision,
+            PermissionDecision::Ask(_) | PermissionDecision::Allow(_)
+        ),
         "Default mode should ask or allow based on rules, got: {:?}",
         decision
     );
@@ -42,10 +45,7 @@ fn permission_mode_from_string_roundtrip() {
         PermissionMode::from_string("default"),
         PermissionMode::Default
     );
-    assert_eq!(
-        PermissionMode::from_string("plan"),
-        PermissionMode::Plan
-    );
+    assert_eq!(PermissionMode::from_string("plan"), PermissionMode::Plan);
     assert_eq!(
         PermissionMode::from_string("acceptEdits"),
         PermissionMode::AcceptEdits

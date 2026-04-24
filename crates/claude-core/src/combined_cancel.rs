@@ -177,7 +177,10 @@ mod tests {
             let c = combined_cancel(None, Some(&s), Some(Duration::from_secs(60)));
             c.token.clone()
         }; // `c` dropped here — drop_guard should cancel.
-        assert!(child_clone.is_cancelled(), "drop guard must cancel the child");
+        assert!(
+            child_clone.is_cancelled(),
+            "drop guard must cancel the child"
+        );
     }
 
     #[tokio::test]

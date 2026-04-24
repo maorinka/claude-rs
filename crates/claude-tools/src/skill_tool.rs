@@ -249,7 +249,11 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]
@@ -347,10 +351,18 @@ mod tests {
 
         // Missing args field entirely → usage message.
         let r1 = tool
-            .call(&json!({ "skill": "loop-test" }), &ctx, CancellationToken::new(), None)
+            .call(
+                &json!({ "skill": "loop-test" }),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
             .await
             .unwrap();
-        assert_eq!(r1.data["content"].as_str().unwrap(), "USAGE: /loop <prompt>");
+        assert_eq!(
+            r1.data["content"].as_str().unwrap(),
+            "USAGE: /loop <prompt>"
+        );
 
         // Empty string args → usage message (TS normalises via trim).
         let r2 = tool
@@ -362,7 +374,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(r2.data["content"].as_str().unwrap(), "USAGE: /loop <prompt>");
+        assert_eq!(
+            r2.data["content"].as_str().unwrap(),
+            "USAGE: /loop <prompt>"
+        );
 
         // Whitespace-only args → usage message.
         let r3 = tool
@@ -374,7 +389,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(r3.data["content"].as_str().unwrap(), "USAGE: /loop <prompt>");
+        assert_eq!(
+            r3.data["content"].as_str().unwrap(),
+            "USAGE: /loop <prompt>"
+        );
 
         // Real args → main body + header + args (NOT the usage message).
         let r4 = tool

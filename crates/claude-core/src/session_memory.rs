@@ -162,12 +162,16 @@ pub fn analyse_section_sizes(content: &str) -> std::collections::BTreeMap<String
     let mut current_section = String::new();
     let mut current_content: Vec<&str> = Vec::new();
 
-    let flush = |section: &str, body: &[&str], out: &mut std::collections::BTreeMap<String, usize>| {
-        if !section.is_empty() && !body.is_empty() {
-            let joined = body.join("\n");
-            out.insert(section.to_string(), rough_token_count_estimation(joined.trim()));
-        }
-    };
+    let flush =
+        |section: &str, body: &[&str], out: &mut std::collections::BTreeMap<String, usize>| {
+            if !section.is_empty() && !body.is_empty() {
+                let joined = body.join("\n");
+                out.insert(
+                    section.to_string(),
+                    rough_token_count_estimation(joined.trim()),
+                );
+            }
+        };
 
     for line in content.lines() {
         if line.starts_with("# ") {
@@ -217,7 +221,12 @@ pub fn generate_section_reminders(
         };
         let body = oversized
             .iter()
-            .map(|(s, t)| format!("- \"{}\" is ~{} tokens (limit: {})", s, t, MAX_SECTION_LENGTH))
+            .map(|(s, t)| {
+                format!(
+                    "- \"{}\" is ~{} tokens (limit: {})",
+                    s, t, MAX_SECTION_LENGTH
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
         parts.push(format!("\n\n{}:\n{}", header, body));

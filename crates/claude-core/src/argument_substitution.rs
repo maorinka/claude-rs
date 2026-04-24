@@ -36,10 +36,7 @@ pub fn parse_arguments(args: &str) -> Vec<String> {
                 _ => None,
             })
             .collect(),
-        ShellParseResult::Err(_) => args
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect(),
+        ShellParseResult::Err(_) => args.split_whitespace().map(|s| s.to_string()).collect(),
     }
 }
 
@@ -261,10 +258,7 @@ mod tests {
     fn progressive_hint_all_filled_is_none() {
         let arg_names = names(&["a", "b"]);
         let typed = names(&["x", "y"]);
-        assert_eq!(
-            generate_progressive_argument_hint(&arg_names, &typed),
-            None
-        );
+        assert_eq!(generate_progressive_argument_hint(&arg_names, &typed), None);
     }
 
     #[test]
@@ -277,19 +271,13 @@ mod tests {
         // Empty string is a valid no-arg invocation — $ARGUMENTS
         // should expand to "" and no ARGUMENTS tail should be
         // appended.
-        let out =
-            substitute_arguments("before $ARGUMENTS after", Some(""), true, &[]);
+        let out = substitute_arguments("before $ARGUMENTS after", Some(""), true, &[]);
         assert_eq!(out, "before  after");
     }
 
     #[test]
     fn sub_dollar_arguments_full_string() {
-        let out = substitute_arguments(
-            "cmd: $ARGUMENTS",
-            Some("hello world"),
-            false,
-            &[],
-        );
+        let out = substitute_arguments("cmd: $ARGUMENTS", Some("hello world"), false, &[]);
         assert_eq!(out, "cmd: hello world");
     }
 
@@ -306,8 +294,7 @@ mod tests {
 
     #[test]
     fn sub_shorthand_indexed() {
-        let out =
-            substitute_arguments("$0 and $1", Some("alpha beta"), false, &[]);
+        let out = substitute_arguments("$0 and $1", Some("alpha beta"), false, &[]);
         assert_eq!(out, "alpha and beta");
     }
 
@@ -332,19 +319,13 @@ mod tests {
     #[test]
     fn sub_named_arg_not_substring_of_longer_name() {
         // `$foo` shouldn't match inside `$foobar`.
-        let out = substitute_arguments(
-            "$foobar and $foo",
-            Some("A"),
-            false,
-            &names(&["foo"]),
-        );
+        let out = substitute_arguments("$foobar and $foo", Some("A"), false, &names(&["foo"]));
         assert_eq!(out, "$foobar and A");
     }
 
     #[test]
     fn sub_appends_when_no_placeholder_and_args_nonempty() {
-        let out =
-            substitute_arguments("do a thing", Some("alpha beta"), true, &[]);
+        let out = substitute_arguments("do a thing", Some("alpha beta"), true, &[]);
         assert!(out.ends_with("\n\nARGUMENTS: alpha beta"));
     }
 

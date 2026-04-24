@@ -24,7 +24,7 @@ fn bridge_message_file_changed_no_content() {
         BridgeMessage::FileChanged { path, content } => {
             assert_eq!(path, "foo.rs");
             assert!(content.is_none());
-        },
+        }
         _ => panic!("unexpected variant"),
     }
 }
@@ -103,7 +103,7 @@ fn bridge_message_status_without_message() {
         BridgeMessage::Status { state, message } => {
             assert_eq!(state, "ready");
             assert!(message.is_none());
-        },
+        }
         _ => panic!("unexpected variant"),
     }
 }

@@ -74,7 +74,11 @@ fn which(cmd: &str) -> Option<PathBuf> {
     // directly without walking PATH. `which` npm does the same.
     if cmd.contains(std::path::MAIN_SEPARATOR) || cmd.contains('/') {
         let p = PathBuf::from(cmd);
-        return if is_executable_candidate(&p) { Some(p) } else { None };
+        return if is_executable_candidate(&p) {
+            Some(p)
+        } else {
+            None
+        };
     }
 
     let path_var = std::env::var_os("PATH")?;
@@ -83,11 +87,10 @@ fn which(cmd: &str) -> Option<PathBuf> {
     // is searched *before* `PATH`. Unix deliberately does not — a
     // bare `ls` never resolves from CWD, only from `PATH`.
     #[cfg(windows)]
-    let search_dirs: Vec<std::path::PathBuf> = std::iter::once(
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-    )
-    .chain(std::env::split_paths(&path_var))
-    .collect();
+    let search_dirs: Vec<std::path::PathBuf> =
+        std::iter::once(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+            .chain(std::env::split_paths(&path_var))
+            .collect();
     #[cfg(not(windows))]
     let search_dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path_var).collect();
 
@@ -237,7 +240,10 @@ mod tests {
             .map(|g| !g.contains_key("  claude_rs_trim_probe_zzz  "))
             .unwrap_or(false);
         assert!(trimmed_present, "cache key must be the trimmed form");
-        assert!(untrimmed_absent, "raw whitespace-wrapped key must not be cached");
+        assert!(
+            untrimmed_absent,
+            "raw whitespace-wrapped key must not be cached"
+        );
     }
 
     #[test]

@@ -146,7 +146,9 @@ mod tests {
 
         let paths = get_macos_plist_paths();
         // Even with zero env, the device-level entry must be there.
-        assert!(paths.iter().any(|c| c.label == "device-level managed preferences"));
+        assert!(paths
+            .iter()
+            .any(|c| c.label == "device-level managed preferences"));
     }
 
     #[test]
@@ -176,7 +178,9 @@ mod tests {
         std::env::remove_var("USER_TYPE");
 
         let paths = get_macos_plist_paths();
-        assert!(!paths.iter().any(|c| c.label == "per-user managed preferences"));
+        assert!(!paths
+            .iter()
+            .any(|c| c.label == "per-user managed preferences"));
         std::env::remove_var("USER");
     }
 
@@ -189,13 +193,17 @@ mod tests {
         // Non-ant: skipped.
         std::env::set_var("USER_TYPE", "external");
         let paths = get_macos_plist_paths();
-        assert!(!paths.iter().any(|c| c.label == "user preferences (ant-only)"));
+        assert!(!paths
+            .iter()
+            .any(|c| c.label == "user preferences (ant-only)"));
 
         // Ant: included (assuming home dir resolves, which it does in
         // `cargo test`'s environment).
         std::env::set_var("USER_TYPE", "ant");
         let paths = get_macos_plist_paths();
-        assert!(paths.iter().any(|c| c.label == "user preferences (ant-only)"));
+        assert!(paths
+            .iter()
+            .any(|c| c.label == "user preferences (ant-only)"));
 
         std::env::remove_var("USER_TYPE");
     }

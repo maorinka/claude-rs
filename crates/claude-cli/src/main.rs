@@ -306,9 +306,12 @@ async fn main() -> Result<()> {
         .iter()
         .map(|t| (t.name().to_string(), t.description()))
         .collect();
-    let system_prompt_values =
-        claude_core::context::system_prompt::build_system_prompt(&project_root, &tool_descriptions, &model)
-            .await?;
+    let system_prompt_values = claude_core::context::system_prompt::build_system_prompt(
+        &project_root,
+        &tool_descriptions,
+        &model,
+    )
+    .await?;
 
     // Convert Vec<Value> to Vec<ContentBlock> for the engine
     let system_prompt: Vec<claude_core::types::content::ContentBlock> = system_prompt_values
@@ -344,13 +347,11 @@ async fn main() -> Result<()> {
     // the prompt param on WebFetch is preserved in the result payload but no
     // summarisation happens.
     {
-        let haiku = std::sync::Arc::new(
-            claude_core::secondary_model::HaikuSecondaryModel::new(
-                auth.clone(),
-                api_config.base_url.clone(),
-                api_config.session_id.clone(),
-            ),
-        );
+        let haiku = std::sync::Arc::new(claude_core::secondary_model::HaikuSecondaryModel::new(
+            auth.clone(),
+            api_config.base_url.clone(),
+            api_config.session_id.clone(),
+        ));
         claude_core::secondary_model::set_global(haiku);
     }
 
@@ -365,14 +366,12 @@ async fn main() -> Result<()> {
             .unwrap_or_default();
         let session_id = api_config.session_id.clone();
         let settings_value = serde_json::to_value(settings).unwrap_or(serde_json::Value::Null);
-        let runner = std::sync::Arc::new(
-            claude_core::hooks::HookRunner::from_settings(
-                &settings_value,
-                cwd,
-                session_id,
-                String::new(),
-            ),
-        );
+        let runner = std::sync::Arc::new(claude_core::hooks::HookRunner::from_settings(
+            &settings_value,
+            cwd,
+            session_id,
+            String::new(),
+        ));
         claude_core::hooks::set_global_runner(runner);
     }
 
@@ -568,7 +567,8 @@ async fn main() -> Result<()> {
                             .unwrap_or(false);
 
                         let decision = {
-                            let tool_perms = SimpleToolPermissions::new(&tool_info.name, is_read_only);
+                            let tool_perms =
+                                SimpleToolPermissions::new(&tool_info.name, is_read_only);
                             evaluate_permission(&tool_perms, &tool_info.input, &perm_ctx)
                         };
 
@@ -582,7 +582,10 @@ async fn main() -> Result<()> {
                                     reason = %ask.message,
                                     "Non-interactive mode: denying tool requiring user confirmation"
                                 );
-                                (format!("Permission denied (non-interactive): {}", ask.message), true)
+                                (
+                                    format!("Permission denied (non-interactive): {}", ask.message),
+                                    true,
+                                )
                             }
                             PermissionDecision::Allow(_) => {
                                 let executor = tools.get(&tool_info.name);

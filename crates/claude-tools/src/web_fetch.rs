@@ -310,7 +310,8 @@ impl ToolExecutor for WebFetchTool {
         // The is_preapproved flag relaxes the quoting guidelines applied
         // to the secondary-model prompt (TS makeSecondaryModelPrompt).
         let is_preapproved = crate::web_fetch_preapproved::is_preapproved_url(&url);
-        match apply_prompt_to_markdown(&prompt, &result_text, is_preapproved, cancel.clone()).await {
+        match apply_prompt_to_markdown(&prompt, &result_text, is_preapproved, cancel.clone()).await
+        {
             Ok(Some(summary)) => Ok(ToolResultData {
                 data: json!({
                     "bytes": bytes,
@@ -375,14 +376,10 @@ mod tests {
     async fn no_model_registered_returns_none() {
         // The global model is never installed in this test harness, so
         // apply_prompt_to_markdown must gracefully return None.
-        let out = apply_prompt_to_markdown(
-            "summarise",
-            "hello world",
-            false,
-            CancellationToken::new(),
-        )
-        .await
-        .expect("no error when model absent");
+        let out =
+            apply_prompt_to_markdown("summarise", "hello world", false, CancellationToken::new())
+                .await
+                .expect("no error when model absent");
         assert!(out.is_none());
     }
 }

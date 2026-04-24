@@ -9,10 +9,7 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::backends::*;
-use super::mailbox::{
-    self, read_team_file, write_team_file, TeammateMessageInput,
-    TEAM_LEAD_NAME,
-};
+use super::mailbox::{self, read_team_file, write_team_file, TeammateMessageInput, TEAM_LEAD_NAME};
 use super::types::*;
 
 // ---------------------------------------------------------------------------
@@ -129,13 +126,7 @@ pub async fn spawn_teammate(
             .await
         }
         BackendType::InProcess => {
-            spawn_in_process(
-                config,
-                team_name,
-                parent_session_id,
-                leader_model,
-            )
-            .await
+            spawn_in_process(config, team_name, parent_session_id, leader_model).await
         }
         BackendType::ITerm2 => {
             // iTerm2 backend not yet implemented in Rust; fall back to tmux.
@@ -165,20 +156,13 @@ async fn spawn_with_tmux(
     permission_mode: Option<&PermissionMode>,
     inside_tmux: bool,
 ) -> Result<SpawnOutput> {
-    let model = resolve_teammate_model(
-        config.model.as_deref(),
-        leader_model,
-        None,
-    );
+    let model = resolve_teammate_model(config.model.as_deref(), leader_model, None);
 
     // Generate unique name if duplicate exists.
     let unique_name = generate_unique_teammate_name(&config.name, team_name).await;
     let sanitized_name = sanitize_agent_name(&unique_name);
     let teammate_id = format_agent_id(&sanitized_name, team_name);
-    let working_dir = config
-        .cwd
-        .as_deref()
-        .unwrap_or(".");
+    let working_dir = config.cwd.as_deref().unwrap_or(".");
 
     // Assign color based on current team size.
     let team_file = read_team_file(team_name).await;
@@ -208,7 +192,10 @@ async fn spawn_with_tmux(
         format!("--agent-name '{}'", shell_escape_val(&sanitized_name)),
         format!("--team-name '{}'", shell_escape_val(team_name)),
         format!("--agent-color '{}'", teammate_color),
-        format!("--parent-session-id '{}'", shell_escape_val(parent_session_id)),
+        format!(
+            "--parent-session-id '{}'",
+            shell_escape_val(parent_session_id)
+        ),
     ];
 
     if config.plan_mode_required {
@@ -277,12 +264,8 @@ async fn spawn_with_tmux(
     );
 
     // Send the command to the new pane.
-    TmuxBackend::send_command_to_pane_impl(
-        &create_result.pane_id,
-        &spawn_command,
-        !inside_tmux,
-    )
-    .await?;
+    TmuxBackend::send_command_to_pane_impl(&create_result.pane_id, &spawn_command, !inside_tmux)
+        .await?;
 
     let session_name = if inside_tmux {
         "current".to_string()
@@ -359,11 +342,7 @@ async fn spawn_in_process(
     parent_session_id: &str,
     leader_model: Option<&str>,
 ) -> Result<SpawnOutput> {
-    let model = resolve_teammate_model(
-        config.model.as_deref(),
-        leader_model,
-        None,
-    );
+    let model = resolve_teammate_model(config.model.as_deref(), leader_model, None);
 
     let unique_name = generate_unique_teammate_name(&config.name, team_name).await;
     let sanitized_name = sanitize_agent_name(&unique_name);

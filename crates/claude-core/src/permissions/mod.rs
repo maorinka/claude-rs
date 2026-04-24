@@ -35,11 +35,10 @@ pub use setup::{
     initialize_tool_permission_context, is_dangerous_bash_permission,
     is_dangerous_powershell_permission, is_dangerous_task_permission,
     is_overly_broad_bash_allow_rule, is_overly_broad_powershell_allow_rule,
-    parse_tool_list_from_cli, prepare_context_for_plan_mode,
-    restore_dangerous_permissions, strip_dangerous_permissions_for_auto_mode,
-    transition_permission_mode, PermissionModeCliConfig, PermissionModeResult,
-    ToolPermissionContextInit, AGENT_TOOL_NAME, BASH_TOOL_NAME, CROSS_PLATFORM_CODE_EXEC,
-    DANGEROUS_BASH_PATTERNS, POWERSHELL_TOOL_NAME,
+    parse_tool_list_from_cli, prepare_context_for_plan_mode, restore_dangerous_permissions,
+    strip_dangerous_permissions_for_auto_mode, transition_permission_mode, PermissionModeCliConfig,
+    PermissionModeResult, ToolPermissionContextInit, AGENT_TOOL_NAME, BASH_TOOL_NAME,
+    CROSS_PLATFORM_CODE_EXEC, DANGEROUS_BASH_PATTERNS, POWERSHELL_TOOL_NAME,
 };
 
 pub use types::{

@@ -168,7 +168,7 @@ pub fn parse_user_specified_model(input: &str) -> String {
             } else {
                 trimmed.to_string()
             }
-        },
+        }
     }
 }
 
@@ -531,7 +531,7 @@ impl CommandHandler for EffortHandler {
                         "Effort level set to: {}",
                         level
                     )))
-                },
+                }
                 _ => Ok(CommandResult::Error(format!(
                     "Invalid effort level: '{}'. Use low, medium, or high.",
                     level
@@ -645,14 +645,14 @@ impl CommandHandler for DiffHandler {
                     output.push_str(&diff);
                     output.push('\n');
                 }
-            },
+            }
             Ok(result) => {
                 let stderr = String::from_utf8_lossy(&result.stderr);
                 output.push_str(&format!("git diff failed: {}\n", stderr.trim()));
-            },
+            }
             Err(e) => {
                 output.push_str(&format!("Failed to run git diff: {}\n", e));
-            },
+            }
         }
 
         match ProcessCommand::new("git")
@@ -669,14 +669,14 @@ impl CommandHandler for DiffHandler {
                     output.push_str(&diff);
                     output.push('\n');
                 }
-            },
+            }
             Ok(result) => {
                 let stderr = String::from_utf8_lossy(&result.stderr);
                 output.push_str(&format!("git diff --cached failed: {}\n", stderr.trim()));
-            },
+            }
             Err(e) => {
                 output.push_str(&format!("Failed to run git diff --cached: {}\n", e));
-            },
+            }
         }
 
         Ok(CommandResult::Action(output))
@@ -787,10 +787,10 @@ impl CommandHandler for PluginHandler {
                         if !found {
                             report.push_str("No plugins installed.\n");
                         }
-                    },
+                    }
                     Err(_) => {
                         report.push_str("No plugins installed.\n");
-                    },
+                    }
                 }
             } else {
                 report.push_str("No plugins installed.\n");
@@ -886,7 +886,7 @@ impl CommandHandler for FilesHandler {
                     )
                 };
                 Ok(CommandResult::Action(display))
-            },
+            }
             _ => Ok(CommandResult::Action(format!(
                 "Not a git repository. Working directory: {}",
                 ctx.working_directory.display()
@@ -996,10 +996,10 @@ impl CommandHandler for EnvHandler {
                     } else {
                         report.push_str(&format!("  {} = {}\n", name, val));
                     }
-                },
+                }
                 Err(_) => {
                     report.push_str(&format!("  {} = (not set)\n", name));
-                },
+                }
             }
         }
 
@@ -1084,10 +1084,10 @@ impl CommandHandler for SessionHandler {
                         if count > 5 {
                             report.push_str(&format!("  ... and {} more\n", count - 5));
                         }
-                    },
+                    }
                     Err(_) => {
                         report.push_str("\nNo stored sessions.\n");
-                    },
+                    }
                 }
             } else {
                 report.push_str("\nNo stored sessions.\n");
@@ -1819,13 +1819,13 @@ impl CommandHandler for ReloadPluginsHandler {
                         }
                     }
                 }
-            },
+            }
             Err(_) => {
                 return Ok(CommandResult::Error(format!(
                     "Failed to read plugins directory: {}",
                     plugins_dir.display()
                 )));
-            },
+            }
         }
 
         let mut msg = format!(
@@ -2951,7 +2951,7 @@ mod tests {
                     "/cost output should contain the model name, got: {}",
                     text
                 );
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -2968,7 +2968,7 @@ mod tests {
                     "/cost should show cost from shared state, got: {}",
                     text
                 );
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -2984,7 +2984,7 @@ mod tests {
                 assert!(text.contains(&ctx.model));
                 // Without shared state, shows fallback
                 assert!(text.contains("no live session"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -2998,7 +2998,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("Settings"));
                 assert!(text.contains("settings.json"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3020,7 +3020,7 @@ mod tests {
                 assert!(text.contains("settings"));
                 assert!(text.contains("working directory"));
                 assert!(text.contains(&ctx.model));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3033,7 +3033,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(!text.is_empty(), "/diff should produce output");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3048,7 +3048,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("exported to") || text.contains("Session exported"));
                 assert!(text.contains("claude_export_"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3062,7 +3062,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("my_session.md"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3075,7 +3075,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("MCP Servers"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3088,7 +3088,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("Installed Plugins"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3103,7 +3103,7 @@ mod tests {
                 assert!(text.contains("Available Skills"));
                 assert!(text.contains("Builtin"));
                 assert!(text.contains("/commit"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3120,7 +3120,7 @@ mod tests {
                 assert!(text.contains("CLAUDE.md"));
                 assert!(tmp.path().join(".claude").exists());
                 assert!(tmp.path().join(".claude/settings.json").exists());
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3136,7 +3136,7 @@ mod tests {
             CommandResult::Message(text) => {
                 // Should still return the prompt even if files already exist
                 assert!(text.contains("analyze this codebase"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3150,7 +3150,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("Session Statistics"));
                 assert!(text.contains(&ctx.model));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3178,7 +3178,7 @@ mod tests {
                 assert!(text.contains("12345"), "should show token count");
                 assert!(text.contains("10"), "should show request count");
                 assert!(text.contains("0.0567"), "should show cost");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3193,7 +3193,7 @@ mod tests {
                 assert!(text.contains("Environment Variables"));
                 assert!(text.contains("ANTHROPIC_API_KEY"));
                 assert!(text.contains("CLAUDE_RS_DEBUG"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3207,7 +3207,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("Configured Hooks"));
                 assert!(text.contains("PreToolUse"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3221,7 +3221,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("Session Info"));
                 assert!(text.contains(&ctx.model));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3238,7 +3238,7 @@ mod tests {
                     "/copy should reference a clipboard tool, got: {}",
                     text
                 );
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3252,7 +3252,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("Agents"));
                 assert!(text.contains("No background agents"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3265,7 +3265,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("Rewind"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3278,7 +3278,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(!text.is_empty(), "/files should produce output");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3293,7 +3293,7 @@ mod tests {
                 assert!(text.contains("pull request"));
                 assert!(text.contains("gh pr view"));
                 assert!(text.contains("gh api"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3306,7 +3306,7 @@ mod tests {
         match result {
             CommandResult::Message(text) => {
                 assert!(text.contains("proactive"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3321,7 +3321,7 @@ mod tests {
                 assert!(text.contains("thorough"));
                 assert!(text.contains("Security"));
                 assert!(text.contains("Performance"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3419,7 +3419,7 @@ mod tests {
                 ] {
                     assert!(text.contains(cmd), "/help should list {}", cmd);
                 }
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3464,7 +3464,7 @@ mod tests {
                     .filter(|e| e.file_name().to_string_lossy().starts_with("claude_share_"))
                     .collect();
                 assert_eq!(files.len(), 1, "should create exactly one share file");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3479,7 +3479,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("my-convo.md"));
                 assert!(tmp.path().join("my-convo.md").exists());
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3516,7 +3516,7 @@ mod tests {
                     text.contains("Average tokens/message"),
                     "should compute average"
                 );
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3529,7 +3529,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("No live session"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3545,7 +3545,7 @@ mod tests {
                 // Verify state was updated
                 let state = ctx.shared.as_ref().unwrap().lock().unwrap();
                 assert_eq!(state.session_name, "My Cool Session");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3558,7 +3558,7 @@ mod tests {
         match result {
             CommandResult::Error(text) => {
                 assert!(text.contains("Usage:"));
-            },
+            }
             other => panic!("expected Error, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3572,7 +3572,7 @@ mod tests {
         match result {
             CommandResult::Error(text) => {
                 assert!(text.contains("Usage:"));
-            },
+            }
             other => panic!(
                 "expected Error for empty arg, got {:?}",
                 std::mem::discriminant(&other)
@@ -3588,7 +3588,7 @@ mod tests {
         match result {
             CommandResult::Error(text) => {
                 assert!(text.contains("not found"));
-            },
+            }
             other => panic!(
                 "expected Error for nonexistent path, got {:?}",
                 std::mem::discriminant(&other)
@@ -3615,7 +3615,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("Added"));
                 assert!(text.contains(extra.path().to_str().unwrap()));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3636,8 +3636,8 @@ mod tests {
                     "should mention keybindings: {}",
                     text
                 );
-            },
-            _ => {},
+            }
+            _ => {}
         }
         let _ = kb_path; // suppress unused warning
     }
@@ -3650,11 +3650,11 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("Reloaded") || text.contains("plugin"));
-            },
+            }
             CommandResult::Error(text) => {
                 // Acceptable if plugins dir doesn't exist in test env
                 assert!(!text.is_empty());
-            },
+            }
             other => panic!(
                 "expected Action or Error, got {:?}",
                 std::mem::discriminant(&other)
@@ -3670,7 +3670,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("Release Notes") || text.contains("changelog"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3686,7 +3686,7 @@ mod tests {
                 assert!(text.contains("blue"));
                 assert!(text.contains("green"));
                 assert!(text.contains("Available colors"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3701,7 +3701,7 @@ mod tests {
                 assert!(text.contains("set to: purple"));
                 let state = ctx.shared.as_ref().unwrap().lock().unwrap();
                 assert_eq!(state.session_color, "purple");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3715,7 +3715,7 @@ mod tests {
             CommandResult::Error(text) => {
                 assert!(text.contains("Invalid color"));
                 assert!(text.contains("rainbow"));
-            },
+            }
             other => panic!("expected Error, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3731,7 +3731,7 @@ mod tests {
                 assert!(text.contains("reset to default"));
                 let state = ctx.shared.as_ref().unwrap().lock().unwrap();
                 assert_eq!(state.session_color, "default");
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3750,7 +3750,7 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("enabled"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
         {
@@ -3762,7 +3762,7 @@ mod tests {
         match result2 {
             CommandResult::Action(text) => {
                 assert!(text.contains("disabled"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3775,14 +3775,14 @@ mod tests {
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("enabled"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
         let result = handler.execute("off", &ctx).unwrap();
         match result {
             CommandResult::Action(text) => {
                 assert!(text.contains("disabled"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3796,7 +3796,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("npm run test:*"));
                 assert!(text.contains("excluded"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3810,7 +3810,7 @@ mod tests {
             CommandResult::Action(text) => {
                 assert!(text.contains("deprecated"));
                 assert!(text.contains("/config"));
-            },
+            }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3843,7 +3843,7 @@ mod tests {
                 );
                 assert!(text.contains("gh pr create"), "should mention PR creation");
                 assert!(text.contains("PR URL"), "should ask to return URL");
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3857,7 +3857,7 @@ mod tests {
             CommandResult::Message(text) => {
                 assert!(text.contains("fix the login bug"));
                 assert!(text.contains("Additional instructions"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3875,7 +3875,7 @@ mod tests {
                 assert!(text.contains("Auth"));
                 assert!(text.contains("Crypto"));
                 assert!(text.contains("HIGH"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3888,7 +3888,7 @@ mod tests {
         match result {
             CommandResult::Message(text) => {
                 assert!(text.contains("src/auth.rs"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3904,7 +3904,7 @@ mod tests {
                 assert!(text.contains("Do NOT execute"));
                 assert!(text.contains("acceptance criteria"));
                 assert!(text.contains("sub-tasks"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3920,7 +3920,7 @@ mod tests {
             CommandResult::Message(text) => {
                 assert!(text.contains("migrate database to PostgreSQL"));
                 assert!(text.contains("ultra-detailed"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3935,7 +3935,7 @@ mod tests {
                 assert!(text.contains("reasoning process"));
                 assert!(text.contains("options did you consider"));
                 assert!(text.contains("trade-offs"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3948,7 +3948,7 @@ mod tests {
         match result {
             CommandResult::Message(text) => {
                 assert!(text.contains("the architecture decision"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3963,7 +3963,7 @@ mod tests {
                 assert!(text.contains("usage patterns"));
                 assert!(text.contains("workflow improvements"));
                 assert!(text.contains("Token usage efficiency"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -3990,7 +3990,7 @@ mod tests {
                 assert!(text.contains("20 messages"));
                 assert!(text.contains("50000 tokens"));
                 assert!(text.contains("0.2500"));
-            },
+            }
             other => panic!("expected Message, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -4008,7 +4008,7 @@ mod tests {
             CommandResult::Message(t) => {
                 assert!(t.contains("what's 2+2?"));
                 assert!(t.contains("Side question"));
-            },
+            }
             _ => panic!("expected Message"),
         }
     }
@@ -4019,7 +4019,7 @@ mod tests {
         match r {
             CommandResult::Action(t) => {
                 assert!(t.contains("github.com/anthropics/claude-code"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4032,7 +4032,7 @@ mod tests {
         match r {
             CommandResult::Action(t) => {
                 assert!(t.contains("repro: open file + crash"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4044,7 +4044,7 @@ mod tests {
             CommandResult::Action(t) => {
                 assert!(t.contains("claude.ai/upgrade"));
                 assert!(t.contains("claude.com/pricing"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4055,7 +4055,7 @@ mod tests {
         match r {
             CommandResult::Action(t) => {
                 assert!(t.contains("CLAUDE_CODE_SIMPLE"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4119,7 +4119,7 @@ mod tests {
                 assert!(t.contains("claude.ai/download"));
                 // The platform note always mentions macOS / Windows one way or another.
                 assert!(t.contains("macOS") || t.contains("Windows"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4131,7 +4131,7 @@ mod tests {
             CommandResult::Action(t) => {
                 assert!(t.contains("apps.apple.com"));
                 assert!(t.contains("play.google.com"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4143,7 +4143,7 @@ mod tests {
             CommandResult::Action(t) => {
                 assert!(t.contains("TERM="));
                 assert!(t.contains("Image paste"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4155,7 +4155,7 @@ mod tests {
             CommandResult::Action(t) => {
                 assert!(t.contains("PID:"));
                 assert!(t.contains("leaks") || t.contains("pmap"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4166,7 +4166,7 @@ mod tests {
         match r {
             CommandResult::Action(t) => {
                 assert!(t.contains("CLAUDE_CODE_REMOTE"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4178,7 +4178,7 @@ mod tests {
             CommandResult::Action(t) => {
                 assert!(t.contains("claude-rs server"));
                 assert!(t.contains("CLAUDE_CODE_BRIDGE"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }
@@ -4190,7 +4190,7 @@ mod tests {
             CommandResult::Message(t) => {
                 assert!(t.contains("gh pr list"));
                 assert!(t.contains("waiting on me"));
-            },
+            }
             _ => panic!("expected Message"),
         }
     }
@@ -4214,7 +4214,7 @@ mod tests {
                 assert!(t.contains("Per-turn tokens"));
                 assert!(t.contains("100"));
                 assert!(t.contains("200"));
-            },
+            }
             _ => panic!("expected Action"),
         }
     }

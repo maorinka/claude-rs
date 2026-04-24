@@ -305,7 +305,7 @@ pub async fn read_pending_permissions(team_name: &str) -> Vec<SwarmPermissionReq
         Err(e) => {
             warn!("[PermissionSync] Failed to read pending requests: {}", e);
             return Vec::new();
-        },
+        }
     };
 
     let mut requests = Vec::new();
@@ -335,14 +335,14 @@ pub async fn read_pending_permissions(team_name: &str) -> Vec<SwarmPermissionReq
                     file_name, e
                 );
                 continue;
-            },
+            }
         };
 
         match serde_json::from_str::<SwarmPermissionRequest>(&content) {
             Ok(req) => requests.push(req),
             Err(e) => {
                 warn!("[PermissionSync] Invalid request file {}: {}", file_name, e);
-            },
+            }
         }
     }
 
@@ -368,7 +368,7 @@ pub async fn read_resolved_permission(
                     request_id, e
                 );
                 None
-            },
+            }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
@@ -377,7 +377,7 @@ pub async fn read_resolved_permission(
                 request_id, e
             );
             None
-        },
+        }
     }
 }
 
@@ -407,14 +407,14 @@ pub async fn resolve_permission(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             debug!("[PermissionSync] Pending request not found: {}", request_id);
             return false;
-        },
+        }
         Err(e) => {
             warn!(
                 "[PermissionSync] Failed to read pending {}: {}",
                 request_id, e
             );
             return false;
-        },
+        }
     };
 
     let mut request: SwarmPermissionRequest = match serde_json::from_str(&content) {
@@ -425,7 +425,7 @@ pub async fn resolve_permission(
                 request_id, e
             );
             return false;
-        },
+        }
     };
 
     // Update the request with resolution data.
@@ -446,7 +446,7 @@ pub async fn resolve_permission(
         Err(e) => {
             warn!("[PermissionSync] Serialize failed: {}", e);
             return false;
-        },
+        }
     };
 
     if let Err(e) = tokio::fs::write(&temp_path, &json).await {
@@ -529,7 +529,7 @@ pub async fn delete_resolved_permission(request_id: &str, team_name: &str) -> bo
                 request_id
             );
             true
-        },
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => {
             warn!(
@@ -537,7 +537,7 @@ pub async fn delete_resolved_permission(request_id: &str, team_name: &str) -> bo
                 e
             );
             false
-        },
+        }
     }
 }
 
@@ -560,7 +560,7 @@ pub async fn cleanup_old_resolutions(team_name: &str, max_age_ms: u64) -> usize 
         Err(e) => {
             warn!("[PermissionSync] Failed to cleanup resolutions: {}", e);
             return 0;
-        },
+        }
     };
 
     let now = chrono::Utc::now().timestamp_millis() as u64;
@@ -588,7 +588,7 @@ pub async fn cleanup_old_resolutions(team_name: &str, max_age_ms: u64) -> usize 
                 Ok(request) => {
                     let resolved_at = request.resolved_at.unwrap_or(request.created_at);
                     now.saturating_sub(resolved_at) >= max_age_ms
-                },
+                }
                 Err(_) => true,
             },
             Err(_) => true,
@@ -644,7 +644,7 @@ pub async fn send_permission_request_via_mailbox(request: &SwarmPermissionReques
         None => {
             debug!("[PermissionSync] Cannot send permission request: leader name not found");
             return false;
-        },
+        }
     };
 
     let message = create_permission_request_message(
@@ -665,7 +665,7 @@ pub async fn send_permission_request_via_mailbox(request: &SwarmPermissionReques
                 e
             );
             return false;
-        },
+        }
     };
 
     match mailbox::write_to_mailbox(
@@ -687,14 +687,14 @@ pub async fn send_permission_request_via_mailbox(request: &SwarmPermissionReques
                 request.id, leader_name
             );
             true
-        },
+        }
         Err(e) => {
             warn!(
                 "[PermissionSync] Failed to send permission request via mailbox: {}",
                 e
             );
             false
-        },
+        }
     }
 }
 
@@ -718,9 +718,9 @@ pub async fn send_permission_response_via_mailbox(
                 Err(e) => {
                     warn!("[PermissionSync] Serialize error: {}", e);
                     return false;
-                },
+                }
             }
-        },
+        }
         PermissionDecision::Rejected => {
             let error = resolution
                 .feedback
@@ -732,9 +732,9 @@ pub async fn send_permission_response_via_mailbox(
                 Err(e) => {
                     warn!("[PermissionSync] Serialize error: {}", e);
                     return false;
-                },
+                }
             }
-        },
+        }
     };
 
     let sender = sender_name.unwrap_or(TEAM_LEAD_NAME);
@@ -758,14 +758,14 @@ pub async fn send_permission_response_via_mailbox(
                 request_id, worker_name
             );
             true
-        },
+        }
         Err(e) => {
             warn!(
                 "[PermissionSync] Failed to send permission response via mailbox: {}",
                 e
             );
             false
-        },
+        }
     }
 }
 
@@ -789,7 +789,7 @@ pub async fn send_sandbox_permission_request_via_mailbox(
                 "[PermissionSync] Cannot send sandbox permission request: leader name not found"
             );
             return false;
-        },
+        }
     };
 
     let message =
@@ -803,7 +803,7 @@ pub async fn send_sandbox_permission_request_via_mailbox(
                 e
             );
             return false;
-        },
+        }
     };
 
     match mailbox::write_to_mailbox(
@@ -825,14 +825,14 @@ pub async fn send_sandbox_permission_request_via_mailbox(
                 request_id, host, leader_name
             );
             true
-        },
+        }
         Err(e) => {
             warn!(
                 "[PermissionSync] Failed to send sandbox permission request: {}",
                 e
             );
             false
-        },
+        }
     }
 }
 
@@ -852,7 +852,7 @@ pub async fn send_sandbox_permission_response_via_mailbox(
         Err(e) => {
             warn!("[PermissionSync] Serialize error: {}", e);
             return false;
-        },
+        }
     };
 
     let sender = sender_name.unwrap_or(TEAM_LEAD_NAME);
@@ -876,11 +876,11 @@ pub async fn send_sandbox_permission_response_via_mailbox(
                 request_id, host, allow, worker_name
             );
             true
-        },
+        }
         Err(e) => {
             warn!("[PermissionSync] Failed to send sandbox response: {}", e);
             false
-        },
+        }
     }
 }
 

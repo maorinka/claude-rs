@@ -9,8 +9,7 @@
 //! Rust has native `u128`, so the TS BigInt path collapses to
 //! straight integer arithmetic.
 
-const BASE_58_CHARS: &[u8] =
-    b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const BASE_58_CHARS: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const VERSION: &str = "01";
 /// `ceil(128 / log2(58)) = 22`.
 const ENCODED_LENGTH: usize = 22;
@@ -110,15 +109,13 @@ mod tests {
 
     #[test]
     fn uuid_rejects_bad_hex() {
-        let err =
-            uuid_to_u128("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz").unwrap_err();
+        let err = uuid_to_u128("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz").unwrap_err();
         assert_eq!(err, TaggedIdError::InvalidHex);
     }
 
     #[test]
     fn tagged_id_shape() {
-        let out =
-            to_tagged_id("user", "00000000-0000-0000-0000-000000000000").unwrap();
+        let out = to_tagged_id("user", "00000000-0000-0000-0000-000000000000").unwrap();
         assert!(out.starts_with("user_01"));
         // tag + "_01" + 22 base58 chars = 7 + 22 = 29 for tag "user"
         assert_eq!(out.len(), "user_01".len() + ENCODED_LENGTH);
@@ -126,8 +123,7 @@ mod tests {
 
     #[test]
     fn tagged_id_version_prefix_stable() {
-        let out =
-            to_tagged_id("org", "12345678-1234-1234-1234-123456789abc").unwrap();
+        let out = to_tagged_id("org", "12345678-1234-1234-1234-123456789abc").unwrap();
         assert!(out.starts_with("org_01"));
     }
 

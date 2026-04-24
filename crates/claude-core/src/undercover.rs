@@ -311,8 +311,7 @@ mod tests {
 
     #[test]
     fn classify_external_with_remote() {
-        let class =
-            classify_remote_url(Some("https://github.com/someorg/random-repo.git"));
+        let class = classify_remote_url(Some("https://github.com/someorg/random-repo.git"));
         assert_eq!(class, RepoClass::External);
     }
 
@@ -331,9 +330,7 @@ mod tests {
     fn classify_matches_substring_not_exact() {
         // TS uses remoteUrl.includes(repo). Any URL that contains
         // the allowlist entry as a substring is Internal.
-        let weird = Some(
-            "git@myhost.git-proxy.internal:github.com:anthropics/apps/mirror.git",
-        );
+        let weird = Some("git@myhost.git-proxy.internal:github.com:anthropics/apps/mirror.git");
         assert_eq!(classify_remote_url(weird), RepoClass::Internal);
     }
 

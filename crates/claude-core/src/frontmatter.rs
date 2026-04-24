@@ -185,7 +185,7 @@ fn parse_scalar(raw: &str) -> FrontmatterValue {
     match s.to_ascii_lowercase().as_str() {
         "true" | "yes" => return FrontmatterValue::Bool(true),
         "false" | "no" => return FrontmatterValue::Bool(false),
-        _ => {},
+        _ => {}
     }
     // Strip surrounding quotes.
     let unquoted = if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
@@ -210,14 +210,14 @@ fn split_respecting_braces(input: &str) -> Vec<String> {
             '{' | '[' => {
                 depth += 1;
                 cur.push(c);
-            },
+            }
             '}' | ']' => {
                 depth -= 1;
                 cur.push(c);
-            },
+            }
             ',' if depth == 0 => {
                 out.push(std::mem::take(&mut cur));
-            },
+            }
             _ => cur.push(c),
         }
     }
@@ -264,7 +264,7 @@ pub fn split_path_in_frontmatter(value: &FrontmatterValue) -> Vec<String> {
                 .filter(|p| !p.is_empty())
                 .flat_map(|p| expand_braces(&p))
                 .collect()
-        },
+        }
         _ => Vec::new(),
     }
 }
@@ -289,7 +289,7 @@ pub fn parse_boolean_frontmatter(v: &FrontmatterValue) -> bool {
         FrontmatterValue::Bool(b) => *b,
         FrontmatterValue::String(s) => {
             matches!(s.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "on")
-        },
+        }
         FrontmatterValue::Number(n) => *n != 0.0,
         _ => false,
     }

@@ -135,7 +135,7 @@ pub fn apply_policy_overlay(user: &Value, policy: &Value) -> Value {
                 }
             }
             Value::Object(out)
-        },
+        }
         // Non-object combinations: policy wins, full stop.
         (_, policy) => policy.clone(),
     }

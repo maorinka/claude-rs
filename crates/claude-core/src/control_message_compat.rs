@@ -68,8 +68,7 @@ mod tests {
 
     #[test]
     fn snake_case_wins_when_both_present() {
-        let mut v =
-            json!({ "request_id": "snake", "requestId": "camel" });
+        let mut v = json!({ "request_id": "snake", "requestId": "camel" });
         normalize_control_message_keys(&mut v);
         assert_eq!(v["request_id"], json!("snake"));
         assert_eq!(v["requestId"], json!("camel"));
@@ -98,8 +97,7 @@ mod tests {
 
     #[test]
     fn response_that_is_not_object_is_untouched() {
-        let mut v =
-            json!({ "requestId": "a", "response": "not-an-object" });
+        let mut v = json!({ "requestId": "a", "response": "not-an-object" });
         normalize_control_message_keys(&mut v);
         assert_eq!(v["request_id"], json!("a"));
         assert_eq!(v["response"], json!("not-an-object"));
