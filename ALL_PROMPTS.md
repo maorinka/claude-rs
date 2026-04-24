@@ -6892,7 +6892,7 @@ createSystemMessage('That message is no longer in the active context (snipped or
 
 ## [outputStyles/loadOutputStylesDir.ts]
 ### Output Style Prompt Loading
-**Status: ❌ NOT IN RUST** — Reason: Output style loading from `.claude/output-styles/*.md` is not implemented. The Rust port has only a deprecated `/output-style` command redirect in `crates/claude-core/src/commands/builtin.rs` that tells users to use `/config` instead, but does not load or inject output style prompts.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/output_styles.rs::load_output_styles(cwd: &Path)` walks `~/.claude/output-styles/*.md` + every ancestor `.claude/output-styles/*.md` from cwd, parsing YAML frontmatter (`name`, `description`, `keep-coding-instructions`) and returning `Vec<OutputStyle>`. Project styles override user styles, matching TS. The `/output-style` command in `commands/builtin.rs` still shows the deprecated-redirect — wiring the loaded styles into the system prompt builder is the remaining step.
 **File:** `src/outputStyles/loadOutputStylesDir.ts:26`
 
 Not a prompt itself, but loads user-authored markdown files from `.claude/output-styles/*.md` directories where the file content becomes a `prompt` field that is injected into the system prompt. The markdown body is loaded as:
