@@ -117,11 +117,7 @@ impl LspClient {
                 }
 
                 // Process all complete messages in the buffer
-                loop {
-                    let Some((content_length, header_end)) = parse_content_length(&buf) else {
-                        break;
-                    };
-
+                while let Some((content_length, header_end)) = parse_content_length(&buf) {
                     let total_len = header_end + content_length;
                     if buf.len() < total_len {
                         // Not enough data yet for the full message body

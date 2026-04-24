@@ -505,9 +505,10 @@ fn glob_match_impl(pattern: &[u8], text: &[u8]) -> bool {
             star_t = t;
             p += 1;
         } else if p < pattern.len()
-            && (pattern[p] == b'?' || pattern[p] == text[t])
-            && text[t] != b'/'
+            && ((pattern[p] == b'?' && text[t] != b'/') || pattern[p] == text[t])
         {
+            // `?` matches any single char except `/`; literal chars
+            // (including `/`) must match exactly.
             p += 1;
             t += 1;
         } else if let Some(sp) = star_p {

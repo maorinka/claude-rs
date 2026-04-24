@@ -72,7 +72,7 @@ fn mtime_ms(path: &Path) -> Option<u64> {
 pub fn scan_memory_files(memory_dir: &Path) -> Vec<MemoryHeader> {
     let mut headers: Vec<MemoryHeader> = Vec::new();
     walk(memory_dir, memory_dir, &mut headers);
-    headers.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    headers.sort_by_key(|h| std::cmp::Reverse(h.mtime_ms));
     headers.truncate(MAX_MEMORY_FILES);
     headers
 }
