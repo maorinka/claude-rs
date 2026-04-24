@@ -1,53 +1,117 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 use tokio::process::Command;
 
+/// Build the git status context prepended to conversations.
+///
+/// Matches TS `src/context.ts:96-103`:
+/// ```text
+/// This is the git status at the start of the conversation. ...
+/// Current branch: <branch>
+/// Main branch (you will usually use this for PRs): <main>
+/// Status: <status>
+/// Recent commits: <log>
+/// ```
 pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
     // Check if in git repo
     let check = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(project_root)
-        .output().await?;
+        .output()
+        .await?;
 
     if !check.status.success() {
         return Ok(None);
     }
 
-    let mut context = String::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    // Branch
+    parts.push(
+        "This is the git status at the start of the conversation. Note that this status \
+         is a snapshot in time, and will not update during the conversation."
+            .to_string(),
+    );
+
+    // Current branch
     if let Ok(branch) = git_output(project_root, &["branch", "--show-current"]).await {
         let branch = branch.trim();
         if !branch.is_empty() {
-            context.push_str(&format!("Current branch: {}\n", branch));
+            parts.push(format!("Current branch: {}", branch));
         }
+    }
+
+    // Main branch (detect main vs master)
+    let main_branch = detect_main_branch(project_root).await;
+    parts.push(format!(
+        "Main branch (you will usually use this for PRs): {}",
+        main_branch
+    ));
+
+    // Git user
+    if let Ok(user_name) = git_output(project_root, &["config", "user.name"]).await {
+        let user_name = user_name.trim();
+        if !user_name.is_empty() {
+            parts.push(format!("Git user: {}", user_name));
+        }
+    }
+
+    // Status (truncated to avoid bloating context)
+    if let Ok(status) = git_output(project_root, &["status", "--short"]).await {
+        let status = status.trim();
+        let truncated = if status.len() > 2000 {
+            let truncated_str = &status[..2000];
+            format!(
+                "{}\n... (truncated because it exceeds 2k characters. If you need more information, run \"git status\" using BashTool)",
+                truncated_str
+            )
+        } else if status.is_empty() {
+            "(clean)".to_string()
+        } else {
+            status.to_string()
+        };
+        parts.push(format!("Status:\n{}", truncated));
     }
 
     // Recent commits
     if let Ok(log) = git_output(project_root, &["log", "--oneline", "-5", "--no-decorate"]).await {
         if !log.trim().is_empty() {
-            context.push_str(&format!("Recent commits:\n{}\n", log.trim()));
+            parts.push(format!("Recent commits:\n{}", log.trim()));
         }
     }
 
-    // Status
-    if let Ok(status) = git_output(project_root, &["status", "--short"]).await {
-        if !status.trim().is_empty() {
-            context.push_str(&format!("Working tree status:\n{}\n", status.trim()));
+    Ok(Some(parts.join("\n\n")))
+}
+
+/// Detect the main branch name (main vs master).
+async fn detect_main_branch(project_root: &Path) -> String {
+    // Try 'main' first
+    if let Ok(output) =
+        git_output(project_root, &["rev-parse", "--verify", "refs/heads/main"]).await
+    {
+        if !output.trim().is_empty() {
+            return "main".to_string();
         }
     }
-
-    if context.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(context))
+    // Fallback to 'master'
+    if let Ok(output) = git_output(
+        project_root,
+        &["rev-parse", "--verify", "refs/heads/master"],
+    )
+    .await
+    {
+        if !output.trim().is_empty() {
+            return "master".to_string();
+        }
     }
+    // Default
+    "main".to_string()
 }
 
 async fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(dir)
-        .output().await?;
+        .output()
+        .await?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

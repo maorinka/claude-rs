@@ -4,14 +4,21 @@ use claude_tui::widgets::spinner::*;
 #[test]
 fn test_dark_theme_colors() {
     let t = dark_theme();
-    assert_eq!(t.fg, ratatui::style::Color::White);
-    assert_eq!(t.error, ratatui::style::Color::Red);
+    // Dark theme uses Reset for fg (terminal default)
+    assert_eq!(t.fg, ratatui::style::Color::Reset);
+    // Error is bright red
+    assert_eq!(t.error, ratatui::style::Color::Rgb(255, 107, 128));
+    // Claude orange
+    assert_eq!(t.claude, ratatui::style::Color::Rgb(215, 119, 87));
 }
 
 #[test]
 fn test_light_theme_colors() {
     let t = light_theme();
-    assert_eq!(t.fg, ratatui::style::Color::Black);
+    // Light theme uses Reset for fg (terminal default)
+    assert_eq!(t.fg, ratatui::style::Color::Reset);
+    // Light error color
+    assert_eq!(t.error, ratatui::style::Color::Rgb(171, 43, 63));
 }
 
 #[test]
@@ -37,10 +44,11 @@ fn test_spinner_advance() {
 fn test_spinner_wraps_around() {
     let mut s = SpinnerState::new();
     s.start(SpinnerMode::Thinking);
-    for _ in 0..10 {
+    // The spinner has 12 frames (6 forward + 6 reverse bounce)
+    for _ in 0..12 {
         s.advance();
     }
-    assert_eq!(s.frame, 0); // Wraps back to 0
+    assert_eq!(s.frame, 0); // Wraps back to 0 after 12 frames
 }
 
 #[test]
@@ -65,7 +73,13 @@ fn test_spinner_start_stop() {
 fn test_spinner_mode_labels() {
     assert_eq!(SpinnerMode::Thinking.label(), "Thinking");
     assert_eq!(SpinnerMode::Waiting.label(), "Waiting");
-    assert_eq!(SpinnerMode::Tool { name: "Bash".into() }.label(), "Bash");
+    assert_eq!(
+        SpinnerMode::Tool {
+            name: "Bash".into()
+        }
+        .label(),
+        "Bash"
+    );
     assert_eq!(SpinnerMode::Stopped.label(), "Ready");
 }
 

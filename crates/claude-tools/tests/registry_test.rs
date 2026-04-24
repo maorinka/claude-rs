@@ -1,6 +1,6 @@
-use claude_tools::registry::*;
-use claude_core::types::events::ToolResultData;
 use async_trait::async_trait;
+use claude_core::types::events::ToolResultData;
+use claude_tools::registry::*;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -9,13 +9,26 @@ struct MockTool;
 
 #[async_trait]
 impl ToolExecutor for MockTool {
-    fn name(&self) -> &str { "MockTool" }
-    fn aliases(&self) -> &[&str] { &["mock", "mt"] }
+    fn name(&self) -> &str {
+        "MockTool"
+    }
+    fn aliases(&self) -> &[&str] {
+        &["mock", "mt"]
+    }
     fn input_schema(&self) -> Value {
         json!({"type": "object", "properties": {"x": {"type": "string"}}})
     }
-    async fn call(&self, input: &Value, _ctx: &ToolUseContext, _cancel: CancellationToken, _progress: Option<ProgressSender>) -> anyhow::Result<ToolResultData> {
-        Ok(ToolResultData { data: json!({"echo": input}), is_error: false })
+    async fn call(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> anyhow::Result<ToolResultData> {
+        Ok(ToolResultData {
+            data: json!({"echo": input}),
+            is_error: false,
+        })
     }
 }
 

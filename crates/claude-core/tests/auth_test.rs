@@ -10,7 +10,9 @@ fn test_code_verifier_length() {
 #[test]
 fn test_code_verifier_is_base64url() {
     let v = generate_code_verifier();
-    assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    assert!(v
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
 }
 
 #[test]
@@ -41,7 +43,7 @@ async fn test_store_and_load_tokens() {
     // Override claude_dir by using direct file ops
     let cred_path = tmp.path().join(".credentials.json");
 
-    let tokens = OAuthStoredTokens {
+    let _tokens = OAuthStoredTokens {
         access_token: "test_access".into(),
         refresh_token: Some("test_refresh".into()),
         expires_at: Some(1234567890),
@@ -59,7 +61,9 @@ async fn test_store_and_load_tokens() {
             "scopes": ["user:inference"]
         }
     });
-    tokio::fs::write(&cred_path, serde_json::to_string(&data).unwrap()).await.unwrap();
+    tokio::fs::write(&cred_path, serde_json::to_string(&data).unwrap())
+        .await
+        .unwrap();
 
     // Read back and verify the JSON was written correctly
     let content = tokio::fs::read_to_string(&cred_path).await.unwrap();

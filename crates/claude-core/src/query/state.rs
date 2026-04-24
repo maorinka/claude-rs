@@ -1,5 +1,5 @@
-use crate::types::message::StopReason;
 use crate::types::error::QueryError;
+use crate::types::message::StopReason;
 
 #[derive(Clone, Debug)]
 pub enum QueryState {

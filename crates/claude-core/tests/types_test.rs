@@ -1,16 +1,19 @@
-use claude_core::types::message::*;
+use chrono::Utc;
 use claude_core::types::content::*;
+use claude_core::types::message::*;
 use claude_core::types::usage::*;
 use uuid::Uuid;
-use chrono::Utc;
 
 #[test]
 fn test_user_message_serializes_with_type_tag() {
     let msg = Message::User(UserMessage {
         uuid: Uuid::nil(),
-        content: vec![ContentBlock::Text { text: "hello".into() }],
+        content: vec![ContentBlock::Text {
+            text: "hello".into(),
+        }],
         timestamp: chrono::DateTime::parse_from_rfc3339("2026-03-31T00:00:00Z")
-            .unwrap().with_timezone(&Utc),
+            .unwrap()
+            .with_timezone(&Utc),
     });
     let json = serde_json::to_value(&msg).unwrap();
     assert_eq!(json["type"], "user");
@@ -27,7 +30,9 @@ fn test_assistant_message_with_tool_use() {
             model: "claude-sonnet-4-6".into(),
             role: Role::Assistant,
             content: vec![
-                ContentBlock::Text { text: "Let me read that file.".into() },
+                ContentBlock::Text {
+                    text: "Let me read that file.".into(),
+                },
                 ContentBlock::ToolUse {
                     id: "tu_1".into(),
                     name: "Read".into(),
@@ -56,7 +61,9 @@ fn test_assistant_message_with_tool_use() {
 fn test_tool_result_content_block() {
     let block = ContentBlock::ToolResult {
         tool_use_id: "tu_1".into(),
-        content: vec![ContentBlock::Text { text: "file contents here".into() }],
+        content: vec![ContentBlock::Text {
+            text: "file contents here".into(),
+        }],
         is_error: Some(false),
     };
     let json = serde_json::to_value(&block).unwrap();
@@ -87,8 +94,10 @@ fn test_usage_default_optional_fields() {
     };
     let json = serde_json::to_value(&usage).unwrap();
     assert_eq!(json["input_tokens"], 500);
-    assert!(json.get("cache_creation_input_tokens").is_none()
-        || json["cache_creation_input_tokens"].is_null());
+    assert!(
+        json.get("cache_creation_input_tokens").is_none()
+            || json["cache_creation_input_tokens"].is_null()
+    );
     assert_eq!(json["cache_read_input_tokens"], 100);
 }
 

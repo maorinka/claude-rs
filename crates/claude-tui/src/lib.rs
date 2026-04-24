@@ -1,6 +1,9 @@
+pub mod ansi;
 pub mod app;
-pub mod layout;
-pub mod widgets;
 pub mod input;
-pub mod theme;
+pub mod layout;
+pub mod links;
 pub mod markdown;
+pub mod syntax;
+pub mod theme;
+pub mod widgets;

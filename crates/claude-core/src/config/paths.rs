@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 
 /// Returns the path to the `~/.claude/` directory.
 pub fn claude_dir() -> Result<PathBuf> {

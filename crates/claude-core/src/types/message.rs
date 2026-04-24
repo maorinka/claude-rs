@@ -1,8 +1,8 @@
+use super::content::ContentBlock;
+use super::usage::Usage;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use super::content::ContentBlock;
-use super::usage::Usage;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -56,6 +56,10 @@ pub enum StopReason {
     ToolUse,
     MaxTokens,
     StopSequence,
+    /// The model's context window was exceeded (treated like MaxTokens).
+    ModelContextWindowExceeded,
+    /// The model paused the turn (e.g. for tool confirmation).
+    PauseTurn,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

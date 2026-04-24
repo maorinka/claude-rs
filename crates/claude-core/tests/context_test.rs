@@ -21,7 +21,9 @@ async fn test_build_system_prompt_basic() {
         ("Read".into(), "Read files".into()),
         ("Bash".into(), "Run commands".into()),
     ];
-    let blocks = build_system_prompt(tmp.path(), &tools).await.unwrap();
+    let blocks = build_system_prompt(tmp.path(), &tools, "claude-sonnet-4-6")
+        .await
+        .unwrap();
     assert!(blocks.len() >= 3); // base + tools + environment (git may or may not be present)
 
     // Check base prompt is first
@@ -33,9 +35,12 @@ async fn test_build_system_prompt_basic() {
 async fn test_build_system_prompt_includes_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let tools = vec![("Grep".into(), "Search files".into())];
-    let blocks = build_system_prompt(tmp.path(), &tools).await.unwrap();
+    let blocks = build_system_prompt(tmp.path(), &tools, "claude-sonnet-4-6")
+        .await
+        .unwrap();
 
-    let all_text: String = blocks.iter()
+    let all_text: String = blocks
+        .iter()
         .filter_map(|b| b["text"].as_str())
         .collect::<Vec<_>>()
         .join("\n");
@@ -46,6 +51,8 @@ async fn test_build_system_prompt_includes_tools() {
 #[tokio::test]
 async fn test_git_context_in_non_git_dir() {
     let tmp = tempfile::tempdir().unwrap();
-    let git_ctx = claude_core::context::git::get_git_context(tmp.path()).await.unwrap();
+    let git_ctx = claude_core::context::git::get_git_context(tmp.path())
+        .await
+        .unwrap();
     assert!(git_ctx.is_none());
 }

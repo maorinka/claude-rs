@@ -43,7 +43,7 @@ fn test_submit_clears_and_returns() {
 fn test_empty_enter_does_nothing() {
     let mut input = PromptInput::new();
     match input.handle_key(key(KeyCode::Enter)) {
-        InputAction::None => {},
+        InputAction::None => {}
         _ => panic!("Expected None for empty enter"),
     }
 }
@@ -75,7 +75,9 @@ fn test_ctrl_a_e() {
 #[test]
 fn test_ctrl_k_kill_to_end() {
     let mut input = PromptInput::new();
-    for c in "hello".chars() { input.handle_key(key(KeyCode::Char(c))); }
+    for c in "hello".chars() {
+        input.handle_key(key(KeyCode::Char(c)));
+    }
     input.handle_key(ctrl('a'));
     input.handle_key(key(KeyCode::Right));
     input.handle_key(key(KeyCode::Right));
@@ -87,9 +89,13 @@ fn test_ctrl_k_kill_to_end() {
 fn test_history_navigation() {
     let mut input = PromptInput::new();
     // Submit two entries
-    for c in "first".chars() { input.handle_key(key(KeyCode::Char(c))); }
+    for c in "first".chars() {
+        input.handle_key(key(KeyCode::Char(c)));
+    }
     input.handle_key(key(KeyCode::Enter));
-    for c in "second".chars() { input.handle_key(key(KeyCode::Char(c))); }
+    for c in "second".chars() {
+        input.handle_key(key(KeyCode::Char(c)));
+    }
     input.handle_key(key(KeyCode::Enter));
 
     // Navigate up

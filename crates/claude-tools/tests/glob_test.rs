@@ -6,9 +6,13 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
-    ToolUseContext {
-        working_directory: dir.path().to_path_buf(),
-    }
+    ToolUseContext::for_test(
+        dir.path().to_path_buf(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 #[tokio::test]
@@ -24,10 +28,19 @@ async fn test_glob_finds_files() {
     let cancel = CancellationToken::new();
 
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
-    assert!(!result.is_error, "Expected no error, got: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "Expected no error, got: {:?}",
+        result.data
+    );
 
     let filenames = result.data["filenames"].as_array().unwrap();
-    assert_eq!(filenames.len(), 2, "Expected 2 .rs files, got {}", filenames.len());
+    assert_eq!(
+        filenames.len(),
+        2,
+        "Expected 2 .rs files, got {}",
+        filenames.len()
+    );
 
     // All filenames should end with .rs
     for f in filenames {
@@ -36,7 +49,7 @@ async fn test_glob_finds_files() {
     }
 
     assert_eq!(result.data["numFiles"].as_u64().unwrap(), 2);
-    assert_eq!(result.data["truncated"].as_bool().unwrap(), false);
+    assert!(!result.data["truncated"].as_bool().unwrap());
 }
 
 #[tokio::test]
@@ -58,10 +71,19 @@ async fn test_glob_with_path_override() {
     let cancel = CancellationToken::new();
 
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
-    assert!(!result.is_error, "Expected no error, got: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "Expected no error, got: {:?}",
+        result.data
+    );
 
     let filenames = result.data["filenames"].as_array().unwrap();
-    assert_eq!(filenames.len(), 2, "Expected 2 files in subdir, got {}", filenames.len());
+    assert_eq!(
+        filenames.len(),
+        2,
+        "Expected 2 files in subdir, got {}",
+        filenames.len()
+    );
     assert_eq!(result.data["numFiles"].as_u64().unwrap(), 2);
 }
 
@@ -84,9 +106,8 @@ async fn test_glob_returns_truncation_flag() {
     assert_eq!(filenames.len(), 5);
     assert_eq!(result.data["numFiles"].as_u64().unwrap(), 5);
     // 5 is well under 100, so truncated must be false
-    assert_eq!(
-        result.data["truncated"].as_bool().unwrap(),
-        false,
+    assert!(
+        !result.data["truncated"].as_bool().unwrap(),
         "5 files should not trigger truncation"
     );
 }
@@ -95,7 +116,10 @@ async fn test_glob_returns_truncation_flag() {
 fn test_glob_is_concurrent_and_readonly() {
     let tool = GlobTool;
     let input = json!({ "pattern": "*.rs" });
-    assert!(tool.is_concurrency_safe(&input), "GlobTool should be concurrency-safe");
+    assert!(
+        tool.is_concurrency_safe(&input),
+        "GlobTool should be concurrency-safe"
+    );
     assert!(tool.is_read_only(&input), "GlobTool should be read-only");
 }
 
@@ -141,5 +165,8 @@ async fn test_glob_path_that_is_file_returns_error() {
     let cancel = CancellationToken::new();
 
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
-    assert!(result.is_error, "Expected error when path points to a file, not a directory");
+    assert!(
+        result.is_error,
+        "Expected error when path points to a file, not a directory"
+    );
 }

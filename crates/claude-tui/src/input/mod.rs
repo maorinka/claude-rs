@@ -1,1 +1,2 @@
-// Input handling — to be implemented
+#[allow(dead_code)]
+pub mod vim;

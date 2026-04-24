@@ -45,8 +45,15 @@ fn test_settings_deserialize() {
 
 #[test]
 fn test_settings_merge() {
-    let base = Settings { model: Some("claude-sonnet-4-6".into()), verbose: Some(false), ..Default::default() };
-    let overlay = Settings { model: Some("claude-opus-4-6".into()), ..Default::default() };
+    let base = Settings {
+        model: Some("claude-sonnet-4-6".into()),
+        verbose: Some(false),
+        ..Default::default()
+    };
+    let overlay = Settings {
+        model: Some("claude-opus-4-6".into()),
+        ..Default::default()
+    };
     let merged = base.merge(&overlay);
     assert_eq!(merged.model.as_deref(), Some("claude-opus-4-6"));
     assert_eq!(merged.verbose, Some(false));

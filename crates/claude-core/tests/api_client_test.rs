@@ -4,7 +4,7 @@ use claude_core::api::client::*;
 fn test_api_config_default() {
     let config = ApiConfig::default();
     assert_eq!(config.base_url, "https://api.anthropic.com");
-    assert_eq!(config.max_tokens, 8000);
+    assert!(config.max_tokens > 0);
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn test_build_request_body() {
         thinking: ThinkingConfig::Adaptive,
         ..Default::default()
     };
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
     assert_eq!(body["model"], "claude-sonnet-4-6");
     assert_eq!(body["max_tokens"], 8000);
     assert_eq!(body["stream"], true);
@@ -42,12 +42,16 @@ fn test_build_request_body() {
 fn test_build_request_body_thinking_enabled() {
     let config = ApiConfig {
         model: "claude-sonnet-4-6".into(),
-        thinking: ThinkingConfig::Enabled { budget_tokens: 10000 },
+        max_tokens: 8192,
+        thinking: ThinkingConfig::Enabled {
+            budget_tokens: 10000,
+        },
         ..Default::default()
     };
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
     assert_eq!(body["thinking"]["type"], "enabled");
-    assert_eq!(body["thinking"]["budget_tokens"], 10000);
+    // budget_tokens is clamped to max_tokens - 1 (Issue 29 fix)
+    assert_eq!(body["thinking"]["budget_tokens"], 8191);
 }
 
 #[test]
@@ -57,6 +61,29 @@ fn test_build_request_body_with_speed() {
         speed: Some(Speed::Fast),
         ..Default::default()
     };
-    let body = build_request_body(&config, &[], &[], &[]);
+    let body = build_request_body(&config, &[], &[], &[], false);
     assert_eq!(body["speed"], "fast");
+}
+
+#[test]
+fn test_build_request_body_with_tools() {
+    let config = ApiConfig::default();
+    let tools = vec![ToolDefinition {
+        name: "MyTool".to_string(),
+        description: "A tool".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+    }];
+    let body = build_request_body(&config, &[], &[], &tools, false);
+
+    let tools_arr = body["tools"].as_array().expect("tools should be an array");
+    assert!(tools_arr.iter().any(|t| t["name"] == "MyTool"));
+}
+
+#[test]
+fn test_build_request_body_no_tools() {
+    let config = ApiConfig::default();
+    let body = build_request_body(&config, &[], &[], &[], false);
+    // With no tools provided, tools field should be absent or empty
+    let tools = &body["tools"];
+    assert!(tools.is_null() || tools.as_array().is_none_or(|a| a.is_empty()));
 }

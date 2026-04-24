@@ -7,3 +7,11 @@
 *.swp
 *.swo
 .DS_Store
+
+# Local review/audit artifacts and scratch files
+CODE_REVIEW.md
+CODEX_CR.md
+CODEX_REVIEW.md
+MERGED_REVIEW.md
+ALL_PROMPTS_PDF.pdf
+poem.txt

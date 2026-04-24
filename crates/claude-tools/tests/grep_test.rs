@@ -5,9 +5,13 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
-    ToolUseContext {
-        working_directory: dir.path().to_path_buf(),
-    }
+    ToolUseContext::for_test(
+        dir.path().to_path_buf(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            claude_tools::registry::ReadFileState::new(),
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 /// Write a file relative to the temp dir.
@@ -21,9 +25,17 @@ async fn test_grep_finds_pattern() {
     let dir = TempDir::new().unwrap();
 
     // file1 contains "println" – should match
-    write_file(&dir, "file1.rs", "fn main() {\n    println!(\"hello\");\n}\n");
+    write_file(
+        &dir,
+        "file1.rs",
+        "fn main() {\n    println!(\"hello\");\n}\n",
+    );
     // file2 does not contain "println"
-    write_file(&dir, "file2.rs", "fn add(a: i32, b: i32) -> i32 { a + b }\n");
+    write_file(
+        &dir,
+        "file2.rs",
+        "fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    );
 
     let tool = GrepTool;
     let ctx = make_ctx(&dir);
@@ -37,7 +49,11 @@ async fn test_grep_finds_pattern() {
         .await
         .expect("grep call failed");
 
-    assert!(!result.is_error, "expected no error, got: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "expected no error, got: {:?}",
+        result.data
+    );
 
     let data = &result.data;
     // In files_with_matches mode we get numFiles and filenames
@@ -59,7 +75,11 @@ async fn test_grep_finds_pattern() {
 async fn test_grep_content_mode() {
     let dir = TempDir::new().unwrap();
 
-    write_file(&dir, "hello.txt", "hello world\ngoodbye world\nhello again\n");
+    write_file(
+        &dir,
+        "hello.txt",
+        "hello world\ngoodbye world\nhello again\n",
+    );
 
     let tool = GrepTool;
     let ctx = make_ctx(&dir);
@@ -74,7 +94,11 @@ async fn test_grep_content_mode() {
         .await
         .expect("grep call failed");
 
-    assert!(!result.is_error, "expected no error, got: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "expected no error, got: {:?}",
+        result.data
+    );
 
     let data = &result.data;
     assert_eq!(data["mode"].as_str(), Some("content"));
@@ -113,7 +137,11 @@ async fn test_grep_case_insensitive() {
         .await
         .expect("grep call failed");
 
-    assert!(!result.is_error, "expected no error, got: {:?}", result.data);
+    assert!(
+        !result.is_error,
+        "expected no error, got: {:?}",
+        result.data
+    );
 
     let content = result.data["content"]
         .as_str()
@@ -144,8 +172,5 @@ fn test_grep_is_concurrent_and_readonly() {
         tool.is_concurrency_safe(&input),
         "GrepTool should be concurrency safe"
     );
-    assert!(
-        tool.is_read_only(&input),
-        "GrepTool should be read only"
-    );
+    assert!(tool.is_read_only(&input), "GrepTool should be read only");
 }

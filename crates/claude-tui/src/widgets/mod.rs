@@ -1,4 +1,15 @@
-pub mod spinner;
-pub mod prompt_input;
+pub mod ask_user_dialog;
+pub mod command_picker;
+pub mod compact_summary;
+pub mod context_view;
+pub mod diff_view;
+pub mod feedback_dialog;
 pub mod message_list;
+pub mod model_picker;
+pub mod onboarding;
 pub mod permission_dialog;
+pub mod prompt_input;
+pub mod spinner;
+pub mod task_list;
+pub mod theme_picker;
+pub mod trust_dialog;

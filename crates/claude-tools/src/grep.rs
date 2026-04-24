@@ -39,7 +39,9 @@ fn find_rg() -> RgBinary {
     ];
 
     for candidate in &native_candidates {
-        if candidate.is_empty() { continue; }
+        if candidate.is_empty() {
+            continue;
+        }
         let p = PathBuf::from(candidate);
         if p.is_file() {
             return RgBinary::Native(p);
@@ -70,9 +72,7 @@ fn find_rg() -> RgBinary {
 }
 
 /// VCS directories that ripgrep should exclude.
-const VCS_GLOBS: &[&str] = &[
-    "!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl",
-];
+const VCS_GLOBS: &[&str] = &["!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl"];
 
 /// Maximum column width passed to ripgrep.
 const MAX_COLUMNS: usize = 500;
@@ -89,6 +89,20 @@ pub struct GrepTool;
 impl ToolExecutor for GrepTool {
     fn name(&self) -> &str {
         "Grep"
+    }
+
+    fn description(&self) -> String {
+        r#"A powerful search tool built on ripgrep
+
+  Usage:
+  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash command. The Grep tool has been optimized for correct permissions and access.
+  - Supports full regex syntax (e.g., "log.*Error", "function\s+\w+")
+  - Filter files with glob parameter (e.g., "*.js", "**/*.tsx") or type parameter (e.g., "js", "py", "rust")
+  - Output modes: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows match counts
+  - Use Agent tool for open-ended searches requiring multiple rounds
+  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\{\}` to find `interface{}` in Go code)
+  - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \{[\s\S]*?field`, use `multiline: true`
+"#.to_string()
     }
 
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
@@ -191,24 +205,30 @@ impl ToolExecutor for GrepTool {
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_HEAD_LIMIT);
 
-        let offset = input["offset"]
-            .as_u64()
-            .map(|v| v as usize)
-            .unwrap_or(0);
+        let offset = input["offset"].as_u64().map(|v| v as usize).unwrap_or(0);
 
         // Build the rg command
         let mut cmd = match find_rg() {
             RgBinary::Native(path) => Command::new(path),
             RgBinary::ClaudeMultiCall(path) => {
+                #[allow(unused_mut)]
                 let mut c = Command::new(&path);
-                // The Claude binary acts as rg when argv[0] == "rg"
-                c.arg0("rg");
+                #[cfg(unix)]
+                {
+                    #[allow(unused_imports)]
+                    use std::os::unix::process::CommandExt as _;
+                    c.arg0("rg");
+                }
                 c
             }
         };
 
         // Use -e for pattern to handle dash-prefixed patterns safely
         cmd.arg("-e").arg(&pattern);
+
+        // Always search hidden files and directories (.env, .github/, .claude/, etc.)
+        // Matches TS GrepTool.ts line 330: `const args = ['--hidden']`
+        cmd.arg("--hidden");
 
         // Output mode flags
         match output_mode {
@@ -237,7 +257,10 @@ impl ToolExecutor for GrepTool {
             cmd.arg("--ignore-case");
         }
 
-        if input["-n"].as_bool().unwrap_or(false) {
+        // -n defaults to true in content mode (mirrors TS default: show_line_numbers = true).
+        // Only applies in content mode — TS also gates this on output_mode === 'content'.
+        let show_line_numbers = input["-n"].as_bool().unwrap_or(true);
+        if show_line_numbers && output_mode == "content" {
             cmd.arg("--line-number");
         }
 
