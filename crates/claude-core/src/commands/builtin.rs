@@ -921,6 +921,25 @@ Usage notes:
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 ```";
 
+/// Verbatim port of TS `NEW_INIT_PROMPT` (src/commands/init.ts:28-224).
+///
+/// The multi-phase init wizard text. The Rust port uses the simpler
+/// [`INIT_PROMPT`] (OLD_INIT_PROMPT) today because several subsystems
+/// this prompt depends on are not yet wired — subagent spawning from
+/// commands, AskUserQuestion integration from commands, skills
+/// creation flow, and the `update-config` skill reference. Parking
+/// the text verbatim keeps it identical to TS so the dispatch flip
+/// is a one-line change once those land.
+pub const NEW_INIT_PROMPT: &str = include_str!("../prompts/new_init.md");
+
+/// Verbatim port of TS `/init-verifiers` prompt
+/// (src/commands/init-verifiers.ts:15-256). The 5-phase verifier-skill
+/// creation wizard. Not wired as a command in Rust yet — it needs
+/// auto-detection of frameworks/servers, AskUserQuestion from commands,
+/// and skill-template writing. Parking the text preserves exact parity
+/// for when those land.
+pub const INIT_VERIFIERS_PROMPT: &str = include_str!("../prompts/init_verifiers.md");
+
 impl CommandHandler for InitHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
         // Ensure .claude/ directory exists
@@ -4217,5 +4236,31 @@ mod tests {
             }
             _ => panic!("expected Action"),
         }
+    }
+
+    #[test]
+    fn new_init_prompt_has_all_eight_phases() {
+        for phase in [
+            "## Phase 1: Ask what to set up",
+            "## Phase 2: Explore the codebase",
+            "## Phase 3: Fill in the gaps",
+            "## Phase 4: Write CLAUDE.md",
+            "## Phase 5: Write CLAUDE.local.md",
+            "## Phase 6: Suggest and create skills",
+            "## Phase 7: Suggest additional optimizations",
+            "## Phase 8: Summary and next steps",
+        ] {
+            assert!(
+                NEW_INIT_PROMPT.contains(phase),
+                "NEW_INIT_PROMPT missing phase header: {phase}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_verifiers_prompt_has_core_structure() {
+        assert!(INIT_VERIFIERS_PROMPT.contains("## Goal"));
+        assert!(INIT_VERIFIERS_PROMPT.contains("verifier skill"));
+        assert!(INIT_VERIFIERS_PROMPT.contains("TodoWrite tool"));
     }
 }

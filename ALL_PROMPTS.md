@@ -2594,7 +2594,7 @@ This is a very large prompt (~6000+ words) with 8 phases:
 - **Phase 8**: Summary and next steps (recap + to-do list of further optimizations)
 
 Full source is at `src/commands/init.ts:28-224` (the `NEW_INIT_PROMPT` constant).
-**Status: NOT IN RUST** -- Reason: The NEW_INIT_PROMPT is a ~6000+ word multi-phase wizard (8 phases: setup choice, codebase exploration via subagent, gap-filling via AskUserQuestion, CLAUDE.md writing, CLAUDE.local.md, skills creation, optimization suggestions, summary). This requires infrastructure not yet in the Rust port: subagent spawning from commands, AskUserQuestion tool integration from commands, skills creation workflow, and the `update-config` skill. The Rust port uses the simpler OLD_INIT_PROMPT instead.
+**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/commands/builtin.rs::NEW_INIT_PROMPT` (loads `crates/claude-core/src/prompts/new_init.md`, verbatim from TS). All 8 phase headers are asserted in a unit test. The `/init` command still dispatches to [`INIT_PROMPT`] (OLD_INIT_PROMPT) because the runtime deps (subagent-from-commands, AskUserQuestion-from-commands, skills-creation flow, `update-config` skill) aren't wired yet.
 
 ---
 
@@ -2637,7 +2637,7 @@ use AskUserQuestion to confirm and then Edit this SKILL.md with a minimal target
 ```
 
 Full source is at `src/commands/init-verifiers.ts:15-256`.
-**Status: NOT IN RUST** -- Reason: The /init-verifiers command is not implemented in the Rust port. It requires a multi-phase wizard with auto-detection of application types/frameworks, verification tool setup (Playwright, Chrome DevTools MCP, CLI/Tmux), interactive Q&A, and skill template generation. This infrastructure does not exist in Rust.
+**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/commands/builtin.rs::INIT_VERIFIERS_PROMPT` (loads `crates/claude-core/src/prompts/init_verifiers.md`, verbatim from TS). Core structure is asserted in a unit test. The `/init-verifiers` command is not yet registered; it still needs the wizard infra (auto-detection, Playwright/MCP/CLI/Tmux integration, Q&A, skill-template writer).
 
 ---
 
@@ -2743,7 +2743,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT matching this schema:
   "brief_summary": "One sentence: what user wanted and whether they got it"
 }`
 ```
-**Status: NOT IN RUST** -- Reason: Same as above. Part of the multi-step insights pipeline not implemented in Rust.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/insights_prompts.rs::facet_extraction_json_prompt(transcript)` + `FACET_EXTRACTION_JSON_SUFFIX`. The /insights command wiring is still partial; facet-extraction prompt itself is ready to call.
 
 ---
 
