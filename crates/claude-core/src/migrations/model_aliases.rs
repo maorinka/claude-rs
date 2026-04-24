@@ -41,7 +41,7 @@ pub fn migrate_fennec_to_opus(ctx: &MigrationContext, settings: &mut Settings) -
         Some(m) if m != model => {
             settings.model = Some(m);
             true
-        }
+        },
         _ => false,
     }
 }
@@ -102,10 +102,7 @@ pub fn migrate_sonnet45_to_sonnet46(ctx: &MigrationContext, settings: &mut Setti
 /// `sonnet` alias flips to 4.6. Runs exactly once — completion is
 /// tracked via `sonnet1m45MigrationComplete` in GlobalConfig.extra.
 /// Returns true if state changed.
-pub fn migrate_sonnet_1m_to_sonnet_45(
-    global: &mut GlobalConfig,
-    settings: &mut Settings,
-) -> bool {
+pub fn migrate_sonnet_1m_to_sonnet_45(global: &mut GlobalConfig, settings: &mut Settings) -> bool {
     // Completion flag already set → no-op.
     if matches!(
         global.extra.get("sonnet1m45MigrationComplete"),
@@ -131,9 +128,10 @@ mod tests {
     use super::*;
 
     fn settings_with_model(m: &str) -> Settings {
-        let mut s = Settings::default();
-        s.model = Some(m.to_string());
-        s
+        Settings {
+            model: Some(m.to_string()),
+            ..Default::default()
+        }
     }
 
     #[test]

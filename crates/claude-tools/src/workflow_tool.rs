@@ -58,7 +58,7 @@ impl ToolExecutor for WorkflowTool {
                     data: json!({ "error": "missing required field: action" }),
                     is_error: true,
                 })
-            }
+            },
         };
         match action {
             "list" => list_workflows(&ctx.working_directory).await,
@@ -70,7 +70,7 @@ impl ToolExecutor for WorkflowTool {
                             data: json!({ "error": "missing required field: name (required for 'run' action)" }),
                             is_error: true,
                         })
-                    }
+                    },
                 };
                 let args: Vec<String> = input
                     .get("args")
@@ -82,7 +82,7 @@ impl ToolExecutor for WorkflowTool {
                     })
                     .unwrap_or_default();
                 run_workflow(&ctx.working_directory, name, &args, cancel).await
-            }
+            },
             _ => Ok(ToolResultData {
                 data: json!({ "error": format!("Unknown action '{}'. Use 'list' or 'run'.", action) }),
                 is_error: true,
@@ -113,7 +113,7 @@ async fn list_workflows(working_dir: &std::path::Path) -> Result<ToolResultData>
                 data: json!({ "workflows": [], "message": "No .claude/workflows/ directory found in the project." }),
                 is_error: false,
             })
-        }
+        },
     };
     let mut workflows = Vec::new();
     let mut entries = match tokio::fs::read_dir(&workflows_dir).await {
@@ -123,7 +123,7 @@ async fn list_workflows(working_dir: &std::path::Path) -> Result<ToolResultData>
                 data: json!({ "error": format!("Failed to read workflows directory: {}", e) }),
                 is_error: true,
             })
-        }
+        },
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
@@ -170,7 +170,7 @@ async fn run_workflow(
                 data: json!({ "error": "No .claude/workflows/ directory found in the project." }),
                 is_error: true,
             })
-        }
+        },
     };
     let script_path = workflows_dir.join(name);
     if !script_path.exists() {
@@ -197,7 +197,7 @@ async fn run_workflow(
                 data: json!({ "error": format!("Failed to start workflow: {}", e) }),
                 is_error: true,
             })
-        }
+        },
     };
 
     let stdout_handle = child_proc.stdout.take();
@@ -244,7 +244,7 @@ async fn run_workflow(
                 data: json!({ "workflow": name, "exitCode": exit_code, "stdout": stdout_trunc, "stderr": stderr_trunc, "success": status.success() }),
                 is_error: !status.success(),
             })
-        }
+        },
         Err(e) => Ok(ToolResultData {
             data: json!({ "error": format!("Workflow process error: {}", e) }),
             is_error: true,
@@ -256,11 +256,15 @@ async fn run_workflow(
 mod tests {
     use super::*;
     use crate::registry::ReadFileState;
-    use std::path::PathBuf;
+
     use std::sync::Arc;
 
     fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
-        ToolUseContext::for_test(dir.to_path_buf(), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            dir.to_path_buf(),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]

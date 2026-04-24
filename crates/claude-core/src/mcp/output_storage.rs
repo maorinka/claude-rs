@@ -75,7 +75,7 @@ fn format_with_thousands(n: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*c);
@@ -270,12 +270,7 @@ mod tests {
 
     #[test]
     fn large_output_instructions_mention_path_and_size() {
-        let s = get_large_output_instructions(
-            "/tmp/out.txt",
-            123_456,
-            "Plain text",
-            Some(8192),
-        );
+        let s = get_large_output_instructions("/tmp/out.txt", 123_456, "Plain text", Some(8192));
         assert!(s.contains("/tmp/out.txt"));
         assert!(s.contains("123,456 characters"));
         assert!(s.contains("Bash output is limited"));

@@ -500,6 +500,7 @@ impl ToolExecutor for ExitPlanModeTool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // test-only global-state serialization via std::sync::Mutex
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;

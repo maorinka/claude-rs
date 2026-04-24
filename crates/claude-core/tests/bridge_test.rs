@@ -1,7 +1,5 @@
 use claude_core::bridge::protocol::{BridgeError, BridgeRequest, BridgeResponse};
-use claude_core::bridge::server::{
-    dispatch_request, dispatch_request_stateless, BridgeServer, BridgeState,
-};
+use claude_core::bridge::server::{dispatch_request_stateless, BridgeServer};
 use claude_core::bridge::types::{BridgeConfig, BridgeMessage, IdeType, SessionInfo, SessionState};
 
 // ─── BridgeMessage serde ────────────────────────────────────────────────────
@@ -26,7 +24,7 @@ fn bridge_message_file_changed_no_content() {
         BridgeMessage::FileChanged { path, content } => {
             assert_eq!(path, "foo.rs");
             assert!(content.is_none());
-        }
+        },
         _ => panic!("unexpected variant"),
     }
 }
@@ -105,7 +103,7 @@ fn bridge_message_status_without_message() {
         BridgeMessage::Status { state, message } => {
             assert_eq!(state, "ready");
             assert!(message.is_none());
-        }
+        },
         _ => panic!("unexpected variant"),
     }
 }

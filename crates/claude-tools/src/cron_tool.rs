@@ -47,7 +47,7 @@ fn validate_cron_expression(expr: &str) -> bool {
         }
         // Handle */N
         if let Some(step) = field.strip_prefix("*/") {
-            return step.parse::<u32>().map_or(false, |n| n > 0 && n <= max);
+            return step.parse::<u32>().is_ok_and(|n| n > 0 && n <= max);
         }
         // Handle comma-separated values
         for part in field.split(',') {
@@ -70,7 +70,7 @@ fn validate_cron_expression(expr: &str) -> bool {
                 }
             } else {
                 match part.parse::<u32>() {
-                    Ok(v) if v >= min && v <= max => {}
+                    Ok(v) if v >= min && v <= max => {},
                     _ => return false,
                 }
             }
@@ -144,7 +144,7 @@ impl ToolExecutor for ScheduleCronTool {
                     data: json!({ "error": "missing required field: cron" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         let prompt = match input.get("prompt").and_then(|v| v.as_str()) {
@@ -154,7 +154,7 @@ impl ToolExecutor for ScheduleCronTool {
                     data: json!({ "error": "missing required field: prompt" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         if !validate_cron_expression(cron_expr) {
@@ -185,7 +185,7 @@ impl ToolExecutor for ScheduleCronTool {
                     data: json!({ "error": "Could not determine home directory" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         let cron_dir = home.join(".claude").join("cron");
@@ -200,7 +200,7 @@ impl ToolExecutor for ScheduleCronTool {
         let mut count = 0;
         if let Ok(mut entries) = tokio::fs::read_dir(&cron_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
-                if entry.path().extension().map_or(false, |ext| ext == "json") {
+                if entry.path().extension().is_some_and(|ext| ext == "json") {
                     count += 1;
                 }
             }
@@ -334,7 +334,7 @@ impl ToolExecutor for CronDeleteTool {
                     data: json!({ "error": "missing required field: id" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         // Reject path traversal
@@ -352,7 +352,7 @@ impl ToolExecutor for CronDeleteTool {
                     data: json!({ "error": "Could not determine home directory" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         let file_path = home
@@ -427,7 +427,7 @@ impl ToolExecutor for CronListTool {
                     data: json!({ "jobs": [], "count": 0, "message": "Could not determine home directory." }),
                     is_error: false,
                 });
-            }
+            },
         };
 
         let cron_dir = home.join(".claude").join("cron");
@@ -440,12 +440,12 @@ impl ToolExecutor for CronListTool {
                     data: json!({ "jobs": [], "count": 0, "message": "No scheduled jobs." }),
                     is_error: false,
                 });
-            }
+            },
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if path.extension().map_or(true, |ext| ext != "json") {
+            if path.extension().is_none_or(|ext| ext != "json") {
                 continue;
             }
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
@@ -509,7 +509,11 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[test]

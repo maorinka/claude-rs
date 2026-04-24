@@ -72,22 +72,37 @@ mod tests {
     fn test_image_target_size_relationship() {
         // Target raw size should be exactly 3/4 of max base64 size
         assert_eq!(IMAGE_TARGET_RAW_SIZE, 3 * 1024 * 1024 + 3 * 1024 * 1024 / 4);
-        assert!(IMAGE_TARGET_RAW_SIZE < API_IMAGE_MAX_BASE64_SIZE);
+        assert_eq!(
+            IMAGE_TARGET_RAW_SIZE.cmp(&API_IMAGE_MAX_BASE64_SIZE),
+            std::cmp::Ordering::Less
+        );
     }
 
     #[test]
     fn test_pdf_limits_hierarchy() {
         // Extract threshold < target raw size < max extract size
-        assert!(PDF_EXTRACT_SIZE_THRESHOLD < PDF_TARGET_RAW_SIZE);
-        assert!(PDF_TARGET_RAW_SIZE < PDF_MAX_EXTRACT_SIZE);
+        assert_eq!(
+            PDF_EXTRACT_SIZE_THRESHOLD.cmp(&PDF_TARGET_RAW_SIZE),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            PDF_TARGET_RAW_SIZE.cmp(&PDF_MAX_EXTRACT_SIZE),
+            std::cmp::Ordering::Less
+        );
     }
 
     #[test]
     fn test_pdf_pages_limits() {
         // Per-read limit should be less than the API max
-        assert!(PDF_MAX_PAGES_PER_READ < API_PDF_MAX_PAGES);
+        assert_eq!(
+            PDF_MAX_PAGES_PER_READ.cmp(&API_PDF_MAX_PAGES),
+            std::cmp::Ordering::Less
+        );
         // Inline threshold should be less than per-read limit
-        assert!(PDF_AT_MENTION_INLINE_THRESHOLD < PDF_MAX_PAGES_PER_READ);
+        assert_eq!(
+            PDF_AT_MENTION_INLINE_THRESHOLD.cmp(&PDF_MAX_PAGES_PER_READ),
+            std::cmp::Ordering::Less
+        );
     }
 
     #[test]

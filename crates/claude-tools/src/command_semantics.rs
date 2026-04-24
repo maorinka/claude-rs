@@ -68,11 +68,7 @@ pub fn interpret_command_result(
 }
 
 fn extract_base_command(command: &str) -> &str {
-    command
-        .trim()
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
+    command.split_whitespace().next().unwrap_or("")
 }
 
 /// Cheap split on `;`, `&&`, `||`, `|` respecting single/double quotes.
@@ -91,14 +87,12 @@ fn split_command(command: &str) -> Vec<&str> {
             '"' if !in_single => in_double = !in_double,
             '|' | '&' | ';' if !in_single && !in_double => {
                 // Consume doubled operator (||, &&) atomically.
-                let step = if (c == '|' || c == '&')
-                    && i + 1 < bytes.len()
-                    && bytes[i + 1] as char == c
-                {
-                    2
-                } else {
-                    1
-                };
+                let step =
+                    if (c == '|' || c == '&') && i + 1 < bytes.len() && bytes[i + 1] as char == c {
+                        2
+                    } else {
+                        1
+                    };
                 let seg = command[start..i].trim();
                 if !seg.is_empty() {
                     out.push(seg);
@@ -106,8 +100,8 @@ fn split_command(command: &str) -> Vec<&str> {
                 i += step;
                 start = i;
                 continue;
-            }
-            _ => {}
+            },
+            _ => {},
         }
         i += 1;
     }
@@ -162,11 +156,7 @@ mod tests {
     fn default_semantic_flags_nonzero() {
         let r = interpret_command_result("ls /nope", 2, "", "");
         assert!(r.is_error);
-        assert!(r
-            .message
-            .as_deref()
-            .unwrap_or("")
-            .contains("exit code 2"));
+        assert!(r.message.as_deref().unwrap_or("").contains("exit code 2"));
     }
 
     #[test]

@@ -134,7 +134,7 @@ fn test_token_budget_at_warning_threshold() {
     let total_tokens: u64 = 160_000; // 80%
     let pct = total_tokens as f64 / context_window as f64;
     assert!(
-        pct >= 0.80 && pct < 0.95,
+        (0.80..0.95).contains(&pct),
         "80% should be in warning range, got {:.2}",
         pct
     );

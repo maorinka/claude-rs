@@ -5,19 +5,15 @@ use std::collections::HashMap;
 /// Matches the TS `Transport` enum: 'stdio' | 'sse' | 'sse-ide' | 'http' | 'ws' | 'sdk'
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum TransportType {
+    #[default]
     Stdio,
     Sse,
     SseIde,
     Http,
     Ws,
     Sdk,
-}
-
-impl Default for TransportType {
-    fn default() -> Self {
-        Self::Stdio
-    }
 }
 
 /// Configuration scope for where the MCP server config came from.

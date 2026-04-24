@@ -29,8 +29,8 @@ use tracing::{debug, warn};
 use super::mailbox::{
     self, create_permission_request_message, create_permission_response_error,
     create_permission_response_success, create_sandbox_permission_request,
-    create_sandbox_permission_response, get_team_dir, read_team_file,
-    TeammateMessageInput, TEAM_LEAD_NAME,
+    create_sandbox_permission_response, get_team_dir, read_team_file, TeammateMessageInput,
+    TEAM_LEAD_NAME,
 };
 
 // ---------------------------------------------------------------------------
@@ -229,6 +229,7 @@ pub fn generate_sandbox_request_id() -> String {
 // ---------------------------------------------------------------------------
 
 /// Create a new `SwarmPermissionRequest` object.
+#[allow(clippy::too_many_arguments)]
 pub fn create_permission_request(
     tool_name: &str,
     tool_use_id: &str,
@@ -267,9 +268,7 @@ pub fn create_permission_request(
 
 /// Write a permission request to the pending directory with file locking.
 /// Called by worker agents when they need permission approval from the leader.
-pub async fn write_permission_request(
-    request: &SwarmPermissionRequest,
-) -> Result<()> {
+pub async fn write_permission_request(request: &SwarmPermissionRequest) -> Result<()> {
     ensure_permission_dirs(&request.team_name).await?;
 
     let pending_path = get_pending_request_path(&request.team_name, &request.id);
@@ -295,13 +294,10 @@ pub async fn write_permission_request(
 
 /// Read all pending permission requests for a team.
 /// Called by the team leader to see what requests need attention.
-pub async fn read_pending_permissions(
-    team_name: &str,
-) -> Vec<SwarmPermissionRequest> {
+pub async fn read_pending_permissions(team_name: &str) -> Vec<SwarmPermissionRequest> {
     let pending_dir = get_pending_dir(team_name);
 
-    let read_result: std::io::Result<tokio::fs::ReadDir> =
-        tokio::fs::read_dir(&pending_dir).await;
+    let read_result: std::io::Result<tokio::fs::ReadDir> = tokio::fs::read_dir(&pending_dir).await;
 
     let mut entries = match read_result {
         Ok(e) => e,
@@ -309,7 +305,7 @@ pub async fn read_pending_permissions(
         Err(e) => {
             warn!("[PermissionSync] Failed to read pending requests: {}", e);
             return Vec::new();
-        }
+        },
     };
 
     let mut requests = Vec::new();
@@ -339,17 +335,14 @@ pub async fn read_pending_permissions(
                     file_name, e
                 );
                 continue;
-            }
+            },
         };
 
         match serde_json::from_str::<SwarmPermissionRequest>(&content) {
             Ok(req) => requests.push(req),
             Err(e) => {
-                warn!(
-                    "[PermissionSync] Invalid request file {}: {}",
-                    file_name, e
-                );
-            }
+                warn!("[PermissionSync] Invalid request file {}: {}", file_name, e);
+            },
         }
     }
 
@@ -375,7 +368,7 @@ pub async fn read_resolved_permission(
                     request_id, e
                 );
                 None
-            }
+            },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
@@ -384,7 +377,7 @@ pub async fn read_resolved_permission(
                 request_id, e
             );
             None
-        }
+        },
     }
 }
 
@@ -412,16 +405,16 @@ pub async fn resolve_permission(
     let content = match tokio::fs::read_to_string(&pending_path).await {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            debug!(
-                "[PermissionSync] Pending request not found: {}",
-                request_id
+            debug!("[PermissionSync] Pending request not found: {}", request_id);
+            return false;
+        },
+        Err(e) => {
+            warn!(
+                "[PermissionSync] Failed to read pending {}: {}",
+                request_id, e
             );
             return false;
-        }
-        Err(e) => {
-            warn!("[PermissionSync] Failed to read pending {}: {}", request_id, e);
-            return false;
-        }
+        },
     };
 
     let mut request: SwarmPermissionRequest = match serde_json::from_str(&content) {
@@ -432,7 +425,7 @@ pub async fn resolve_permission(
                 request_id, e
             );
             return false;
-        }
+        },
     };
 
     // Update the request with resolution data.
@@ -453,7 +446,7 @@ pub async fn resolve_permission(
         Err(e) => {
             warn!("[PermissionSync] Serialize failed: {}", e);
             return false;
-        }
+        },
     };
 
     if let Err(e) = tokio::fs::write(&temp_path, &json).await {
@@ -487,10 +480,7 @@ pub async fn resolve_permission(
 
 /// Poll for a permission response (worker-side convenience function).
 /// Converts the resolved request into a simpler response format.
-pub async fn poll_for_response(
-    request_id: &str,
-    team_name: &str,
-) -> Option<PermissionResponse> {
+pub async fn poll_for_response(request_id: &str, team_name: &str) -> Option<PermissionResponse> {
     let resolved = read_resolved_permission(request_id, team_name).await?;
 
     let decision = if resolved.status == PermissionStatus::Approved {
@@ -520,10 +510,7 @@ pub async fn poll_for_response(
 }
 
 /// Remove a worker's response after processing (delete the resolved file).
-pub async fn remove_worker_response(
-    request_id: &str,
-    team_name: &str,
-) -> bool {
+pub async fn remove_worker_response(request_id: &str, team_name: &str) -> bool {
     delete_resolved_permission(request_id, team_name).await
 }
 
@@ -533,10 +520,7 @@ pub async fn remove_worker_response(
 
 /// Delete a resolved permission file.
 /// Called after a worker has processed the resolution.
-pub async fn delete_resolved_permission(
-    request_id: &str,
-    team_name: &str,
-) -> bool {
+pub async fn delete_resolved_permission(request_id: &str, team_name: &str) -> bool {
     let resolved_path = get_resolved_request_path(team_name, request_id);
     match tokio::fs::remove_file(&resolved_path).await {
         Ok(_) => {
@@ -545,7 +529,7 @@ pub async fn delete_resolved_permission(
                 request_id
             );
             true
-        }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => {
             warn!(
@@ -553,7 +537,7 @@ pub async fn delete_resolved_permission(
                 e
             );
             false
-        }
+        },
     }
 }
 
@@ -565,14 +549,10 @@ pub async fn delete_resolved_permission(
 /// Called periodically to prevent file accumulation.
 ///
 /// `max_age_ms` defaults to 1 hour (3_600_000 ms).
-pub async fn cleanup_old_resolutions(
-    team_name: &str,
-    max_age_ms: u64,
-) -> usize {
+pub async fn cleanup_old_resolutions(team_name: &str, max_age_ms: u64) -> usize {
     let resolved_dir = get_resolved_dir(team_name);
 
-    let read_result: std::io::Result<tokio::fs::ReadDir> =
-        tokio::fs::read_dir(&resolved_dir).await;
+    let read_result: std::io::Result<tokio::fs::ReadDir> = tokio::fs::read_dir(&resolved_dir).await;
 
     let mut entries = match read_result {
         Ok(e) => e,
@@ -580,7 +560,7 @@ pub async fn cleanup_old_resolutions(
         Err(e) => {
             warn!("[PermissionSync] Failed to cleanup resolutions: {}", e);
             return 0;
-        }
+        },
     };
 
     let now = chrono::Utc::now().timestamp_millis() as u64;
@@ -604,31 +584,24 @@ pub async fn cleanup_old_resolutions(
         }
 
         let should_clean = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => {
-                match serde_json::from_str::<SwarmPermissionRequest>(&content) {
-                    Ok(request) => {
-                        let resolved_at = request.resolved_at.unwrap_or(request.created_at);
-                        now.saturating_sub(resolved_at) >= max_age_ms
-                    }
-                    Err(_) => true,
-                }
-            }
+            Ok(content) => match serde_json::from_str::<SwarmPermissionRequest>(&content) {
+                Ok(request) => {
+                    let resolved_at = request.resolved_at.unwrap_or(request.created_at);
+                    now.saturating_sub(resolved_at) >= max_age_ms
+                },
+                Err(_) => true,
+            },
             Err(_) => true,
         };
 
-        if should_clean {
-            if tokio::fs::remove_file(&path).await.is_ok() {
-                debug!("[PermissionSync] Cleaned up old resolution: {}", file_name);
-                cleaned += 1;
-            }
+        if should_clean && tokio::fs::remove_file(&path).await.is_ok() {
+            debug!("[PermissionSync] Cleaned up old resolution: {}", file_name);
+            cleaned += 1;
         }
     }
 
     if cleaned > 0 {
-        debug!(
-            "[PermissionSync] Cleaned up {} old resolutions",
-            cleaned
-        );
+        debug!("[PermissionSync] Cleaned up {} old resolutions", cleaned);
     }
     cleaned
 }
@@ -647,9 +620,7 @@ pub fn is_team_leader(agent_id: Option<&str>) -> bool {
 
 /// Check if the given agent is a worker in a swarm.
 pub fn is_swarm_worker(team_name: Option<&str>, agent_id: Option<&str>) -> bool {
-    team_name.is_some()
-        && agent_id.is_some()
-        && !is_team_leader(agent_id)
+    team_name.is_some() && agent_id.is_some() && !is_team_leader(agent_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -667,15 +638,13 @@ pub async fn get_leader_name(team_name: &str) -> Option<String> {
 }
 
 /// Send a permission request to the leader via mailbox.
-pub async fn send_permission_request_via_mailbox(
-    request: &SwarmPermissionRequest,
-) -> bool {
+pub async fn send_permission_request_via_mailbox(request: &SwarmPermissionRequest) -> bool {
     let leader_name = match get_leader_name(&request.team_name).await {
         Some(n) => n,
         None => {
             debug!("[PermissionSync] Cannot send permission request: leader name not found");
             return false;
-        }
+        },
     };
 
     let message = create_permission_request_message(
@@ -691,9 +660,12 @@ pub async fn send_permission_request_via_mailbox(
     let msg_json = match serde_json::to_string(&message) {
         Ok(j) => j,
         Err(e) => {
-            warn!("[PermissionSync] Failed to serialize permission request: {}", e);
+            warn!(
+                "[PermissionSync] Failed to serialize permission request: {}",
+                e
+            );
             return false;
-        }
+        },
     };
 
     match mailbox::write_to_mailbox(
@@ -715,14 +687,14 @@ pub async fn send_permission_request_via_mailbox(
                 request.id, leader_name
             );
             true
-        }
+        },
         Err(e) => {
             warn!(
                 "[PermissionSync] Failed to send permission request via mailbox: {}",
                 e
             );
             false
-        }
+        },
     }
 }
 
@@ -739,19 +711,16 @@ pub async fn send_permission_response_via_mailbox(
             let resp = create_permission_response_success(
                 request_id,
                 resolution.updated_input.clone(),
-                resolution
-                    .permission_updates
-                    .as_ref()
-                    .map(|v| v.clone()),
+                resolution.permission_updates.clone(),
             );
             match serde_json::to_string(&resp) {
                 Ok(j) => j,
                 Err(e) => {
                     warn!("[PermissionSync] Serialize error: {}", e);
                     return false;
-                }
+                },
             }
-        }
+        },
         PermissionDecision::Rejected => {
             let error = resolution
                 .feedback
@@ -763,9 +732,9 @@ pub async fn send_permission_response_via_mailbox(
                 Err(e) => {
                     warn!("[PermissionSync] Serialize error: {}", e);
                     return false;
-                }
+                },
             }
-        }
+        },
     };
 
     let sender = sender_name.unwrap_or(TEAM_LEAD_NAME);
@@ -789,14 +758,14 @@ pub async fn send_permission_response_via_mailbox(
                 request_id, worker_name
             );
             true
-        }
+        },
         Err(e) => {
             warn!(
                 "[PermissionSync] Failed to send permission response via mailbox: {}",
                 e
             );
             false
-        }
+        },
     }
 }
 
@@ -816,25 +785,25 @@ pub async fn send_sandbox_permission_request_via_mailbox(
     let leader_name = match get_leader_name(team_name).await {
         Some(n) => n,
         None => {
-            debug!("[PermissionSync] Cannot send sandbox permission request: leader name not found");
+            debug!(
+                "[PermissionSync] Cannot send sandbox permission request: leader name not found"
+            );
             return false;
-        }
+        },
     };
 
-    let message = create_sandbox_permission_request(
-        request_id,
-        worker_id,
-        worker_name,
-        worker_color,
-        host,
-    );
+    let message =
+        create_sandbox_permission_request(request_id, worker_id, worker_name, worker_color, host);
 
     let msg_json = match serde_json::to_string(&message) {
         Ok(j) => j,
         Err(e) => {
-            warn!("[PermissionSync] Failed to serialize sandbox request: {}", e);
+            warn!(
+                "[PermissionSync] Failed to serialize sandbox request: {}",
+                e
+            );
             return false;
-        }
+        },
     };
 
     match mailbox::write_to_mailbox(
@@ -856,11 +825,14 @@ pub async fn send_sandbox_permission_request_via_mailbox(
                 request_id, host, leader_name
             );
             true
-        }
+        },
         Err(e) => {
-            warn!("[PermissionSync] Failed to send sandbox permission request: {}", e);
+            warn!(
+                "[PermissionSync] Failed to send sandbox permission request: {}",
+                e
+            );
             false
-        }
+        },
     }
 }
 
@@ -880,7 +852,7 @@ pub async fn send_sandbox_permission_response_via_mailbox(
         Err(e) => {
             warn!("[PermissionSync] Serialize error: {}", e);
             return false;
-        }
+        },
     };
 
     let sender = sender_name.unwrap_or(TEAM_LEAD_NAME);
@@ -904,11 +876,11 @@ pub async fn send_sandbox_permission_response_via_mailbox(
                 request_id, host, allow, worker_name
             );
             true
-        }
+        },
         Err(e) => {
             warn!("[PermissionSync] Failed to send sandbox response: {}", e);
             false
-        }
+        },
     }
 }
 

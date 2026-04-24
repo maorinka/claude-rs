@@ -147,8 +147,8 @@ fn parse_pdf_page_range(pages: &str) -> Option<(u32, u32)> {
     }
 
     // Open-ended range: "N-"
-    if trimmed.ends_with('-') {
-        let first: u32 = trimmed[..trimmed.len() - 1].parse().ok()?;
+    if let Some(stripped) = trimmed.strip_suffix('-') {
+        let first: u32 = stripped.parse().ok()?;
         if first < 1 {
             return None;
         }
@@ -191,7 +191,7 @@ fn render_notebook(raw: &[u8], file_path: &str) -> Result<ToolResultData> {
         Some(arr) => arr,
         None => {
             return Ok(error_result("notebook has no cells array"));
-        }
+        },
     };
 
     let mut cells = Vec::new();
@@ -247,7 +247,7 @@ fn render_notebook(raw: &[u8], file_path: &str) -> Result<ToolResultData> {
                                 "output_type": output_type,
                                 "text": text,
                             }));
-                        }
+                        },
                         "execute_result" | "display_data" => {
                             let text = output
                                 .pointer("/data/text/plain")
@@ -257,7 +257,7 @@ fn render_notebook(raw: &[u8], file_path: &str) -> Result<ToolResultData> {
                                 "output_type": output_type,
                                 "text": text,
                             }));
-                        }
+                        },
                         "error" => {
                             let ename = output.get("ename").and_then(|v| v.as_str()).unwrap_or("");
                             let evalue =
@@ -276,8 +276,8 @@ fn render_notebook(raw: &[u8], file_path: &str) -> Result<ToolResultData> {
                                 "output_type": "error",
                                 "text": format!("{}: {}\n{}", ename, evalue, traceback),
                             }));
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
                 }
                 if !processed_outputs.is_empty() {
@@ -374,7 +374,7 @@ impl ToolExecutor for FileReadTool {
             Some(p) => p,
             None => {
                 return Ok(error_result("missing required parameter: file_path"));
-            }
+            },
         };
 
         // Block dangerous device paths.
@@ -405,7 +405,7 @@ impl ToolExecutor for FileReadTool {
                         "Invalid pages parameter: \"{}\". Use formats like \"1-5\", \"3\", or \"10-20\". Pages are 1-indexed.",
                         pages
                     )));
-                }
+                },
                 Some((first, last)) => {
                     let range_size = if last == u32::MAX {
                         PDF_MAX_PAGES_PER_READ + 1
@@ -418,7 +418,7 @@ impl ToolExecutor for FileReadTool {
                             pages, PDF_MAX_PAGES_PER_READ
                         )));
                     }
-                }
+                },
             }
         }
 
@@ -449,7 +449,7 @@ impl FileReadTool {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
-            }
+            },
         };
 
         let original_size = raw.len();
@@ -478,7 +478,7 @@ impl FileReadTool {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
-            }
+            },
         };
 
         let original_size = raw.len() as u64;
@@ -516,7 +516,7 @@ impl FileReadTool {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
-            }
+            },
         };
 
         render_notebook(&raw, file_path)
@@ -543,7 +543,7 @@ impl FileReadTool {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
-            }
+            },
         };
 
         let file_size = raw_bytes.len() as u64;
@@ -578,7 +578,7 @@ impl FileReadTool {
                     "File '{}' contains invalid UTF-8 and cannot be displayed as text.",
                     file_path
                 )));
-            }
+            },
         };
 
         // Record this read in the shared state for staleness tracking.
@@ -753,7 +753,11 @@ mod tests {
     // ---- Integration tests (async, using the tool) ----
 
     fn make_tool_context() -> ToolUseContext {
-        ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(std::sync::Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]

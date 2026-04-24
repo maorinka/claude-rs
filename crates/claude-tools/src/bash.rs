@@ -140,7 +140,7 @@ fn truncate(s: String) -> String {
 fn detect_blocked_sleep_pattern(command: &str) -> Option<String> {
     // Take the first segment before any compound operators
     let first_segment = command
-        .split(|c: char| c == '&' || c == ';' || c == '|')
+        .split(['&', ';', '|'])
         .next()
         .unwrap_or(command)
         .trim();
@@ -200,7 +200,7 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
                         parts.push(trimmed);
                     }
                     current.clear();
-                }
+                },
                 '|' if chars.peek() == Some(&'|') => {
                     chars.next(); // consume second '|'
                     let trimmed = current.trim().to_string();
@@ -208,24 +208,24 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
                         parts.push(trimmed);
                     }
                     current.clear();
-                }
+                },
                 '|' => {
                     let trimmed = current.trim().to_string();
                     if !trimmed.is_empty() {
                         parts.push(trimmed);
                     }
                     current.clear();
-                }
+                },
                 ';' => {
                     let trimmed = current.trim().to_string();
                     if !trimmed.is_empty() {
                         parts.push(trimmed);
                     }
                     current.clear();
-                }
+                },
                 _ => {
                     current.push(ch);
-                }
+                },
             }
         } else {
             current.push(ch);
@@ -864,7 +864,7 @@ mod tests {
             PermissionCheckResult::Ask(cmds) => {
                 assert_eq!(cmds.len(), 1);
                 assert!(cmds[0].contains("rm"));
-            }
+            },
             other => panic!("expected Ask, got {:?}", other),
         }
     }
@@ -876,7 +876,7 @@ mod tests {
             PermissionCheckResult::Ask(cmds) => {
                 assert_eq!(cmds.len(), 1);
                 assert!(cmds[0].contains("rm"));
-            }
+            },
             other => panic!("expected Ask, got {:?}", other),
         }
     }
@@ -926,9 +926,11 @@ mod tests {
     // -- BashTool integration tests (async) --
 
     fn make_ctx() -> ToolUseContext {
-        ToolUseContext::for_test(std::env::current_dir().unwrap_or_else(|_| "/tmp".into()), std::sync::Arc::new(std::sync::Mutex::new(
-                crate::registry::ReadFileState::new(),
-            )), crate::registry::PermissionMode::Default)
+        ToolUseContext::for_test(
+            std::env::current_dir().unwrap_or_else(|_| "/tmp".into()),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
     }
 
     #[tokio::test]
@@ -1199,7 +1201,7 @@ mod tests {
         let val = is_background_tasks_disabled();
         // We can't guarantee the env var isn't set in CI, but we can check
         // the function returns a bool
-        assert!(val == true || val == false);
+        assert_eq!(val, is_background_tasks_disabled());
     }
 
     #[tokio::test]

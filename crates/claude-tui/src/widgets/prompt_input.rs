@@ -55,8 +55,8 @@ impl PromptInput {
             (KeyModifiers::SHIFT, KeyCode::Enter) | (KeyModifiers::ALT, KeyCode::Enter) => {
                 self.text.insert(self.cursor, '\n');
                 self.cursor += '\n'.len_utf8();
-                return InputAction::None;
-            }
+                InputAction::None
+            },
             // Submit on Enter
             (_, KeyCode::Enter) if !self.text.is_empty() => {
                 let submitted = self.text.clone();
@@ -65,7 +65,7 @@ impl PromptInput {
                 self.cursor = 0;
                 self.history_index = None;
                 InputAction::Submit(submitted)
-            }
+            },
             // Character input
             (_, KeyCode::Char(c))
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
@@ -73,7 +73,7 @@ impl PromptInput {
                 self.text.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
                 InputAction::None
-            }
+            },
             // Backspace
             (_, KeyCode::Backspace) => {
                 if self.cursor > 0 {
@@ -86,24 +86,24 @@ impl PromptInput {
                     self.text.remove(self.cursor);
                 }
                 InputAction::None
-            }
+            },
             // Delete
             (_, KeyCode::Delete) => {
                 if self.cursor < self.text.len() {
                     self.text.remove(self.cursor);
                 }
                 InputAction::None
-            }
+            },
             // Ctrl+Left — move cursor one word left (must be before catch-all Left)
             (KeyModifiers::CONTROL, KeyCode::Left) => {
                 self.cursor = self.word_boundary_left();
                 InputAction::None
-            }
+            },
             // Ctrl+Right — move cursor one word right (must be before catch-all Right)
             (KeyModifiers::CONTROL, KeyCode::Right) => {
                 self.cursor = self.word_boundary_right();
                 InputAction::None
-            }
+            },
             // Left arrow
             (_, KeyCode::Left) => {
                 if self.cursor > 0 {
@@ -115,7 +115,7 @@ impl PromptInput {
                     self.cursor -= prev;
                 }
                 InputAction::None
-            }
+            },
             // Right arrow
             (_, KeyCode::Right) => {
                 if self.cursor < self.text.len() {
@@ -127,55 +127,55 @@ impl PromptInput {
                     self.cursor += next;
                 }
                 InputAction::None
-            }
+            },
             // Ctrl+A — home
             (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                 self.cursor = 0;
                 InputAction::None
-            }
+            },
             // Ctrl+E — end
             (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
                 self.cursor = self.text.len();
                 InputAction::None
-            }
+            },
             // Ctrl+K — kill to end of line
             (KeyModifiers::CONTROL, KeyCode::Char('k')) => {
                 self.text.truncate(self.cursor);
                 InputAction::None
-            }
+            },
             // Ctrl+U — kill to start of line
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 self.text = self.text[self.cursor..].to_string();
                 self.cursor = 0;
                 InputAction::None
-            }
+            },
             // Ctrl+W — delete word before cursor
             (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
                 let new_pos = self.word_boundary_left();
                 self.text = format!("{}{}", &self.text[..new_pos], &self.text[self.cursor..]);
                 self.cursor = new_pos;
                 InputAction::None
-            }
+            },
             // Up — history previous
             (_, KeyCode::Up) => {
                 self.history_prev();
                 InputAction::None
-            }
+            },
             // Down — history next
             (_, KeyCode::Down) => {
                 self.history_next();
                 InputAction::None
-            }
+            },
             // Home
             (_, KeyCode::Home) => {
                 self.cursor = 0;
                 InputAction::None
-            }
+            },
             // End
             (_, KeyCode::End) => {
                 self.cursor = self.text.len();
                 InputAction::None
-            }
+            },
             _ => InputAction::None,
         }
     }
@@ -197,7 +197,7 @@ impl PromptInput {
                     .next()
                     .map(|c| c.len_utf8())
                     .unwrap_or(0)
-            }
+            },
             None => 0,
         }
     }
@@ -233,11 +233,11 @@ impl PromptInput {
             None => {
                 self.saved_current = self.text.clone();
                 self.history_index = Some(self.history.len() - 1);
-            }
+            },
             Some(0) => return, // Already at oldest
             Some(i) => {
                 self.history_index = Some(i - 1);
-            }
+            },
         }
         if let Some(i) = self.history_index {
             self.text = self.history[i].clone();
@@ -247,17 +247,17 @@ impl PromptInput {
 
     fn history_next(&mut self) {
         match self.history_index {
-            None => return,
+            None => (),
             Some(i) if i >= self.history.len() - 1 => {
                 self.history_index = None;
                 self.text = self.saved_current.clone();
                 self.cursor = self.text.len();
-            }
+            },
             Some(i) => {
                 self.history_index = Some(i + 1);
                 self.text = self.history[i + 1].clone();
                 self.cursor = self.text.len();
-            }
+            },
         }
     }
 }
@@ -353,17 +353,19 @@ impl<'a> Widget for PromptInputWidget<'a> {
                     ]);
                     buf.set_line(area.x, row, &line, area.width);
                 } else {
-                    let line = Line::from(vec![
-                        Span::raw(indent.clone()),
-                        Span::raw(*text_slice),
-                    ]);
+                    let line = Line::from(vec![Span::raw(indent.clone()), Span::raw(*text_slice)]);
                     buf.set_line(area.x, row, &line, area.width);
                 }
             }
 
             // Bottom border
             let bottom_border = "─".repeat(area.width as usize);
-            buf.set_string(area.x, area.y + area.height - 1, &bottom_border, border_style);
+            buf.set_string(
+                area.x,
+                area.y + area.height - 1,
+                &bottom_border,
+                border_style,
+            );
         } else {
             // Minimal (height == 1): just the last line of text with prompt character
             let last_line = text_lines.last().copied().unwrap_or("");

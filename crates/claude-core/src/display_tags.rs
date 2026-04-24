@@ -73,13 +73,11 @@ fn strip_blocks(text: &str, allow_list: Option<&[&str]>) -> String {
         }
 
         // Try to parse an opening tag at i.
-        if let Some((name_start, name_end, open_end)) = parse_open_tag(bytes, i)
-        {
-            let name = std::str::from_utf8(&bytes[name_start..name_end])
-                .unwrap_or("");
+        if let Some((name_start, name_end, open_end)) = parse_open_tag(bytes, i) {
+            let name = std::str::from_utf8(&bytes[name_start..name_end]).unwrap_or("");
             let strip = match allow_list {
                 None => true,
-                Some(allowed) => allowed.iter().any(|a| *a == name),
+                Some(allowed) => allowed.contains(&name),
             };
             let close_seq = format!("</{name}>");
             if let Some(rel) = find_from(bytes, open_end, close_seq.as_bytes()) {
@@ -94,10 +92,7 @@ fn strip_blocks(text: &str, allow_list: Option<&[&str]>) -> String {
                     continue;
                 } else {
                     // Leave tag-name-mismatched blocks intact.
-                    out.push_str(
-                        std::str::from_utf8(&bytes[i..block_end])
-                            .unwrap_or(""),
-                    );
+                    out.push_str(std::str::from_utf8(&bytes[i..block_end]).unwrap_or(""));
                     i = block_end;
                     continue;
                 }
@@ -247,8 +242,7 @@ mod tests {
 
     #[test]
     fn strip_ide_context_keeps_other_tags() {
-        let text =
-            "<ide_opened_file>foo</ide_opened_file><code>keep</code>after";
+        let text = "<ide_opened_file>foo</ide_opened_file><code>keep</code>after";
         let out = strip_ide_context_tags(text);
         assert_eq!(out, "<code>keep</code>after");
     }

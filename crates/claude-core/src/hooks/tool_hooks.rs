@@ -89,20 +89,17 @@ pub async fn run_pre_tool_use_hooks(
     let permission_reason = aggregated.hook_permission_decision_reason.clone();
 
     // If the hook denied via permission_behavior, format a denial message.
-    let denial_message = if permission_behavior == Some(PermissionBehavior::Deny)
-        && denial_message.is_none()
-    {
-        Some(
-            permission_reason
-                .as_deref()
-                .map(|r| format!("Hook {} denied this tool: {}", hook_name, r))
-                .unwrap_or_else(|| {
-                    format!("Hook {} denied this tool", hook_name)
-                }),
-        )
-    } else {
-        denial_message
-    };
+    let denial_message =
+        if permission_behavior == Some(PermissionBehavior::Deny) && denial_message.is_none() {
+            Some(
+                permission_reason
+                    .as_deref()
+                    .map(|r| format!("Hook {} denied this tool: {}", hook_name, r))
+                    .unwrap_or_else(|| format!("Hook {} denied this tool", hook_name)),
+            )
+        } else {
+            denial_message
+        };
 
     PreToolUseHookDecision {
         permission_behavior,
@@ -197,6 +194,7 @@ pub struct PostToolUseFailureHookDecision {
 /// Run PostToolUseFailure hooks.
 ///
 /// Mirrors the TypeScript `executePostToolUseFailureHooks`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_post_tool_use_failure_hooks(
     runner: &HookRunner,
     tool_name: &str,
@@ -295,23 +293,18 @@ where
                 return ResolvedPermission::Allow {
                     updated_input: hook_decision.updated_input.clone(),
                 };
-            }
+            },
             RuleCheckResult::Deny(msg) => {
-                debug!(
-                    "Hook approved tool use, but deny rule overrides: {:?}",
-                    msg
-                );
-                return ResolvedPermission::Deny {
-                    message: msg,
-                };
-            }
+                debug!("Hook approved tool use, but deny rule overrides: {:?}", msg);
+                return ResolvedPermission::Deny { message: msg };
+            },
             RuleCheckResult::Ask => {
                 debug!("Hook approved tool use, but ask rule requires prompt");
                 return ResolvedPermission::RequiresUserConfirmation {
                     updated_input: hook_decision.updated_input.clone(),
                     force_decision: None,
                 };
-            }
+            },
         }
     }
 
@@ -345,9 +338,7 @@ pub enum ResolvedPermission {
         updated_input: Option<HashMap<String, serde_json::Value>>,
     },
     /// Tool is denied (either by hook or by a deny rule overriding hook allow).
-    Deny {
-        message: Option<String>,
-    },
+    Deny { message: Option<String> },
     /// User confirmation is required (ask rule or hook ask).
     RequiresUserConfirmation {
         updated_input: Option<HashMap<String, serde_json::Value>>,
@@ -387,9 +378,10 @@ mod tests {
         let decision = make_hook_decision(Some(PermissionBehavior::Allow));
         let input = serde_json::json!({"command": "echo hello"});
 
-        let result =
-            resolve_hook_permission_decision(&decision, &input, |_| async { RuleCheckResult::NoMatch })
-                .await;
+        let result = resolve_hook_permission_decision(&decision, &input, |_| async {
+            RuleCheckResult::NoMatch
+        })
+        .await;
 
         assert!(matches!(result, ResolvedPermission::Allow { .. }));
     }
@@ -407,7 +399,7 @@ mod tests {
         match result {
             ResolvedPermission::Deny { message } => {
                 assert_eq!(message, Some("dangerous command".to_string()));
-            }
+            },
             _ => panic!("Expected Deny, got {:?}", result),
         }
     }
@@ -433,14 +425,15 @@ mod tests {
         decision.denial_message = Some("nope".to_string());
         let input = serde_json::json!({});
 
-        let result =
-            resolve_hook_permission_decision(&decision, &input, |_| async { RuleCheckResult::NoMatch })
-                .await;
+        let result = resolve_hook_permission_decision(&decision, &input, |_| async {
+            RuleCheckResult::NoMatch
+        })
+        .await;
 
         match result {
             ResolvedPermission::Deny { message } => {
                 assert_eq!(message, Some("nope".to_string()));
-            }
+            },
             _ => panic!("Expected Deny"),
         }
     }
@@ -451,14 +444,15 @@ mod tests {
         decision.permission_reason = Some("please confirm".to_string());
         let input = serde_json::json!({});
 
-        let result =
-            resolve_hook_permission_decision(&decision, &input, |_| async { RuleCheckResult::NoMatch })
-                .await;
+        let result = resolve_hook_permission_decision(&decision, &input, |_| async {
+            RuleCheckResult::NoMatch
+        })
+        .await;
 
         match result {
             ResolvedPermission::RequiresUserConfirmation { force_decision, .. } => {
                 assert_eq!(force_decision, Some("please confirm".to_string()));
-            }
+            },
             _ => panic!("Expected RequiresUserConfirmation"),
         }
     }
@@ -468,9 +462,10 @@ mod tests {
         let decision = make_hook_decision(None);
         let input = serde_json::json!({});
 
-        let result =
-            resolve_hook_permission_decision(&decision, &input, |_| async { RuleCheckResult::NoMatch })
-                .await;
+        let result = resolve_hook_permission_decision(&decision, &input, |_| async {
+            RuleCheckResult::NoMatch
+        })
+        .await;
 
         assert!(matches!(result, ResolvedPermission::NormalFlow { .. }));
     }
@@ -480,9 +475,10 @@ mod tests {
         let decision = make_hook_decision(Some(PermissionBehavior::Passthrough));
         let input = serde_json::json!({});
 
-        let result =
-            resolve_hook_permission_decision(&decision, &input, |_| async { RuleCheckResult::NoMatch })
-                .await;
+        let result = resolve_hook_permission_decision(&decision, &input, |_| async {
+            RuleCheckResult::NoMatch
+        })
+        .await;
 
         assert!(matches!(result, ResolvedPermission::NormalFlow { .. }));
     }

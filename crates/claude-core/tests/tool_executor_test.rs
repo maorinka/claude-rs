@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 fn make_call_fn() -> ToolCallFn {
-    Arc::new(|name, id, input, cancel| {
+    Arc::new(|name, id, _input, _cancel| {
         tokio::spawn(async move {
             // Simulate tool execution
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

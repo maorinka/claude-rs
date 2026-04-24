@@ -17,8 +17,8 @@ use tokio::fs;
 
 const PASTE_STORE_DIR: &str = "paste-cache";
 
-/// Claude's config home. Matches the `CLAUDE_CONFIG_DIR` env override
-/// + `~/.claude` fallback pattern used elsewhere in the crate
+/// Claude's config home. Matches the `CLAUDE_CONFIG_DIR` env override +
+/// `~/.claude` fallback pattern used elsewhere in the crate
 /// (`auth/storage.rs`, `keybindings/loader.rs`, `magic_docs.rs`).
 fn claude_config_home() -> PathBuf {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
@@ -122,6 +122,7 @@ fn is_txt_file(path: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // test-only env serialization via std::sync::Mutex
 mod tests {
     use super::*;
     use std::sync::Mutex;

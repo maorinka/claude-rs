@@ -58,7 +58,7 @@ mod tests {
     fn utf8_boundary_safe() {
         // 4-byte codepoint is U+1F600 (grinning face). Each char is 4 bytes,
         // so a cap that falls inside a char must backtrack.
-        let s: String = std::iter::repeat('\u{1F600}').take(50).collect();
+        let s: String = std::iter::repeat_n('\u{1F600}', 50).collect();
         let out = truncate_tool_result(&s, 51); // between 12th and 13th char
         assert!(out.starts_with("\u{1F600}"));
     }

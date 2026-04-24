@@ -237,7 +237,7 @@ fn parse_bool_value(s: &str) -> Option<bool> {
 /// as a YAML list (already comma-joined by `simple_yaml_parse`).
 fn parse_string_list(s: &str) -> Vec<String> {
     s.split(',')
-        .map(|item| unquote_yaml_string(item))
+        .map(unquote_yaml_string)
         .filter(|item| !item.is_empty())
         .collect()
 }

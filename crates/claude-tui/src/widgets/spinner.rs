@@ -13,23 +13,91 @@ const SPINNER_CHARS: &[&str] = &["·", "✢", "✳", "✶", "✻", "✽"];
 /// Spinner verbs matching TS constants/spinnerVerbs.ts (204 verbs).
 /// Rotated every ~3 seconds while the model is thinking.
 const SPINNER_VERBS: &[&str] = &[
-    "Thinking", "Reasoning", "Analyzing", "Processing", "Computing",
-    "Evaluating", "Considering", "Pondering", "Reflecting", "Deliberating",
-    "Brewing", "Churning", "Crunching", "Simmering", "Percolating",
-    "Distilling", "Synthesizing", "Cogitating", "Contemplating", "Musing",
-    "Ruminating", "Meditating", "Noodling", "Brainstorming", "Ideating",
-    "Formulating", "Crafting", "Composing", "Architecting", "Engineering",
-    "Constructing", "Building", "Assembling", "Weaving", "Knitting",
-    "Stitching", "Cooking", "Baking", "Sautéing", "Marinating",
-    "Fermenting", "Steeping", "Infusing", "Blending", "Mixing",
-    "Stirring", "Whipping", "Folding", "Kneading", "Proofing",
-    "Calibrating", "Tuning", "Optimizing", "Refining", "Polishing",
-    "Honing", "Sharpening", "Focusing", "Aligning", "Harmonizing",
-    "Orchestrating", "Conducting", "Channeling", "Conjuring", "Summoning",
-    "Invoking", "Manifesting", "Materializing", "Crystallizing", "Decoding",
-    "Parsing", "Compiling", "Interpreting", "Translating", "Mapping",
-    "Charting", "Navigating", "Exploring", "Investigating", "Researching",
-    "Studying", "Examining", "Inspecting", "Scrutinizing", "Surveying",
+    "Thinking",
+    "Reasoning",
+    "Analyzing",
+    "Processing",
+    "Computing",
+    "Evaluating",
+    "Considering",
+    "Pondering",
+    "Reflecting",
+    "Deliberating",
+    "Brewing",
+    "Churning",
+    "Crunching",
+    "Simmering",
+    "Percolating",
+    "Distilling",
+    "Synthesizing",
+    "Cogitating",
+    "Contemplating",
+    "Musing",
+    "Ruminating",
+    "Meditating",
+    "Noodling",
+    "Brainstorming",
+    "Ideating",
+    "Formulating",
+    "Crafting",
+    "Composing",
+    "Architecting",
+    "Engineering",
+    "Constructing",
+    "Building",
+    "Assembling",
+    "Weaving",
+    "Knitting",
+    "Stitching",
+    "Cooking",
+    "Baking",
+    "Sautéing",
+    "Marinating",
+    "Fermenting",
+    "Steeping",
+    "Infusing",
+    "Blending",
+    "Mixing",
+    "Stirring",
+    "Whipping",
+    "Folding",
+    "Kneading",
+    "Proofing",
+    "Calibrating",
+    "Tuning",
+    "Optimizing",
+    "Refining",
+    "Polishing",
+    "Honing",
+    "Sharpening",
+    "Focusing",
+    "Aligning",
+    "Harmonizing",
+    "Orchestrating",
+    "Conducting",
+    "Channeling",
+    "Conjuring",
+    "Summoning",
+    "Invoking",
+    "Manifesting",
+    "Materializing",
+    "Crystallizing",
+    "Decoding",
+    "Parsing",
+    "Compiling",
+    "Interpreting",
+    "Translating",
+    "Mapping",
+    "Charting",
+    "Navigating",
+    "Exploring",
+    "Investigating",
+    "Researching",
+    "Studying",
+    "Examining",
+    "Inspecting",
+    "Scrutinizing",
+    "Surveying",
 ];
 
 /// Build the bounce sequence: forward + reverse.
@@ -74,6 +142,12 @@ pub struct SpinnerState {
     pub queued_count: usize,
     verb_index: usize,
     last_verb_change: Instant,
+}
+
+impl Default for SpinnerState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SpinnerState {
@@ -201,10 +275,7 @@ impl Widget for &SpinnerState {
             info_parts.push(format!("{} tokens", format_tokens(self.tokens)));
         }
         if self.queued_count > 0 {
-            info_parts.push(format!(
-                "{} queued",
-                self.queued_count
-            ));
+            info_parts.push(format!("{} queued", self.queued_count));
         }
         spans.push(Span::styled(
             format!(" ({})", info_parts.join(" · ")),

@@ -15,6 +15,12 @@ pub struct TaskListWidget {
     pub visible: bool,
 }
 
+impl Default for TaskListWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskListWidget {
     pub fn new() -> Self {
         Self {

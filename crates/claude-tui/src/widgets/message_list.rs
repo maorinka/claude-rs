@@ -70,6 +70,12 @@ pub struct MessageList {
     height_cache: Vec<Option<usize>>,
 }
 
+impl Default for MessageList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MessageList {
     pub fn new() -> Self {
         Self {
@@ -83,7 +89,10 @@ impl MessageList {
 
     pub fn push(&mut self, msg: MessageEntry) {
         // For ToolResult, insert right after its matching ToolUse (not at end)
-        if let MessageEntry::ToolResult { ref tool_use_id, .. } = msg {
+        if let MessageEntry::ToolResult {
+            ref tool_use_id, ..
+        } = msg
+        {
             if let Some(pos) = self.messages.iter().rposition(|m| {
                 matches!(m, MessageEntry::ToolUse { tool_use_id: ref id, .. } if id == tool_use_id)
             }) {
@@ -216,7 +225,11 @@ fn wrap_spans(line: &Line<'static>, max_width: usize, indent: usize) -> Vec<Line
     }
 
     // Fast path: check if the line already fits.
-    let total_width: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+    let total_width: usize = line
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
     if total_width <= max_width {
         return vec![line.clone()];
     }
@@ -250,11 +263,9 @@ fn wrap_spans(line: &Line<'static>, max_width: usize, indent: usize) -> Vec<Line
         for ch in wrapped_text.chars() {
             if char_offset < chars_styles.len() {
                 let (_, style) = chars_styles[char_offset];
-                if current_style.map_or(false, |s| s != style) {
-                    if !current_text.is_empty() {
-                        spans.push(Span::styled(current_text.clone(), current_style.unwrap()));
-                        current_text.clear();
-                    }
+                if current_style.is_some_and(|s| s != style) && !current_text.is_empty() {
+                    spans.push(Span::styled(current_text.clone(), current_style.unwrap()));
+                    current_text.clear();
                 }
                 current_style = Some(style);
                 current_text.push(ch);
@@ -421,7 +432,7 @@ fn render_message(
                         .fg(theme.claude)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("{}", " ".repeat(pad)), Style::default()),
+                Span::styled(" ".repeat(pad).to_string(), Style::default()),
                 Span::styled(" \u{2502}", Style::default().fg(theme.claude)),
             ]));
 
@@ -472,7 +483,7 @@ fn render_message(
             )));
 
             lines.push(Line::from(""));
-        }
+        },
         MessageEntry::User { text } => {
             // Original: marginTop=1 (blank line), then user text with
             // backgroundColor=userMessageBackground filling the full width.
@@ -492,7 +503,7 @@ fn render_message(
                     )]));
                 }
             }
-        }
+        },
         MessageEntry::Assistant { text } => {
             // Original TS: marginTop=1 (blank line), then BLACK_CIRCLE in
             // minWidth=2 followed by markdown content. The circle prefix is 2
@@ -520,7 +531,7 @@ fn render_message(
                 spans.extend(md_line.spans.clone());
                 lines.push(Line::from(spans));
             }
-        }
+        },
         MessageEntry::ToolUse {
             name,
             input_summary,
@@ -580,7 +591,7 @@ fn render_message(
                     ]));
                 }
             }
-        }
+        },
         MessageEntry::ToolResult {
             name: _,
             output,
@@ -614,8 +625,10 @@ fn render_message(
                     }
                 }
             } else if looks_like_diff(output) {
-                let diff_lines =
-                    diff_view::diff_to_lines(output, width.saturating_sub(TOOL_RESULT_PREFIX_WIDTH as u16));
+                let diff_lines = diff_view::diff_to_lines(
+                    output,
+                    width.saturating_sub(TOOL_RESULT_PREFIX_WIDTH as u16),
+                );
                 for dl in diff_lines {
                     let mut spans = vec![Span::styled(
                         TOOL_RESULT_PREFIX.to_string(),
@@ -645,7 +658,7 @@ fn render_message(
                     )));
                 }
             }
-        }
+        },
         MessageEntry::Thinking { text } => {
             // Original: "∴ Thinking" in dimColor + italic.
             // When expanded (verbose/show_thinking): thinking text in dim markdown, paddingLeft=2.
@@ -688,7 +701,7 @@ fn render_message(
                     ),
                 ]));
             }
-        }
+        },
         MessageEntry::System { text } => {
             // System messages: plain text in inactive/muted color, word-wrapped.
             let sys_width = (width as usize).max(1);
@@ -700,7 +713,7 @@ fn render_message(
                     )]));
                 }
             }
-        }
+        },
     }
 
     lines
@@ -867,7 +880,10 @@ mod tests {
     #[test]
     fn word_wrap_long_text_wraps_at_boundary() {
         // 30 cols: "This is a long sentence that" wraps
-        let result = word_wrap("This is a long sentence that should wrap at word boundaries", 30);
+        let result = word_wrap(
+            "This is a long sentence that should wrap at word boundaries",
+            30,
+        );
         assert!(result.len() >= 2);
         for line in &result {
             assert!(
@@ -898,7 +914,9 @@ mod tests {
             assert!(
                 w <= 40,
                 "Assistant line {} '{}' exceeds 40 cols (got {})",
-                i, text, w
+                i,
+                text,
+                w
             );
         }
     }
@@ -921,7 +939,9 @@ mod tests {
             assert!(
                 w <= 50,
                 "User line {} '{}' exceeds 50 cols (got {})",
-                i, text, w
+                i,
+                text,
+                w
             );
         }
     }
@@ -947,7 +967,9 @@ mod tests {
             assert!(
                 w <= 50,
                 "Tool result line {} '{}' exceeds 50 cols (got {})",
-                i, text, w
+                i,
+                text,
+                w
             );
         }
     }
@@ -970,7 +992,9 @@ mod tests {
             assert!(
                 w <= 40,
                 "System line {} '{}' exceeds 40 cols (got {})",
-                i, text, w
+                i,
+                text,
+                w
             );
         }
     }
@@ -982,9 +1006,18 @@ mod tests {
             Span::raw("world this is a long text that needs wrapping"),
         ]);
         let result = wrap_spans(&styled_line, 20, 0);
-        assert!(result.len() >= 2, "Expected wrapping, got {} lines", result.len());
+        assert!(
+            result.len() >= 2,
+            "Expected wrapping, got {} lines",
+            result.len()
+        );
         // First line's first span should be bold
-        assert!(result[0].spans[0].style.add_modifier == Modifier::BOLD
-                || result[0].spans.iter().any(|s| s.style.add_modifier == Modifier::BOLD));
+        assert!(
+            result[0].spans[0].style.add_modifier == Modifier::BOLD
+                || result[0]
+                    .spans
+                    .iter()
+                    .any(|s| s.style.add_modifier == Modifier::BOLD)
+        );
     }
 }

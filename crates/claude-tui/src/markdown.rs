@@ -59,23 +59,23 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
         }
 
         // Headers
-        if line.starts_with("### ") {
+        if let Some(stripped) = line.strip_prefix("### ") {
             lines.push(Line::from(Span::styled(
-                line[4..].to_string(),
+                stripped.to_string(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
-        } else if line.starts_with("## ") {
+        } else if let Some(stripped) = line.strip_prefix("## ") {
             lines.push(Line::from(Span::styled(
-                line[3..].to_string(),
+                stripped.to_string(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
-        } else if line.starts_with("# ") {
+        } else if let Some(stripped) = line.strip_prefix("# ") {
             lines.push(Line::from(Span::styled(
-                line[2..].to_string(),
+                stripped.to_string(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),

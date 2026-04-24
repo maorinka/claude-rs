@@ -9,7 +9,7 @@
 /// System prompt for the session-search agentic query. Tells
 /// the model to find relevant sessions by tag > title > branch
 /// > summary/transcript, be inclusive, and return a JSON
-/// `{"relevant_indices": [...]}` response.
+/// > `{"relevant_indices": [...]}` response.
 ///
 /// Port of TS `utils/agenticSessionSearch.ts:15-48`.
 pub const SESSION_SEARCH_SYSTEM_PROMPT: &str = r#"Your goal is to find relevant sessions based on a user's search query.

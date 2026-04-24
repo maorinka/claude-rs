@@ -126,7 +126,7 @@ fn weekday_name(w: chrono::Weekday) -> &'static str {
 fn format_timezone<Tz: chrono::TimeZone>(dt: &chrono::DateTime<Tz>) -> String {
     let offset_secs = dt.offset().fix().local_minus_utc();
     let sign = if offset_secs >= 0 { '+' } else { '-' };
-    let abs = offset_secs.unsigned_abs() as u32;
+    let abs = offset_secs.unsigned_abs();
     let hours = abs / 3600;
     let mins = (abs % 3600) / 60;
     format!("{}{:02}:{:02}", sign, hours, mins)
@@ -181,7 +181,10 @@ mod tests {
 
     #[test]
     fn normalize_rejects_empty_and_invalid() {
-        assert!(matches!(normalize_model_reply(""), DateTimeParseResult::Err(_)));
+        assert!(matches!(
+            normalize_model_reply(""),
+            DateTimeParseResult::Err(_)
+        ));
         assert!(matches!(
             normalize_model_reply("INVALID"),
             DateTimeParseResult::Err(_)

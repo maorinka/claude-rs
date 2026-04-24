@@ -117,23 +117,20 @@ pub fn validate_elicitation_input(input: &str, schema: &PrimitiveSchema) -> Vali
         } => validate_string(input, *min_length, *max_length, *format),
         PrimitiveSchema::Number { minimum, maximum } => {
             validate_number(input, *minimum, *maximum, false)
-        }
+        },
         PrimitiveSchema::Integer { minimum, maximum } => {
             let min = minimum.map(|v| v as f64);
             let max = maximum.map(|v| v as f64);
             validate_number(input, min, max, true)
-        }
+        },
         PrimitiveSchema::Boolean => validate_boolean(input),
         PrimitiveSchema::Enum { values, .. } => {
             if values.iter().any(|v| v == input) {
                 ValidationResult::ok(Primitive::String(input.to_string()))
             } else {
-                ValidationResult::err(format!(
-                    "Must be one of: {}",
-                    values.join(", ")
-                ))
+                ValidationResult::err(format!("Must be one of: {}", values.join(", ")))
             }
-        }
+        },
     }
 }
 
@@ -186,7 +183,7 @@ fn format_error_message(f: StringFormat) -> String {
         StringFormat::Date => "Must be a valid date, e.g. 2024-03-15, today, next Monday".into(),
         StringFormat::DateTime => {
             "Must be a valid date-time, e.g. 2024-03-15T14:30:00Z, tomorrow at 3pm".into()
-        }
+        },
     }
 }
 
@@ -209,7 +206,9 @@ fn is_uri(s: &str) -> bool {
     if let Some(idx) = s.find("://") {
         let scheme = &s[..idx];
         !scheme.is_empty()
-            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
             && s.len() > idx + 3
     } else {
         false
@@ -256,7 +255,11 @@ fn validate_number(
     max: Option<f64>,
     require_int: bool,
 ) -> ValidationResult {
-    let type_label = if require_int { "an integer" } else { "a number" };
+    let type_label = if require_int {
+        "an integer"
+    } else {
+        "a number"
+    };
     let range_msg = match (min, max) {
         (Some(lo), Some(hi)) => format!(
             "Must be {} between {} and {}",
@@ -264,16 +267,8 @@ fn validate_number(
             format_num(lo, require_int),
             format_num(hi, require_int)
         ),
-        (Some(lo), None) => format!(
-            "Must be {} >= {}",
-            type_label,
-            format_num(lo, require_int)
-        ),
-        (None, Some(hi)) => format!(
-            "Must be {} <= {}",
-            type_label,
-            format_num(hi, require_int)
-        ),
+        (Some(lo), None) => format!("Must be {} >= {}", type_label, format_num(lo, require_int)),
+        (None, Some(hi)) => format!("Must be {} <= {}", type_label, format_num(hi, require_int)),
         (None, None) => format!("Must be {}", type_label),
     };
 
@@ -339,9 +334,12 @@ pub fn get_format_hint(schema: &PrimitiveSchema) -> Option<String> {
             format: Some(StringFormat::DateTime),
             ..
         } => Some("date-time, e.g. 2024-03-15T14:30:00Z".into()),
-        PrimitiveSchema::Number { minimum, maximum } => {
-            Some(number_hint("number", minimum.map(|v| v as f64), maximum.map(|v| v as f64), false))
-        }
+        PrimitiveSchema::Number { minimum, maximum } => Some(number_hint(
+            "number",
+            minimum.map(|v| v),
+            maximum.map(|v| v),
+            false,
+        )),
         PrimitiveSchema::Integer { minimum, maximum } => Some(number_hint(
             "integer",
             minimum.map(|v| v as f64),
@@ -352,12 +350,7 @@ pub fn get_format_hint(schema: &PrimitiveSchema) -> Option<String> {
     }
 }
 
-fn number_hint(
-    type_name: &str,
-    min: Option<f64>,
-    max: Option<f64>,
-    is_integer: bool,
-) -> String {
+fn number_hint(type_name: &str, min: Option<f64>, max: Option<f64>, is_integer: bool) -> String {
     match (min, max) {
         (Some(lo), Some(hi)) => format!(
             "({} between {} and {})",
@@ -370,7 +363,7 @@ fn number_hint(
         (None, None) => {
             let example = if is_integer { "42" } else { "3.14" };
             format!("({}, e.g. {})", type_name, example)
-        }
+        },
     }
 }
 
@@ -385,9 +378,9 @@ mod tests {
             max_length: Some(5),
             format: None,
         };
-        assert!(validate_elicitation_input("ab", &schema).is_valid == false);
+        assert!(!validate_elicitation_input("ab", &schema).is_valid);
         assert!(validate_elicitation_input("abc", &schema).is_valid);
-        assert!(validate_elicitation_input("abcdef", &schema).is_valid == false);
+        assert!(!validate_elicitation_input("abcdef", &schema).is_valid);
     }
 
     #[test]
@@ -480,7 +473,10 @@ mod tests {
             max_length: None,
             format: Some(StringFormat::Email),
         };
-        assert_eq!(get_format_hint(&schema).as_deref(), Some("email address, e.g. user@example.com"));
+        assert_eq!(
+            get_format_hint(&schema).as_deref(),
+            Some("email address, e.g. user@example.com")
+        );
     }
 
     #[test]

@@ -1,5 +1,4 @@
 use claude_tools::build_default_registry;
-use serde_json::json;
 
 #[test]
 fn test_agent_tool_schema_has_team_name() {
@@ -93,14 +92,8 @@ fn test_agent_tool_full_prompt_content() {
         desc.contains("general-purpose"),
         "Should list the general-purpose agent"
     );
-    assert!(
-        desc.contains("Explore"),
-        "Should list the Explore agent"
-    );
-    assert!(
-        desc.contains("Plan"),
-        "Should list the Plan agent"
-    );
+    assert!(desc.contains("Explore"), "Should list the Explore agent");
+    assert!(desc.contains("Plan"), "Should list the Plan agent");
     assert!(
         desc.contains("When NOT to use the Agent tool:"),
         "Should have the 'when not to use' section"
@@ -113,10 +106,7 @@ fn test_agent_tool_full_prompt_content() {
         desc.contains("Never delegate understanding."),
         "Should have the delegation warning"
     );
-    assert!(
-        desc.contains("Usage notes:"),
-        "Should have usage notes"
-    );
+    assert!(desc.contains("Usage notes:"), "Should have usage notes");
     assert!(
         desc.contains("Foreground vs background"),
         "Should have foreground/background guidance"
@@ -133,10 +123,7 @@ fn test_agent_tool_full_prompt_content() {
         desc.contains("SendMessage"),
         "Should mention SendMessage for continuing agents"
     );
-    assert!(
-        desc.contains("<example>"),
-        "Should have examples"
-    );
+    assert!(desc.contains("<example>"), "Should have examples");
     assert!(
         desc.len() > 2000,
         "Full prompt should be substantial (got {} chars)",

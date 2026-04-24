@@ -53,7 +53,9 @@ pub fn plural<'a>(n: usize, word: &'a str, plural_word: Option<&'a str>) -> Stri
     if n == 1 {
         word.to_string()
     } else {
-        plural_word.map(str::to_string).unwrap_or_else(|| format!("{}s", word))
+        plural_word
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{}s", word))
     }
 }
 
@@ -119,20 +121,22 @@ pub fn safe_join_lines(lines: &[&str], delimiter: &str, max_size: usize) -> Stri
 /// appending a "\n... [<n> more lines]" marker when cut.
 pub fn truncate_to_lines(text: &str, max_lines: usize) -> String {
     let mut out = String::new();
-    let mut taken = 0usize;
     let total_lines = text.lines().count();
-    for line in text.lines().take(max_lines) {
+    for (taken, line) in text.lines().take(max_lines).enumerate() {
         if taken > 0 {
             out.push('\n');
         }
         out.push_str(line);
-        taken += 1;
     }
     if total_lines > max_lines {
         out.push_str(&format!(
             "\n... [{} more {}]",
             total_lines - max_lines,
-            if total_lines - max_lines == 1 { "line" } else { "lines" }
+            if total_lines - max_lines == 1 {
+                "line"
+            } else {
+                "lines"
+            }
         ));
     }
     out
@@ -175,12 +179,8 @@ pub fn bytes_per_token_for_file_type(file_extension: &str) -> usize {
 /// Like `rough_token_count_estimation` but uses the file-type
 /// heuristic when the extension is known.
 pub fn rough_token_count_estimation_for_file_type(content: &str, file_extension: &str) -> usize {
-    rough_token_count_estimation_with_ratio(
-        content,
-        bytes_per_token_for_file_type(file_extension),
-    )
+    rough_token_count_estimation_with_ratio(content, bytes_per_token_for_file_type(file_extension))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -254,10 +254,7 @@ mod tests {
 
     #[test]
     fn full_width_space_normalizes() {
-        assert_eq!(
-            normalize_full_width_space("foo\u{3000}bar"),
-            "foo bar"
-        );
+        assert_eq!(normalize_full_width_space("foo\u{3000}bar"), "foo bar");
     }
 
     #[test]

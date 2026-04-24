@@ -39,6 +39,7 @@ pub struct ToolInfo {
 ///   - the input batch is empty
 ///   - no secondary model is registered
 ///   - the model returns empty content
+///
 /// Returns `Err` for cancellation / model-call errors; callers that
 /// treat summaries as best-effort should log the error via the
 /// `E_TOOL_USE_SUMMARY_GENERATION_FAILED` error ID.
@@ -77,7 +78,7 @@ pub async fn generate_tool_use_summary(
                 "User's intent (from assistant's last message): {}\n\n",
                 &txt[..cut]
             )
-        }
+        },
         _ => String::new(),
     };
 
@@ -105,13 +106,7 @@ pub async fn generate_tool_use_summary(
     let summary = model
         .summarize(&full_prompt, cancel)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "errorId={}: {}",
-                E_TOOL_USE_SUMMARY_GENERATION_FAILED,
-                e
-            )
-        })?;
+        .map_err(|e| anyhow::anyhow!("errorId={}: {}", E_TOOL_USE_SUMMARY_GENERATION_FAILED, e))?;
     let summary = summary.trim();
     if summary.is_empty() {
         Ok(None)
@@ -159,9 +154,10 @@ mod tests {
             output: json!({"content": "hi"}),
         }];
         // Secondary model is not installed in the test harness.
-        let out = generate_tool_use_summary(&tools, Some("previous text"), CancellationToken::new())
-            .await
-            .unwrap();
+        let out =
+            generate_tool_use_summary(&tools, Some("previous text"), CancellationToken::new())
+                .await
+                .unwrap();
         assert!(out.is_none());
     }
 

@@ -33,8 +33,7 @@ pub const EXPLANATORY_STYLE_PROMPT_PREFIX: &str =
 /// `EXPLANATORY_FEATURE_PROMPT` via [`learning_style_prompt`]
 /// to get the full TS-equivalent string. Port of TS
 /// `constants/outputStyles.ts:56-133`.
-pub const LEARNING_STYLE_PROMPT_PREFIX: &str =
-    include_str!("prompts/output_style_learning.md");
+pub const LEARNING_STYLE_PROMPT_PREFIX: &str = include_str!("prompts/output_style_learning.md");
 
 /// Build the full Explanatory style prompt by concatenating
 /// the prefix with the shared insights footer.
@@ -102,8 +101,10 @@ mod tests {
     #[test]
     fn metadata_matches_ts() {
         assert_eq!(EXPLANATORY_STYLE.name, "Explanatory");
-        assert!(EXPLANATORY_STYLE.keep_coding_instructions);
+        let explanatory_keeps_coding = EXPLANATORY_STYLE.keep_coding_instructions;
+        assert!(explanatory_keeps_coding);
         assert_eq!(LEARNING_STYLE.name, "Learning");
-        assert!(LEARNING_STYLE.keep_coding_instructions);
+        let learning_keeps_coding = LEARNING_STYLE.keep_coding_instructions;
+        assert!(learning_keeps_coding);
     }
 }

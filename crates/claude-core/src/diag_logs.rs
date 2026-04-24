@@ -147,6 +147,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // test-only env serialization via std::sync::Mutex
 mod tests {
     use super::*;
     use serde_json::json;

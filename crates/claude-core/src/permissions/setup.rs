@@ -29,55 +29,15 @@ pub const AGENT_TOOL_NAME: &str = "Agent";
 
 /// Cross-platform code-execution entry points shared between Bash and PowerShell.
 pub const CROSS_PLATFORM_CODE_EXEC: &[&str] = &[
-    "python",
-    "python3",
-    "python2",
-    "node",
-    "deno",
-    "tsx",
-    "ruby",
-    "perl",
-    "php",
-    "lua",
-    "npx",
-    "bunx",
-    "npm run",
-    "yarn run",
-    "pnpm run",
-    "bun run",
-    "bash",
-    "sh",
-    "ssh",
+    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua", "npx",
+    "bunx", "npm run", "yarn run", "pnpm run", "bun run", "bash", "sh", "ssh",
 ];
 
 /// Dangerous Bash patterns (superset of CROSS_PLATFORM_CODE_EXEC).
 pub const DANGEROUS_BASH_PATTERNS: &[&str] = &[
-    "python",
-    "python3",
-    "python2",
-    "node",
-    "deno",
-    "tsx",
-    "ruby",
-    "perl",
-    "php",
-    "lua",
-    "npx",
-    "bunx",
-    "npm run",
-    "yarn run",
-    "pnpm run",
-    "bun run",
-    "bash",
-    "sh",
-    "ssh",
-    "zsh",
-    "fish",
-    "eval",
-    "exec",
-    "env",
-    "xargs",
-    "sudo",
+    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua", "npx",
+    "bunx", "npm run", "yarn run", "pnpm run", "bun run", "bash", "sh", "ssh", "zsh", "fish",
+    "eval", "exec", "env", "xargs", "sudo",
 ];
 
 /// Additional dangerous PowerShell patterns (cmdlets, process spawners, etc.).
@@ -129,7 +89,7 @@ pub fn is_dangerous_bash_permission(tool_name: &str, rule_content: Option<&str>)
     // Tool-level allow (Bash with no content, or Bash(*))
     match rule_content {
         None | Some("") => return true,
-        _ => {}
+        _ => {},
     }
 
     let content = rule_content.unwrap().trim().to_lowercase();
@@ -184,7 +144,7 @@ pub fn is_dangerous_powershell_permission(tool_name: &str, rule_content: Option<
 
     match rule_content {
         None | Some("") => return true,
-        _ => {}
+        _ => {},
     }
 
     let content = rule_content.unwrap().trim().to_lowercase();
@@ -571,9 +531,7 @@ pub fn transition_permission_mode(
 
 /// Centralized plan-mode entry. Stashes the current mode as pre_plan_mode
 /// so ExitPlanMode can restore it.
-pub fn prepare_context_for_plan_mode(
-    mut context: ToolPermissionContext,
-) -> ToolPermissionContext {
+pub fn prepare_context_for_plan_mode(mut context: ToolPermissionContext) -> ToolPermissionContext {
     let current_mode = context.mode.clone();
     if current_mode == PermissionMode::Plan {
         return context;
@@ -604,11 +562,11 @@ pub fn parse_tool_list_from_cli(tools: &[String]) -> Vec<String> {
                 '(' => {
                     in_parens = true;
                     current.push(ch);
-                }
+                },
                 ')' => {
                     in_parens = false;
                     current.push(ch);
-                }
+                },
                 ',' => {
                     if in_parens {
                         current.push(ch);
@@ -619,7 +577,7 @@ pub fn parse_tool_list_from_cli(tools: &[String]) -> Vec<String> {
                         }
                         current.clear();
                     }
-                }
+                },
                 ' ' => {
                     if in_parens {
                         current.push(ch);
@@ -630,10 +588,10 @@ pub fn parse_tool_list_from_cli(tools: &[String]) -> Vec<String> {
                         }
                         current.clear();
                     }
-                }
+                },
                 _ => {
                     current.push(ch);
-                }
+                },
             }
         }
 
@@ -688,10 +646,7 @@ pub fn initial_permission_mode_from_cli(config: &PermissionModeCliConfig) -> Per
             );
             continue; // Skip disabled mode
         }
-        return PermissionModeResult {
-            mode,
-            notification,
-        };
+        return PermissionModeResult { mode, notification };
     }
 
     // Default
@@ -755,8 +710,8 @@ pub fn initialize_tool_permission_context(
         Vec::new()
     };
 
-    let is_bypass_available = permission_mode == PermissionMode::BypassPermissions
-        || allow_dangerously_skip_permissions;
+    let is_bypass_available =
+        permission_mode == PermissionMode::BypassPermissions || allow_dangerously_skip_permissions;
 
     let additional_working_directories: HashMap<String, AdditionalWorkingDirectory> =
         HashMap::new();
@@ -1025,10 +980,8 @@ mod tests {
     #[test]
     fn test_restore_dangerous_permissions() {
         let mut ctx = ToolPermissionContext::default();
-        ctx.always_allow_rules.insert(
-            PermissionRuleSource::Session,
-            vec!["Edit".to_string()],
-        );
+        ctx.always_allow_rules
+            .insert(PermissionRuleSource::Session, vec!["Edit".to_string()]);
         let mut stash: ToolPermissionRulesBySource = HashMap::new();
         stash.insert(
             PermissionRuleSource::Session,
@@ -1062,29 +1015,24 @@ mod tests {
 
     #[test]
     fn test_transition_to_plan_stashes_mode() {
-        let mut ctx = ToolPermissionContext::default();
-        ctx.mode = PermissionMode::AcceptEdits;
-        let result = transition_permission_mode(
-            &PermissionMode::AcceptEdits,
-            &PermissionMode::Plan,
-            ctx,
-        );
-        assert_eq!(
-            result.pre_plan_mode,
-            Some(PermissionMode::AcceptEdits)
-        );
+        let ctx = ToolPermissionContext {
+            mode: PermissionMode::AcceptEdits,
+            ..Default::default()
+        };
+        let result =
+            transition_permission_mode(&PermissionMode::AcceptEdits, &PermissionMode::Plan, ctx);
+        assert_eq!(result.pre_plan_mode, Some(PermissionMode::AcceptEdits));
     }
 
     #[test]
     fn test_transition_from_plan_clears_pre_plan() {
-        let mut ctx = ToolPermissionContext::default();
-        ctx.mode = PermissionMode::Plan;
-        ctx.pre_plan_mode = Some(PermissionMode::AcceptEdits);
-        let result = transition_permission_mode(
-            &PermissionMode::Plan,
-            &PermissionMode::Default,
-            ctx,
-        );
+        let ctx = ToolPermissionContext {
+            mode: PermissionMode::Plan,
+            pre_plan_mode: Some(PermissionMode::AcceptEdits),
+            ..Default::default()
+        };
+        let result =
+            transition_permission_mode(&PermissionMode::Plan, &PermissionMode::Default, ctx);
         assert!(result.pre_plan_mode.is_none());
     }
 

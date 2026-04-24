@@ -191,7 +191,7 @@ fn process_block(
             } else {
                 stats.assistant_messages += tokens;
             }
-        }
+        },
         "tool_use" => {
             let Some(name) = obj.get("name").and_then(Value::as_str) else {
                 return;
@@ -200,10 +200,7 @@ fn process_block(
                 return;
             };
             let tool_name = if name.is_empty() { "unknown" } else { name };
-            *stats
-                .tool_requests
-                .entry(tool_name.to_owned())
-                .or_insert(0) += tokens;
+            *stats.tool_requests.entry(tool_name.to_owned()).or_insert(0) += tokens;
             tool_ids.insert(id.to_owned(), tool_name.to_owned());
 
             // Track Read tool file paths for dup-read tracking.
@@ -217,7 +214,7 @@ fn process_block(
                     read_tool_paths.insert(id.to_owned(), path.to_owned());
                 }
             }
-        }
+        },
         "tool_result" => {
             let Some(tool_use_id) = obj.get("tool_use_id").and_then(Value::as_str) else {
                 return;
@@ -226,10 +223,7 @@ fn process_block(
                 .get(tool_use_id)
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_owned());
-            *stats
-                .tool_results
-                .entry(tool_name.clone())
-                .or_insert(0) += tokens;
+            *stats.tool_results.entry(tool_name.clone()).or_insert(0) += tokens;
 
             if tool_name == "Read" {
                 if let Some(path) = read_tool_paths.get(tool_use_id).cloned() {
@@ -238,7 +232,7 @@ fn process_block(
                     entry.1 += tokens;
                 }
             }
-        }
+        },
         // All the rest — TS case fall-through to `stats.other += tokens`.
         "image"
         | "server_tool_use"
@@ -257,12 +251,12 @@ fn process_block(
         | "tool_search_tool_result"
         | "compaction" => {
             stats.other += tokens;
-        }
+        },
         _ => {
             // Unknown kinds: TS falls through (default case with no
             // matching branch leaves the stat untouched). Tokens still
             // count into `total` above, matching TS.
-        }
+        },
     }
 }
 
@@ -508,12 +502,14 @@ mod tests {
 
     #[test]
     fn statsig_metrics_flat_shape() {
-        let mut stats = TokenStats::default();
-        stats.total = 100;
-        stats.human_messages = 50;
-        stats.assistant_messages = 30;
-        stats.local_command_outputs = 10;
-        stats.other = 10;
+        let mut stats = TokenStats {
+            total: 100,
+            human_messages: 50,
+            assistant_messages: 30,
+            local_command_outputs: 10,
+            other: 10,
+            ..Default::default()
+        };
         stats.tool_requests.insert("Read".into(), 25);
         stats.tool_results.insert("Read".into(), 20);
 

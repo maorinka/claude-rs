@@ -60,15 +60,11 @@ pub enum ShellParseError {
 impl fmt::Display for ShellParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ShellParseError::UnterminatedSingleQuote => {
-                f.write_str("unterminated single quote")
-            }
-            ShellParseError::UnterminatedDoubleQuote => {
-                f.write_str("unterminated double quote")
-            }
+            ShellParseError::UnterminatedSingleQuote => f.write_str("unterminated single quote"),
+            ShellParseError::UnterminatedDoubleQuote => f.write_str("unterminated double quote"),
             ShellParseError::TrailingBackslash => {
                 f.write_str("trailing backslash without next character")
-            }
+            },
         }
     }
 }
@@ -332,7 +328,7 @@ fn quotes_balanced(command: &str) -> bool {
         i += 1;
     }
 
-    double_count % 2 == 0 && single_count % 2 == 0
+    double_count.is_multiple_of(2) && single_count.is_multiple_of(2)
 }
 
 /// Mirror of `hasMalformedTokens(command, parsed)`. Flags commands
@@ -358,10 +354,10 @@ pub fn has_malformed_tokens(command: &str, parsed: &[ParseEntry]) -> bool {
         if count_balanced(s, '[', ']') != 0 {
             return true;
         }
-        if count_unescaped(s, '"') % 2 != 0 {
+        if !count_unescaped(s, '"').is_multiple_of(2) {
             return true;
         }
-        if count_unescaped(s, '\'') % 2 != 0 {
+        if !count_unescaped(s, '\'').is_multiple_of(2) {
             return true;
         }
     }
@@ -442,8 +438,8 @@ pub fn has_shell_quote_single_quote_bug(command: &str) -> bool {
                     return true;
                 }
                 if backslash_count > 0
-                    && backslash_count % 2 == 0
-                    && chars[i + 1..].iter().any(|&ch| ch == '\'')
+                    && backslash_count.is_multiple_of(2)
+                    && chars[i + 1..].contains(&'\'')
                 {
                     return true;
                 }
@@ -468,10 +464,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let parts: Vec<String> = args
-        .into_iter()
-        .map(|a| quote_one(a.as_ref()))
-        .collect();
+    let parts: Vec<String> = args.into_iter().map(|a| quote_one(a.as_ref())).collect();
     ShellQuoteResult::Ok(parts.join(" "))
 }
 
@@ -548,12 +541,7 @@ pub fn format_shell_prefix_command(prefix: &str, command: &str) -> String {
             // Skip the leading space — TS uses
             // `substring(spaceBeforeDash + 1)`.
             let args = &prefix[space_before_dash + 1..];
-            return format!(
-                "{} {} {}",
-                quote([exec_path]),
-                args,
-                quote([command])
-            );
+            return format!("{} {} {}", quote([exec_path]), args, quote([command]));
         }
     }
     format!("{} {}", quote([prefix]), quote([command]))
@@ -622,7 +610,7 @@ mod tests {
     #[test]
     fn unterminated_single_is_error() {
         match try_parse_shell_command("echo 'hi") {
-            ShellParseResult::Err(_) => {}
+            ShellParseResult::Err(_) => {},
             _ => panic!("expected error"),
         }
     }
@@ -630,7 +618,7 @@ mod tests {
     #[test]
     fn unterminated_double_is_error() {
         match try_parse_shell_command(r#"echo "hi"#) {
-            ShellParseResult::Err(_) => {}
+            ShellParseResult::Err(_) => {},
             _ => panic!("expected error"),
         }
     }
@@ -706,7 +694,7 @@ mod tests {
     #[test]
     fn has_malformed_detects_unterminated_raw_quote() {
         let parsed = parse("echo hi");
-        assert!(has_malformed_tokens("echo 'hi", &parsed) == true);
+        assert!(has_malformed_tokens("echo 'hi", &parsed));
     }
 
     #[test]
@@ -781,10 +769,7 @@ mod tests {
         let args = ["echo", "hi there", "$x"];
         let quoted = quote(args);
         let parsed = parse(&quoted);
-        let literals: Vec<&str> = parsed
-            .iter()
-            .filter_map(|e| e.as_literal())
-            .collect();
+        let literals: Vec<&str> = parsed.iter().filter_map(|e| e.as_literal()).collect();
         assert_eq!(literals, vec!["echo", "hi there", "$x"]);
     }
 
@@ -810,14 +795,8 @@ mod tests {
     #[test]
     fn format_shell_prefix_windows_path_with_spaces() {
         // Embedded spaces force single-quoting of the exec path.
-        let out = format_shell_prefix_command(
-            r"C:\Program Files\Git\bin\bash.exe -c",
-            "ls",
-        );
-        assert_eq!(
-            out,
-            r"'C:\Program Files\Git\bin\bash.exe' -c ls"
-        );
+        let out = format_shell_prefix_command(r"C:\Program Files\Git\bin\bash.exe -c", "ls");
+        assert_eq!(out, r"'C:\Program Files\Git\bin\bash.exe' -c ls");
     }
 
     #[test]

@@ -11,14 +11,14 @@ pub const CLAUDE_AI_LOCAL_BASE_URL: &str = "http://localhost:4000";
 
 /// True if the session looks like staging.
 pub fn is_remote_session_staging(session_id: Option<&str>, ingress_url: Option<&str>) -> bool {
-    session_id.map_or(false, |s| s.contains("_staging_"))
-        || ingress_url.map_or(false, |u| u.contains("staging"))
+    session_id.is_some_and(|s| s.contains("_staging_"))
+        || ingress_url.is_some_and(|u| u.contains("staging"))
 }
 
 /// True if the session looks like local dev.
 pub fn is_remote_session_local(session_id: Option<&str>, ingress_url: Option<&str>) -> bool {
-    session_id.map_or(false, |s| s.contains("_local_"))
-        || ingress_url.map_or(false, |u| u.contains("localhost"))
+    session_id.is_some_and(|s| s.contains("_local_"))
+        || ingress_url.is_some_and(|u| u.contains("localhost"))
 }
 
 /// Return the base URL for Claude.ai based on session environment.

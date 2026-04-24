@@ -223,6 +223,7 @@ impl AskUserQuestionTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // test-only global-state serialization via std::sync::Mutex
 mod tests {
     use super::*;
     use std::path::PathBuf;

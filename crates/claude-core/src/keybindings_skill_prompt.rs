@@ -6,7 +6,7 @@
 //! # Scope
 //!
 //! TS assembles the final prompt from 8 static SECTION_* blocks
-//! + 3 dynamic reference tables (reserved shortcuts, contexts,
+//! plus 3 dynamic reference tables (reserved shortcuts, contexts,
 //! actions). The static sections are reproduced verbatim here
 //! as public constants; the dynamic tables depend on
 //! keybinding-infrastructure constants
@@ -219,7 +219,10 @@ pub fn assemble_keybindings_prompt(inputs: &KeybindingsPromptInputs<'_>) -> Stri
         ));
     }
     if !inputs.contexts_table.is_empty() {
-        sections.push(format!("## Available Contexts\n\n{}", inputs.contexts_table));
+        sections.push(format!(
+            "## Available Contexts\n\n{}",
+            inputs.contexts_table
+        ));
     }
     if !inputs.actions_table.is_empty() {
         sections.push(format!("## Available Actions\n\n{}", inputs.actions_table));
@@ -249,7 +252,10 @@ mod tests {
             (KEYBINDINGS_SECTION_INTRO, "# Keybindings Skill"),
             (KEYBINDINGS_SECTION_FILE_FORMAT, "## File Format"),
             (KEYBINDINGS_SECTION_KEYSTROKE_SYNTAX, "## Keystroke Syntax"),
-            (KEYBINDINGS_SECTION_UNBINDING, "## Unbinding Default Shortcuts"),
+            (
+                KEYBINDINGS_SECTION_UNBINDING,
+                "## Unbinding Default Shortcuts",
+            ),
             (
                 KEYBINDINGS_SECTION_INTERACTION,
                 "## How User Bindings Interact with Defaults",
@@ -258,10 +264,7 @@ mod tests {
             (KEYBINDINGS_SECTION_BEHAVIORAL_RULES, "## Behavioral Rules"),
             (KEYBINDINGS_SECTION_DOCTOR, "## Validation with /doctor"),
         ] {
-            assert!(
-                section.contains(heading),
-                "section missing `{heading}`"
-            );
+            assert!(section.contains(heading), "section missing `{heading}`");
         }
     }
 

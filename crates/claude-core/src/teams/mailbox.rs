@@ -68,8 +68,7 @@ fn teams_dir() -> PathBuf {
 
 /// Sanitize a path component to prevent directory traversal.
 fn sanitize_path_component(s: &str) -> String {
-    s.replace('/', "_")
-        .replace('\\', "_")
+    s.replace(['/', '\\'], "_")
         .replace("..", "_")
         .replace('\0', "")
 }
@@ -119,7 +118,7 @@ async fn acquire_lock(lock_path: &Path) -> Result<LockGuard> {
                 return Ok(LockGuard {
                     path: lock_path.to_path_buf(),
                 });
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if retry >= LOCK_MAX_RETRIES {
                     // Try to clean up a potentially stale lock.
@@ -136,10 +135,14 @@ async fn acquire_lock(lock_path: &Path) -> Result<LockGuard> {
                 );
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 retry += 1;
-            }
+            },
             Err(e) => {
-                return Err(anyhow::anyhow!("lock open error for {:?}: {}", lock_path, e));
-            }
+                return Err(anyhow::anyhow!(
+                    "lock open error for {:?}: {}",
+                    lock_path,
+                    e
+                ));
+            },
         }
     }
 }
@@ -160,10 +163,7 @@ impl Drop for LockGuard {
 // ---------------------------------------------------------------------------
 
 /// Read all messages from a teammate's inbox.
-pub async fn read_mailbox(
-    agent_name: &str,
-    team_name: Option<&str>,
-) -> Vec<TeammateMessage> {
+pub async fn read_mailbox(agent_name: &str, team_name: Option<&str>) -> Vec<TeammateMessage> {
     let inbox_path = get_inbox_path(agent_name, team_name);
     debug!("[TeammateMailbox] readMailbox: path={:?}", inbox_path);
 
@@ -175,20 +175,20 @@ pub async fn read_mailbox(
                     messages.len()
                 );
                 messages
-            }
+            },
             Err(e) => {
                 warn!("[TeammateMailbox] parse error for {:?}: {}", inbox_path, e);
                 Vec::new()
-            }
+            },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             debug!("[TeammateMailbox] readMailbox: file does not exist");
             Vec::new()
-        }
+        },
         Err(e) => {
             warn!("Failed to read inbox for {}: {}", agent_name, e);
             Vec::new()
-        }
+        },
     }
 }
 
@@ -230,11 +230,14 @@ pub async fn write_to_mailbox(
     if !inbox_path.exists() {
         match tokio::fs::write(&inbox_path, "[]").await {
             Ok(_) => debug!("[TeammateMailbox] writeToMailbox: created new inbox file"),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
             Err(e) => {
-                warn!("[TeammateMailbox] writeToMailbox: failed to create inbox file: {}", e);
+                warn!(
+                    "[TeammateMailbox] writeToMailbox: failed to create inbox file: {}",
+                    e
+                );
                 return Err(e.into());
-            }
+            },
         }
     }
 
@@ -312,10 +315,7 @@ pub async fn mark_message_as_read_by_index(
 }
 
 /// Mark all messages in a teammate's inbox as read.
-pub async fn mark_messages_as_read(
-    agent_name: &str,
-    team_name: Option<&str>,
-) -> Result<()> {
+pub async fn mark_messages_as_read(agent_name: &str, team_name: Option<&str>) -> Result<()> {
     let inbox_path = get_inbox_path(agent_name, team_name);
     if !inbox_path.exists() {
         return Ok(());
@@ -379,21 +379,18 @@ pub async fn mark_messages_as_read_by_predicate(
 }
 
 /// Clear a teammate's inbox (delete all messages).
-pub async fn clear_mailbox(
-    agent_name: &str,
-    team_name: Option<&str>,
-) -> Result<()> {
+pub async fn clear_mailbox(agent_name: &str, team_name: Option<&str>) -> Result<()> {
     let inbox_path = get_inbox_path(agent_name, team_name);
     match tokio::fs::write(&inbox_path, "[]").await {
         Ok(_) => {
             debug!("[TeammateMailbox] Cleared inbox for {}", agent_name);
             Ok(())
-        }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => {
             warn!("Failed to clear inbox for {}: {}", agent_name, e);
             Err(e.into())
-        }
+        },
     }
 }
 
@@ -402,14 +399,18 @@ pub async fn clear_mailbox(
 // ---------------------------------------------------------------------------
 
 /// Format teammate messages as XML for attachment display.
-pub fn format_teammate_messages(
-    messages: &[TeammateMessage],
-) -> String {
+pub fn format_teammate_messages(messages: &[TeammateMessage]) -> String {
     messages
         .iter()
         .map(|m| {
-            let color_attr = m.color.as_ref().map_or(String::new(), |c| format!(" color=\"{}\"", c));
-            let summary_attr = m.summary.as_ref().map_or(String::new(), |s| format!(" summary=\"{}\"", s));
+            let color_attr = m
+                .color
+                .as_ref()
+                .map_or(String::new(), |c| format!(" color=\"{}\"", c));
+            let summary_attr = m
+                .summary
+                .as_ref()
+                .map_or(String::new(), |s| format!(" summary=\"{}\"", s));
             format!(
                 "<{tag} teammate_id=\"{from}\"{color}{summary}>\n{text}\n</{tag}>",
                 tag = TEAMMATE_MESSAGE_TAG,
@@ -1019,7 +1020,7 @@ pub struct PermissionUpdatePayload {
     #[serde(rename = "type")]
     pub update_type: String, // "addRules"
     pub rules: Vec<PermissionRule>,
-    pub behavior: String, // "allow" | "deny" | "ask"
+    pub behavior: String,    // "allow" | "deny" | "ask"
     pub destination: String, // "session"
 }
 
@@ -1231,16 +1232,14 @@ mod tests {
 
     #[test]
     fn test_format_teammate_messages() {
-        let messages = vec![
-            TeammateMessage {
-                from: "worker-1".to_string(),
-                text: "Hello from worker".to_string(),
-                timestamp: "2024-01-01T00:00:00Z".to_string(),
-                read: false,
-                color: Some("red".to_string()),
-                summary: Some("Greeting".to_string()),
-            },
-        ];
+        let messages = vec![TeammateMessage {
+            from: "worker-1".to_string(),
+            text: "Hello from worker".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read: false,
+            color: Some("red".to_string()),
+            summary: Some("Greeting".to_string()),
+        }];
         let formatted = format_teammate_messages(&messages);
         assert!(formatted.contains("teammate_id=\"worker-1\""));
         assert!(formatted.contains("color=\"red\""));
@@ -1262,7 +1261,11 @@ mod tests {
     #[test]
     fn test_sandbox_permission_roundtrip() {
         let req = create_sandbox_permission_request(
-            "sp-1", "worker-1", "researcher", None, "api.example.com",
+            "sp-1",
+            "worker-1",
+            "researcher",
+            None,
+            "api.example.com",
         );
         let json = serde_json::to_string(&req).unwrap();
         let parsed = is_sandbox_permission_request(&json);

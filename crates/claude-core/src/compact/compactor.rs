@@ -41,7 +41,7 @@ fn estimate_content_tokens(content: &Value) -> u64 {
                 total += estimate_block_tokens(block);
             }
             total
-        }
+        },
         _ => 0,
     }
 }
@@ -75,14 +75,14 @@ fn estimate_block_tokens(block: &Value) -> u64 {
                 .map(|i| serde_json::to_string(i).unwrap_or_default().len())
                 .unwrap_or(0);
             (name_len + input_len) as u64
-        }
+        },
         "tool_result" => {
             // Recursively count nested content
             block
                 .get("content")
-                .map(|c| estimate_content_tokens(c))
+                .map(estimate_content_tokens)
                 .unwrap_or(0)
-        }
+        },
         "thinking" => block
             .get("thinking")
             .and_then(|t| t.as_str())
@@ -96,11 +96,11 @@ fn estimate_block_tokens(block: &Value) -> u64 {
         "image" | "document" => {
             // Fixed estimate for images/documents (matches TS IMAGE_MAX_TOKEN_SIZE * 4)
             8000 // 2000 tokens * 4 chars/token
-        }
+        },
         _ => {
             // Fallback: JSON stringify length
             serde_json::to_string(block).unwrap_or_default().len() as u64
-        }
+        },
     }
 }
 
@@ -176,18 +176,17 @@ pub async fn compact_conversation(
                         match event {
                             SseEvent::ContentBlockStart { index, block } => {
                                 accumulator.on_start(index, block);
-                            }
+                            },
                             SseEvent::ContentBlockDelta { index, delta } => {
                                 accumulator.on_delta(index, delta);
-                            }
+                            },
                             SseEvent::ContentBlockStop { index } => {
-                                if let Ok(block) = accumulator.on_stop(index) {
-                                    if let ContentBlock::Text { text } = block {
-                                        summary.push_str(&text);
-                                    }
+                                if let Ok(ContentBlock::Text { text }) = accumulator.on_stop(index)
+                                {
+                                    summary.push_str(&text);
                                 }
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     }
                 }

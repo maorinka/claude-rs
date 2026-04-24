@@ -2,7 +2,7 @@
 //!
 //! Port of TS `src/utils/debugFilter.ts`. Used by the `--debug`
 //! CLI flag so operators can narrow noisy traces to a specific
-//! subsystem:
+//!   subsystem:
 //! - `--debug api,hooks` → only messages in those categories.
 //! - `--debug !file,!1p` → everything except those.
 //! - Mixed include + exclude is rejected (returns None → "show all")
@@ -50,7 +50,11 @@ pub fn parse_debug_filter(filter_string: Option<&str>) -> Option<DebugFilter> {
         .collect();
 
     Some(DebugFilter {
-        include: if has_exclusive { Vec::new() } else { clean.clone() },
+        include: if has_exclusive {
+            Vec::new()
+        } else {
+            clean.clone()
+        },
         exclude: if has_exclusive { clean } else { Vec::new() },
         is_exclusive: has_exclusive,
     })
@@ -64,6 +68,7 @@ pub fn parse_debug_filter(filter_string: Option<&str>) -> Option<DebugFilter> {
 ///  4. `... 1p event: ...` → adds `"1p"`.
 ///  5. ` : secondary (type|mode|status|event):` → adds secondary
 ///     when it's a reasonable category name (<30 chars, no space).
+///
 /// Categories are lowercased and deduplicated (first-occurrence
 /// order preserved).
 pub fn extract_debug_categories(message: &str) -> Vec<String> {
@@ -81,11 +86,7 @@ pub fn extract_debug_categories(message: &str) -> Vec<String> {
         push("mcp".to_string(), &mut categories, &mut seen);
         push(name.to_lowercase(), &mut categories, &mut seen);
     } else if let Some(prefix) = try_match_leading_colon_prefix(message) {
-        push(
-            prefix.trim().to_lowercase(),
-            &mut categories,
-            &mut seen,
-        );
+        push(prefix.trim().to_lowercase(), &mut categories, &mut seen);
     }
 
     // Pattern 3: [CATEGORY] at start.
@@ -111,10 +112,7 @@ pub fn extract_debug_categories(message: &str) -> Vec<String> {
 
 /// Decide whether a message with the given extracted `categories`
 /// passes `filter`. `None` filter ⇒ always visible.
-pub fn should_show_debug_categories(
-    categories: &[String],
-    filter: Option<&DebugFilter>,
-) -> bool {
+pub fn should_show_debug_categories(categories: &[String], filter: Option<&DebugFilter>) -> bool {
     let Some(filter) = filter else {
         return true;
     };
@@ -131,10 +129,7 @@ pub fn should_show_debug_categories(
 }
 
 /// Combined helper: extract categories then apply the filter.
-pub fn should_show_debug_message(
-    message: &str,
-    filter: Option<&DebugFilter>,
-) -> bool {
+pub fn should_show_debug_message(message: &str, filter: Option<&DebugFilter>) -> bool {
     if filter.is_none() {
         return true;
     }
@@ -276,9 +271,7 @@ mod tests {
 
     #[test]
     fn extract_ant_only_1p_event_combined() {
-        let cats = extract_debug_categories(
-            "[ANT-ONLY] 1P event: tengu_timer",
-        );
+        let cats = extract_debug_categories("[ANT-ONLY] 1P event: tengu_timer");
         assert!(cats.contains(&"ant-only".to_string()));
         assert!(cats.contains(&"1p".to_string()));
     }

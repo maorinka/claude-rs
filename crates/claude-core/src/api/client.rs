@@ -151,8 +151,6 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
         4_096
     } else if lower.contains("3-5-sonnet") || lower.contains("3-5-haiku") {
         8_192
-    } else if lower.contains("3-7-sonnet") {
-        32_000
     } else {
         32_000
     };
@@ -164,14 +162,23 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
 
 /// Map model ID to marketing name (matches TS getPublicModelDisplayName).
 fn model_marketing_name(model: &str) -> &str {
-    if model.contains("opus-4-6") { "Opus 4.6" }
-    else if model.contains("opus-4-5") { "Opus 4.5" }
-    else if model.contains("opus-4-1") { "Opus 4.1" }
-    else if model.contains("sonnet-4-6") { "Sonnet 4.6" }
-    else if model.contains("sonnet-4-5") { "Sonnet 4.5" }
-    else if model.contains("haiku-4-5") { "Haiku 4.5" }
-    else if model.contains("claude-3-7-sonnet") { "Sonnet 3.7" }
-    else { model }
+    if model.contains("opus-4-6") {
+        "Opus 4.6"
+    } else if model.contains("opus-4-5") {
+        "Opus 4.5"
+    } else if model.contains("opus-4-1") {
+        "Opus 4.1"
+    } else if model.contains("sonnet-4-6") {
+        "Sonnet 4.6"
+    } else if model.contains("sonnet-4-5") {
+        "Sonnet 4.5"
+    } else if model.contains("haiku-4-5") {
+        "Haiku 4.5"
+    } else if model.contains("claude-3-7-sonnet") {
+        "Sonnet 3.7"
+    } else {
+        model
+    }
 }
 
 // ── Tool definition (for the request body) ───────────────────────────────────
@@ -229,7 +236,7 @@ pub fn build_request_body(
                     "type": "enabled",
                     "budget_tokens": clamped,
                 }))
-            }
+            },
             ThinkingConfig::Adaptive => Some(json!({ "type": "adaptive" })),
         }
     } else {
@@ -484,9 +491,7 @@ impl ApiClient {
         // attempt reactive compaction before surfacing the error.
         if status == 413 || err_body.contains("prompt_too_long") {
             return Err(anyhow::Error::new(
-                crate::types::error::PromptTooLongError {
-                    body: err_body,
-                },
+                crate::types::error::PromptTooLongError { body: err_body },
             ));
         }
 

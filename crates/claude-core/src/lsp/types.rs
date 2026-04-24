@@ -5,10 +5,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Serializes as an integer per the LSP specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum DiagnosticSeverity {
     Error = 1,
     Warning = 2,
     Information = 3,
+    #[default]
     Hint = 4,
 }
 
@@ -46,12 +48,6 @@ impl DiagnosticSeverity {
             Self::Information => "Information",
             Self::Hint => "Hint",
         }
-    }
-}
-
-impl Default for DiagnosticSeverity {
-    fn default() -> Self {
-        Self::Hint
     }
 }
 
@@ -291,7 +287,7 @@ mod tests {
     #[test]
     fn test_position_serialization() {
         let pos = Position::new(10, 5);
-        let json = serde_json::to_value(&pos).unwrap();
+        let json = serde_json::to_value(pos).unwrap();
         assert_eq!(json["line"], 10);
         assert_eq!(json["character"], 5);
 
@@ -302,7 +298,7 @@ mod tests {
     #[test]
     fn test_range_serialization() {
         let range = Range::new(Position::new(1, 0), Position::new(1, 10));
-        let json = serde_json::to_value(&range).unwrap();
+        let json = serde_json::to_value(range).unwrap();
         assert_eq!(json["start"]["line"], 1);
         assert_eq!(json["end"]["character"], 10);
 

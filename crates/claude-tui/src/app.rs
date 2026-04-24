@@ -313,16 +313,16 @@ impl App {
             match result {
                 Ok(CommandResult::Message(text)) => {
                     return Some(CommandAction::Prompt(text));
-                }
+                },
                 Ok(CommandResult::Action(text)) => {
                     return Some(CommandAction::Display(text));
-                }
+                },
                 Ok(CommandResult::Error(text)) => {
                     return Some(CommandAction::Display(format!("Error: {}", text)));
-                }
+                },
                 Err(e) => {
                     return Some(CommandAction::Display(format!("Error: {}", e)));
-                }
+                },
             }
         }
 
@@ -343,11 +343,7 @@ impl App {
     /// Original standalone run loop (no engine). Kept for backwards compatibility.
     pub async fn run(&mut self) -> Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            cursor::Hide
-        )?;
+        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(100);
 
@@ -362,7 +358,7 @@ impl App {
                                 if k.kind == crossterm::event::KeyEventKind::Press =>
                             {
                                 Some(AppEvent::Key(k))
-                            }
+                            },
                             CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
@@ -411,17 +407,13 @@ impl App {
                     AppEvent::Resize(_, _) => self.render()?,
                     AppEvent::Mouse(m) => self.handle_mouse(m),
                     AppEvent::Quit => self.should_quit = true,
-                    _ => {}
+                    _ => {},
                 }
             }
         }
 
         terminal::disable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            cursor::Show
-        )?;
+        execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
         Ok(())
     }
 
@@ -434,11 +426,7 @@ impl App {
         permission_mode: PermissionMode,
     ) -> Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            cursor::Hide
-        )?;
+        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
 
@@ -454,25 +442,27 @@ impl App {
                     match cmd {
                         EngineCommand::AddUserMessage(text) => {
                             engine.add_user_message(&text);
-                        }
-                        EngineCommand::AddToolResult { id, content, is_error } => {
+                        },
+                        EngineCommand::AddToolResult {
+                            id,
+                            content,
+                            is_error,
+                        } => {
                             engine.add_tool_result(&id, &content, is_error);
-                        }
+                        },
                         EngineCommand::RunTurn(stream_tx) => {
                             let result = engine.run_turn(&stream_tx).await;
-                            let _ = app_tx
-                                .send(AppEvent::TurnComplete(result.map_err(Into::into)))
-                                .await;
-                        }
+                            let _ = app_tx.send(AppEvent::TurnComplete(result)).await;
+                        },
                         EngineCommand::LoadMessages(msgs) => {
                             engine.load_messages(msgs);
-                        }
+                        },
                         EngineCommand::SetModel(model) => {
                             engine.set_model(model);
-                        }
+                        },
                         EngineCommand::SetCancelToken(token) => {
                             engine.set_cancel_token(token);
-                        }
+                        },
                     }
                 }
             });
@@ -489,7 +479,7 @@ impl App {
                                 if k.kind == crossterm::event::KeyEventKind::Press =>
                             {
                                 Some(AppEvent::Key(k))
-                            }
+                            },
                             CrosstermEvent::Key(_) => None, // Ignore Release/Repeat on Windows
                             CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
@@ -599,19 +589,19 @@ impl App {
                         }
                     }
                     self.render()?;
-                }
+                },
                 AppEvent::SpinnerTick => {
                     self.spinner.advance();
-                }
+                },
                 AppEvent::Resize(_, _) => {
                     self.render()?;
-                }
+                },
                 AppEvent::Mouse(m) => {
                     self.handle_mouse(m);
-                }
+                },
                 AppEvent::Quit => {
                     self.should_quit = true;
-                }
+                },
                 AppEvent::Key(k) => {
                     // Ctrl+C / Ctrl+D always quits
                     if matches!(
@@ -638,12 +628,12 @@ impl App {
                                 if let Some(ref mut dialog) = self.permission_dialog {
                                     dialog.next_button();
                                 }
-                            }
+                            },
                             KeyCode::BackTab | KeyCode::Left => {
                                 if let Some(ref mut dialog) = self.permission_dialog {
                                     dialog.prev_button();
                                 }
-                            }
+                            },
                             KeyCode::Enter => {
                                 let response = self
                                     .permission_dialog
@@ -651,24 +641,27 @@ impl App {
                                     .map(|d| d.selected().to_string())
                                     .unwrap_or_else(|| "deny".to_string());
                                 let _ = tx.send(AppEvent::PermissionResponse(response)).await;
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     } else if self.model_picker.visible {
                         // Route keys to model picker: ↑↓ model, ←→ effort, Enter confirm, Esc cancel
                         match k.code {
                             KeyCode::Esc => {
                                 self.model_picker.close();
-                            }
+                            },
                             KeyCode::Up => self.model_picker.prev(),
                             KeyCode::Down => self.model_picker.next(),
                             KeyCode::Left => self.model_picker.effort_left(),
                             KeyCode::Right => self.model_picker.effort_right(),
                             KeyCode::Enter => {
                                 if let Some((model, effort)) = self.model_picker.confirm() {
-                                    let display = claude_core::commands::builtin::render_model_name(&model);
+                                    let display =
+                                        claude_core::commands::builtin::render_model_name(&model);
                                     self.model_name = model.clone();
-                                    let _ = engine_tx.send(EngineCommand::SetModel(model.clone())).await;
+                                    let _ = engine_tx
+                                        .send(EngineCommand::SetModel(model.clone()))
+                                        .await;
                                     if let Ok(mut state) = self.shared_state.lock() {
                                         state.model = model;
                                     }
@@ -679,15 +672,15 @@ impl App {
                                         text: format!("Set model to {}{}", display, effort_str),
                                     });
                                 }
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     } else if self.theme_picker.visible {
                         // Route keys to theme picker: ↑↓ navigate, Enter confirm, Esc cancel
                         match k.code {
                             KeyCode::Esc => {
                                 self.theme_picker.close();
-                            }
+                            },
                             KeyCode::Up => self.theme_picker.prev(),
                             KeyCode::Down => self.theme_picker.next(),
                             KeyCode::Enter => {
@@ -711,21 +704,21 @@ impl App {
                                         text: format!("Theme set to {}", setting),
                                     });
                                 }
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     } else if self.command_picker.visible {
                         // Route keys to command picker
                         match k.code {
                             KeyCode::Esc => {
                                 self.command_picker.close();
-                            }
+                            },
                             KeyCode::Up => {
                                 self.command_picker.prev();
-                            }
+                            },
                             KeyCode::Down | KeyCode::Tab => {
                                 self.command_picker.next();
-                            }
+                            },
                             KeyCode::Enter => {
                                 if let Some(name) = self.command_picker.selected_name() {
                                     let cmd_text = format!("/{}", name);
@@ -735,7 +728,7 @@ impl App {
                                 } else {
                                     self.command_picker.close();
                                 }
-                            }
+                            },
                             KeyCode::Backspace => {
                                 self.prompt.handle_key(k);
                                 let new_text = self.prompt.text().to_string();
@@ -745,7 +738,7 @@ impl App {
                                     let query = new_text.strip_prefix('/').unwrap_or("");
                                     self.command_picker.set_query(query);
                                 }
-                            }
+                            },
                             KeyCode::Char(_)
                                 if k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT =>
                             {
@@ -758,8 +751,8 @@ impl App {
                                 } else {
                                     self.command_picker.close();
                                 }
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     } else {
                         // Escape: cancel in-progress response (does not quit).
@@ -813,64 +806,63 @@ impl App {
                             (KeyModifiers::NONE, KeyCode::PageUp) => {
                                 self.message_list.page_up(self.viewport_height as usize);
                                 continue;
-                            }
+                            },
                             (KeyModifiers::NONE, KeyCode::PageDown) => {
                                 self.message_list.page_down(self.viewport_height as usize);
                                 continue;
-                            }
+                            },
                             (KeyModifiers::NONE, KeyCode::Home) => {
                                 self.message_list.scroll_to_top();
                                 continue;
-                            }
+                            },
                             (KeyModifiers::NONE, KeyCode::End) => {
                                 self.message_list.scroll_to_bottom();
                                 continue;
-                            }
+                            },
                             (KeyModifiers::CONTROL, KeyCode::Up) => {
                                 self.message_list.scroll_up(1);
                                 continue;
-                            }
+                            },
                             (KeyModifiers::CONTROL, KeyCode::Down) => {
                                 self.message_list.scroll_down(1);
                                 continue;
-                            }
+                            },
                             // Ctrl+O: toggle thinking block visibility (matches TS)
                             (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
                                 self.message_list.toggle_thinking();
                                 continue;
-                            }
+                            },
                             // Ctrl+L: clear screen (redraw)
                             (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
                                 let _ = self.terminal.clear();
                                 continue;
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
 
                         // Route keys to prompt input
                         match self.prompt.handle_key(k) {
                             InputAction::Submit(text) => {
                                 let _ = tx.send(AppEvent::SubmitPrompt(text)).await;
-                            }
+                            },
                             InputAction::None => {
                                 let text = self.prompt.text().to_string();
-                                if text.starts_with('/') {
+                                if let Some(query) = text.strip_prefix('/') {
                                     if !self.command_picker.visible {
                                         // Open picker on first `/`
                                         let entries = self.build_picker_entries();
                                         self.command_picker.open(entries);
                                     }
                                     // Update filter with text after `/`
-                                    let query = &text[1..];
                                     self.command_picker.set_query(query);
                                 } else if self.command_picker.visible {
                                     // Close picker if `/` was deleted
                                     self.command_picker.close();
                                 }
-                            }
+                            },
                         }
                     }
-                }
+                },
                 AppEvent::SubmitPrompt(text) => {
                     if text.trim().is_empty() {
                         continue;
@@ -894,11 +886,14 @@ impl App {
                             continue;
                         }
                         // Has args: set model directly
-                        let new_model = claude_core::commands::builtin::parse_user_specified_model(args);
+                        let new_model =
+                            claude_core::commands::builtin::parse_user_specified_model(args);
                         let display = claude_core::commands::builtin::render_model_name(&new_model);
                         self.model_name = new_model.clone();
-                        let _ = engine_tx.send(EngineCommand::SetModel(new_model.clone())).await;
-                        if let Some(ref shared) = Some(&self.shared_state) {
+                        let _ = engine_tx
+                            .send(EngineCommand::SetModel(new_model.clone()))
+                            .await;
+                        if let Some(shared) = Some(&self.shared_state) {
                             if let Ok(mut state) = shared.lock() {
                                 state.model = new_model;
                             }
@@ -962,11 +957,29 @@ impl App {
                                 self.message_list
                                     .push(MessageEntry::System { text: output });
 
-                                // Handle side effects from stateful commands
-                                if let Ok(mut state) = self.shared_state.lock() {
-                                    if state.clear_requested {
-                                        state.clear_requested = false;
-                                        let _ = engine_tx.send(EngineCommand::LoadMessages(Vec::new())).await;
+                                // Extract side-effect flags and drop the guard
+                                // before awaiting engine_tx.send — holding a
+                                // std::sync::Mutex across .await can deadlock
+                                // the runtime (clippy::await_holding_lock).
+                                let side_effects =
+                                    self.shared_state.lock().ok().map(|mut state| {
+                                        let clear = state.clear_requested;
+                                        let fork = state.fork_requested;
+                                        if clear {
+                                            state.clear_requested = false;
+                                        }
+                                        if fork {
+                                            state.fork_requested = false;
+                                        }
+                                        (clear, fork, state.brief_mode)
+                                    });
+                                if let Some((clear_requested, _fork_requested, brief_mode)) =
+                                    side_effects
+                                {
+                                    if clear_requested {
+                                        let _ = engine_tx
+                                            .send(EngineCommand::LoadMessages(Vec::new()))
+                                            .await;
                                         self.message_list = MessageList::new();
                                         self.total_tokens = 0;
                                         self.cost_tracker = CostTracker::new(&self.model_name);
@@ -974,23 +987,20 @@ impl App {
                                             text: "Conversation history cleared.".to_string(),
                                         });
                                     }
-                                    if state.fork_requested {
-                                        state.fork_requested = false;
-                                        // Fork: create a new session storage with a copy
-                                        // of current messages. The engine continues with
-                                        // its existing message history.
-                                    }
-                                    // Sync brief mode with the tool global state
-                                    claude_tools::brief_tool::set_brief_mode(state.brief_mode);
+                                    // fork_requested: side-effect flag consumed; the
+                                    // engine continues with its existing history.
+                                    claude_tools::brief_tool::set_brief_mode(brief_mode);
                                 }
 
                                 continue;
-                            }
+                            },
                             Some(CommandAction::Prompt(prompt_text)) => {
                                 // Prompt-type command: inject as user message
                                 self.message_list
                                     .push(MessageEntry::User { text: text.clone() });
-                                let _ = engine_tx.send(EngineCommand::AddUserMessage(prompt_text)).await;
+                                let _ = engine_tx
+                                    .send(EngineCommand::AddUserMessage(prompt_text))
+                                    .await;
                                 self.engine_busy = true;
                                 self.spinner.start(SpinnerMode::Thinking);
 
@@ -1007,10 +1017,10 @@ impl App {
 
                                 let _ = engine_tx.send(EngineCommand::RunTurn(stream_tx)).await;
                                 continue;
-                            }
+                            },
                             None => {
                                 // Not a known command, treat as regular input
-                            }
+                            },
                         }
                     }
 
@@ -1043,12 +1053,12 @@ impl App {
                                     };
                                     self.message_list
                                         .push(MessageEntry::System { text: combined });
-                                }
+                                },
                                 Err(e) => {
                                     self.message_list.push(MessageEntry::System {
                                         text: format!("Error running command: {}", e),
                                     });
-                                }
+                                },
                             }
                             continue;
                         }
@@ -1080,10 +1090,10 @@ impl App {
                     // Tell the engine task to run the turn; the engine task will
                     // send TurnComplete back via app_tx when done.
                     let _ = engine_tx.send(EngineCommand::RunTurn(stream_tx)).await;
-                }
+                },
                 AppEvent::Stream(stream_event) => {
                     self.handle_stream_event(stream_event);
-                }
+                },
                 AppEvent::PermissionResponse(response) => {
                     self.permission_dialog = None;
 
@@ -1091,7 +1101,9 @@ impl App {
                         // Safety: if we get a stale/orphan permission response,
                         // recover by clearing engine_busy so the user isn't stuck.
                         if self.engine_busy && pending_tools.is_empty() {
-                            tracing::warn!("Orphan PermissionResponse with no pending tools — recovering");
+                            tracing::warn!(
+                                "Orphan PermissionResponse with no pending tools — recovering"
+                            );
                             self.spinner.stop();
                             self.spinner.queued_count = 0;
                             self.engine_busy = false;
@@ -1148,14 +1160,16 @@ impl App {
                             // Don't block — continue event loop. Result comes via ToolExecutionComplete.
 
                             // Tool executes in background — result arrives via ToolExecutionComplete
-                        }
+                        },
                         "deny" => {
                             let info = &pending_tools[tool_idx].info;
-                            let _ = engine_tx.send(EngineCommand::AddToolResult {
-                                id: info.id.clone(),
-                                content: "Permission denied by user".to_string(),
-                                is_error: true,
-                            }).await;
+                            let _ = engine_tx
+                                .send(EngineCommand::AddToolResult {
+                                    id: info.id.clone(),
+                                    content: "Permission denied by user".to_string(),
+                                    is_error: true,
+                                })
+                                .await;
                             self.message_list.push(MessageEntry::ToolResult {
                                 name: info.name.clone(),
                                 output: "Permission denied".to_string(),
@@ -1179,10 +1193,10 @@ impl App {
                                     let _ = tx2.send(AppEvent::ContinueTurn).await;
                                 });
                             }
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
-                }
+                },
                 AppEvent::ContinueTurn => {
                     // All pending tool results have been fed back — run the next turn.
                     self.spinner.start(SpinnerMode::Thinking);
@@ -1200,7 +1214,7 @@ impl App {
 
                     // Tell the engine task to run the next turn
                     let _ = engine_tx.send(EngineCommand::RunTurn(stream_tx)).await;
-                }
+                },
 
                 AppEvent::ShowAskUserDialog {
                     tool_use_id: _,
@@ -1210,7 +1224,7 @@ impl App {
                     // Show the AskUser input dialog; execution is paused in the tool
                     // via a oneshot channel until the user submits.
                     self.ask_user_dialog = Some(AskUserDialog::new(question, options));
-                }
+                },
 
                 AppEvent::AskUserResponse(answer) => {
                     // User submitted an answer — dismiss dialog and unblock the tool.
@@ -1226,14 +1240,17 @@ impl App {
                     self.message_list.push(MessageEntry::System {
                         text: format!("Your answer: {}", answer),
                     });
-                }
+                },
 
                 AppEvent::ToolExecutionComplete { tool_idx, result } => {
                     self.spinner.stop();
 
                     if tool_idx >= pending_tools.len() {
                         // Safety: stale tool completion — recover
-                        tracing::warn!(tool_idx, "ToolExecutionComplete for unknown tool_idx — recovering");
+                        tracing::warn!(
+                            tool_idx,
+                            "ToolExecutionComplete for unknown tool_idx — recovering"
+                        );
                         if self.engine_busy {
                             self.engine_busy = false;
                             self.spinner.queued_count = 0;
@@ -1258,11 +1275,11 @@ impl App {
                                     if let Some(path) = data.data["worktreePath"].as_str() {
                                         cwd = PathBuf::from(path);
                                     }
-                                }
+                                },
                                 "ExitWorktree" => {
                                     cwd = original_cwd.clone();
-                                }
-                                _ => {}
+                                },
+                                _ => {},
                             }
                         }
                     }
@@ -1275,41 +1292,57 @@ impl App {
                         .unwrap_or(false);
 
                     if awaiting {
-                        let question = result.as_ref().ok()
+                        let question = result
+                            .as_ref()
+                            .ok()
                             .and_then(|d| d.data["question"].as_str())
-                            .unwrap_or("").to_string();
-                        let opts: Vec<String> = result.as_ref().ok()
+                            .unwrap_or("")
+                            .to_string();
+                        let opts: Vec<String> = result
+                            .as_ref()
+                            .ok()
                             .and_then(|d| d.data["options"].as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
                             .unwrap_or_default();
                         let tool_id = info.id.clone();
                         let tx2 = tx.clone();
                         tokio::spawn(async move {
-                            let _ = tx2.send(AppEvent::ShowAskUserDialog {
-                                tool_use_id: tool_id, question, options: opts,
-                            }).await;
+                            let _ = tx2
+                                .send(AppEvent::ShowAskUserDialog {
+                                    tool_use_id: tool_id,
+                                    question,
+                                    options: opts,
+                                })
+                                .await;
                         });
                     } else {
                         let (result_text, display_text, is_error) = match &result {
                             Ok(data) => {
-                                let raw = data.data.as_str()
+                                let raw = data
+                                    .data
+                                    .as_str()
                                     .unwrap_or(&data.data.to_string())
                                     .to_string();
-                                let display = format_tool_result_display(
-                                    &info.name, &data.data, &raw,
-                                );
+                                let display =
+                                    format_tool_result_display(&info.name, &data.data, &raw);
                                 (raw, display, data.is_error)
-                            }
+                            },
                             Err(e) => {
                                 let msg = format!("Error: {}", e);
                                 (msg.clone(), msg, true)
-                            }
+                            },
                         };
-                        let _ = engine_tx.send(EngineCommand::AddToolResult {
-                            id: info.id.clone(),
-                            content: result_text,
-                            is_error,
-                        }).await;
+                        let _ = engine_tx
+                            .send(EngineCommand::AddToolResult {
+                                id: info.id.clone(),
+                                content: result_text,
+                                is_error,
+                            })
+                            .await;
                         self.message_list.push(MessageEntry::ToolResult {
                             name: info.name.clone(),
                             output: truncate_result(&display_text),
@@ -1321,8 +1354,11 @@ impl App {
                         pending_tool_index = tool_idx + 1;
                         if pending_tool_index < pending_tools.len() {
                             self.check_next_tool_permission(
-                                &pending_tools, &mut pending_tool_index,
-                                &perm_ctx, &tools, &tx,
+                                &pending_tools,
+                                &mut pending_tool_index,
+                                &perm_ctx,
+                                &tools,
+                                &tx,
                             );
                         } else {
                             let tx2 = tx.clone();
@@ -1331,7 +1367,7 @@ impl App {
                             });
                         }
                     }
-                }
+                },
 
                 AppEvent::TurnComplete(result) => {
                     match result {
@@ -1349,7 +1385,7 @@ impl App {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
                                 });
                             }
-                        }
+                        },
                         Ok(TurnResult::ToolUse(tool_uses)) => {
                             pending_tools = tool_uses
                                 .into_iter()
@@ -1364,7 +1400,7 @@ impl App {
                                 &tools,
                                 &tx,
                             );
-                        }
+                        },
                         Ok(TurnResult::ContinueRecovery) => {
                             self.message_list.push(MessageEntry::System {
                                 text: "Continuing (max tokens recovery)...".to_string(),
@@ -1373,7 +1409,7 @@ impl App {
                             tokio::spawn(async move {
                                 let _ = tx2.send(AppEvent::ContinueTurn).await;
                             });
-                        }
+                        },
                         Err(e) => {
                             self.spinner.stop();
                             self.spinner.queued_count = 0;
@@ -1391,19 +1427,15 @@ impl App {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
                                 });
                             }
-                        }
+                        },
                     }
-                }
+                },
             }
         }
 
         // Cleanup
         terminal::disable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            cursor::Show
-        )?;
+        execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
         Ok(())
     }
 
@@ -1418,7 +1450,7 @@ impl App {
         tools: &ToolRegistry,
         tx: &mpsc::Sender<AppEvent>,
     ) {
-        while *pending_tool_index < pending_tools.len() {
+        if *pending_tool_index < pending_tools.len() {
             let tool = &pending_tools[*pending_tool_index];
             let info = &tool.info;
             *pending_tool_index += 1;
@@ -1445,8 +1477,7 @@ impl App {
                             .send(AppEvent::PermissionResponse("allow".to_string()))
                             .await;
                     });
-                    return;
-                }
+                },
                 PermissionDecision::Ask(ask) => {
                     let input_preview = serde_json::to_string_pretty(&info.input)
                         .unwrap_or_else(|_| info.input.to_string());
@@ -1455,8 +1486,7 @@ impl App {
                         ask.message,
                         input_preview,
                     ));
-                    return;
-                }
+                },
                 PermissionDecision::Deny(deny) => {
                     let message = deny.message;
                     // Auto-deny, send deny response
@@ -1469,8 +1499,7 @@ impl App {
                     self.message_list.push(MessageEntry::System {
                         text: format!("Denied: {}", message),
                     });
-                    return;
-                }
+                },
             }
         }
     }
@@ -1486,7 +1515,7 @@ impl App {
                 } else {
                     self.message_list.push(MessageEntry::Assistant { text });
                 }
-            }
+            },
             StreamEvent::ThinkingDelta { text } => {
                 if let Some(MessageEntry::Thinking { text: ref mut t }) =
                     self.message_list.messages_mut().last_mut()
@@ -1495,7 +1524,7 @@ impl App {
                 } else {
                     self.message_list.push(MessageEntry::Thinking { text });
                 }
-            }
+            },
             StreamEvent::ToolStart {
                 tool_use_id,
                 name,
@@ -1508,7 +1537,7 @@ impl App {
                     tool_use_id,
                 });
                 self.spinner.start(SpinnerMode::Tool { name });
-            }
+            },
             StreamEvent::ToolResult {
                 tool_use_id,
                 result,
@@ -1521,10 +1550,10 @@ impl App {
                     is_error: result.is_error,
                     tool_use_id,
                 });
-            }
+            },
             StreamEvent::Done { stop_reason: _ } => {
                 self.spinner.stop();
-            }
+            },
             StreamEvent::UsageUpdate(ref usage) => {
                 self.spinner.tokens = usage.output_tokens;
                 self.total_tokens = self.total_tokens.saturating_add(usage.output_tokens);
@@ -1535,16 +1564,16 @@ impl App {
                     state.request_count = self.cost_tracker.request_count();
                     state.total_cost_usd = self.cost_tracker.total_cost_usd();
                 }
-            }
+            },
             StreamEvent::RequestStart { request_id: _ } => {
                 self.spinner.start(SpinnerMode::Thinking);
-            }
+            },
             StreamEvent::Error(err) => {
                 self.message_list.push(MessageEntry::System {
                     text: format!("Error: {}", err),
                 });
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -1554,10 +1583,10 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => self.should_quit = true,
             (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
                 self.message_list.toggle_thinking();
-            }
+            },
             _ => {
                 self.prompt.handle_key(key);
-            }
+            },
         }
     }
 
@@ -1566,11 +1595,11 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.message_list.scroll_up(3);
-            }
+            },
             MouseEventKind::ScrollDown => {
                 self.message_list.scroll_down(3);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -1737,12 +1766,7 @@ impl App {
                         "\u{2500}".repeat(input_area.width as usize),
                         ratatui::style::Style::default().fg(border_color),
                     ));
-                    buf.set_line(
-                        input_area.x,
-                        bottom_y,
-                        &bottom_line,
-                        input_area.width,
-                    );
+                    buf.set_line(input_area.x, bottom_y, &bottom_line, input_area.width);
                 } else {
                     // Minimal: show only the last line of multi-line input
                     let prompt_style = if engine_busy {
@@ -1753,7 +1777,7 @@ impl App {
                         ratatui::style::Style::default()
                     };
                     let text_str = prompt.text().to_string();
-                    let last_line = text_str.split('\n').last().unwrap_or("");
+                    let last_line = text_str.split('\n').next_back().unwrap_or("");
                     let prompt_line = ratatui::text::Line::from(vec![
                         ratatui::text::Span::styled("\u{276F} ", prompt_style),
                         ratatui::text::Span::raw(last_line.to_string()),
@@ -1853,11 +1877,7 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            cursor::Show
-        );
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
     }
 }
 
@@ -1922,7 +1942,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 parts.join("\n")
             }
-        }
+        },
         "Read" => {
             // TS: "Read N lines"
             if let Some(content) = data["file"].as_object() {
@@ -1941,10 +1961,8 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 raw.to_string()
             }
-        }
-        "Edit" | "Write" => {
-            format_edit_result(data).unwrap_or_else(|| raw.to_string())
-        }
+        },
+        "Edit" | "Write" => format_edit_result(data).unwrap_or_else(|| raw.to_string()),
         "Glob" => {
             // TS: show file count and list
             if let Some(files) = data["filenames"].as_array() {
@@ -1954,7 +1972,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 raw.to_string()
             }
-        }
+        },
         "Grep" => {
             // TS: show file count or match count
             if let Some(files) = data["filenames"].as_array() {
@@ -1967,13 +1985,13 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
                         } else {
                             format!("{} files", files.len())
                         }
-                    }
+                    },
                     _ => format!("{} files", files.len()),
                 }
             } else {
                 raw.to_string()
             }
-        }
+        },
         "Agent" => {
             // TS: shows agent result summary
             if let Some(result) = data["result"].as_str() {
@@ -1981,7 +1999,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 raw.to_string()
             }
-        }
+        },
         "TodoWrite" => {
             // Show a clean confirmation
             if let Some(msg) = data["message"].as_str() {
@@ -1989,7 +2007,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 "Todos updated".to_string()
             }
-        }
+        },
         "REPL" => {
             // Show stdout from REPL execution
             let stdout = data["stdout"].as_str().unwrap_or("");
@@ -2001,7 +2019,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 "(no output)".to_string()
             }
-        }
+        },
         "AskUserQuestion" | "AskUser" => {
             // Don't show raw JSON for AskUser
             if let Some(q) = data["question"].as_str() {
@@ -2009,7 +2027,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 raw.to_string()
             }
-        }
+        },
         _ => {
             // Default: if it's a JSON object, try to extract a "result" or "message" field
             if let Some(msg) = data["message"].as_str() {
@@ -2021,7 +2039,7 @@ fn format_tool_result_display(tool_name: &str, data: &serde_json::Value, raw: &s
             } else {
                 raw.to_string()
             }
-        }
+        },
     }
 }
 
@@ -2044,15 +2062,15 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
                 parts.push(format!("pages {}", pages));
             }
             parts.join(" · ")
-        }
+        },
         "Edit" => {
             let path = input["file_path"].as_str().unwrap_or("?");
             shorten_path(path).to_string()
-        }
+        },
         "Write" => {
             let path = input["file_path"].as_str().unwrap_or("?");
             shorten_path(path).to_string()
-        }
+        },
         "Bash" => {
             let cmd = input["command"].as_str().unwrap_or("?");
             if cmd.len() > 100 {
@@ -2060,11 +2078,11 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
             } else {
                 cmd.to_string()
             }
-        }
+        },
         "Glob" => {
             let pattern = input["pattern"].as_str().unwrap_or("?");
             pattern.to_string()
-        }
+        },
         "Grep" => {
             let pattern = input["pattern"].as_str().unwrap_or("?");
             let path = input["path"].as_str().unwrap_or("");
@@ -2073,7 +2091,7 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
             } else {
                 format!("\"{}\" in {}", pattern, shorten_path(path))
             }
-        }
+        },
         "Agent" => {
             let desc = input["description"].as_str().unwrap_or("");
             let subtype = input["subagent_type"].as_str().unwrap_or("");
@@ -2089,7 +2107,7 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
                     prompt.to_string()
                 }
             }
-        }
+        },
         _ => {
             // Fallback: compact JSON, truncated
             let s = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
@@ -2098,7 +2116,7 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
             } else {
                 s
             }
-        }
+        },
     }
 }
 

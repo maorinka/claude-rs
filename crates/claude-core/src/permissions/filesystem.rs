@@ -50,8 +50,8 @@ pub fn expand_path(path: &str) -> PathBuf {
         if let Some(home) = dirs::home_dir() {
             if path == "~" {
                 home
-            } else if path.starts_with("~/") {
-                home.join(&path[2..])
+            } else if let Some(stripped) = path.strip_prefix("~/") {
+                home.join(stripped)
             } else {
                 PathBuf::from(path)
             }
@@ -71,10 +71,10 @@ fn normalize_path(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::CurDir => {} // skip .
+            Component::CurDir => {}, // skip .
             Component::ParentDir => {
                 result.pop();
-            }
+            },
             other => result.push(other),
         }
     }
@@ -200,8 +200,7 @@ fn is_dangerous_file_path_to_auto_edit(path: &str) -> bool {
 static SHORT_NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"~\d").unwrap());
 static DOS_DEVICE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\.(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$").unwrap());
-static TRIPLE_DOT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(^|/|\\)\.{3,}(/|\\|$)").unwrap());
+static TRIPLE_DOT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(^|/|\\)\.{3,}(/|\\|$)").unwrap());
 
 /// Detect suspicious Windows path patterns that could bypass security checks.
 /// Includes NTFS ADS, 8.3 short names, long path prefixes, trailing dots/spaces,
@@ -511,9 +510,6 @@ fn glob_match_impl(pattern: &[u8], text: &[u8]) -> bool {
         {
             p += 1;
             t += 1;
-        } else if p < pattern.len() && pattern[p] == text[t] {
-            p += 1;
-            t += 1;
         } else if let Some(sp) = star_p {
             // * cannot match /
             if text[star_t] == b'/' {
@@ -544,10 +540,7 @@ fn pattern_with_root(
     if pattern.starts_with("//") {
         // Patterns starting with // resolve relative to /
         let without_double_slash = &pattern[1..];
-        (
-            without_double_slash.to_string(),
-            Some("/".to_string()),
-        )
+        (without_double_slash.to_string(), Some("/".to_string()))
     } else if pattern.starts_with("~/") {
         // Patterns starting with ~/ resolve relative to homedir
         let home = dirs::home_dir()
@@ -580,10 +573,10 @@ fn root_path_for_source(source: &PermissionRuleSource, cwd: &Path) -> String {
                 .unwrap_or_else(|| PathBuf::from("/"))
                 .to_string_lossy()
                 .to_string()
-        }
+        },
         PermissionRuleSource::ProjectSettings | PermissionRuleSource::LocalSettings => {
             cwd.to_string_lossy().to_string()
-        }
+        },
         PermissionRuleSource::FlagSettings => cwd.to_string_lossy().to_string(),
     }
 }
@@ -708,17 +701,13 @@ pub enum ToolType {
 pub fn get_file_read_ignore_patterns(
     context: &ToolPermissionContext,
 ) -> HashMap<Option<String>, Vec<String>> {
-    let rules =
-        get_rule_by_contents_for_tool_name(context, "Read", &PermissionBehavior::Deny);
+    let rules = get_rule_by_contents_for_tool_name(context, "Read", &PermissionBehavior::Deny);
     let cwd = &context.working_directory;
     let mut result: HashMap<Option<String>, Vec<String>> = HashMap::new();
 
     for (pattern_str, rule) in &rules {
         let (relative_pattern, root) = pattern_with_root(pattern_str, &rule.source, cwd);
-        result
-            .entry(root)
-            .or_default()
-            .push(relative_pattern);
+        result.entry(root).or_default().push(relative_pattern);
     }
 
     result
@@ -743,7 +732,11 @@ pub fn normalize_patterns_to_path(
         let pattern_root = pattern_root.as_ref().unwrap();
 
         for pattern in patterns {
-            let full_pattern = format!("{}/{}", pattern_root.trim_end_matches('/'), pattern.trim_start_matches('/'));
+            let full_pattern = format!(
+                "{}/{}",
+                pattern_root.trim_end_matches('/'),
+                pattern.trim_start_matches('/')
+            );
             if pattern_root == root {
                 result.push(format!("/{}", pattern.trim_start_matches('/')));
             } else if full_pattern.starts_with(&format!("{}/", root)) {
@@ -818,7 +811,8 @@ pub fn check_read_permission_for_tool(
 
     // 3. Read-specific deny rules
     for p in &paths_to_check {
-        if let Some(deny_rule) = matching_rule_for_input(p, context, ToolType::Read, &PermissionBehavior::Deny)
+        if let Some(deny_rule) =
+            matching_rule_for_input(p, context, ToolType::Read, &PermissionBehavior::Deny)
         {
             return PermissionDecision::Deny(PermissionDenyDecision {
                 message: format!("Permission to read {} has been denied.", path),
@@ -830,7 +824,8 @@ pub fn check_read_permission_for_tool(
 
     // 4. Read-specific ask rules
     for p in &paths_to_check {
-        if let Some(ask_rule) = matching_rule_for_input(p, context, ToolType::Read, &PermissionBehavior::Ask)
+        if let Some(ask_rule) =
+            matching_rule_for_input(p, context, ToolType::Read, &PermissionBehavior::Ask)
         {
             return PermissionDecision::Ask(PermissionAskDecision {
                 message: format!(
@@ -903,7 +898,8 @@ pub fn check_write_permission_for_tool(
 
     // 1. Check deny rules
     for p in &paths_to_check {
-        if let Some(deny_rule) = matching_rule_for_input(p, context, ToolType::Edit, &PermissionBehavior::Deny)
+        if let Some(deny_rule) =
+            matching_rule_for_input(p, context, ToolType::Edit, &PermissionBehavior::Deny)
         {
             return PermissionDecision::Deny(PermissionDenyDecision {
                 message: format!("Permission to edit {} has been denied.", path),
@@ -915,11 +911,7 @@ pub fn check_write_permission_for_tool(
 
     // 1.6. Check for .claude/** session allow rules before safety checks
     if let Some(allow_rule) = matching_rule_for_session_claude_folder(path, context) {
-        let rule_content = allow_rule
-            .rule_value
-            .rule_content
-            .as_deref()
-            .unwrap_or("");
+        let rule_content = allow_rule.rule_value.rule_content.as_deref().unwrap_or("");
         if (rule_content.starts_with("/.claude/") || rule_content.starts_with("~/.claude/"))
             && !rule_content.contains("..")
             && rule_content.ends_with("/**")
@@ -952,7 +944,8 @@ pub fn check_write_permission_for_tool(
 
     // 2. Check ask rules
     for p in &paths_to_check {
-        if let Some(ask_rule) = matching_rule_for_input(p, context, ToolType::Edit, &PermissionBehavior::Ask)
+        if let Some(ask_rule) =
+            matching_rule_for_input(p, context, ToolType::Edit, &PermissionBehavior::Ask)
         {
             return PermissionDecision::Ask(PermissionAskDecision {
                 message: format!(
@@ -1036,7 +1029,12 @@ fn matching_rule_for_session_claude_folder(
             .insert(PermissionRuleSource::Session, session_rules.clone());
     }
 
-    matching_rule_for_input(path, &session_only, ToolType::Edit, &PermissionBehavior::Allow)
+    matching_rule_for_input(
+        path,
+        &session_only,
+        ToolType::Edit,
+        &PermissionBehavior::Allow,
+    )
 }
 
 // ============================================================================
@@ -1052,10 +1050,8 @@ pub fn generate_suggestions(
     let is_outside_working_dir = !path_in_allowed_working_path(file_path, context);
 
     // Only suggest acceptEdits when it would be an upgrade
-    let should_suggest_accept_edits = matches!(
-        context.mode,
-        PermissionMode::Default | PermissionMode::Plan
-    );
+    let should_suggest_accept_edits =
+        matches!(context.mode, PermissionMode::Default | PermissionMode::Plan);
 
     if operation_type == "read" && is_outside_working_dir {
         let dir_path = get_directory_for_path(file_path);
@@ -1130,7 +1126,9 @@ mod tests {
     fn test_is_dangerous_file_path() {
         assert!(is_dangerous_file_path_to_auto_edit("/home/user/.bashrc"));
         assert!(is_dangerous_file_path_to_auto_edit("/project/.git/config"));
-        assert!(is_dangerous_file_path_to_auto_edit("/project/.vscode/settings.json"));
+        assert!(is_dangerous_file_path_to_auto_edit(
+            "/project/.vscode/settings.json"
+        ));
         assert!(!is_dangerous_file_path_to_auto_edit("/project/src/main.rs"));
     }
 
@@ -1163,7 +1161,10 @@ mod tests {
 
     #[test]
     fn test_normalize_case_for_comparison() {
-        assert_eq!(normalize_case_for_comparison("/Project/Src"), "/project/src");
+        assert_eq!(
+            normalize_case_for_comparison("/Project/Src"),
+            "/project/src"
+        );
     }
 
     #[test]
@@ -1181,7 +1182,9 @@ mod tests {
         assert!(has_suspicious_windows_path_pattern("file.txt."));
         assert!(has_suspicious_windows_path_pattern("file.txt.CON"));
         assert!(has_suspicious_windows_path_pattern("path/.../file"));
-        assert!(!has_suspicious_windows_path_pattern("/normal/path/file.txt"));
+        assert!(!has_suspicious_windows_path_pattern(
+            "/normal/path/file.txt"
+        ));
     }
 
     #[test]

@@ -110,7 +110,9 @@ mod tests {
         assert_eq!(infer_compact_schema(&json!(null), 2), "null");
         assert_eq!(infer_compact_schema(&json!(true), 2), "boolean");
         assert_eq!(infer_compact_schema(&json!(42), 2), "number");
-        assert_eq!(infer_compact_schema(&json!(3.14), 2), "number");
+        #[allow(clippy::approx_constant)]
+        let sample_float = 3.14;
+        assert_eq!(infer_compact_schema(&json!(sample_float), 2), "number");
         assert_eq!(infer_compact_schema(&json!("hi"), 2), "string");
     }
 

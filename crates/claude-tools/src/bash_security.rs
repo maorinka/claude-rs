@@ -380,12 +380,12 @@ fn validate_malformed_token_injection(ctx: &ValidationContext) -> SecurityBehavi
             '}' => brace_depth -= 1,
             '[' => bracket_depth += 1,
             ']' => bracket_depth -= 1,
-            _ => {}
+            _ => {},
         }
     }
     // Odd quote counts or unbalanced delimiters with separators is suspicious
-    if (sq_count % 2 != 0
-        || dq_count % 2 != 0
+    if (!sq_count.is_multiple_of(2)
+        || !dq_count.is_multiple_of(2)
         || paren_depth != 0
         || brace_depth != 0
         || bracket_depth != 0)
@@ -979,9 +979,9 @@ pub fn validate_command_security(command: &str) -> SecurityBehavior {
                 // TS returns passthrough for early-allow to let the command
                 // proceed without further checks
                 return SecurityBehavior::Passthrough;
-            }
+            },
             SecurityBehavior::Ask(_) => return r,
-            _ => {}
+            _ => {},
         }
     }
 
@@ -1444,7 +1444,7 @@ pub fn match_wildcard_pattern(pattern: &str, command: &str) -> bool {
 /// Extract a stable command prefix (command + subcommand).
 pub fn get_command_prefix(command: &str) -> Option<String> {
     let env_var_re = regex_lite::Regex::new(r"^[A-Za-z_]\w*=").unwrap();
-    let tokens: Vec<&str> = command.trim().split_whitespace().collect();
+    let tokens: Vec<&str> = command.split_whitespace().collect();
     let mut i = 0;
     while i < tokens.len() && env_var_re.is_match(tokens[i]) {
         let vn = tokens[i].split('=').next().unwrap_or("");

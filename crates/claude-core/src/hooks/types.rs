@@ -38,6 +38,7 @@ pub enum HookEvent {
 
 impl HookEvent {
     /// Parse a string into a HookEvent, returning None if invalid.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "PreToolUse" => Some(Self::PreToolUse),
@@ -117,16 +118,12 @@ impl std::fmt::Display for HookEvent {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ShellType {
+    #[default]
     Bash,
     #[serde(rename = "powershell")]
     PowerShell,
-}
-
-impl Default for ShellType {
-    fn default() -> Self {
-        Self::Bash
-    }
 }
 
 // ============================================================================
@@ -167,7 +164,7 @@ impl HookCommand {
                     h.prompt.clone()
                 };
                 format!("prompt: {}", truncated)
-            }
+            },
             HookCommand::Http(h) => format!("http: {}", h.url),
             HookCommand::Agent(h) => {
                 let truncated = if h.prompt.len() > 60 {
@@ -176,7 +173,7 @@ impl HookCommand {
                     h.prompt.clone()
                 };
                 format!("agent: {}", truncated)
-            }
+            },
         }
     }
 

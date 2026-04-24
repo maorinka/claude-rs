@@ -28,9 +28,7 @@ fn re(pattern: &str) -> Regex {
 /// Covers `-i`, `-i ''`, `-i.bak`, `-i''` and the long form `--in-place`.
 fn has_in_place_flag(command: &str) -> bool {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    let r = CELL.get_or_init(|| {
-        re(r"\bsed\b[^;&|\n]*(\s|^)(--in-place\b|-[a-zA-Z]*i[a-zA-Z]*)")
-    });
+    let r = CELL.get_or_init(|| re(r"\bsed\b[^;&|\n]*(\s|^)(--in-place\b|-[a-zA-Z]*i[a-zA-Z]*)"));
     r.is_match(command)
 }
 
@@ -120,11 +118,10 @@ fn expression_has_dangerous_op(expr: &str) -> bool {
     let _ = Y_CMD;
     if cmd.starts_with('y')
         && cmd.len() > 1
-        && cmd.chars().nth(1).map_or(false, |c| c != '\\' && c != '\n')
+        && cmd.chars().nth(1).is_some_and(|c| c != '\\' && c != '\n')
+        && cmd[1..].chars().any(|c| matches!(c, 'w' | 'W' | 'e' | 'E'))
     {
-        if cmd[1..].chars().any(|c| matches!(c, 'w' | 'W' | 'e' | 'E')) {
-            return true;
-        }
+        return true;
     }
 
     false
@@ -150,7 +147,7 @@ fn extract_expressions(command: &str) -> Vec<String> {
                 if !cur.is_empty() {
                     tokens.push(std::mem::take(&mut cur));
                 }
-            }
+            },
             c => cur.push(c),
         }
     }
@@ -243,9 +240,7 @@ mod tests {
 
     #[test]
     fn substitution_write_flag_caught() {
-        assert!(has_dangerous_sed_construct(
-            "sed 's/a/b/gw outfile' input"
-        ));
+        assert!(has_dangerous_sed_construct("sed 's/a/b/gw outfile' input"));
     }
 
     #[test]

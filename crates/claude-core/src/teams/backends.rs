@@ -14,8 +14,7 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 use super::mailbox::{
-    create_shutdown_request, read_team_file, write_to_mailbox,
-    TeammateMessageInput, TEAM_LEAD_NAME,
+    create_shutdown_request, read_team_file, write_to_mailbox, TeammateMessageInput, TEAM_LEAD_NAME,
 };
 use super::types::*;
 
@@ -84,7 +83,7 @@ async fn run_command(cmd: &str, args: &[&str]) -> (String, String, i32) {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let code = output.status.code().unwrap_or(-1);
             (stdout, stderr, code)
-        }
+        },
         Err(e) => (String::new(), e.to_string(), -1),
     }
 }
@@ -105,6 +104,12 @@ async fn run_command(cmd: &str, args: &[&str]) -> (String, String, i32) {
 pub struct TmuxBackend {
     /// Tracks whether the first pane has been used for external swarm session.
     first_pane_used: AtomicBool,
+}
+
+impl Default for TmuxBackend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TmuxBackend {
@@ -152,11 +157,11 @@ impl TmuxBackend {
 
     /// Get number of panes in a window.
     async fn get_pane_count(window_target: &str, use_swarm_socket: bool) -> Option<usize> {
-        let args = vec!["list-panes", "-t", window_target, "-F", "#{pane_id}"];
+        let args = ["list-panes", "-t", window_target, "-F", "#{pane_id}"];
         let (stdout, _, code) = if use_swarm_socket {
-            run_tmux_in_swarm(&args.iter().map(|s| *s).collect::<Vec<_>>()).await
+            run_tmux_in_swarm(args.as_ref()).await
         } else {
-            run_tmux_in_user_session(&args.iter().map(|s| *s).collect::<Vec<_>>()).await
+            run_tmux_in_user_session(args.as_ref()).await
         };
         if code != 0 {
             return None;
@@ -223,15 +228,13 @@ impl TmuxBackend {
         let window_target = format!("{}:{}", SWARM_SESSION_NAME, SWARM_VIEW_WINDOW_NAME);
 
         if windows.contains(&SWARM_VIEW_WINDOW_NAME) {
-            let (pane_stdout, _, _) = run_tmux_in_swarm(&[
-                "list-panes",
-                "-t",
-                &window_target,
-                "-F",
-                "#{pane_id}",
-            ])
-            .await;
-            let panes: Vec<&str> = pane_stdout.trim().lines().filter(|l| !l.is_empty()).collect();
+            let (pane_stdout, _, _) =
+                run_tmux_in_swarm(&["list-panes", "-t", &window_target, "-F", "#{pane_id}"]).await;
+            let panes: Vec<&str> = pane_stdout
+                .trim()
+                .lines()
+                .filter(|l| !l.is_empty())
+                .collect();
             return Ok((window_target, panes.first().unwrap_or(&"").to_string()));
         }
 
@@ -293,16 +296,15 @@ impl TmuxBackend {
             ])
             .await
         } else {
-            let (list_stdout, _, _) = run_tmux_in_user_session(&[
-                "list-panes",
-                "-t",
-                &window_target,
-                "-F",
-                "#{pane_id}",
-            ])
-            .await;
+            let (list_stdout, _, _) =
+                run_tmux_in_user_session(&["list-panes", "-t", &window_target, "-F", "#{pane_id}"])
+                    .await;
 
-            let panes: Vec<&str> = list_stdout.trim().lines().filter(|l| !l.is_empty()).collect();
+            let panes: Vec<&str> = list_stdout
+                .trim()
+                .lines()
+                .filter(|l| !l.is_empty())
+                .collect();
             let teammate_panes = &panes[1..];
             let teammate_count = teammate_panes.len();
 
@@ -374,23 +376,18 @@ impl TmuxBackend {
             Self::enable_pane_border_status_impl(Some(&window_target), true).await;
             first_pane_id
         } else {
-            let (list_stdout, _, _) = run_tmux_in_swarm(&[
-                "list-panes",
-                "-t",
-                &window_target,
-                "-F",
-                "#{pane_id}",
-            ])
-            .await;
+            let (list_stdout, _, _) =
+                run_tmux_in_swarm(&["list-panes", "-t", &window_target, "-F", "#{pane_id}"]).await;
 
-            let panes: Vec<&str> = list_stdout.trim().lines().filter(|l| !l.is_empty()).collect();
+            let panes: Vec<&str> = list_stdout
+                .trim()
+                .lines()
+                .filter(|l| !l.is_empty())
+                .collect();
             let teammate_count = panes.len();
             let split_vertically = teammate_count % 2 == 1;
             let target_idx = ((teammate_count as isize) - 1).max(0) as usize / 2;
-            let target_pane = panes
-                .get(target_idx)
-                .or(panes.last())
-                .unwrap_or(&"");
+            let target_pane = panes.get(target_idx).or(panes.last()).unwrap_or(&"");
 
             let (stdout, stderr, code) = run_tmux_in_swarm(&[
                 "split-window",
@@ -431,7 +428,11 @@ impl TmuxBackend {
         command: &str,
         use_external: bool,
     ) -> Result<()> {
-        let (_, stderr, code) = run_tmux(&["send-keys", "-t", pane_id, command, "Enter"], use_external).await;
+        let (_, stderr, code) = run_tmux(
+            &["send-keys", "-t", pane_id, command, "Enter"],
+            use_external,
+        )
+        .await;
         if code != 0 {
             return Err(anyhow::anyhow!(
                 "Failed to send command to pane {}: {}",
@@ -448,9 +449,35 @@ impl TmuxBackend {
         let fg_style = format!("bg=default,fg={}", tmux_color);
         let border_style = format!("fg={}", tmux_color);
 
-        let _ = run_tmux(&["select-pane", "-t", pane_id, "-P", &fg_style], use_external).await;
-        let _ = run_tmux(&["set-option", "-p", "-t", pane_id, "pane-border-style", &border_style], use_external).await;
-        let _ = run_tmux(&["set-option", "-p", "-t", pane_id, "pane-active-border-style", &border_style], use_external).await;
+        let _ = run_tmux(
+            &["select-pane", "-t", pane_id, "-P", &fg_style],
+            use_external,
+        )
+        .await;
+        let _ = run_tmux(
+            &[
+                "set-option",
+                "-p",
+                "-t",
+                pane_id,
+                "pane-border-style",
+                &border_style,
+            ],
+            use_external,
+        )
+        .await;
+        let _ = run_tmux(
+            &[
+                "set-option",
+                "-p",
+                "-t",
+                pane_id,
+                "pane-active-border-style",
+                &border_style,
+            ],
+            use_external,
+        )
+        .await;
     }
 
     /// Set pane title.
@@ -458,7 +485,18 @@ impl TmuxBackend {
         let tmux_color = color.tmux_color();
         let _ = run_tmux(&["select-pane", "-t", pane_id, "-T", name], use_external).await;
         let format_str = format!("#[fg={},bold] #{{pane_title}} #[default]", tmux_color);
-        let _ = run_tmux(&["set-option", "-p", "-t", pane_id, "pane-border-format", &format_str], use_external).await;
+        let _ = run_tmux(
+            &[
+                "set-option",
+                "-p",
+                "-t",
+                pane_id,
+                "pane-border-format",
+                &format_str,
+            ],
+            use_external,
+        )
+        .await;
     }
 
     /// Enable pane border status for a window.
@@ -471,42 +509,41 @@ impl TmuxBackend {
             },
         };
 
-        let _ = run_tmux(&["set-option", "-w", "-t", &target, "pane-border-status", "top"], use_external).await;
+        let _ = run_tmux(
+            &[
+                "set-option",
+                "-w",
+                "-t",
+                &target,
+                "pane-border-status",
+                "top",
+            ],
+            use_external,
+        )
+        .await;
     }
 
     /// Rebalance panes with leader (main-vertical layout, leader at 30%).
     async fn rebalance_with_leader(window_target: &str) {
-        let (list_stdout, _, _) = run_tmux_in_user_session(&[
-            "list-panes",
-            "-t",
-            window_target,
-            "-F",
-            "#{pane_id}",
-        ])
-        .await;
+        let (list_stdout, _, _) =
+            run_tmux_in_user_session(&["list-panes", "-t", window_target, "-F", "#{pane_id}"])
+                .await;
 
-        let panes: Vec<&str> = list_stdout.trim().lines().filter(|l| !l.is_empty()).collect();
+        let panes: Vec<&str> = list_stdout
+            .trim()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect();
         if panes.len() <= 2 {
             return;
         }
 
-        let _ = run_tmux_in_user_session(&[
-            "select-layout",
-            "-t",
-            window_target,
-            "main-vertical",
-        ])
-        .await;
+        let _ = run_tmux_in_user_session(&["select-layout", "-t", window_target, "main-vertical"])
+            .await;
 
         if let Some(leader_pane) = panes.first() {
-            let _ = run_tmux_in_user_session(&[
-                "resize-pane",
-                "-t",
-                leader_pane,
-                "-x",
-                "30%",
-            ])
-            .await;
+            let _ =
+                run_tmux_in_user_session(&["resize-pane", "-t", leader_pane, "-x", "30%"]).await;
         }
 
         debug!(
@@ -517,16 +554,14 @@ impl TmuxBackend {
 
     /// Rebalance panes in tiled layout (no leader).
     async fn rebalance_tiled(window_target: &str) {
-        let (list_stdout, _, _) = run_tmux_in_swarm(&[
-            "list-panes",
-            "-t",
-            window_target,
-            "-F",
-            "#{pane_id}",
-        ])
-        .await;
+        let (list_stdout, _, _) =
+            run_tmux_in_swarm(&["list-panes", "-t", window_target, "-F", "#{pane_id}"]).await;
 
-        let panes: Vec<&str> = list_stdout.trim().lines().filter(|l| !l.is_empty()).collect();
+        let panes: Vec<&str> = list_stdout
+            .trim()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect();
         if panes.len() <= 1 {
             return;
         }
@@ -548,10 +583,18 @@ impl TmuxBackend {
     /// Hide a pane by moving it to a detached hidden session.
     pub async fn hide_pane_impl(pane_id: &str, use_external: bool) -> bool {
         // Create hidden session if needed.
-        let _ = run_tmux(&["new-session", "-d", "-s", HIDDEN_SESSION_NAME], use_external).await;
+        let _ = run_tmux(
+            &["new-session", "-d", "-s", HIDDEN_SESSION_NAME],
+            use_external,
+        )
+        .await;
 
         let target = format!("{}:", HIDDEN_SESSION_NAME);
-        let (_, _, code) = run_tmux(&["break-pane", "-d", "-s", pane_id, "-t", &target], use_external).await;
+        let (_, _, code) = run_tmux(
+            &["break-pane", "-d", "-s", pane_id, "-t", &target],
+            use_external,
+        )
+        .await;
         if code == 0 {
             debug!("[TmuxBackend] Hidden pane {}", pane_id);
         } else {
@@ -566,7 +609,18 @@ impl TmuxBackend {
         target_window_or_pane: &str,
         use_external: bool,
     ) -> bool {
-        let (_, _, code) = run_tmux(&["join-pane", "-h", "-s", pane_id, "-t", target_window_or_pane], use_external).await;
+        let (_, _, code) = run_tmux(
+            &[
+                "join-pane",
+                "-h",
+                "-s",
+                pane_id,
+                "-t",
+                target_window_or_pane,
+            ],
+            use_external,
+        )
+        .await;
 
         if code != 0 {
             debug!("[TmuxBackend] Failed to show pane {}", pane_id);
@@ -574,11 +628,34 @@ impl TmuxBackend {
         }
 
         // Reapply main-vertical layout.
-        let _ = run_tmux(&["select-layout", "-t", target_window_or_pane, "main-vertical"], use_external).await;
+        let _ = run_tmux(
+            &[
+                "select-layout",
+                "-t",
+                target_window_or_pane,
+                "main-vertical",
+            ],
+            use_external,
+        )
+        .await;
 
-        let (list_stdout, _, _) = run_tmux(&["list-panes", "-t", target_window_or_pane, "-F", "#{pane_id}"], use_external).await;
+        let (list_stdout, _, _) = run_tmux(
+            &[
+                "list-panes",
+                "-t",
+                target_window_or_pane,
+                "-F",
+                "#{pane_id}",
+            ],
+            use_external,
+        )
+        .await;
 
-        let panes: Vec<&str> = list_stdout.trim().lines().filter(|l| !l.is_empty()).collect();
+        let panes: Vec<&str> = list_stdout
+            .trim()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect();
         if let Some(first) = panes.first() {
             let _ = run_tmux(&["resize-pane", "-t", first, "-x", "30%"], use_external).await;
         }
@@ -709,6 +786,12 @@ struct InProcessTeammate {
     team_name: String,
     agent_name: String,
     cancelled: AtomicBool,
+}
+
+impl Default for InProcessBackend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InProcessBackend {
@@ -856,7 +939,7 @@ impl TeammateExecutor for InProcessBackend {
                     agent_id
                 );
                 return false;
-            }
+            },
         };
 
         if already_cancelled {
@@ -867,7 +950,11 @@ impl TeammateExecutor for InProcessBackend {
             return true;
         }
 
-        let request_id = format!("shutdown-{}-{}", agent_id, chrono::Utc::now().timestamp_millis());
+        let request_id = format!(
+            "shutdown-{}-{}",
+            agent_id,
+            chrono::Utc::now().timestamp_millis()
+        );
         let shutdown_msg = create_shutdown_request(&request_id, TEAM_LEAD_NAME, reason);
 
         let _ = write_to_mailbox(
@@ -989,10 +1076,7 @@ fn get_default_teammate_model(
 
 /// Generate a unique teammate name by checking existing team members.
 /// If the name already exists, appends a numeric suffix (e.g. `tester-2`).
-pub async fn generate_unique_teammate_name(
-    base_name: &str,
-    team_name: &str,
-) -> String {
+pub async fn generate_unique_teammate_name(base_name: &str, team_name: &str) -> String {
     let team_file = match read_team_file(team_name).await {
         Some(tf) => tf,
         None => return base_name.to_string(),
@@ -1065,7 +1149,7 @@ pub fn build_inherited_cli_flags(
     match chrome_flag_override {
         Some(true) => flags.push("--chrome".to_string()),
         Some(false) => flags.push("--no-chrome".to_string()),
-        None => {}
+        None => {},
     }
 
     flags.join(" ")

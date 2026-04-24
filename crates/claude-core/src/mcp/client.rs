@@ -77,8 +77,7 @@ pub type RequestHandlerFuture =
 /// at `services/mcp/client.ts:1009-1018` and `:1191-1197`. TS
 /// handlers are async; the Rust port mirrors that shape so handlers
 /// can await I/O or async locks naturally.
-pub type RequestHandler =
-    Arc<dyn Fn(Option<Value>) -> RequestHandlerFuture + Send + Sync>;
+pub type RequestHandler = Arc<dyn Fn(Option<Value>) -> RequestHandlerFuture + Send + Sync>;
 
 pub struct McpClient {
     /// Name of this server (for logging and identification).
@@ -194,11 +193,11 @@ impl McpClient {
                             handlers_clone.clone(),
                             writer_clone.clone(),
                         );
-                    }
+                    },
                     Err(e) => {
                         debug!(server = server_name, "MCP server stdout read error: {}", e);
                         break;
-                    }
+                    },
                 }
             }
             debug!(server = server_name, "MCP server reader task ended");
@@ -214,9 +213,7 @@ impl McpClient {
             request_handlers,
             // stdio never feeds this tracker (see field doc); keep
             // a clean default for field-shape parity.
-            lifecycle: Arc::new(Mutex::new(
-                super::lifecycle::LifecycleTracker::new(),
-            )),
+            lifecycle: Arc::new(Mutex::new(super::lifecycle::LifecycleTracker::new())),
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -332,9 +329,7 @@ impl McpClient {
                                             // dispatched. Log so the deferral
                                             // is visible instead of failing
                                             // silently.
-                                            if v.get("method").is_some()
-                                                && v.get("id").is_some()
-                                            {
+                                            if v.get("method").is_some() && v.get("id").is_some() {
                                                 warn!(
                                                     server = server_name,
                                                     "SSE inbound request received but dispatch \
@@ -345,7 +340,7 @@ impl McpClient {
                                         }
                                     }
                                 }
-                            }
+                            },
                             Err(e) => {
                                 let msg = e.to_string();
                                 debug!(server = server_name, "SSE stream error: {}", msg);
@@ -362,17 +357,16 @@ impl McpClient {
                                 {
                                     debug!(
                                         server = server_name,
-                                        "SSE transport closed by lifecycle tracker: {}",
-                                        reason
+                                        "SSE transport closed by lifecycle tracker: {}", reason
                                     );
                                     let mut pending = pending_clone.lock().await;
                                     pending.clear();
                                 }
                                 break;
-                            }
+                            },
                         }
                     }
-                }
+                },
                 Err(e) => {
                     let msg = e.to_string();
                     debug!(server = server_name, "SSE connection failed: {}", msg);
@@ -385,7 +379,7 @@ impl McpClient {
                     // mirrors TS, whose onerror handler treats
                     // setup and mid-stream errors the same way.
                     let _ = lifecycle_clone.lock().await.record_error(&msg);
-                }
+                },
             }
             debug!(server = server_name, "SSE reader task ended");
         });
@@ -452,9 +446,7 @@ impl McpClient {
             // HTTP inbound-request dispatch is deferred; the map
             // holds defaults for API parity with stdio.
             request_handlers: default_request_handlers().await,
-            lifecycle: Arc::new(Mutex::new(
-                super::lifecycle::LifecycleTracker::new(),
-            )),
+            lifecycle: Arc::new(Mutex::new(super::lifecycle::LifecycleTracker::new())),
             capabilities: None,
             server_info: None,
             instructions: None,
@@ -500,15 +492,10 @@ impl McpClient {
             .with_context(|| format!("invalid WebSocket URL for MCP server '{}'", name))?;
         {
             let hdrs = req.headers_mut();
-            hdrs.insert(
-                "Sec-WebSocket-Protocol",
-                HeaderValue::from_static("mcp"),
-            );
+            hdrs.insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mcp"));
             for (k, v) in &request_headers {
                 if let (Ok(hn), Ok(hv)) = (
-                    tokio_tungstenite::tungstenite::http::HeaderName::try_from(
-                        k.as_str(),
-                    ),
+                    tokio_tungstenite::tungstenite::http::HeaderName::try_from(k.as_str()),
                     HeaderValue::try_from(v.as_str()),
                 ) {
                     hdrs.insert(hn, hv);
@@ -524,9 +511,7 @@ impl McpClient {
 
         let (ws_stream, _response) = tokio_tungstenite::connect_async(req)
             .await
-            .with_context(|| {
-                format!("Failed to establish WebSocket to MCP server '{}'", name)
-            })?;
+            .with_context(|| format!("Failed to establish WebSocket to MCP server '{}'", name))?;
 
         use futures_util::{SinkExt, StreamExt};
         let (mut write_half, mut read_half) = ws_stream.split();
@@ -541,18 +526,14 @@ impl McpClient {
         // Outbound queue — unbounded since we don't want
         // send_request to block on a full channel. Volume is
         // bounded by the pending map size already.
-        let (write_tx, mut write_rx) =
-            tokio::sync::mpsc::unbounded_channel::<String>();
+        let (write_tx, mut write_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         // Writer task: drain outgoing frames.
         let writer_server_name = name.to_string();
         tokio::spawn(async move {
             while let Some(msg) = write_rx.recv().await {
-                if let Err(e) = write_half.send(Message::Text(msg.into())).await {
-                    debug!(
-                        server = writer_server_name,
-                        "WebSocket write failed: {}", e
-                    );
+                if let Err(e) = write_half.send(Message::Text(msg)).await {
+                    debug!(server = writer_server_name, "WebSocket write failed: {}", e);
                     break;
                 }
             }
@@ -571,8 +552,7 @@ impl McpClient {
         // interface). To keep dispatch unified we just clone the
         // write_tx into a no-op writer for now; server-initiated
         // request responses get sent directly.
-        let writer_adapter: Arc<Mutex<Option<Box<dyn Write + Send>>>> =
-            Arc::new(Mutex::new(None));
+        let writer_adapter: Arc<Mutex<Option<Box<dyn Write + Send>>>> = Arc::new(Mutex::new(None));
         let write_tx_clone = write_tx.clone();
         let reader_handle = tokio::spawn(async move {
             while let Some(frame) = read_half.next().await {
@@ -585,19 +565,16 @@ impl McpClient {
                             handlers_clone.clone(),
                             write_tx_clone.clone(),
                         );
-                    }
+                    },
                     Ok(Message::Close(_)) => {
-                        debug!(
-                            server = reader_server_name,
-                            "WebSocket closed by peer"
-                        );
+                        debug!(server = reader_server_name, "WebSocket closed by peer");
                         break;
-                    }
+                    },
                     Ok(_) => {
                         // Ignore binary / ping / pong — MCP uses
                         // text JSON only. tungstenite auto-pongs
                         // pings internally.
-                    }
+                    },
                     Err(e) => {
                         let msg = e.to_string();
                         debug!(
@@ -607,20 +584,18 @@ impl McpClient {
                         // Same lifecycle treatment as SSE stream
                         // errors — drain pending on TriggerClose.
                         let mut lc = lifecycle_clone.lock().await;
-                        if let super::lifecycle::LifecycleDecision::TriggerClose {
-                            reason,
-                        } = lc.record_error(&msg)
+                        if let super::lifecycle::LifecycleDecision::TriggerClose { reason } =
+                            lc.record_error(&msg)
                         {
                             debug!(
                                 server = reader_server_name,
-                                "WebSocket closed by lifecycle tracker: {}",
-                                reason
+                                "WebSocket closed by lifecycle tracker: {}", reason
                             );
                             let mut pending = pending_clone.lock().await;
                             pending.clear();
                         }
                         break;
-                    }
+                    },
                 }
             }
             // Silence unused-Arc warnings for the adapter slot.
@@ -762,9 +737,9 @@ impl McpClient {
                             self.name,
                             method
                         ))
-                    }
+                    },
                 }
-            }
+            },
 
             McpTransport::Sse {
                 http,
@@ -849,9 +824,9 @@ impl McpClient {
                             self.name,
                             method
                         ))
-                    }
+                    },
                 }
-            }
+            },
 
             McpTransport::Http {
                 url,
@@ -900,7 +875,7 @@ impl McpClient {
                             "Failed to POST to MCP HTTP server '{}' at {}",
                             self.name, url
                         )));
-                    }
+                    },
                 };
 
                 // Capture session ID from response header
@@ -961,7 +936,7 @@ impl McpClient {
                 })?;
 
                 Ok(response)
-            }
+            },
             McpTransport::Ws { write_tx, .. } => {
                 // G18b: lifecycle short-circuit same shape as
                 // SSE — a closed transport fails fast.
@@ -976,8 +951,8 @@ impl McpClient {
                     let mut pending = self.pending.lock().await;
                     pending.insert(id, tx);
                 }
-                let line = serde_json::to_string(&request)
-                    .context("Failed to serialize WS request")?;
+                let line =
+                    serde_json::to_string(&request).context("Failed to serialize WS request")?;
                 if let Err(e) = write_tx.send(line) {
                     // Writer task is gone — pending was inserted;
                     // drop it so the caller sees the error
@@ -1007,9 +982,9 @@ impl McpClient {
                             self.name,
                             method
                         ))
-                    }
+                    },
                 }
-            }
+            },
         }
     }
 
@@ -1031,7 +1006,7 @@ impl McpClient {
                 } else {
                     return Err(anyhow!("MCP server '{}' writer is closed", self.name));
                 }
-            }
+            },
 
             McpTransport::Sse {
                 http,
@@ -1073,7 +1048,7 @@ impl McpClient {
                         self.name
                     )
                 })?;
-            }
+            },
 
             McpTransport::Http {
                 url,
@@ -1111,7 +1086,7 @@ impl McpClient {
                         self.name
                     )
                 })?;
-            }
+            },
             McpTransport::Ws { write_tx, .. } => {
                 if self.lifecycle.lock().await.has_triggered_close() {
                     return Err(anyhow!(
@@ -1128,7 +1103,7 @@ impl McpClient {
                         e
                     ));
                 }
-            }
+            },
         }
 
         debug!(server = self.name, method = method, "Sent MCP notification");
@@ -1178,8 +1153,7 @@ impl McpClient {
         // at `client.ts:3055-3066`. `HeartbeatGuard::drop` aborts
         // the spawned task so the timer stops on ANY return path
         // (success, error, or parent-future cancellation).
-        let _heartbeat =
-            spawn_progress_heartbeat(self.name.clone(), tool_name.to_string());
+        let _heartbeat = spawn_progress_heartbeat(self.name.clone(), tool_name.to_string());
         // Transport flavour hint for the session-expiry classifier
         // (TS scopes -32000 "Connection closed" to http /
         // claudeai-proxy only; SSE and stdio errors of that shape
@@ -1198,12 +1172,8 @@ impl McpClient {
         let response = match self.send_request(methods::TOOLS_CALL, Some(params)).await {
             Ok(r) => r,
             Err(e) => {
-                return Err(classify_call_tool_error(
-                    e,
-                    &self.name,
-                    transport_hint,
-                ));
-            }
+                return Err(classify_call_tool_error(e, &self.name, transport_hint));
+            },
         };
 
         if let Some(result) = response.result {
@@ -1213,12 +1183,10 @@ impl McpClient {
             // that predate the `content[]`+`isError` envelope. The
             // Rust `McpToolResult` shape doesn't model the legacy
             // field, so we pull it out as a JSON fallback.
-            let legacy_error = result
-                .get("error")
-                .map(|v| match v.as_str() {
-                    Some(s) => s.to_string(),
-                    None => v.to_string(),
-                });
+            let legacy_error = result.get("error").map(|v| match v.as_str() {
+                Some(s) => s.to_string(),
+                None => v.to_string(),
+            });
 
             let tool_result: McpToolResult =
                 serde_json::from_value(result).context("Failed to parse MCP tool call result")?;
@@ -1234,12 +1202,10 @@ impl McpClient {
                     .find_map(|c| c.text.clone())
                     .or(legacy_error)
                     .unwrap_or_else(|| "Unknown error".to_string());
-                return Err(anyhow::Error::from(
-                    super::errors::McpToolCallError::new(
-                        details,
-                        "MCP tool returned error",
-                    ),
-                ));
+                return Err(anyhow::Error::from(super::errors::McpToolCallError::new(
+                    details,
+                    "MCP tool returned error",
+                )));
             }
             return Ok(tool_result);
         }
@@ -1294,9 +1260,8 @@ impl McpClient {
 
         if let Some(result) = response.result {
             if let Some(prompts) = result.get("prompts") {
-                let prompts: Vec<McpPromptDefinition> =
-                    serde_json::from_value(prompts.clone())
-                        .context("Failed to parse MCP prompts list")?;
+                let prompts: Vec<McpPromptDefinition> = serde_json::from_value(prompts.clone())
+                    .context("Failed to parse MCP prompts list")?;
                 debug!(
                     server = self.name,
                     count = prompts.len(),
@@ -1339,14 +1304,16 @@ impl McpClient {
     ) -> Result<McpPromptResult> {
         let mut params = serde_json::json!({ "name": prompt_name });
         if let Some(args) = arguments {
-            params["arguments"] = serde_json::to_value(args)
-                .context("Failed to serialize prompts/get arguments")?;
+            params["arguments"] =
+                serde_json::to_value(args).context("Failed to serialize prompts/get arguments")?;
         }
-        let response = self.send_request(methods::PROMPTS_GET, Some(params)).await?;
+        let response = self
+            .send_request(methods::PROMPTS_GET, Some(params))
+            .await?;
 
         if let Some(result) = response.result {
-            let parsed: McpPromptResult = serde_json::from_value(result)
-                .context("Failed to parse MCP prompts/get result")?;
+            let parsed: McpPromptResult =
+                serde_json::from_value(result).context("Failed to parse MCP prompts/get result")?;
             debug!(
                 server = self.name,
                 prompt = prompt_name,
@@ -1556,7 +1523,7 @@ impl McpClient {
                 } else {
                     false
                 }
-            }
+            },
             McpTransport::Sse { .. } => {
                 // SSE is alive if the reader task hasn't finished
                 if let Some(ref handle) = self.reader_handle {
@@ -1564,12 +1531,12 @@ impl McpClient {
                 } else {
                     false
                 }
-            }
+            },
             McpTransport::Http { .. } => {
                 // HTTP transport is stateless -- always "alive" as long as
                 // we have the URL configured
                 true
-            }
+            },
             McpTransport::Ws { .. } => {
                 // Same liveness rule as SSE: the reader task
                 // exits when the socket closes (either via a
@@ -1579,7 +1546,7 @@ impl McpClient {
                 } else {
                     false
                 }
-            }
+            },
         }
     }
 }
@@ -1707,9 +1674,8 @@ fn classify_call_tool_error(
     // `config.type === 'http' || 'claudeai-proxy'`; the -32001
     // branch applies globally because it's a direct server
     // signal, not a transport-layer wrap.
-    let direct_404_32001 =
-        msg.contains("session expired")
-            || super::helpers::is_mcp_session_expired_error(Some(404), &msg);
+    let direct_404_32001 = msg.contains("session expired")
+        || super::helpers::is_mcp_session_expired_error(Some(404), &msg);
     let connection_closed_on_http = transport == TransportHint::Http
         && msg.contains("-32000")
         && msg.contains("Connection closed");
@@ -1763,8 +1729,7 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
     // by this deadline. Matches TS `failsafeTimeout` at
     // `client.ts:1467-1477` which starts a concurrent 600ms timer
     // alongside the sequential escalation.
-    let absolute_deadline =
-        tokio::time::Instant::now() + Duration::from_millis(600);
+    let absolute_deadline = tokio::time::Instant::now() + Duration::from_millis(600);
 
     // Step 1: SIGINT (like Ctrl-C). Polite — most servers handle
     // this for graceful shutdown.
@@ -1781,19 +1746,16 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
 
     // Poll on 25ms granularity up to the SIGINT window (100ms,
     // capped by the absolute deadline).
-    if wait_for_exit_bounded(
-        child,
-        Duration::from_millis(100),
-        absolute_deadline,
-    )
-    .await
-    {
+    if wait_for_exit_bounded(child, Duration::from_millis(100), absolute_deadline).await {
         debug!(server = name, "MCP server process exited cleanly on SIGINT");
         return;
     }
 
     // Step 2: SIGTERM.
-    debug!(server = name, "SIGINT failed, sending SIGTERM to MCP server process");
+    debug!(
+        server = name,
+        "SIGINT failed, sending SIGTERM to MCP server process"
+    );
     let r = unsafe { libc::kill(pid_i, libc::SIGTERM) };
     if r != 0 {
         debug!(
@@ -1806,19 +1768,16 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
 
     // SIGTERM window: 400ms nominal; absolute_deadline may clip
     // it short if the SIGINT step took longer than 100ms.
-    if wait_for_exit_bounded(
-        child,
-        Duration::from_millis(400),
-        absolute_deadline,
-    )
-    .await
-    {
+    if wait_for_exit_bounded(child, Duration::from_millis(400), absolute_deadline).await {
         debug!(server = name, "MCP server process exited on SIGTERM");
         return;
     }
 
     // Step 3: SIGKILL. Unignorable; kernel reaps the process.
-    debug!(server = name, "SIGTERM failed, sending SIGKILL to MCP server process");
+    debug!(
+        server = name,
+        "SIGTERM failed, sending SIGKILL to MCP server process"
+    );
     let r = unsafe { libc::kill(pid_i, libc::SIGKILL) };
     if r != 0 {
         debug!(
@@ -1830,9 +1789,7 @@ pub(crate) async fn graceful_terminate_stdio(child: &mut std::process::Child, na
     // Give SIGKILL a small window to actually reap. The absolute
     // deadline may already be past; the bounded helper returns
     // immediately in that case.
-    let _ =
-        wait_for_exit_bounded(child, Duration::from_millis(100), absolute_deadline)
-            .await;
+    let _ = wait_for_exit_bounded(child, Duration::from_millis(100), absolute_deadline).await;
 
     /// Poll `child.try_wait()` every 25ms until the child exits
     /// OR `min(now + per_step_window, absolute_deadline)` elapses.
@@ -1890,9 +1847,7 @@ async fn default_request_handlers() -> Arc<Mutex<HashMap<String, RequestHandler>
 /// panic.
 fn original_cwd() -> &'static std::path::PathBuf {
     static CELL: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-    })
+    CELL.get_or_init(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
 }
 
 /// Default handler for `roots/list`: reports the *startup* working
@@ -1902,9 +1857,7 @@ fn original_cwd() -> &'static std::path::PathBuf {
 fn default_roots_list_handler() -> RequestHandler {
     Arc::new(|_params| {
         let uri = format!("file://{}", original_cwd().display());
-        Box::pin(async move {
-            Ok(serde_json::json!({ "roots": [ { "uri": uri } ] }))
-        })
+        Box::pin(async move { Ok(serde_json::json!({ "roots": [ { "uri": uri } ] })) })
     })
 }
 
@@ -1913,9 +1866,7 @@ fn default_roots_list_handler() -> RequestHandler {
 /// elicitation arriving before `registerElicitationHandler` runs
 /// gets a clean `cancel` rather than hanging.
 fn default_elicitation_cancel_handler() -> RequestHandler {
-    Arc::new(|_params| {
-        Box::pin(async { Ok(serde_json::json!({ "action": "cancel" })) })
-    })
+    Arc::new(|_params| Box::pin(async { Ok(serde_json::json!({ "action": "cancel" })) }))
 }
 
 /// Classify an inbound JSON-RPC line and dispatch it appropriately.
@@ -1949,11 +1900,14 @@ fn dispatch_ws_inbound_line(
                 "Unparseable WS line (dropped): {} ({})", line, e
             );
             return;
-        }
+        },
     };
 
     let has_result = value.get("result").is_some() || value.get("error").is_some();
-    let method = value.get("method").and_then(|m| m.as_str()).map(String::from);
+    let method = value
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(String::from);
     let id = value.get("id").and_then(|i| i.as_u64());
 
     let rt = match tokio::runtime::Handle::try_current() {
@@ -1964,7 +1918,7 @@ fn dispatch_ws_inbound_line(
                 "Reader has no tokio runtime; dropping WS message: {}", line
             );
             return;
-        }
+        },
     };
 
     if has_result {
@@ -1977,16 +1931,14 @@ fn dispatch_ws_inbound_line(
                     }
                 });
                 return;
-            }
+            },
             Err(e) => {
                 debug!(
                     server = server_name,
-                    "Malformed response-shaped WS message (dropped): {} ({})",
-                    line,
-                    e
+                    "Malformed response-shaped WS message (dropped): {} ({})", line, e
                 );
                 return;
-            }
+            },
         }
     }
 
@@ -2034,7 +1986,7 @@ fn dispatch_ws_inbound_line(
                         "Failed to serialize WS response: {}", e
                     );
                     return;
-                }
+                },
             };
             if let Err(e) = write_tx.send(line) {
                 debug!(
@@ -2047,7 +1999,10 @@ fn dispatch_ws_inbound_line(
     }
 
     if method.is_some() {
-        debug!(server = server_name, "Ignoring WS server notification: {}", line);
+        debug!(
+            server = server_name,
+            "Ignoring WS server notification: {}", line
+        );
         return;
     }
     debug!(
@@ -2071,11 +2026,14 @@ fn dispatch_inbound_line(
                 "Unparseable MCP line (dropped): {} ({})", line, e
             );
             return;
-        }
+        },
     };
 
     let has_result = value.get("result").is_some() || value.get("error").is_some();
-    let method = value.get("method").and_then(|m| m.as_str()).map(String::from);
+    let method = value
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(String::from);
     let id = value.get("id").and_then(|i| i.as_u64());
 
     let rt = match tokio::runtime::Handle::try_current() {
@@ -2086,7 +2044,7 @@ fn dispatch_inbound_line(
                 "Reader has no tokio runtime; dropping message: {}", line
             );
             return;
-        }
+        },
     };
 
     // Response path — takes precedence when both `id` and a
@@ -2101,7 +2059,7 @@ fn dispatch_inbound_line(
                     }
                 });
                 return;
-            }
+            },
             Err(e) => {
                 // Response-shaped but fails structural decode (e.g.
                 // non-numeric id — JsonRpcResponse.id is u64). The
@@ -2110,12 +2068,10 @@ fn dispatch_inbound_line(
                 // diagnosability.
                 debug!(
                     server = server_name,
-                    "Malformed response-shaped message (dropped): {} ({})",
-                    line,
-                    e
+                    "Malformed response-shaped message (dropped): {} ({})", line, e
                 );
                 return;
-            }
+            },
         }
     }
 
@@ -2156,7 +2112,7 @@ fn dispatch_inbound_line(
                             data: None,
                         }),
                     }
-                }
+                },
             };
 
             let line = match serde_json::to_string(&response) {
@@ -2167,7 +2123,7 @@ fn dispatch_inbound_line(
                         "Failed to serialize response: {}", e
                     );
                     return;
-                }
+                },
             };
             let mut w = writer.lock().await;
             if let Some(ref mut w) = *w {
@@ -2186,7 +2142,10 @@ fn dispatch_inbound_line(
     // Notification path (`method` only, no id). TS drops these too
     // unless a notification handler is registered — not part of G20.
     if method.is_some() {
-        debug!(server = server_name, "Ignoring server notification: {}", line);
+        debug!(
+            server = server_name,
+            "Ignoring server notification: {}", line
+        );
         return;
     }
 
@@ -2242,8 +2201,7 @@ mod tests {
                 { "name": "format" }
             ]
         });
-        let p: super::McpPromptDefinition =
-            serde_json::from_value(wire).expect("deserialize");
+        let p: super::McpPromptDefinition = serde_json::from_value(wire).expect("deserialize");
         assert_eq!(p.name, "changelog");
         assert_eq!(p.title.as_deref(), Some("Generate a Changelog"));
         assert_eq!(p.description.as_deref(), Some("Build release notes"));
@@ -2261,14 +2219,12 @@ mod tests {
         // No `arguments` field on the wire → Option stays None;
         // empty array → Some(vec![]). Either must deserialize.
         let p1: super::McpPromptDefinition =
-            serde_json::from_value(serde_json::json!({ "name": "quick" }))
-                .expect("bare name");
+            serde_json::from_value(serde_json::json!({ "name": "quick" })).expect("bare name");
         assert!(p1.arguments.is_none());
 
-        let p2: super::McpPromptDefinition = serde_json::from_value(
-            serde_json::json!({ "name": "quick", "arguments": [] }),
-        )
-        .expect("empty arguments array");
+        let p2: super::McpPromptDefinition =
+            serde_json::from_value(serde_json::json!({ "name": "quick", "arguments": [] }))
+                .expect("empty arguments array");
         assert_eq!(p2.arguments.as_ref().map(|v| v.len()), Some(0));
     }
 
@@ -2281,8 +2237,7 @@ mod tests {
                 { "role": "assistant", "content": { "type": "text", "text": "ok" } }
             ]
         });
-        let r: super::McpPromptResult =
-            serde_json::from_value(wire).expect("deserialize");
+        let r: super::McpPromptResult = serde_json::from_value(wire).expect("deserialize");
         assert_eq!(r.messages.len(), 2);
         assert_eq!(r.messages[0].role, "user");
         assert_eq!(
@@ -2315,8 +2270,7 @@ mod tests {
                 { "name": "x", "title": "X Axis" }
             ]
         });
-        let p: super::McpPromptDefinition =
-            serde_json::from_value(wire).expect("deserialize");
+        let p: super::McpPromptDefinition = serde_json::from_value(wire).expect("deserialize");
         assert!(p.icons.is_some());
         assert_eq!(
             p.meta
@@ -2328,12 +2282,10 @@ mod tests {
         let args = p.arguments.expect("arguments present");
         assert_eq!(args[0].title.as_deref(), Some("X Axis"));
 
-        let got_result: super::McpPromptResult = serde_json::from_value(
-            serde_json::json!({
-                "messages": [],
-                "_meta": { "trace_id": "abc" }
-            }),
-        )
+        let got_result: super::McpPromptResult = serde_json::from_value(serde_json::json!({
+            "messages": [],
+            "_meta": { "trace_id": "abc" }
+        }))
         .expect("deserialize");
         assert!(got_result.meta.is_some());
     }
@@ -2394,10 +2346,7 @@ mod tests {
     async fn default_elicitation_handler_returns_cancel() {
         let h = default_elicitation_cancel_handler();
         let out = h(None).await.expect("default handler must succeed");
-        assert_eq!(
-            out.get("action").and_then(|a| a.as_str()),
-            Some("cancel")
-        );
+        assert_eq!(out.get("action").and_then(|a| a.as_str()), Some("cancel"));
     }
 
     #[tokio::test]
@@ -2456,12 +2405,7 @@ mod tests {
     async fn graceful_terminate_sigint_friendly_fixture() {
         // Trailing `; true` prevents bash's single-command exec
         // optimisation (which would skip the trap installation).
-        run_graceful_terminate_case(
-            "trap 'exit 0' INT; sleep 30; true",
-            900,
-            "test-sigint",
-        )
-        .await;
+        run_graceful_terminate_case("trap 'exit 0' INT; sleep 30; true", 900, "test-sigint").await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2529,13 +2473,11 @@ mod tests {
     #[test]
     fn classify_http_401_becomes_auth_error() {
         let e = anyhow::anyhow!("Failed to POST: HTTP 401 body: unauthorized");
-        let classified =
-            super::classify_call_tool_error(e, "jira", super::TransportHint::Http);
+        let classified = super::classify_call_tool_error(e, "jira", super::TransportHint::Http);
         // Downcast to the typed error — proves callers can handle
         // auth specifically via `.downcast()`.
-        let auth: &super::super::errors::McpAuthError = classified
-            .downcast_ref()
-            .expect("expected McpAuthError");
+        let auth: &super::super::errors::McpAuthError =
+            classified.downcast_ref().expect("expected McpAuthError");
         assert_eq!(auth.server_name, "jira");
         assert!(auth.message.contains("re-authorization"));
     }
@@ -2544,22 +2486,16 @@ mod tests {
     fn classify_401_unauthorized_text_becomes_auth_error() {
         // Alternate wording some transports use.
         let e = anyhow::anyhow!("server returned 401 Unauthorized");
-        let classified =
-            super::classify_call_tool_error(e, "slack", super::TransportHint::Http);
-        assert!(
-            classified
-                .downcast_ref::<super::super::errors::McpAuthError>()
-                .is_some()
-        );
+        let classified = super::classify_call_tool_error(e, "slack", super::TransportHint::Http);
+        assert!(classified
+            .downcast_ref::<super::super::errors::McpAuthError>()
+            .is_some());
     }
 
     #[test]
     fn classify_session_expired_text_becomes_session_error() {
-        let e = anyhow::anyhow!(
-            "MCP HTTP server 'x' session expired (HTTP 404 + JSON-RPC -32001)"
-        );
-        let classified =
-            super::classify_call_tool_error(e, "x", super::TransportHint::Http);
+        let e = anyhow::anyhow!("MCP HTTP server 'x' session expired (HTTP 404 + JSON-RPC -32001)");
+        let classified = super::classify_call_tool_error(e, "x", super::TransportHint::Http);
         let sess: &super::super::errors::McpSessionExpiredError = classified
             .downcast_ref()
             .expect("expected McpSessionExpiredError");
@@ -2571,11 +2507,8 @@ mod tests {
         // SDK's -32000 "Connection closed" wrapper fires when the
         // transport is torn down mid-request on HTTP. Should map
         // to session-expired so the caller reconnects.
-        let e = anyhow::anyhow!(
-            "Failed to call tool: code -32000: Connection closed"
-        );
-        let classified =
-            super::classify_call_tool_error(e, "vault", super::TransportHint::Http);
+        let e = anyhow::anyhow!("Failed to call tool: code -32000: Connection closed");
+        let classified = super::classify_call_tool_error(e, "vault", super::TransportHint::Http);
         assert!(
             classified
                 .downcast_ref::<super::super::errors::McpSessionExpiredError>()
@@ -2604,11 +2537,8 @@ mod tests {
     #[test]
     fn classify_32000_connection_closed_on_stdio_passes_through() {
         let e = anyhow::anyhow!("code -32000: Connection closed");
-        let classified = super::classify_call_tool_error(
-            e,
-            "stdio-server",
-            super::TransportHint::Stdio,
-        );
+        let classified =
+            super::classify_call_tool_error(e, "stdio-server", super::TransportHint::Stdio);
         assert!(
             classified
                 .downcast_ref::<super::super::errors::McpSessionExpiredError>()
@@ -2624,8 +2554,7 @@ mod tests {
         // The error message contains a JSON payload with braces —
         // build it as a plain String so the `anyhow!` macro
         // doesn't interpret the braces as format specifiers.
-        let payload =
-            String::from("HTTP 404 body: {\"error\":{\"code\":-32001}}");
+        let payload = String::from("HTTP 404 body: {\"error\":{\"code\":-32001}}");
         for hint in [
             super::TransportHint::Http,
             super::TransportHint::Sse,
@@ -2646,19 +2575,14 @@ mod tests {
     #[test]
     fn classify_unknown_error_passes_through() {
         let e = anyhow::anyhow!("parse error at offset 42");
-        let classified =
-            super::classify_call_tool_error(e, "x", super::TransportHint::Http);
+        let classified = super::classify_call_tool_error(e, "x", super::TransportHint::Http);
         // No typed error — original bubbles up unchanged.
-        assert!(
-            classified
-                .downcast_ref::<super::super::errors::McpAuthError>()
-                .is_none()
-        );
-        assert!(
-            classified
-                .downcast_ref::<super::super::errors::McpSessionExpiredError>()
-                .is_none()
-        );
+        assert!(classified
+            .downcast_ref::<super::super::errors::McpAuthError>()
+            .is_none());
+        assert!(classified
+            .downcast_ref::<super::super::errors::McpSessionExpiredError>()
+            .is_none());
         assert!(classified.to_string().contains("parse error"));
     }
 
@@ -2673,8 +2597,7 @@ mod tests {
 
         // Bare tracker behaviour — same logic used by
         // `has_triggered_close()` in the send path.
-        let tracker: Arc<Mutex<LifecycleTracker>> =
-            Arc::new(Mutex::new(LifecycleTracker::new()));
+        let tracker: Arc<Mutex<LifecycleTracker>> = Arc::new(Mutex::new(LifecycleTracker::new()));
 
         {
             let g = tracker.lock().await;

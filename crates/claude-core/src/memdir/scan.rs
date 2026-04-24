@@ -17,16 +17,14 @@ pub struct MemoryHeader {
     pub memory_type: Option<MemoryType>,
 }
 
-fn parse_frontmatter_fields(
-    src: &str,
-) -> (Option<String>, Option<String>) {
+fn parse_frontmatter_fields(src: &str) -> (Option<String>, Option<String>) {
     // Read the first FRONTMATTER_MAX_LINES of the file and pull `description`
     // and `type` out of a YAML `--- ... ---` header.
     let trimmed = src.trim_start_matches('\u{FEFF}');
     if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n") {
         return (None, None);
     }
-    let after_open = trimmed.splitn(2, '\n').nth(1).unwrap_or("");
+    let after_open = trimmed.split_once('\n').map(|x| x.1).unwrap_or("");
     let close = after_open
         .find("\n---\n")
         .or_else(|| after_open.find("\n---\r\n"))
@@ -42,7 +40,7 @@ fn parse_frontmatter_fields(
             match key {
                 "description" => description = Some(val),
                 "type" => ty = Some(val),
-                _ => {}
+                _ => {},
             }
         }
     }
@@ -65,11 +63,7 @@ fn read_first_lines(path: &Path, n: usize) -> Option<String> {
 fn mtime_ms(path: &Path) -> Option<u64> {
     let md = path.metadata().ok()?;
     let t = md.modified().ok()?;
-    Some(
-        t.duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_millis() as u64,
-    )
+    Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64)
 }
 
 /// Walk `memory_dir` recursively and return headers for every `.md` file
@@ -101,7 +95,11 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<MemoryHeader>) {
             continue;
         }
 
-        let relative = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         let mtime = mtime_ms(&path).unwrap_or(0);
         let first = read_first_lines(&path, FRONTMATTER_MAX_LINES).unwrap_or_default();
         let (description, ty) = parse_frontmatter_fields(&first);
@@ -195,20 +193,15 @@ mod tests {
             "---\ndescription: user is a staff eng\ntype: user\n---\n\nbody\n",
         )
         .unwrap();
-        std::fs::write(
-            tmp.path().join("no_frontmatter.md"),
-            "# Heading\n\nbody\n",
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.path().join("MEMORY.md"),
-            "entrypoint should be skipped",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("no_frontmatter.md"), "# Heading\n\nbody\n").unwrap();
+        std::fs::write(tmp.path().join("MEMORY.md"), "entrypoint should be skipped").unwrap();
 
         let headers = scan_memory_files(tmp.path());
         assert_eq!(headers.len(), 2);
-        let user = headers.iter().find(|h| h.filename == "user_role.md").unwrap();
+        let user = headers
+            .iter()
+            .find(|h| h.filename == "user_role.md")
+            .unwrap();
         assert_eq!(user.description.as_deref(), Some("user is a staff eng"));
         assert_eq!(user.memory_type, Some(MemoryType::User));
     }

@@ -112,6 +112,7 @@ pub fn save_to_disk(value: &Value) -> std::io::Result<()> {
 ///     policy value overrides.
 ///   - for keys present only in policy: take policy value.
 ///   - for keys present only in user: take user value.
+///
 /// Arrays are treated as atomic values (policy replaces user's array).
 ///
 /// Returns a new Value; inputs are not mutated.
@@ -134,7 +135,7 @@ pub fn apply_policy_overlay(user: &Value, policy: &Value) -> Value {
                 }
             }
             Value::Object(out)
-        }
+        },
         // Non-object combinations: policy wins, full stop.
         (_, policy) => policy.clone(),
     }

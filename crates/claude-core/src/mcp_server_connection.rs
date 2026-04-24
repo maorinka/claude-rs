@@ -27,13 +27,13 @@ use serde_json::Value;
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum McpServerConnection {
     /// `ConnectedMCPServer` — live session. TS also carries `client`
-    /// + `cleanup` fields; those are runtime behaviour stripped
+    /// plus `cleanup` fields; those are runtime behaviour stripped
     /// from this data-layer port.
     Connected(ConnectedMcpServer),
     /// `FailedMCPServer` — connect attempt errored.
     Failed(FailedMcpServer),
     /// `NeedsAuthMCPServer` — caller must run OAuth before a retry
-    /// succeeds.
+    ///   succeeds.
     #[serde(rename = "needs-auth")]
     NeedsAuth(NeedsAuthMcpServer),
     /// `PendingMCPServer` — mid-reconnect or first-connect in flight.
@@ -51,7 +51,11 @@ pub struct ConnectedMcpServer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Value>,
     /// MCP server self-identification from the initialise handshake.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "serverInfo")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "serverInfo"
+    )]
     pub server_info: Option<ServerInfo>,
     /// Instructions-from-server. TS `instructions?: string`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,9 +87,17 @@ pub struct NeedsAuthMcpServer {
 pub struct PendingMcpServer {
     pub name: String,
     pub config: ScopedMcpServerConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "reconnectAttempt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "reconnectAttempt"
+    )]
     pub reconnect_attempt: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxReconnectAttempts")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "maxReconnectAttempts"
+    )]
     pub max_reconnect_attempts: Option<u32>,
 }
 

@@ -35,9 +35,10 @@ mod tests {
     use super::*;
 
     fn cfg_with(extra: serde_json::Map<String, Value>) -> GlobalConfig {
-        let mut cfg = GlobalConfig::default();
-        cfg.extra = extra;
-        cfg
+        GlobalConfig {
+            extra,
+            ..Default::default()
+        }
     }
 
     #[test]

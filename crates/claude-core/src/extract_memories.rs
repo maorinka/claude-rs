@@ -137,14 +137,13 @@ pub fn build_extract_auto_only_prompt(
     existing_memories: &str,
     skip_index: bool,
 ) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    lines.push(opener(new_message_count, existing_memories));
-    lines.push(String::new());
-    lines.push(
+    let mut lines: Vec<String> = vec![
+        opener(new_message_count, existing_memories),
+        String::new(),
         "If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry."
             .into(),
-    );
-    lines.push(String::new());
+        String::new(),
+    ];
     for s in TYPES_SECTION_INDIVIDUAL {
         lines.push((*s).to_string());
     }

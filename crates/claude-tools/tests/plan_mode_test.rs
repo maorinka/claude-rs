@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock)] // test-only global-state serialization via std::sync::Mutex
+
 use claude_tools::plan_mode::{
     is_plan_mode_active, set_plan_mode, should_plan_mode_block, EnterPlanModeTool, ExitPlanModeTool,
 };

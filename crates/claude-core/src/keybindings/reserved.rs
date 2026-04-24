@@ -105,8 +105,7 @@ pub fn get_reserved_shortcuts() -> Vec<ReservedShortcut> {
 /// preserve chord separators (space-separated keystrokes). Mirrors TS
 /// `normalizeKeyForComparison`.
 pub fn normalize_key_for_comparison(key: &str) -> String {
-    key.trim()
-        .split_whitespace()
+    key.split_whitespace()
         .map(normalize_step)
         .collect::<Vec<_>>()
         .join(" ")

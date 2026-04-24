@@ -41,7 +41,14 @@ pub async fn fire_stop_failure(reason: &str) -> Option<String> {
     let runner = get_global_runner()?;
     let extra = serde_json::json!({ "error": reason });
     let result = runner
-        .run_hooks(&types::HookEvent::StopFailure, extra, None, None, None, None)
+        .run_hooks(
+            &types::HookEvent::StopFailure,
+            extra,
+            None,
+            None,
+            None,
+            None,
+        )
         .await;
     if result.blocking_errors.is_empty() {
         return None;
@@ -49,7 +56,7 @@ pub async fn fire_stop_failure(reason: &str) -> Option<String> {
     let msg = result
         .blocking_errors
         .iter()
-        .map(|e| runner::get_stop_hook_message(e))
+        .map(runner::get_stop_hook_message)
         .collect::<Vec<_>>()
         .join("\n");
     tracing::warn!("StopFailure hook feedback: {}", msg);
@@ -60,13 +67,13 @@ pub async fn fire_stop_failure(reason: &str) -> Option<String> {
 pub use aggregation::aggregate_hook_results;
 pub use matching::{get_matching_hooks, matches_pattern, resolve_match_query, MatchedHook};
 pub use runner::{
-    get_pre_tool_hook_blocking_message, get_stop_hook_message,
-    get_task_completed_hook_message, get_task_created_hook_message,
-    get_teammate_idle_hook_message, get_user_prompt_submit_hook_blocking_message, HookRunner,
+    get_pre_tool_hook_blocking_message, get_stop_hook_message, get_task_completed_hook_message,
+    get_task_created_hook_message, get_teammate_idle_hook_message,
+    get_user_prompt_submit_hook_blocking_message, HookRunner,
 };
 pub use tool_hooks::{
-    resolve_hook_permission_decision, run_post_tool_use_failure_hooks,
-    run_post_tool_use_hooks, run_pre_tool_use_hooks, PostToolUseFailureHookDecision,
-    PostToolUseHookDecision, PreToolUseHookDecision, ResolvedPermission, RuleCheckResult,
+    resolve_hook_permission_decision, run_post_tool_use_failure_hooks, run_post_tool_use_hooks,
+    run_pre_tool_use_hooks, PostToolUseFailureHookDecision, PostToolUseHookDecision,
+    PreToolUseHookDecision, ResolvedPermission, RuleCheckResult,
 };
 pub use types::*;

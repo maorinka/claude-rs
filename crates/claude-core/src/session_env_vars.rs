@@ -75,7 +75,7 @@ mod tests {
         clear_session_env_vars();
         set_session_env_var("K", "v");
         delete_session_env_var("K");
-        assert!(get_session_env_vars().get("K").is_none());
+        assert!(!get_session_env_vars().contains_key("K"));
     }
 
     #[test]

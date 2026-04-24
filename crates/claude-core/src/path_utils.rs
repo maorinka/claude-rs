@@ -69,14 +69,14 @@ pub fn normalize_path(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
-            Component::CurDir => {}
+            Component::CurDir => {},
             Component::ParentDir => {
                 if !matches!(out.components().next_back(), Some(Component::RootDir))
                     && !out.as_os_str().is_empty()
                 {
                     out.pop();
                 }
-            }
+            },
             other => out.push(other),
         }
     }
@@ -101,7 +101,7 @@ pub fn to_relative_path(absolute: &Path, cwd: &Path) -> PathBuf {
     if rel_buf
         .components()
         .next()
-        .map_or(false, |c| matches!(c, Component::ParentDir))
+        .is_some_and(|c| matches!(c, Component::ParentDir))
     {
         absolute.to_path_buf()
     } else {
@@ -111,7 +111,7 @@ pub fn to_relative_path(absolute: &Path, cwd: &Path) -> PathBuf {
 
 /// True iff the path contains a `..` traversal segment.
 pub fn contains_path_traversal(path: &str) -> bool {
-    for comp in path.split(|c: char| c == '/' || c == '\\') {
+    for comp in path.split(['/', '\\']) {
         if comp == ".." {
             return true;
         }
@@ -246,10 +246,7 @@ mod tests {
             sanitize_path("/Users/alice/code/claude-rs"),
             "Users-alice-code-claude-rs"
         );
-        assert_eq!(
-            sanitize_path("C:\\Users\\bob\\proj"),
-            "C-Users-bob-proj"
-        );
+        assert_eq!(sanitize_path("C:\\Users\\bob\\proj"), "C-Users-bob-proj");
         assert_eq!(sanitize_path("///leading"), "leading");
     }
 
@@ -265,13 +262,7 @@ mod tests {
 
     #[test]
     fn normalize_path_for_config_key_converts_backslashes() {
-        assert_eq!(
-            normalize_path_for_config_key("C:\\foo\\bar"),
-            "C:/foo/bar"
-        );
-        assert_eq!(
-            normalize_path_for_config_key("/a/./b/../c"),
-            "/a/c"
-        );
+        assert_eq!(normalize_path_for_config_key("C:\\foo\\bar"), "C:/foo/bar");
+        assert_eq!(normalize_path_for_config_key("/a/./b/../c"), "/a/c");
     }
 }

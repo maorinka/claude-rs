@@ -43,7 +43,7 @@ async fn test_store_and_load_tokens() {
     // Override claude_dir by using direct file ops
     let cred_path = tmp.path().join(".credentials.json");
 
-    let tokens = OAuthStoredTokens {
+    let _tokens = OAuthStoredTokens {
         access_token: "test_access".into(),
         refresh_token: Some("test_refresh".into()),
         expires_at: Some(1234567890),

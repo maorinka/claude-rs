@@ -83,7 +83,7 @@ pub fn parse_frontmatter(markdown: &str) -> ParsedMarkdown {
         };
     }
 
-    let after_open = trimmed.splitn(2, '\n').nth(1).unwrap_or("");
+    let after_open = trimmed.split_once('\n').map(|x| x.1).unwrap_or("");
     let close_pos = after_open
         .find("\n---\n")
         .or_else(|| after_open.find("\n---\r\n"))
@@ -185,7 +185,7 @@ fn parse_scalar(raw: &str) -> FrontmatterValue {
     match s.to_ascii_lowercase().as_str() {
         "true" | "yes" => return FrontmatterValue::Bool(true),
         "false" | "no" => return FrontmatterValue::Bool(false),
-        _ => {}
+        _ => {},
     }
     // Strip surrounding quotes.
     let unquoted = if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
@@ -210,14 +210,14 @@ fn split_respecting_braces(input: &str) -> Vec<String> {
             '{' | '[' => {
                 depth += 1;
                 cur.push(c);
-            }
+            },
             '}' | ']' => {
                 depth -= 1;
                 cur.push(c);
-            }
+            },
             ',' if depth == 0 => {
                 out.push(std::mem::take(&mut cur));
-            }
+            },
             _ => cur.push(c),
         }
     }
@@ -255,10 +255,7 @@ fn expand_braces(pattern: &str) -> Vec<String> {
 /// Accepts either a string like `"src/*.ts, docs/**/*.md"` or a list.
 pub fn split_path_in_frontmatter(value: &FrontmatterValue) -> Vec<String> {
     match value {
-        FrontmatterValue::List(items) => items
-            .iter()
-            .flat_map(split_path_in_frontmatter)
-            .collect(),
+        FrontmatterValue::List(items) => items.iter().flat_map(split_path_in_frontmatter).collect(),
         FrontmatterValue::String(s) => {
             let parts = split_respecting_braces(s);
             parts
@@ -267,7 +264,7 @@ pub fn split_path_in_frontmatter(value: &FrontmatterValue) -> Vec<String> {
                 .filter(|p| !p.is_empty())
                 .flat_map(|p| expand_braces(&p))
                 .collect()
-        }
+        },
         _ => Vec::new(),
     }
 }
@@ -275,10 +272,7 @@ pub fn split_path_in_frontmatter(value: &FrontmatterValue) -> Vec<String> {
 /// Coerce a frontmatter value to a description string. Falls back to
 /// `default_value` when the field is absent or not stringifiable.
 /// Matches TS `coerceDescriptionToString`.
-pub fn coerce_description_to_string(
-    v: Option<&FrontmatterValue>,
-    default_value: &str,
-) -> String {
+pub fn coerce_description_to_string(v: Option<&FrontmatterValue>, default_value: &str) -> String {
     match v {
         Some(FrontmatterValue::String(s)) if !s.is_empty() => s.clone(),
         Some(FrontmatterValue::Number(n)) => n.to_string(),
@@ -293,7 +287,9 @@ pub fn coerce_description_to_string(
 pub fn parse_boolean_frontmatter(v: &FrontmatterValue) -> bool {
     match v {
         FrontmatterValue::Bool(b) => *b,
-        FrontmatterValue::String(s) => matches!(s.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "on"),
+        FrontmatterValue::String(s) => {
+            matches!(s.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "on")
+        },
         FrontmatterValue::Number(n) => *n != 0.0,
         _ => false,
     }
@@ -320,9 +316,7 @@ mod tests {
 
     #[test]
     fn parses_basic_frontmatter() {
-        let m = parse_frontmatter(
-            "---\nname: Test\ndescription: A test\n---\n\nBody here.\n",
-        );
+        let m = parse_frontmatter("---\nname: Test\ndescription: A test\n---\n\nBody here.\n");
         assert_eq!(m.frontmatter.get("name").unwrap().as_str(), Some("Test"));
         assert_eq!(
             m.frontmatter.get("description").unwrap().as_str(),
@@ -363,9 +357,7 @@ mod tests {
 
     #[test]
     fn quoted_string_keeps_special_chars() {
-        let m = parse_frontmatter(
-            "---\npaths: \"src/*.{ts,tsx}\"\n---\n",
-        );
+        let m = parse_frontmatter("---\npaths: \"src/*.{ts,tsx}\"\n---\n");
         assert_eq!(
             m.frontmatter.get("paths").unwrap().as_str(),
             Some("src/*.{ts,tsx}")
@@ -374,17 +366,13 @@ mod tests {
 
     #[test]
     fn split_path_expands_brace() {
-        let paths = split_path_in_frontmatter(&FrontmatterValue::String(
-            "src/*.{ts,tsx}".into(),
-        ));
+        let paths = split_path_in_frontmatter(&FrontmatterValue::String("src/*.{ts,tsx}".into()));
         assert_eq!(paths, vec!["src/*.ts", "src/*.tsx"]);
     }
 
     #[test]
     fn split_path_expands_cross_product() {
-        let paths = split_path_in_frontmatter(&FrontmatterValue::String(
-            "{a,b}/{c,d}".into(),
-        ));
+        let paths = split_path_in_frontmatter(&FrontmatterValue::String("{a,b}/{c,d}".into()));
         assert_eq!(paths.len(), 4);
         assert!(paths.contains(&"a/c".to_string()));
         assert!(paths.contains(&"b/d".to_string()));
@@ -412,8 +400,12 @@ mod tests {
     #[test]
     fn parse_boolean_variants() {
         assert!(parse_boolean_frontmatter(&FrontmatterValue::Bool(true)));
-        assert!(parse_boolean_frontmatter(&FrontmatterValue::String("yes".into())));
-        assert!(!parse_boolean_frontmatter(&FrontmatterValue::String("no".into())));
+        assert!(parse_boolean_frontmatter(&FrontmatterValue::String(
+            "yes".into()
+        )));
+        assert!(!parse_boolean_frontmatter(&FrontmatterValue::String(
+            "no".into()
+        )));
         assert!(parse_boolean_frontmatter(&FrontmatterValue::Number(1.0)));
         assert!(!parse_boolean_frontmatter(&FrontmatterValue::Null));
     }
@@ -426,10 +418,12 @@ mod tests {
 
     #[test]
     fn parse_positive_int_rejects_negative_and_float() {
-        assert!(parse_positive_int_from_frontmatter(Some(&FrontmatterValue::Number(-1.0)))
-            .is_none());
-        assert!(parse_positive_int_from_frontmatter(Some(&FrontmatterValue::Number(1.5)))
-            .is_none());
+        assert!(
+            parse_positive_int_from_frontmatter(Some(&FrontmatterValue::Number(-1.0))).is_none()
+        );
+        assert!(
+            parse_positive_int_from_frontmatter(Some(&FrontmatterValue::Number(1.5))).is_none()
+        );
         assert!(parse_positive_int_from_frontmatter(None).is_none());
     }
 }

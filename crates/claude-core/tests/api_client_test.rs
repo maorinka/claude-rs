@@ -85,5 +85,5 @@ fn test_build_request_body_no_tools() {
     let body = build_request_body(&config, &[], &[], &[], false);
     // With no tools provided, tools field should be absent or empty
     let tools = &body["tools"];
-    assert!(tools.is_null() || tools.as_array().map_or(true, |a| a.is_empty()));
+    assert!(tools.is_null() || tools.as_array().is_none_or(|a| a.is_empty()));
 }

@@ -79,9 +79,11 @@ mod cost_tracking {
         };
         use std::sync::{Arc, Mutex};
 
-        let mut state = SharedCommandState::default();
-        state.cost_summary =
-            "Total cost:            $1.2345\nTotal input tokens:    100000".to_string();
+        let state = SharedCommandState {
+            cost_summary: "Total cost:            $1.2345\nTotal input tokens:    100000"
+                .to_string(),
+            ..Default::default()
+        };
 
         let ctx = CommandContext {
             working_directory: std::path::PathBuf::from("/tmp"),
@@ -98,7 +100,7 @@ mod cost_tracking {
                     text
                 );
                 assert!(text.contains("100000"), "should show tokens, got: {}", text);
-            }
+            },
             _ => panic!("expected Action variant"),
         }
     }
@@ -434,10 +436,10 @@ mod mcp_transports {
                     error.is_some(),
                     "should have error message for failed SSE connection"
                 );
-            }
+            },
             _ => {
                 // If it somehow connected (unlikely), that's also fine
-            }
+            },
         }
     }
 
@@ -459,14 +461,11 @@ mod mcp_transports {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "test-http");
         // Connection will fail (no server), but routing should work
-        match &results[0].status {
-            McpConnectionStatus::Failed { error } => {
-                assert!(
-                    error.is_some(),
-                    "should have error for failed HTTP connection"
-                );
-            }
-            _ => {}
+        if let McpConnectionStatus::Failed { error } = &results[0].status {
+            assert!(
+                error.is_some(),
+                "should have error for failed HTTP connection"
+            );
         }
     }
 

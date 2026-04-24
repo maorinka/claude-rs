@@ -47,7 +47,9 @@ pub fn normalize_quotes(s: &str) -> String {
 pub fn find_actual_string<'a>(haystack: &'a str, search: &str) -> Option<&'a str> {
     if haystack.contains(search) {
         // Return the exact slice from haystack (same bytes as `search`).
-        return haystack.find(search).map(|idx| &haystack[idx..idx + search.len()]);
+        return haystack
+            .find(search)
+            .map(|idx| &haystack[idx..idx + search.len()]);
     }
 
     let normalized_file = normalize_quotes(haystack);
@@ -86,11 +88,7 @@ pub fn find_actual_string<'a>(haystack: &'a str, search: &str) -> Option<&'a str
 /// so the edit preserves typography.
 ///
 /// Mirrors TS `preserveQuoteStyle`.
-pub fn preserve_quote_style(
-    old_string: &str,
-    actual_old_string: &str,
-    new_string: &str,
-) -> String {
+pub fn preserve_quote_style(old_string: &str, actual_old_string: &str, new_string: &str) -> String {
     if old_string == actual_old_string {
         return new_string.to_string();
     }
@@ -208,8 +206,8 @@ fn apply_curly_single_quotes(s: &str) -> String {
             // Apostrophe in a contraction: letter-apostrophe-letter.
             let prev = if i > 0 { Some(chars[i - 1]) } else { None };
             let next = chars.get(i + 1).copied();
-            let prev_is_letter = prev.map_or(false, |c| c.is_alphabetic());
-            let next_is_letter = next.map_or(false, |c| c.is_alphabetic());
+            let prev_is_letter = prev.is_some_and(|c| c.is_alphabetic());
+            let next_is_letter = next.is_some_and(|c| c.is_alphabetic());
             if prev_is_letter && next_is_letter {
                 out.push(RIGHT_SINGLE_CURLY_QUOTE);
             } else if is_opening_context(&chars, i) {

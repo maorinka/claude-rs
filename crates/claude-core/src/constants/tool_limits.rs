@@ -33,11 +33,17 @@ mod tests {
 
     #[test]
     fn byte_cap_is_derived() {
-        assert_eq!(MAX_TOOL_RESULT_BYTES, MAX_TOOL_RESULT_TOKENS * BYTES_PER_TOKEN);
+        assert_eq!(
+            MAX_TOOL_RESULT_BYTES,
+            MAX_TOOL_RESULT_TOKENS * BYTES_PER_TOKEN
+        );
     }
 
     #[test]
     fn per_message_cap_exceeds_per_tool_cap() {
-        assert!(MAX_TOOL_RESULTS_PER_MESSAGE_CHARS > DEFAULT_MAX_RESULT_SIZE_CHARS);
+        assert_eq!(
+            MAX_TOOL_RESULTS_PER_MESSAGE_CHARS.cmp(&DEFAULT_MAX_RESULT_SIZE_CHARS),
+            std::cmp::Ordering::Greater
+        );
     }
 }

@@ -66,15 +66,20 @@ impl Rarity {
 }
 
 pub const SPECIES: &[&str] = &[
-    "duck", "goose", "blob", "cat", "dragon", "octopus", "owl", "penguin",
-    "turtle", "snail", "ghost", "axolotl", "capybara", "cactus", "robot",
-    "rabbit", "mushroom", "chonk",
+    "duck", "goose", "blob", "cat", "dragon", "octopus", "owl", "penguin", "turtle", "snail",
+    "ghost", "axolotl", "capybara", "cactus", "robot", "rabbit", "mushroom", "chonk",
 ];
 
 pub const EYES: &[&str] = &["·", "✦", "×", "◉", "@", "°"];
 
 pub const HATS: &[&str] = &[
-    "none", "crown", "tophat", "propeller", "halo", "wizard", "beanie",
+    "none",
+    "crown",
+    "tophat",
+    "propeller",
+    "halo",
+    "wizard",
+    "beanie",
     "tinyduck",
 ];
 
@@ -150,7 +155,7 @@ impl Mulberry32 {
         let mut t = self.state;
         t = (t ^ (t >> 15)).wrapping_mul(1 | t);
         t = t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t)) ^ t;
-        let out = (t ^ (t >> 14)) & 0xFFFF_FFFF;
+        let out = t ^ (t >> 14);
         out as f64 / 4_294_967_296.0
     }
 }
@@ -340,7 +345,7 @@ mod tests {
             match roll_with_seed(&format!("bulk-{}", i)).bones.rarity {
                 Rarity::Common => common += 1,
                 Rarity::Legendary => legendary += 1,
-                _ => {}
+                _ => {},
             }
         }
         assert!(

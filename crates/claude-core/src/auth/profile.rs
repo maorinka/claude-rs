@@ -104,15 +104,15 @@ pub async fn fetch_profile_from_oauth_token(
             let profile: OAuthProfileResponse =
                 r.json().await.context("failed to parse profile response")?;
             Ok(Some(profile))
-        }
+        },
         Ok(r) => {
             tracing::warn!("Profile fetch returned {}", r.status());
             Ok(None)
-        }
+        },
         Err(e) => {
             tracing::warn!("Profile fetch failed: {}", e);
             Ok(None)
-        }
+        },
     }
 }
 
@@ -125,7 +125,7 @@ pub async fn fetch_profile_from_api_key(
 ) -> Result<Option<OAuthProfileResponse>> {
     let client = super::login::debug_http_client();
     let resp = client
-        .get(&cli_profile_url())
+        .get(cli_profile_url())
         .header("x-api-key", api_key)
         .header("anthropic-beta", OAUTH_BETA_HEADER)
         .query(&[("account_uuid", account_uuid)])
@@ -140,7 +140,7 @@ pub async fn fetch_profile_from_api_key(
                 .await
                 .context("failed to parse CLI profile response")?;
             Ok(Some(profile))
-        }
+        },
         Ok(_) | Err(_) => Ok(None),
     }
 }

@@ -6,9 +6,13 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
-    ToolUseContext::for_test(dir.path().to_path_buf(), std::sync::Arc::new(std::sync::Mutex::new(
+    ToolUseContext::for_test(
+        dir.path().to_path_buf(),
+        std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
-        )), claude_tools::registry::PermissionMode::Default)
+        )),
+        claude_tools::registry::PermissionMode::Default,
+    )
 }
 
 #[tokio::test]
@@ -45,7 +49,7 @@ async fn test_glob_finds_files() {
     }
 
     assert_eq!(result.data["numFiles"].as_u64().unwrap(), 2);
-    assert_eq!(result.data["truncated"].as_bool().unwrap(), false);
+    assert!(!result.data["truncated"].as_bool().unwrap());
 }
 
 #[tokio::test]
@@ -102,9 +106,8 @@ async fn test_glob_returns_truncation_flag() {
     assert_eq!(filenames.len(), 5);
     assert_eq!(result.data["numFiles"].as_u64().unwrap(), 5);
     // 5 is well under 100, so truncated must be false
-    assert_eq!(
-        result.data["truncated"].as_bool().unwrap(),
-        false,
+    assert!(
+        !result.data["truncated"].as_bool().unwrap(),
         "5 files should not trigger truncation"
     );
 }

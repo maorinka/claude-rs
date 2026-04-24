@@ -36,27 +36,79 @@ fn readonly_binaries() -> &'static HashSet<&'static str> {
     CELL.get_or_init(|| {
         [
             // Listing / reading
-            "ls", "cat", "head", "tail", "wc", "stat", "file", "type",
-            "which", "whereis", "readlink", "realpath", "pwd",
+            "ls",
+            "cat",
+            "head",
+            "tail",
+            "wc",
+            "stat",
+            "file",
+            "type",
+            "which",
+            "whereis",
+            "readlink",
+            "realpath",
+            "pwd",
             // Search
-            "find", "locate", "grep", "egrep", "fgrep", "rg", "ripgrep", "ag",
-            "fd", "fdfind",
+            "find",
+            "locate",
+            "grep",
+            "egrep",
+            "fgrep",
+            "rg",
+            "ripgrep",
+            "ag",
+            "fd",
+            "fdfind",
             // Diff / comparison
-            "diff", "cmp",
+            "diff",
+            "cmp",
             // System info
-            "uname", "hostname", "id", "whoami", "date", "uptime", "env",
-            "echo", "printf", "true", "false", "yes",
+            "uname",
+            "hostname",
+            "id",
+            "whoami",
+            "date",
+            "uptime",
+            "env",
+            "echo",
+            "printf",
+            "true",
+            "false",
+            "yes",
             // Printing / paging
-            "less", "more",
+            "less",
+            "more",
             // Text transforms that don't write files
-            "awk", "sort", "uniq", "tr", "cut", "paste", "column", "nl",
-            "tac", "rev", "fold", "basename", "dirname",
+            "awk",
+            "sort",
+            "uniq",
+            "tr",
+            "cut",
+            "paste",
+            "column",
+            "nl",
+            "tac",
+            "rev",
+            "fold",
+            "basename",
+            "dirname",
             // Checksums
-            "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
+            "md5sum",
+            "sha1sum",
+            "sha256sum",
+            "sha512sum",
+            "cksum",
             // Tree / metadata
-            "tree", "du", "df",
+            "tree",
+            "du",
+            "df",
             // Network diagnostics (read-only)
-            "ping", "traceroute", "dig", "nslookup", "host",
+            "ping",
+            "traceroute",
+            "dig",
+            "nslookup",
+            "host",
             // Language docs
             "man",
         ]
@@ -70,11 +122,10 @@ fn mutating_binaries() -> &'static HashSet<&'static str> {
     static CELL: OnceLock<HashSet<&'static str>> = OnceLock::new();
     CELL.get_or_init(|| {
         [
-            "rm", "rmdir", "mv", "cp", "dd", "shred", "install",
-            "touch", "mkdir", "ln", "chmod", "chown", "chgrp",
-            "sed", // in-place via -i; treat the whole binary as mutating
-            "curl", "wget", "ssh", "scp", "rsync", "npm", "yarn", "pnpm",
-            "pip", "cargo", "go",
+            "rm", "rmdir", "mv", "cp", "dd", "shred", "install", "touch", "mkdir", "ln", "chmod",
+            "chown", "chgrp", "sed", // in-place via -i; treat the whole binary as mutating
+            "curl", "wget", "ssh", "scp", "rsync", "npm", "yarn", "pnpm", "pip", "cargo",
+            "go",
             // NB: `git`, `gh`, `docker` are NOT here — their first subcommand
             // decides via subcommand_allowlist().
         ]
@@ -92,29 +143,48 @@ fn subcommand_allowlist(binary: &str) -> Option<&'static HashSet<&'static str>> 
     match binary {
         "git" => Some(GIT.get_or_init(|| {
             [
-                "status", "log", "show", "diff", "branch", "tag", "blame",
-                "config", "describe", "reflog", "shortlog", "worktree",
-                "rev-parse", "rev-list", "ls-files", "ls-tree", "cat-file",
-                "grep", "name-rev", "help", "version", "remote", "stash",
-                "for-each-ref", "check-ignore", "whatchanged",
+                "status",
+                "log",
+                "show",
+                "diff",
+                "branch",
+                "tag",
+                "blame",
+                "config",
+                "describe",
+                "reflog",
+                "shortlog",
+                "worktree",
+                "rev-parse",
+                "rev-list",
+                "ls-files",
+                "ls-tree",
+                "cat-file",
+                "grep",
+                "name-rev",
+                "help",
+                "version",
+                "remote",
+                "stash",
+                "for-each-ref",
+                "check-ignore",
+                "whatchanged",
             ]
             .into_iter()
             .collect()
         })),
         "gh" => Some(GH.get_or_init(|| {
             [
-                "auth", "help", "version", "issue", "pr", "repo", "run",
-                "workflow", "release", "status", "label", "api", "search",
-                "gist", "variable",
+                "auth", "help", "version", "issue", "pr", "repo", "run", "workflow", "release",
+                "status", "label", "api", "search", "gist", "variable",
             ]
             .into_iter()
             .collect()
         })),
         "docker" => Some(DOCKER.get_or_init(|| {
             [
-                "ps", "images", "logs", "inspect", "history", "version",
-                "info", "diff", "top", "stats", "events", "port", "search",
-                "volume", "network",
+                "ps", "images", "logs", "inspect", "history", "version", "info", "diff", "top",
+                "stats", "events", "port", "search", "volume", "network",
             ]
             .into_iter()
             .collect()
@@ -139,7 +209,7 @@ fn loose_tokens(cmd: &str) -> Vec<String> {
                 if !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
                 }
-            }
+            },
             c => cur.push(c),
         }
     }
@@ -186,7 +256,7 @@ pub fn classify_command(cmd: &str) -> Classification {
             match classify_single(&seg) {
                 Classification::Mutating => saw_mutating = true,
                 Classification::Unknown => saw_unknown = true,
-                Classification::ReadOnly => {}
+                Classification::ReadOnly => {},
             }
         }
         return if saw_mutating {
@@ -226,8 +296,8 @@ fn split_pipeline(cmd: &str) -> Vec<String> {
                 }
                 i += 1;
                 continue;
-            }
-            _ => {}
+            },
+            _ => {},
         }
         cur.push(c);
         i += 1;
@@ -278,15 +348,15 @@ fn classify_single(cmd: &str) -> Classification {
 
 /// If the command starts with `VAR=value VAR2=value2 <binary>`, return the
 /// binary token. Otherwise return the first token.
-fn strip_env_assignments<'a>(tokens: &'a [String]) -> Option<&'a str> {
+fn strip_env_assignments(tokens: &[String]) -> Option<&str> {
     for t in tokens {
         // An env assignment is `NAME=...` where NAME is all alnum/_ starting
         // with a non-digit.
         let bytes = t.as_bytes();
         let eq = bytes.iter().position(|&b| b == b'=');
-        let is_env = eq.map_or(false, |i| {
-            i > 0
-                && bytes[0].is_ascii_alphabetic() || bytes[0] == b'_'
+        let is_env = eq.is_some_and(|i| {
+            i > 0 && bytes[0].is_ascii_alphabetic()
+                || bytes[0] == b'_'
                     && bytes[..i]
                         .iter()
                         .all(|&b| b.is_ascii_alphanumeric() || b == b'_')
@@ -320,13 +390,22 @@ mod tests {
     #[test]
     fn git_status_is_readonly() {
         assert_eq!(classify_command("git status"), Classification::ReadOnly);
-        assert_eq!(classify_command("git log --oneline -5"), Classification::ReadOnly);
-        assert_eq!(classify_command("git diff --cached"), Classification::ReadOnly);
+        assert_eq!(
+            classify_command("git log --oneline -5"),
+            Classification::ReadOnly
+        );
+        assert_eq!(
+            classify_command("git diff --cached"),
+            Classification::ReadOnly
+        );
     }
 
     #[test]
     fn git_commit_is_mutating() {
-        assert_eq!(classify_command("git commit -m hello"), Classification::Mutating);
+        assert_eq!(
+            classify_command("git commit -m hello"),
+            Classification::Mutating
+        );
         assert_eq!(classify_command("git push"), Classification::Mutating);
     }
 
@@ -338,7 +417,10 @@ mod tests {
 
     #[test]
     fn command_substitution_is_unknown() {
-        assert_eq!(classify_command("echo $(rm -rf /)"), Classification::Unknown);
+        assert_eq!(
+            classify_command("echo $(rm -rf /)"),
+            Classification::Unknown
+        );
         assert_eq!(classify_command("echo `date`"), Classification::Unknown);
     }
 
@@ -374,10 +456,7 @@ mod tests {
 
     #[test]
     fn env_assignment_prefix_handled() {
-        assert_eq!(
-            classify_command("FOO=bar ls -la"),
-            Classification::ReadOnly
-        );
+        assert_eq!(classify_command("FOO=bar ls -la"), Classification::ReadOnly);
     }
 
     #[test]

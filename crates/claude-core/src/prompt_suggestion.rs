@@ -4,8 +4,8 @@
 //! — the **predicate + gate** slice. The async orchestration
 //! (`tryGenerateSuggestion`, `runForkedAgent` integration,
 //! speculation pipelining) depends on the forked-agent
-//! machinery + REPL hook infrastructure that isn't part of
-//! this crate; those stay in application-layer code.
+//!   machinery + REPL hook infrastructure that isn't part of
+//!   this crate; those stay in application-layer code.
 //!
 //! # What's ported here
 //!
@@ -29,7 +29,7 @@
 //! `tryGenerateSuggestion` (async orchestration with
 //! `runForkedAgent`, abort controllers, GrowthBook sampling,
 //! REPL hook callbacks) — those reach into forked-agent
-//! + speculation + analytics subsystems not in this crate.
+//! plus speculation and analytics subsystems not in this crate.
 //! Callers in the application layer wire those themselves and
 //! consult the predicates here for the gating decisions.
 
@@ -43,7 +43,8 @@ use serde::{Deserialize, Serialize};
 /// next. Verbatim port of TS
 /// `services/PromptSuggestion/promptSuggestion.ts:258`
 /// `SUGGESTION_PROMPT`.
-pub const SUGGESTION_PROMPT: &str = "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]
+pub const SUGGESTION_PROMPT: &str =
+    "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]
 
 FIRST: Look at the user's recent messages and original request.
 

@@ -4,7 +4,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -53,7 +53,7 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 /// Returns `<home>/.claude/mailboxes/<agent_id>/`.
-fn mailbox_dir_with_home(home: &PathBuf, agent_id: &str) -> PathBuf {
+fn mailbox_dir_with_home(home: &Path, agent_id: &str) -> PathBuf {
     home.join(".claude").join("mailboxes").join(agent_id)
 }
 
@@ -65,7 +65,7 @@ pub async fn write_to_mailbox(msg: &MailboxMessage) -> Result<PathBuf> {
 }
 
 /// Internal write that accepts an explicit home root (for testing).
-async fn write_to_mailbox_in(home: &PathBuf, msg: &MailboxMessage) -> Result<PathBuf> {
+async fn write_to_mailbox_in(home: &Path, msg: &MailboxMessage) -> Result<PathBuf> {
     let dir = mailbox_dir_with_home(home, &msg.to);
     tokio::fs::create_dir_all(&dir).await?;
     let file_name = format!("msg_{}.json", msg.id);
@@ -91,7 +91,7 @@ pub async fn receive_messages(agent_id: &str) -> Result<Vec<MailboxMessage>> {
 }
 
 /// Internal receive that accepts an explicit home root (for testing).
-async fn receive_messages_in(home: &PathBuf, agent_id: &str) -> Result<Vec<MailboxMessage>> {
+async fn receive_messages_in(home: &Path, agent_id: &str) -> Result<Vec<MailboxMessage>> {
     let dir = mailbox_dir_with_home(home, agent_id);
 
     if !dir.exists() {
@@ -121,14 +121,14 @@ async fn receive_messages_in(home: &PathBuf, agent_id: &str) -> Result<Vec<Mailb
                         warn!("Failed to delete mailbox message {:?}: {}", path, e);
                     }
                     messages.push(msg);
-                }
+                },
                 Err(e) => {
                     warn!("Skipping unparseable mailbox file {:?}: {}", path, e);
-                }
+                },
             },
             Err(e) => {
                 warn!("Could not read mailbox file {:?}: {}", path, e);
-            }
+            },
         }
     }
 
@@ -281,7 +281,7 @@ impl ToolExecutor for SendMessageTool {
                     data: json!({ "error": "missing or empty required field: to" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         // Reject '@' in recipient -- matches TS validation
@@ -301,7 +301,7 @@ impl ToolExecutor for SendMessageTool {
                     data: json!({ "error": "missing required field: content" }),
                     is_error: true,
                 });
-            }
+            },
         };
 
         let summary = input
@@ -489,7 +489,11 @@ mod tests {
             "from": "tool-sender",
         });
 
-        let ctx = ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default);
+        let ctx = ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        );
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
@@ -517,7 +521,11 @@ mod tests {
         let tool = SendMessageTool;
         let input = json!({ "content": "hello" });
 
-        let ctx = ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default);
+        let ctx = ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        );
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
@@ -533,7 +541,11 @@ mod tests {
         let tool = SendMessageTool;
         let input = json!({ "to": "agent@team", "content": "hello" });
 
-        let ctx = ToolUseContext::for_test(PathBuf::from("/tmp"), Arc::new(Mutex::new(ReadFileState::new())), crate::registry::PermissionMode::Default);
+        let ctx = ToolUseContext::for_test(
+            PathBuf::from("/tmp"),
+            Arc::new(Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        );
         let cancel = CancellationToken::new();
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();

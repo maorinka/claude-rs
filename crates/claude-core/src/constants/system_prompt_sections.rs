@@ -100,6 +100,7 @@ pub fn clear_sections() {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // test-only serialization via std::sync::Mutex
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};

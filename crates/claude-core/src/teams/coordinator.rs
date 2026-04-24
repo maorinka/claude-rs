@@ -149,7 +149,7 @@ pub fn get_coordinator_user_context(
     }
 
     let worker_tools = if is_simple {
-        let mut tools = vec!["Bash", "Edit", "Read"];
+        let mut tools = ["Bash", "Edit", "Read"];
         tools.sort();
         tools.join(", ")
     } else {
@@ -448,7 +448,7 @@ fn process_is_running(pid: u32) -> bool {
                 let state = state.trim();
                 // 'Z' = zombie; treat as not running.
                 !state.is_empty() && state != "Z"
-            }
+            },
             _ => false,
         }
     }
@@ -543,7 +543,7 @@ impl TeamCoordinator {
                     agent.pid = Some(pid);
                     agent.status = AgentStatus::Running;
                     info!(team = %team_id, agent = %agent.id, pid, "Spawned agent process");
-                }
+                },
                 Err(e) => {
                     warn!(
                         team = %team_id,
@@ -552,7 +552,7 @@ impl TeamCoordinator {
                         "Failed to spawn agent process"
                     );
                     agent.status = AgentStatus::Failed;
-                }
+                },
             }
         }
 
@@ -583,7 +583,7 @@ impl TeamCoordinator {
                     // Try loading from disk if not in memory.
                     drop(store);
                     read_team_sync(team_id)?
-                }
+                },
             }
         };
 
@@ -615,7 +615,7 @@ impl TeamCoordinator {
                 None => {
                     drop(store);
                     read_team_sync(team_id)?
-                }
+                },
             }
         };
 
@@ -675,10 +675,10 @@ impl TeamCoordinator {
                     let mut store = self.teams.lock().unwrap();
                     store.insert(team_id.clone(), team.clone());
                     loaded.push(team);
-                }
+                },
                 Err(e) => {
                     warn!(team = %team_id, error = %e, "Failed to load team from disk");
-                }
+                },
             }
         }
 

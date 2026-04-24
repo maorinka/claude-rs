@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock)] // test-only global-state serialization via std::sync::Mutex
+
 use claude_tools::ask_user::{send_user_answer, AskUserQuestionTool};
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
 use serde_json::json;

@@ -81,10 +81,10 @@ impl StreamingToolExecutor {
                         // Adjust counts (simplified — we don't track per-task concurrency here)
                     }
                     self.completed.push(completed);
-                }
+                },
                 Err(e) => {
                     tracing::warn!("Tool task panicked: {}", e);
-                }
+                },
             }
         }
 
@@ -100,7 +100,7 @@ impl StreamingToolExecutor {
                     while self
                         .pending_exclusive
                         .front()
-                        .map_or(false, |t| t.is_concurrent)
+                        .is_some_and(|t| t.is_concurrent)
                     {
                         let t = self.pending_exclusive.pop_front().unwrap();
                         self.spawn_tool(t);

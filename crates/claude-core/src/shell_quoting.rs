@@ -24,9 +24,8 @@ use crate::shell_quote::quote;
 /// backtrack-free and rejects backrefs, so the four quote
 /// forms are enumerated explicitly. Functionally equivalent:
 /// either `'EOF'` OR `"EOF"` OR bare `EOF` OR `\EOF` matches.
-static HEREDOC_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<<-?\s*(?:'(?:\w+)'|"(?:\w+)"|\\(?:\w+)|(?:\w+))"#).unwrap()
-});
+static HEREDOC_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"<<-?\s*(?:'(?:\w+)'|"(?:\w+)"|\\(?:\w+)|(?:\w+))"#).unwrap());
 
 /// Bit-shift operator patterns that must NOT count as heredocs.
 /// TS at `shellQuoting.ts:12-16`. Three distinct forms — each
@@ -34,8 +33,7 @@ static HEREDOC_REGEX: Lazy<Regex> = Lazy::new(|| {
 static BIT_SHIFT_INT: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\d\s*<<\s*\d"#).unwrap());
 static BIT_SHIFT_BRACKETS: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"\[\[\s*\d+\s*<<\s*\d+\s*\]\]"#).unwrap());
-static BIT_SHIFT_ARITH: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\$\(\(.*<<.*\)\)"#).unwrap());
+static BIT_SHIFT_ARITH: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\$\(\(.*<<.*\)\)"#).unwrap());
 
 /// Multiline single-quoted string: `'...\n...'` with escape
 /// support for `\'`. TS at `shellQuoting.ts:32`.
@@ -65,9 +63,8 @@ static STDIN_REDIRECT: Lazy<Regex> =
 /// Rust `regex` crate doesn't support lookahead, so we
 /// match an optional "terminator" character explicitly and
 /// handle the end-of-string case with `$`.
-static NUL_REDIRECT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)(\d?&?>+\s*)nul(\s|$|[|&;)\n])"#).unwrap()
-});
+static NUL_REDIRECT_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)(\d?&?>+\s*)nul(\s|$|[|&;)\n])"#).unwrap());
 
 /// Detect a heredoc opener in `command`. Returns `false` when
 /// the `<<` is actually a bit-shift operator (three common
@@ -87,8 +84,7 @@ pub fn contains_heredoc(command: &str) -> bool {
 /// `command`. Escaped quotes `\'` / `\"` don't terminate the
 /// string. TS at `shellQuoting.ts:27-38`.
 pub fn contains_multiline_string(command: &str) -> bool {
-    SINGLE_QUOTE_MULTILINE.is_match(command)
-        || DOUBLE_QUOTE_MULTILINE.is_match(command)
+    SINGLE_QUOTE_MULTILINE.is_match(command) || DOUBLE_QUOTE_MULTILINE.is_match(command)
 }
 
 /// Does `command` already contain a stdin-redirect like
@@ -162,23 +158,20 @@ static CONTROL_STRUCTURE_REGEX: Lazy<Regex> =
 /// by a newline. Used by `join_continuation_lines` to collapse
 /// bash line continuations. Matches TS
 /// `joinContinuationLines` at `utils/bash/bashPipeCommand.ts:284`.
-static CONTINUATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\\+\n"#).unwrap());
+static CONTINUATION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\\+\n"#).unwrap());
 
 /// Bash list-separators — operators that separate top-level
 /// commands in a compound command. Used to detect "this looks
 /// like a pure list of commands" during permission analysis.
 /// Matches TS `COMMAND_LIST_SEPARATORS` at
 /// `utils/bash/commands.ts:521-529`.
-pub const COMMAND_LIST_SEPARATORS: &[&str] =
-    &["&&", "||", ";", ";;", "|"];
+pub const COMMAND_LIST_SEPARATORS: &[&str] = &["&&", "||", ";", ";;", "|"];
 
 /// Every control operator the shell-quote path recognises:
 /// list separators plus the three stdout-redirect operators.
 /// Matches TS `ALL_SUPPORTED_CONTROL_OPERATORS` at
 /// `utils/bash/commands.ts:531-536`.
-pub const ALL_SUPPORTED_CONTROL_OPERATORS: &[&str] =
-    &["&&", "||", ";", ";;", "|", ">&", ">", ">>"];
+pub const ALL_SUPPORTED_CONTROL_OPERATORS: &[&str] = &["&&", "||", ";", ";;", "|", ">&", ">", ">>"];
 
 /// Filter a list of tokens down to just the non-operator
 /// command pieces. Matches TS `filterControlOperators` at
@@ -200,7 +193,7 @@ where
         .into_iter()
         .filter_map(|p| {
             let s = p.as_ref();
-            if ALL_SUPPORTED_CONTROL_OPERATORS.iter().any(|op| *op == s) {
+            if ALL_SUPPORTED_CONTROL_OPERATORS.contains(&s) {
                 None
             } else {
                 Some(s.to_string())
@@ -477,51 +470,24 @@ mod tests {
 
     #[test]
     fn rewrite_nul_basic_forms() {
-        assert_eq!(
-            rewrite_windows_null_redirect("ls >nul"),
-            "ls >/dev/null"
-        );
-        assert_eq!(
-            rewrite_windows_null_redirect("ls 2>nul"),
-            "ls 2>/dev/null"
-        );
-        assert_eq!(
-            rewrite_windows_null_redirect("ls &>nul"),
-            "ls &>/dev/null"
-        );
-        assert_eq!(
-            rewrite_windows_null_redirect("ls >>nul"),
-            "ls >>/dev/null"
-        );
+        assert_eq!(rewrite_windows_null_redirect("ls >nul"), "ls >/dev/null");
+        assert_eq!(rewrite_windows_null_redirect("ls 2>nul"), "ls 2>/dev/null");
+        assert_eq!(rewrite_windows_null_redirect("ls &>nul"), "ls &>/dev/null");
+        assert_eq!(rewrite_windows_null_redirect("ls >>nul"), "ls >>/dev/null");
     }
 
     #[test]
     fn rewrite_nul_case_insensitive() {
-        assert_eq!(
-            rewrite_windows_null_redirect("ls > NUL"),
-            "ls > /dev/null"
-        );
-        assert_eq!(
-            rewrite_windows_null_redirect("ls >Nul"),
-            "ls >/dev/null"
-        );
+        assert_eq!(rewrite_windows_null_redirect("ls > NUL"), "ls > /dev/null");
+        assert_eq!(rewrite_windows_null_redirect("ls >Nul"), "ls >/dev/null");
     }
 
     #[test]
     fn rewrite_nul_guards_against_false_positives() {
         // `>null`, `>nullable`, `>nul.txt` must stay untouched.
-        assert_eq!(
-            rewrite_windows_null_redirect("echo >null"),
-            "echo >null"
-        );
-        assert_eq!(
-            rewrite_windows_null_redirect("ls >nul.txt"),
-            "ls >nul.txt"
-        );
-        assert_eq!(
-            rewrite_windows_null_redirect("cat nul.txt"),
-            "cat nul.txt"
-        );
+        assert_eq!(rewrite_windows_null_redirect("echo >null"), "echo >null");
+        assert_eq!(rewrite_windows_null_redirect("ls >nul.txt"), "ls >nul.txt");
+        assert_eq!(rewrite_windows_null_redirect("cat nul.txt"), "cat nul.txt");
     }
 
     #[test]
@@ -540,19 +506,22 @@ mod tests {
     #[test]
     fn rewrite_nul_end_of_string() {
         // End-of-string must also terminate the match.
-        assert_eq!(
-            rewrite_windows_null_redirect("ls >nul"),
-            "ls >/dev/null"
-        );
+        assert_eq!(rewrite_windows_null_redirect("ls >nul"), "ls >/dev/null");
     }
 
     // ─── contains_control_structure ──────────────────────────────
 
     #[test]
     fn control_structure_matches_bash_keywords() {
-        assert!(contains_control_structure("for i in 1 2 3; do echo $i; done"));
-        assert!(contains_control_structure("while read line; do echo hi; done"));
-        assert!(contains_control_structure("until [[ $x -eq 0 ]]; do : ; done"));
+        assert!(contains_control_structure(
+            "for i in 1 2 3; do echo $i; done"
+        ));
+        assert!(contains_control_structure(
+            "while read line; do echo hi; done"
+        ));
+        assert!(contains_control_structure(
+            "until [[ $x -eq 0 ]]; do : ; done"
+        ));
         assert!(contains_control_structure("if [[ -f file ]]; then ls; fi"));
         assert!(contains_control_structure("case $x in a) echo a ;; esac"));
         assert!(contains_control_structure("select opt in a b; do : ; done"));
@@ -620,10 +589,7 @@ mod tests {
 
     #[test]
     fn continuation_no_backslash_passthrough() {
-        assert_eq!(
-            join_continuation_lines("echo\nhello"),
-            "echo\nhello"
-        );
+        assert_eq!(join_continuation_lines("echo\nhello"), "echo\nhello");
     }
 
     #[test]

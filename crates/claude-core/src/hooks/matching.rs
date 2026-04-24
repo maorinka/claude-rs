@@ -134,7 +134,7 @@ pub fn matches_pattern(match_query: &str, matcher: &str) -> bool {
         Err(_) => {
             debug!("Invalid regex pattern in hook matcher: {}", matcher);
             false
-        }
+        },
     }
 }
 
@@ -211,7 +211,7 @@ pub fn evaluate_if_condition(
     // For compound shell commands split on common operators and check if ANY
     // sub-command matches. This mirrors the TS "fail-safe: run hook if too complex" logic.
     command_str
-        .split(|c: char| c == ';' || c == '&' || c == '|')
+        .split([';', '&', '|'])
         .any(|part| glob_match(&rule_content, part.trim()))
 }
 
@@ -230,7 +230,7 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     match parts.as_slice() {
         [prefix, suffix] => {
             text.starts_with(prefix) && (suffix.is_empty() || text.ends_with(suffix))
-        }
+        },
         _ => text == pattern,
     }
 }
@@ -260,7 +260,7 @@ fn hook_dedup_key(hook: &HookCommand) -> String {
                 None => "bash".to_string(),
             };
             format!("command\0{}\0{}\0{}", shell, h.command, if_cond)
-        }
+        },
         HookCommand::Prompt(h) => format!("prompt\0{}\0{}", h.prompt, if_cond),
         HookCommand::Http(h) => format!("http\0{}\0{}", h.url, if_cond),
         HookCommand::Agent(h) => format!("agent\0{}\0{}", h.prompt, if_cond),
@@ -343,10 +343,7 @@ pub fn get_matching_hooks(
         if let Some(cond) = matched.hook.if_condition() {
             let keep = evaluate_if_condition(cond, event, hook_input);
             if !keep {
-                debug!(
-                    "Skipping hook due to if condition {:?} not matching",
-                    cond
-                );
+                debug!("Skipping hook due to if condition {:?} not matching", cond);
             }
             keep
         } else {

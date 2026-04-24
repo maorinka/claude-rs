@@ -160,7 +160,7 @@ Usage:
         // Guard: refuse to raw-edit Jupyter notebook files. Raw string replacement
         // inside notebook JSON can corrupt cell metadata, output arrays, and the
         // nbformat schema. Mirrors TS FileEditTool lines 266-273.
-        if path.extension().map_or(false, |ext| ext == "ipynb") {
+        if path.extension().is_some_and(|ext| ext == "ipynb") {
             return Ok(error_result(
                 "File is a Jupyter Notebook (.ipynb). Use the NotebookEdit tool to edit \
                  notebook cells instead. Raw string replacement in notebook JSON can \
@@ -174,13 +174,11 @@ Usage:
         // `new_string` (not the projected post-edit buffer) at
         // FileEditTool.ts:144. cwd comes from the request-scoped tool
         // context, mirroring TS's AsyncLocalStorage `getCwd()`.
-        if let Some(msg) =
-            claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
-                path,
-                new_string,
-                &ctx.working_directory,
-            )
-        {
+        if let Some(msg) = claude_core::teams::team_mem_secret_guard::check_team_mem_secrets(
+            path,
+            new_string,
+            &ctx.working_directory,
+        ) {
             return Ok(error_result(msg));
         }
 
@@ -266,9 +264,7 @@ Usage:
         // doesn't become CRCRLF after the join. Matches TS
         // `writeTextContent` at file.ts:90-94.
         let to_write = match endings {
-            LineEndings::Crlf => {
-                new_content.replace("\r\n", "\n").replace('\n', "\r\n")
-            }
+            LineEndings::Crlf => new_content.replace("\r\n", "\n").replace('\n', "\r\n"),
             LineEndings::Lf => new_content.clone(),
         };
 

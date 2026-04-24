@@ -3,8 +3,8 @@
 //! Port of `src/services/autoDream/{config,consolidationPrompt,consolidationLock}.ts`.
 //! TS is 550 LOC total — the full dream path ships a forked agent
 //! + consolidation-lock machinery to prevent concurrent dreams across
-//! sessions. This module ports the self-contained pieces a Rust
-//! caller can use today:
+//!   sessions. This module ports the self-contained pieces a Rust
+//!   caller can use today:
 //!
 //!   - `is_auto_dream_enabled()` — env/settings-driven gate (matches
 //!     TS `isAutoDreamEnabled`; the GrowthBook fallback tier is
@@ -43,7 +43,10 @@ pub fn is_auto_dream_enabled() -> bool {
         matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     }
     fn falsy(v: &str) -> bool {
-        matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off")
+        matches!(
+            v.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
     }
 
     if let Ok(v) = std::env::var(AUTO_DREAM_ENABLED_ENV) {
@@ -73,11 +76,7 @@ const DIR_EXISTS_GUIDANCE: &str =
 /// character-for-character so prompt-cache prefix-matches across
 /// implementations. `extra` is appended under "Additional context"
 /// when non-empty; pass "" to omit.
-pub fn build_consolidation_prompt(
-    memory_root: &str,
-    transcript_dir: &str,
-    extra: &str,
-) -> String {
+pub fn build_consolidation_prompt(memory_root: &str, transcript_dir: &str, extra: &str) -> String {
     let mut out = String::new();
     out.push_str("# Dream: Memory Consolidation\n\n");
     out.push_str("You are performing a dream — a reflective pass over your memory files. Synthesize what you've learned recently into durable, well-organized memories so that future sessions can orient quickly.\n\n");
@@ -95,7 +94,9 @@ pub fn build_consolidation_prompt(
         "- Read `{}` to understand the current index\n",
         ENTRYPOINT_NAME
     ));
-    out.push_str("- Skim existing topic files so you improve them rather than creating duplicates\n");
+    out.push_str(
+        "- Skim existing topic files so you improve them rather than creating duplicates\n",
+    );
     out.push_str("- If `logs/` or `sessions/` subdirectories exist (assistant-mode layout), review recent entries there\n\n");
     out.push_str("## Phase 2 — Gather recent signal\n\n");
     out.push_str("Look for new information worth persisting. Sources in rough priority order:\n\n");
@@ -106,11 +107,15 @@ pub fn build_consolidation_prompt(
         "   `grep -rn \"<narrow term>\" {}/ --include=\"*.jsonl\" | tail -50`\n\n",
         transcript_dir
     ));
-    out.push_str("Don't exhaustively read transcripts. Look only for things you already suspect matter.\n\n");
+    out.push_str(
+        "Don't exhaustively read transcripts. Look only for things you already suspect matter.\n\n",
+    );
     out.push_str("## Phase 3 — Consolidate\n\n");
     out.push_str("For each thing worth remembering, write or update a memory file at the top level of the memory directory. Use the memory file format and type conventions from your system prompt's auto-memory section — it's the source of truth for what to save, how to structure it, and what NOT to save.\n\n");
     out.push_str("Focus on:\n");
-    out.push_str("- Merging new signal into existing topic files rather than creating near-duplicates\n");
+    out.push_str(
+        "- Merging new signal into existing topic files rather than creating near-duplicates\n",
+    );
     out.push_str("- Converting relative dates (\"yesterday\", \"last week\") to absolute dates so they remain interpretable after time passes\n");
     out.push_str("- Deleting contradicted facts — if today's investigation disproves an old memory, fix it at the source\n\n");
     out.push_str("## Phase 4 — Prune and index\n\n");

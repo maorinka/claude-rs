@@ -36,8 +36,9 @@ fn parse_frontmatter(src: &str) -> (HashMap<String, String>, String) {
     }
 
     // Find the closing '---' line
-    let after_open = trimmed.splitn(2, '\n').nth(1).unwrap_or("");
-    let close_idx = after_open.find("\n---\n")
+    let after_open = trimmed.split_once('\n').map(|x| x.1).unwrap_or("");
+    let close_idx = after_open
+        .find("\n---\n")
         .or_else(|| after_open.find("\n---\r\n"))
         .or_else(|| {
             // Handle the case where --- is the last line of the file

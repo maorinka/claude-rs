@@ -242,7 +242,7 @@ impl PermissionRuleValue {
             Some(content) => {
                 let escaped = escape_rule_content(content);
                 format!("{}({})", self.tool_name, escaped)
-            }
+            },
         }
     }
 
@@ -279,22 +279,16 @@ pub struct PermissionRule {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PermissionDecisionReason {
     /// Decision was made by a matching permission rule.
-    Rule {
-        rule: PermissionRule,
-    },
+    Rule { rule: PermissionRule },
     /// Decision was made by the current permission mode.
-    Mode {
-        mode: PermissionMode,
-    },
+    Mode { mode: PermissionMode },
     /// Decision was made by evaluating subcommand results (e.g., compound bash).
     SubcommandResults {
         /// Map of subcommand string -> its permission result.
         reasons: HashMap<String, PermissionResult>,
     },
     /// Decision was made by a permission prompt tool.
-    PermissionPromptTool {
-        permission_prompt_tool_name: String,
-    },
+    PermissionPromptTool { permission_prompt_tool_name: String },
     /// Decision was made by a hook.
     Hook {
         hook_name: String,
@@ -304,23 +298,16 @@ pub enum PermissionDecisionReason {
         reason: Option<String>,
     },
     /// Decision was made for an async agent that cannot prompt.
-    AsyncAgent {
-        reason: String,
-    },
+    AsyncAgent { reason: String },
     /// Decision due to sandbox override.
     SandboxOverride {
         /// Either "excludedCommand" or "dangerouslyDisableSandbox"
         reason: String,
     },
     /// Decision was made by an AI classifier (auto mode).
-    Classifier {
-        classifier: String,
-        reason: String,
-    },
+    Classifier { classifier: String, reason: String },
     /// Decision related to working directory restrictions.
-    WorkingDir {
-        reason: String,
-    },
+    WorkingDir { reason: String },
     /// Safety check decision (dangerous files, Windows path bypass, etc.).
     SafetyCheck {
         reason: String,
@@ -328,9 +315,7 @@ pub enum PermissionDecisionReason {
         classifier_approvable: bool,
     },
     /// Catch-all for other reasons.
-    Other {
-        reason: String,
-    },
+    Other { reason: String },
 }
 
 /// Result when permission is granted. Matches TS PermissionAllowDecision.
@@ -419,10 +404,7 @@ impl PermissionDecision {
         })
     }
 
-    pub fn allow_with_input(
-        input: serde_json::Value,
-        reason: PermissionDecisionReason,
-    ) -> Self {
+    pub fn allow_with_input(input: serde_json::Value, reason: PermissionDecisionReason) -> Self {
         PermissionDecision::Allow(PermissionAllowDecision {
             updated_input: Some(input),
             user_modified: None,
@@ -451,10 +433,7 @@ impl PermissionDecision {
         })
     }
 
-    pub fn ask_with_reason(
-        message: impl Into<String>,
-        reason: PermissionDecisionReason,
-    ) -> Self {
+    pub fn ask_with_reason(message: impl Into<String>, reason: PermissionDecisionReason) -> Self {
         PermissionDecision::Ask(PermissionAskDecision {
             message: message.into(),
             updated_input: None,
@@ -573,7 +552,7 @@ impl PermissionResult {
                     blocked_path: None,
                     is_bash_security_check_for_misparsing: None,
                 })
-            }
+            },
         }
     }
 
@@ -684,7 +663,10 @@ pub struct ToolPermissionContext {
 
 impl ToolPermissionContext {
     /// Get rules by source for a given behavior.
-    pub fn rules_for_behavior(&self, behavior: &PermissionBehavior) -> &ToolPermissionRulesBySource {
+    pub fn rules_for_behavior(
+        &self,
+        behavior: &PermissionBehavior,
+    ) -> &ToolPermissionRulesBySource {
         match behavior {
             PermissionBehavior::Allow => &self.always_allow_rules,
             PermissionBehavior::Deny => &self.always_deny_rules,
@@ -730,10 +712,8 @@ impl ToolPermissionContext {
     /// overwriting any prior entry for that path. Matches TS
     /// `Map.set(path, { path, source })` semantics.
     pub fn add_working_directory(&mut self, path: String, source: PermissionRuleSource) {
-        self.additional_working_directories.insert(
-            path.clone(),
-            AdditionalWorkingDirectory { path, source },
-        );
+        self.additional_working_directories
+            .insert(path.clone(), AdditionalWorkingDirectory { path, source });
     }
 }
 
@@ -820,7 +800,7 @@ fn find_first_unescaped_char(s: &str, ch: char) -> Option<usize> {
                     break;
                 }
             }
-            if backslash_count % 2 == 0 {
+            if backslash_count.is_multiple_of(2) {
                 return Some(i);
             }
         }
@@ -843,7 +823,7 @@ fn find_last_unescaped_char(s: &str, ch: char) -> Option<usize> {
                     break;
                 }
             }
-            if backslash_count % 2 == 0 {
+            if backslash_count.is_multiple_of(2) {
                 return Some(i);
             }
         }
@@ -866,7 +846,7 @@ pub fn create_permission_request_message(
                     "Classifier '{}' requires approval for this {} command: {}",
                     classifier, tool_name, reason
                 )
-            }
+            },
             PermissionDecisionReason::Hook {
                 hook_name, reason, ..
             } => match reason {
@@ -883,7 +863,7 @@ pub fn create_permission_request_message(
                     "Permission rule '{}' from {} requires approval for this {} command",
                     rule_string, source_string, tool_name
                 )
-            }
+            },
             PermissionDecisionReason::SubcommandResults { reasons } => {
                 let needs_approval: Vec<&String> = reasons
                     .iter()
@@ -905,7 +885,7 @@ pub fn create_permission_request_message(
                         tool_name
                     )
                 }
-            }
+            },
             PermissionDecisionReason::PermissionPromptTool {
                 permission_prompt_tool_name,
             } => {
@@ -913,10 +893,10 @@ pub fn create_permission_request_message(
                     "Tool '{}' requires approval for this {} command",
                     permission_prompt_tool_name, tool_name
                 )
-            }
+            },
             PermissionDecisionReason::SandboxOverride { .. } => {
                 "Run outside of the sandbox".to_string()
-            }
+            },
             PermissionDecisionReason::WorkingDir { reason } => reason.clone(),
             PermissionDecisionReason::SafetyCheck { reason, .. } => reason.clone(),
             PermissionDecisionReason::Other { reason } => reason.clone(),
@@ -926,7 +906,7 @@ pub fn create_permission_request_message(
                     mode.title(),
                     tool_name
                 )
-            }
+            },
             PermissionDecisionReason::AsyncAgent { reason } => reason.clone(),
         }
     } else {
@@ -1004,7 +984,10 @@ mod tests {
 
     #[test]
     fn test_permission_mode_from_string() {
-        assert_eq!(PermissionMode::from_string("default"), PermissionMode::Default);
+        assert_eq!(
+            PermissionMode::from_string("default"),
+            PermissionMode::Default
+        );
         assert_eq!(
             PermissionMode::from_string("acceptEdits"),
             PermissionMode::AcceptEdits
@@ -1014,10 +997,19 @@ mod tests {
             PermissionMode::from_string("bypassPermissions"),
             PermissionMode::BypassPermissions
         );
-        assert_eq!(PermissionMode::from_string("dontAsk"), PermissionMode::DontAsk);
+        assert_eq!(
+            PermissionMode::from_string("dontAsk"),
+            PermissionMode::DontAsk
+        );
         assert_eq!(PermissionMode::from_string("plan"), PermissionMode::Plan);
-        assert_eq!(PermissionMode::from_string("bubble"), PermissionMode::Bubble);
-        assert_eq!(PermissionMode::from_string("unknown"), PermissionMode::Default);
+        assert_eq!(
+            PermissionMode::from_string("bubble"),
+            PermissionMode::Bubble
+        );
+        assert_eq!(
+            PermissionMode::from_string("unknown"),
+            PermissionMode::Default
+        );
     }
 
     #[test]

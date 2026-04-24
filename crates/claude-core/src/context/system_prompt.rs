@@ -99,15 +99,25 @@ pub async fn build_system_prompt(
 /// This is retained for any system-prompt-level formatting that may need it.
 #[allow(dead_code)]
 fn model_marketing_name(model: &str) -> &str {
-    if model.contains("opus-4-6") { "Opus 4.6" }
-    else if model.contains("opus-4-5") { "Opus 4.5" }
-    else if model.contains("opus-4-1") { "Opus 4.1" }
-    else if model.contains("sonnet-4-6") { "Sonnet 4.6" }
-    else if model.contains("sonnet-4-5") { "Sonnet 4.5" }
-    else if model.contains("haiku-4-5") { "Haiku 4.5" }
-    else if model.contains("claude-3-7-sonnet") { "Sonnet 3.7" }
-    else if model.contains("claude-3-5-sonnet") { "Sonnet 3.5" }
-    else { model }
+    if model.contains("opus-4-6") {
+        "Opus 4.6"
+    } else if model.contains("opus-4-5") {
+        "Opus 4.5"
+    } else if model.contains("opus-4-1") {
+        "Opus 4.1"
+    } else if model.contains("sonnet-4-6") {
+        "Sonnet 4.6"
+    } else if model.contains("sonnet-4-5") {
+        "Sonnet 4.5"
+    } else if model.contains("haiku-4-5") {
+        "Haiku 4.5"
+    } else if model.contains("claude-3-7-sonnet") {
+        "Sonnet 3.7"
+    } else if model.contains("claude-3-5-sonnet") {
+        "Sonnet 3.5"
+    } else {
+        model
+    }
 }
 
 // ── Prefix variants (constants/system.ts) ─────────────────────────────────────
@@ -123,8 +133,7 @@ const AGENT_SDK_CLAUDE_CODE_PRESET_PREFIX: &str =
 
 /// Prefix for generic Agent SDK agents (matches TS AGENT_SDK_PREFIX).
 #[allow(dead_code)]
-const AGENT_SDK_PREFIX: &str =
-    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+const AGENT_SDK_PREFIX: &str = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
 // ── Cyber risk instruction (constants/cyberRiskInstruction.ts) ────────────────
 
@@ -438,8 +447,7 @@ pub const DEFAULT_AGENT_PROMPT: &str =
 // ── Agent system prompt enhancement notes (constants/prompts.ts:760) ──────────
 
 /// Notes appended to sub-agent system prompts (matches TS enhanceSystemPromptWithEnvDetails notes).
-pub const AGENT_NOTES: &str =
-    "Notes:\n\
+pub const AGENT_NOTES: &str = "Notes:\n\
      - Agent threads always have their cwd reset between bash calls, as a result please only \
      use absolute file paths.\n\
      - In your final response, share file paths (always absolute, never relative) that are \
@@ -462,37 +470,28 @@ const SUMMARIZE_TOOL_RESULTS_SECTION: &str =
 // ── Full system prompt builder ────────────────────────────────────────────────
 
 fn base_system_prompt() -> String {
-    let mut parts: Vec<String> = Vec::new();
-
-    // Identity prefix
-    parts.push(DEFAULT_PREFIX.to_string());
-
-    // Intro section (identity + cyber risk)
-    parts.push(get_simple_intro_section());
-
-    // System section
-    parts.push(get_simple_system_section());
-
-    // Doing tasks section
-    parts.push(get_simple_doing_tasks_section());
-
-    // Actions section (reversibility / blast radius)
-    parts.push(get_actions_section().to_string());
-
-    // Using your tools
-    parts.push(get_using_your_tools_section().to_string());
-
-    // Session-specific guidance
-    parts.push(get_session_specific_guidance_section());
-
-    // Output efficiency
-    parts.push(get_output_efficiency_section().to_string());
-
-    // Tone and style
-    parts.push(get_tone_and_style_section().to_string());
-
-    // System reminders
-    parts.push(get_system_reminders_section().to_string());
+    let parts: Vec<String> = vec![
+        // Identity prefix
+        DEFAULT_PREFIX.to_string(),
+        // Intro section (identity + cyber risk)
+        get_simple_intro_section(),
+        // System section
+        get_simple_system_section(),
+        // Doing tasks section
+        get_simple_doing_tasks_section(),
+        // Actions section (reversibility / blast radius)
+        get_actions_section().to_string(),
+        // Using your tools
+        get_using_your_tools_section().to_string(),
+        // Session-specific guidance
+        get_session_specific_guidance_section(),
+        // Output efficiency
+        get_output_efficiency_section().to_string(),
+        // Tone and style
+        get_tone_and_style_section().to_string(),
+        // System reminders
+        get_system_reminders_section().to_string(),
+    ];
 
     parts.join("\n\n")
 }
