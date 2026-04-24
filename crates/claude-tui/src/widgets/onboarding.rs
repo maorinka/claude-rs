@@ -208,11 +208,7 @@ impl Widget for OnboardingWidget<'_> {
 
         // Progress indicator at top
         let progress_width = inner.width.saturating_sub(2) as usize;
-        let filled = if total > 0 {
-            (step_num * progress_width) / total
-        } else {
-            0
-        };
+        let filled = (step_num * progress_width).checked_div(total).unwrap_or(0);
         let progress_bar: String = (0..progress_width)
             .map(|i| if i < filled { '#' } else { '-' })
             .collect();

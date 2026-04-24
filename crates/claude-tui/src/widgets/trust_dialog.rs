@@ -314,8 +314,8 @@ impl Widget for TrustDialogWidget<'_> {
         if let Some(ref subject) = self.dialog.subject {
             let desc = subject.description();
             let max_w = inner.width.saturating_sub(2) as usize;
-            let mut row = inner.y + 2;
-            for line_text in desc.lines() {
+            for (offset, line_text) in desc.lines().enumerate() {
+                let row = inner.y + 2 + offset as u16;
                 if row >= inner.y + inner.height.saturating_sub(2) {
                     break;
                 }
@@ -326,7 +326,6 @@ impl Widget for TrustDialogWidget<'_> {
                 };
                 let line = Line::from(Span::raw(display));
                 buf.set_line(inner.x + 1, row, &line, inner.width.saturating_sub(2));
-                row += 1;
             }
         }
 

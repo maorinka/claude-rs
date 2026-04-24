@@ -167,7 +167,7 @@ pub struct VimBuffer {
 
 impl VimBuffer {
     pub fn new(text: String, cursor: usize) -> Self {
-        let cursor = cursor.min(text.len().saturating_sub(1).max(0));
+        let cursor = cursor.min(text.len().saturating_sub(1));
         Self { text, cursor }
     }
     pub fn line_count(&self) -> usize {
