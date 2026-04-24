@@ -1,0 +1,10 @@
+# clippy.toml - Clippy linter configuration
+
+# Allow certain lints that may be too noisy
+too-many-arguments-threshold = 8
+type-complexity-threshold = 500
+
+# Disallowed lints (must be addressed)
+disallowed-methods = [
+    # Add any methods you want to disallow
+]
