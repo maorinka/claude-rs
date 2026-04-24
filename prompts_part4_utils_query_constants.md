@@ -208,7 +208,7 @@ function getAgentToolSection(): string {
 
 ### Discover Skills Guidance
 **File:** `src/constants/prompts.ts:333-341`
-**Status: ❌ NOT IN RUST** — Reason: The DiscoverSkills (ToolSearch) tool exists but the guidance prompt that references it is not in the system prompt. The Rust port doesn't have the `getDiscoverSkillsGuidance` function because the skill discovery surfacing infrastructure (auto-surfacing relevant skills each turn) is not yet implemented.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::DISCOVER_SKILLS_GUIDANCE`
 ```ts
 function getDiscoverSkillsGuidance(): string | null {
   // ...
@@ -303,7 +303,7 @@ if (isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
 
 ### Proactive (Autonomous) Mode Prompt
 **File:** `src/constants/prompts.ts:471-474`
-**Status: ❌ NOT IN RUST** — Reason: Proactive/autonomous mode exists as a command stub (/proactive in builtin.rs) but the system prompt for it has not been ported. The mode infrastructure (tick loop, sleep tool integration, terminal focus detection) is not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::proactive_mode_header`
 ```ts
 `\nYou are an autonomous agent. Use the available tools to do useful work.
 
@@ -312,14 +312,14 @@ ${CYBER_RISK_INSTRUCTION}`
 
 ### Numeric Length Anchors (ant-only)
 **File:** `src/constants/prompts.ts:531-536`
-**Status: ❌ NOT IN RUST** — Reason: This is an ant-only (internal Anthropic) prompt section. USER_TYPE detection is not implemented in the Rust port.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::NUMERIC_LENGTH_ANCHORS` (caller owns the ant-only gate)
 ```ts
 'Length limits: keep text between tool calls to ≤25 words. Keep final responses to ≤100 words unless the task requires more detail.'
 ```
 
 ### Token Budget Instruction
 **File:** `src/constants/prompts.ts:547-548`
-**Status: ❌ NOT IN RUST** — Reason: Token budget/target feature (+500k, spend 2M tokens, etc.) is not implemented in the Rust port. The TUI has token budget *warning* thresholds but not the user-facing token target system prompt injection.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::TOKEN_BUDGET_INSTRUCTION`
 ```ts
 'When the user specifies a token target (e.g., "+500k", "spend 2M tokens", "use 1B tokens"), your output token count will be shown each turn. Keep working until you approach the target — plan your work to fill it productively. The target is a hard minimum, not a suggestion. If you stop early, the system will automatically continue you.'
 ```
@@ -410,7 +410,7 @@ export async function enhanceSystemPromptWithEnvDetails(
 
 ### Scratchpad Instructions
 **File:** `src/constants/prompts.ts:804-818`
-**Status: ❌ NOT IN RUST** — Reason: The scratchpad directory feature is partially referenced in teams/coordinator.rs (for workers) but the full scratchpad system prompt section (with the directory path, usage guidelines, and /tmp override) is not implemented as a main system prompt section. The scratchpad directory infrastructure itself doesn't exist as a standalone feature in the Rust port.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::scratchpad_instructions`
 ```ts
 return `# Scratchpad Directory
 
@@ -431,7 +431,7 @@ The scratchpad directory is session-specific, isolated from the user's project, 
 
 ### Function Result Clearing Section
 **File:** `src/constants/prompts.ts:836-838`
-**Status: ❌ NOT IN RUST** — Reason: Function result clearing (selective tool result eviction) is not implemented in the Rust port. The Rust port uses full compaction instead.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::function_result_clearing_section`
 ```ts
 return `# Function Result Clearing
 
@@ -447,7 +447,7 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
 
 ### Proactive / Autonomous Work Section
 **File:** `src/constants/prompts.ts:864-913`
-**Status: ❌ NOT IN RUST** — Reason: The full autonomous/proactive work section (tick loop, sleep tool pacing, terminal focus, bias toward action) requires the proactive mode infrastructure which is not implemented in Rust. Only a stub /proactive command exists.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::PROACTIVE_AUTONOMOUS_WORK_SECTION`
 ```ts
 return `# Autonomous work
 
@@ -553,7 +553,7 @@ Example TodoList flow:
    ✓ "Integrate contribution and complete feature"
 
 ### Request Format
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ FOUND in Rust** — Embedded in `crates/claude-core/src/output_style_prompts.rs::learning_style_prompt` + `prompts/output_style_learning.md`.
 \`\`\`
 ${figures.bullet} **Learn by Doing**
 **Context:** [what's built and why this decision matters]
@@ -562,18 +562,18 @@ ${figures.bullet} **Learn by Doing**
 \`\`\`
 
 ### Key Guidelines
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ FOUND in Rust** — Embedded in `crates/claude-core/src/output_style_prompts.rs::learning_style_prompt` + `prompts/output_style_learning.md`.
 - Frame contributions as valuable design decisions, not busy work
 - You must first add a TODO(human) section into the codebase with your editing tools before making the Learn by Doing request      
 - Make sure there is one and only one TODO(human) section in the code
 - Don't take any action or output anything after the Learn by Doing request. Wait for human implementation before proceeding.
 
 ### Example Requests
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ FOUND in Rust** — Embedded in `crates/claude-core/src/output_style_prompts.rs::learning_style_prompt` + `prompts/output_style_learning.md`.
 [...extensive examples omitted for brevity...]
 
 ### After Contributions
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ FOUND in Rust** — Embedded in `crates/claude-core/src/output_style_prompts.rs::learning_style_prompt` + `prompts/output_style_learning.md`.
 Share one insight connecting their code to broader patterns or system effects. Avoid praise or repetition.
 
 ## Insights
@@ -616,7 +616,7 @@ currentDate: `Today's date is ${getLocalISODate()}.`,
 
 ### System Context - Cache Breaker
 **File:** `src/context.ts:143-146`
-**Status: ❌ NOT IN RUST** — Reason: Cache breaker injection is not implemented. The Rust port doesn't have the prompt cache invalidation mechanism that uses `[CACHE_BREAKER: ...]` tokens.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::cache_breaker`
 ```ts
 cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ```
@@ -626,7 +626,7 @@ cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ## utils/systemPrompt.ts
 ### Custom Agent Instructions (proactive mode)
 **File:** `src/utils/systemPrompt.ts:110`
-**Status: ❌ NOT IN RUST** — Reason: Custom agent instructions for proactive mode are not implemented. Proactive mode infrastructure is not in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::custom_agent_instructions_section`
 ```ts
 `\n# Custom Agent Instructions\n${agentSystemPrompt}`
 ```
@@ -747,7 +747,7 @@ const SYSTEM_PROMPT = `Analyze shell commands and explain what they do, why you'
 
 ### Permission Explainer Tool Definition
 **File:** `src/utils/permissions/permissionExplainer.ts:46-74`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::{PERMISSION_EXPLAINER_TOOL_NAME, PERMISSION_EXPLAINER_TOOL_DESCRIPTION}` (name/desc constants; caller owns the JSON schema shape)
 ```ts
 const EXPLAIN_COMMAND_TOOL = {
   name: 'explain_command',
@@ -782,7 +782,7 @@ const EXPLAIN_COMMAND_TOOL = {
 
 ### Permission Explainer User Prompt Template
 **File:** `src/utils/permissions/permissionExplainer.ts:167-173`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::permission_explainer_user_prompt`
 ```ts
 const userPrompt = `Tool: ${toolName}
 ${toolDescription ? `Description: ${toolDescription}\n` : ''}
@@ -885,7 +885,7 @@ const response = await queryHaiku({
 ## utils/hooks/execPromptHook.ts
 ### Prompt Hook Evaluation System Prompt
 **File:** `src/utils/hooks/execPromptHook.ts:64-69`
-**Status: ❌ NOT IN RUST** — Reason: Prompt hooks (LLM-evaluated hooks) are defined in the type system (`hooks/types.rs:PromptHook`) but the execution currently returns a placeholder error ("Prompt hook execution requires LLM query infrastructure" at `hooks/runner.rs:605`). The system prompt for the LLM evaluation is not yet added.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::PROMPT_HOOK_EVALUATION_SYSTEM_PROMPT`
 ```ts
 systemPrompt: asSystemPrompt([
   `You are evaluating a hook in Claude Code.
@@ -901,7 +901,7 @@ Your response must be a JSON object matching one of the following schemas:
 ## utils/hooks/skillImprovement.ts
 ### Skill Improvement Detection Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:102-127`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement detection (LLM-powered analysis of user preferences during skill execution to auto-update skill definitions) is not implemented in the Rust port.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::skill_improvement_detection_prompt`
 ```ts
 content: `You are analyzing a conversation where a user is executing a skill (a repeatable process).
 Your job: identify if the user's recent messages contain preferences, requests, or corrections that should be permanently added to the skill definition for future runs.
@@ -929,7 +929,7 @@ Output <updates>[]</updates> if no updates are needed.`,
 
 ### Skill Improvement Detection System Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:129-130`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement detection not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_DETECTION_SYSTEM_PROMPT`
 ```ts
 systemPrompt:
   'You detect user preferences and process improvements during skill execution. Flag anything the user asks for that should be remembered for next time.',
@@ -937,7 +937,7 @@ systemPrompt:
 
 ### Skill Improvement Apply Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:215-230`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::skill_improvement_apply_prompt`
 ```ts
 content: `You are editing a skill definition file. Apply the following improvements to the skill.
 
@@ -959,7 +959,7 @@ Rules:
 
 ### Skill Improvement Apply System Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:233-234`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement not implemented. See above.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_APPLY_SYSTEM_PROMPT`
 ```ts
 systemPrompt: asSystemPrompt([
   'You edit skill definition files to incorporate user preferences. Output only the updated file content.',
@@ -971,7 +971,7 @@ systemPrompt: asSystemPrompt([
 ## utils/swarm/teammatePromptAddendum.ts
 ### Teammate System Prompt Addendum
 **File:** `src/utils/swarm/teammatePromptAddendum.ts:8-17`
-**Status: ❌ NOT IN RUST** — Reason: The swarm/teammate system (multi-agent team coordination with SendMessage to peers) is partially implemented in `crates/claude-core/src/teams/` but the teammate system prompt addendum is not present. The coordinator prompt exists but the per-worker teammate addendum does not.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::TEAMMATE_SYSTEM_PROMPT_ADDENDUM`
 ```ts
 export const TEAMMATE_SYSTEM_PROMPT_ADDENDUM = `
 # Agent Teammate Communication

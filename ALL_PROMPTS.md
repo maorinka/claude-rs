@@ -4750,7 +4750,7 @@ function getAgentToolSection(): string {
 
 ### Discover Skills Guidance
 **File:** `src/constants/prompts.ts:333-341`
-**Status: ❌ NOT IN RUST** — Reason: The DiscoverSkills (ToolSearch) tool exists but the guidance prompt that references it is not in the system prompt. The Rust port doesn't have the `getDiscoverSkillsGuidance` function because the skill discovery surfacing infrastructure (auto-surfacing relevant skills each turn) is not yet implemented.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::DISCOVER_SKILLS_GUIDANCE`
 ```ts
 function getDiscoverSkillsGuidance(): string | null {
   // ...
@@ -4845,7 +4845,7 @@ if (isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
 
 ### Proactive (Autonomous) Mode Prompt
 **File:** `src/constants/prompts.ts:471-474`
-**Status: ❌ NOT IN RUST** — Reason: Proactive/autonomous mode exists as a command stub (/proactive in builtin.rs) but the system prompt for it has not been ported. The mode infrastructure (tick loop, sleep tool integration, terminal focus detection) is not implemented in Rust.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::proactive_mode_header`
 ```ts
 `\nYou are an autonomous agent. Use the available tools to do useful work.
 
@@ -4854,7 +4854,7 @@ ${CYBER_RISK_INSTRUCTION}`
 
 ### Numeric Length Anchors (ant-only)
 **File:** `src/constants/prompts.ts:531-536`
-**Status: ❌ NOT IN RUST** — Reason: This is an ant-only (internal Anthropic) prompt section. USER_TYPE detection is not implemented in the Rust port.
+**Status: ✅ FOUND in Rust** — `crates/claude-core/src/system_prompt_extensions.rs::NUMERIC_LENGTH_ANCHORS`
 ```ts
 'Length limits: keep text between tool calls to ≤25 words. Keep final responses to ≤100 words unless the task requires more detail.'
 ```
