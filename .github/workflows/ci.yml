@@ -41,6 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install ripgrep
+        # claude-tools' GrepTool invokes `rg` as an external binary; tests fail
+        # with os error 2 on runners without it.
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Run tests
         run: cargo test --all
 

@@ -135,7 +135,7 @@ impl ToolExecutor for GlobTool {
         }
 
         // Sort by modification time, most recent first
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.1));
 
         let total = entries.len();
         let truncated = total > MAX_RESULTS;
