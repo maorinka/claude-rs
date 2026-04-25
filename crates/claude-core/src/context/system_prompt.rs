@@ -53,9 +53,7 @@ pub async fn build_system_prompt(
 
     // 1. Base system prompt
     parts.push(base_system_prompt());
-    // Model identity is injected dynamically in build_request_body
-    // so it always reflects the current model (even after /model switch).
-    let _ = model; // used by callers, identity injected at API layer
+    let _ = model; // retained for API compatibility with callers
 
     // 2. Git context
     if let Ok(Some(git_ctx)) = get_git_context(project_root).await {
@@ -175,7 +173,6 @@ fn load_merged_settings(project_root: &Path) -> Settings {
 }
 
 /// Map model ID to a human-readable marketing name (matches TS getPublicModelDisplayName).
-/// Note: the canonical copy used at request time lives in `api/client.rs::model_marketing_name`.
 /// This is retained for any system-prompt-level formatting that may need it.
 #[allow(dead_code)]
 fn model_marketing_name(model: &str) -> &str {

@@ -140,10 +140,7 @@ pub fn minimal_transport_enabled() -> bool {
 
 pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
-    if lower.contains("opus-4-6")
-        || lower.contains("sonnet-4-6")
-        || lower.contains("haiku-4-5")
-    {
+    if lower.contains("opus-4-6") || lower.contains("sonnet-4-6") || lower.contains("haiku-4-5") {
         64_000
     } else if lower.contains("opus-4-1") || lower.contains("opus-4") {
         32_000
@@ -157,27 +154,6 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
         8_192
     } else {
         32_000
-    }
-}
-
-/// Map model ID to marketing name (matches TS getPublicModelDisplayName).
-fn model_marketing_name(model: &str) -> &str {
-    if model.contains("opus-4-6") {
-        "Opus 4.6"
-    } else if model.contains("opus-4-5") {
-        "Opus 4.5"
-    } else if model.contains("opus-4-1") {
-        "Opus 4.1"
-    } else if model.contains("sonnet-4-6") {
-        "Sonnet 4.6"
-    } else if model.contains("sonnet-4-5") {
-        "Sonnet 4.5"
-    } else if model.contains("haiku-4-5") {
-        "Haiku 4.5"
-    } else if model.contains("claude-3-7-sonnet") {
-        "Sonnet 3.7"
-    } else {
-        model
     }
 }
 
@@ -268,7 +244,7 @@ pub fn build_request_body(
     // rejected with 429. If it is not the first block (e.g. model identity
     // is prepended before it), the server won't find it and you get 429s.
     //
-    // Order: [attribution (OAuth only)] -> [model identity] -> [user system blocks]
+    // Order: [attribution (OAuth only)] -> [user system blocks]
     if !system.is_empty() || is_oauth {
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
@@ -277,13 +253,6 @@ pub fn build_request_body(
                     .to_string(),
             });
         }
-        let marketing = model_marketing_name(&config.model);
-        full_system.push(ContentBlock::Text {
-            text: format!(
-                "You are powered by the model named {}. The exact model ID is {}.",
-                marketing, config.model
-            ),
-        });
         full_system.extend_from_slice(system);
         body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
 
