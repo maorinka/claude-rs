@@ -23,6 +23,8 @@ const BLACK_CIRCLE: &str = "\u{25CF}";
 /// The return symbol used for tool result indentation (MessageResponse).
 /// The original uses "  ⎿  " — two spaces, ⎿, two spaces.
 const TOOL_RESULT_PREFIX: &str = "  \u{23BF}  ";
+const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
+const INTERRUPT_DISPLAY: &str = "Interrupted \u{00B7} What should Claude do instead?";
 
 /// Teardrop asterisk used for system/compact messages in the original.
 #[allow(dead_code)]
@@ -776,6 +778,17 @@ fn render_message(
             }
         }
         MessageEntry::System { text } => {
+            if text.trim() == INTERRUPT_MESSAGE {
+                let dim_style = Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM);
+                lines.push(Line::from(vec![
+                    Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style),
+                    Span::styled(INTERRUPT_DISPLAY.to_string(), dim_style),
+                ]));
+                return lines;
+            }
+
             // System messages: plain text in inactive/muted color, word-wrapped.
             let sys_width = (width as usize).max(1);
             for line_text in text.split('\n') {
@@ -1169,6 +1182,25 @@ mod tests {
                 w
             );
         }
+    }
+
+    #[test]
+    fn interrupted_marker_renders_like_message_response() {
+        let theme = crate::theme::dark_theme();
+        let lines = render_msg_simple(
+            &MessageEntry::System {
+                text: INTERRUPT_MESSAGE.to_string(),
+            },
+            80,
+            false,
+            &theme,
+        );
+
+        assert_eq!(lines.len(), 1);
+        let text = lines[0].to_string();
+        assert!(text.contains('\u{23BF}'));
+        assert!(text.contains(INTERRUPT_DISPLAY));
+        assert!(!text.contains(INTERRUPT_MESSAGE));
     }
 
     #[test]
