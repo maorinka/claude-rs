@@ -154,3 +154,4 @@ pub mod vcr;
 pub mod vim;
 pub mod xdg;
 pub mod xml_escape;
+pub mod yolo_classifier;
