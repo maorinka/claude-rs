@@ -201,7 +201,7 @@ fn render_inline_line(text: &str) -> Line<'static> {
                 i += 1;
             }
             let code: String = chars[start..i].iter().collect();
-            spans.push(Span::styled(code, Style::default().fg(Color::Green)));
+            spans.push(Span::styled(code, Style::default().fg(Color::Cyan)));
             if i < chars.len() {
                 i += 1;
             }

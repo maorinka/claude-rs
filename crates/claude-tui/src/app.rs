@@ -265,13 +265,9 @@ impl App {
     }
 
     fn enqueue_message(&mut self, text: String) {
-        let preview = truncate_chars(text.trim(), 160);
         self.message_queue.push(text);
         self.prompt.clear();
         self.spinner.queued_count = 0;
-        self.message_list.push(MessageEntry::System {
-            text: format!("Queued message: {}", preview),
-        });
     }
 
     fn pop_queued_message(&mut self) -> Option<String> {
@@ -280,6 +276,15 @@ impl App {
         }
         self.spinner.queued_count = 0;
         Some(self.message_queue.remove(0))
+    }
+
+    fn edit_last_queued_message(&mut self) -> bool {
+        let Some(text) = self.message_queue.pop() else {
+            return false;
+        };
+        self.spinner.queued_count = 0;
+        self.prompt.set_text(text);
+        true
     }
 
     /// Set the model name displayed in the header and cost tracker.
@@ -1118,6 +1123,14 @@ impl App {
                                 self.message_list.scroll_to_bottom();
                                 continue;
                             }
+                            (KeyModifiers::NONE, KeyCode::Up)
+                                if self.engine_busy
+                                    && self.prompt.is_empty()
+                                    && !self.message_queue.is_empty() =>
+                            {
+                                self.edit_last_queued_message();
+                                continue;
+                            }
                             (KeyModifiers::CONTROL, KeyCode::Up) => {
                                 self.message_list.scroll_up(1);
                                 continue;
@@ -1168,8 +1181,9 @@ impl App {
                     }
                     if self.engine_busy {
                         // TS behavior (handlePromptSubmit.ts:336): enqueue and clear
-                        // input. Show the queued text in the transcript so the
-                        // user can see exactly what will run next.
+                        // input. The render path keeps the queued text visible
+                        // above the prompt and lets Up move it back into the
+                        // editor.
                         self.enqueue_message(text);
                         continue;
                     }
@@ -1976,6 +1990,7 @@ impl App {
         let command_picker = &self.command_picker;
         let rewind_picker = &self.rewind_picker;
         let rewind_confirmation = &self.rewind_confirmation;
+        let message_queue = &self.message_queue;
         let model_picker = &self.model_picker;
         let theme_picker = &self.theme_picker;
         let model_name = &self.model_name;
@@ -1998,12 +2013,14 @@ impl App {
             // - Spinner row (1 line when active, 0 otherwise)
             // - Blank margin row (1 line, matches original marginTop=1 on prompt)
             // - Prompt input (3 lines: top border, input line, bottom border)
+            let queued_message_visible = engine_busy && !message_queue.is_empty();
             let spinner_height = if spinner.active { 1 } else { 0 };
+            let activity_height = spinner_height + if queued_message_visible { 2 } else { 0 };
             let chunks = Layout::default()
                 .constraints([
-                    Constraint::Min(1),                 // Messages
-                    Constraint::Length(spinner_height), // Spinner
-                    Constraint::Length(3),              // Input (border + input + border)
+                    Constraint::Min(1),                  // Messages
+                    Constraint::Length(activity_height), // Spinner + queued message preview
+                    Constraint::Length(3),               // Input (border + input + border)
                 ])
                 .split(area);
 
@@ -2013,7 +2030,26 @@ impl App {
 
             // Spinner (inline with messages, like the original)
             if spinner.active {
-                frame.render_widget(spinner, chunks[1]);
+                let spinner_area = Rect::new(chunks[1].x, chunks[1].y, chunks[1].width, 1);
+                frame.render_widget(spinner, spinner_area);
+            }
+
+            if queued_message_visible {
+                let queue_y = chunks[1].y + spinner_height + 1;
+                if queue_y < chunks[1].y + chunks[1].height {
+                    let preview = truncate_chars(message_queue[0].replace('\n', " ").trim(), 160);
+                    let queued_line = Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled("\u{276F} ", Style::default().fg(theme.permission)),
+                        Span::styled(preview, Style::default().fg(theme.text)),
+                    ]);
+                    frame.buffer_mut().set_line(
+                        chunks[1].x,
+                        queue_y,
+                        &queued_line,
+                        chunks[1].width,
+                    );
+                }
             }
 
             // Prompt input with border matching the original's promptBorder color.
@@ -2086,7 +2122,11 @@ impl App {
                     };
 
                     // Multi-line aware rendering: split on '\n' and render each line.
-                    let text_str = prompt.text().to_string();
+                    let text_str = if queued_message_visible {
+                        "Press up to edit queued messages".to_string()
+                    } else {
+                        prompt.text().to_string()
+                    };
                     let lines: Vec<&str> = text_str.split('\n').collect();
                     let max_visible = (input_area.height.saturating_sub(2)) as usize; // leave room for borders
                     let visible_lines = if lines.len() > max_visible && max_visible > 0 {
@@ -2122,7 +2162,11 @@ impl App {
                     } else {
                         ratatui::style::Style::default()
                     };
-                    let text_str = prompt.text().to_string();
+                    let text_str = if queued_message_visible {
+                        "Press up to edit queued messages".to_string()
+                    } else {
+                        prompt.text().to_string()
+                    };
                     let last_line = text_str.split('\n').next_back().unwrap_or("");
                     let prompt_line = ratatui::text::Line::from(vec![
                         ratatui::text::Span::styled("\u{276F} ", prompt_style),
@@ -2701,19 +2745,20 @@ mod tests {
     }
 
     #[test]
-    fn queued_messages_are_visible_and_not_spinner_counted() {
+    fn queued_messages_stay_out_of_transcript_and_can_be_edited() {
         let mut app = App::new().unwrap();
         app.enqueue_message("follow up after this".to_string());
 
         assert_eq!(app.spinner.queued_count, 0);
-        assert_eq!(
-            app.pop_queued_message().as_deref(),
-            Some("follow up after this")
-        );
-        assert_eq!(app.spinner.queued_count, 0);
-        assert!(matches!(
+        assert_eq!(app.message_queue, vec!["follow up after this".to_string()]);
+        assert!(!matches!(
             app.message_list.messages().last(),
-            Some(MessageEntry::System { text }) if text.contains("Queued message: follow up after this")
+            Some(MessageEntry::System { text }) if text.contains("Queued message:")
         ));
+
+        assert!(app.edit_last_queued_message());
+        assert_eq!(app.prompt.text(), "follow up after this");
+        assert!(app.message_queue.is_empty());
+        assert_eq!(app.spinner.queued_count, 0);
     }
 }
