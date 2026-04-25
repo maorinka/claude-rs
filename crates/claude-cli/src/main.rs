@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,6 +14,14 @@ pub struct Cli {
     /// Initial prompt (non-interactive mode)
     pub prompt: Option<String>,
 
+    /// Print response and exit (TS-compatible alias for non-interactive mode)
+    #[arg(short = 'p', long = "print")]
+    pub print: bool,
+
+    /// Output format for non-interactive mode
+    #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
+    pub output_format: OutputFormat,
+
     /// Model to use
     #[arg(short, long)]
     pub model: Option<String>,
@@ -26,6 +34,14 @@ pub struct Cli {
     #[arg(long)]
     pub dangerously_skip_permissions: bool,
 
+    /// Permission mode to use for the session
+    #[arg(long = "permission-mode")]
+    pub permission_mode: Option<String>,
+
+    /// Specify available tools ("default", "", or comma/space-separated tool names)
+    #[arg(long = "tools", num_args = 1.., value_delimiter = ',')]
+    pub tools: Vec<String>,
+
     /// Working directory
     #[arg(short = 'C', long = "cd")]
     pub working_dir: Option<PathBuf>,
@@ -33,6 +49,14 @@ pub struct Cli {
     /// Resume session by ID
     #[arg(long)]
     pub resume: Option<String>,
+
+    /// Use a specific session ID
+    #[arg(long = "session-id")]
+    pub session_id: Option<String>,
+
+    /// Disable session persistence (accepted for TS CLI parity; non-interactive Rust mode does not persist sessions)
+    #[arg(long = "no-session-persistence")]
+    pub no_session_persistence: bool,
 
     /// Max conversation turns (non-interactive)
     #[arg(long)]
@@ -44,6 +68,13 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<SubCommand>,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    StreamJson,
 }
 
 #[derive(clap::Subcommand)]
@@ -107,9 +138,140 @@ fn resolve_max_output_tokens(
     claude_core::api::client::get_max_output_tokens_for_model(model)
 }
 
+fn split_tool_args(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split_whitespace())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn filter_registry_by_cli_tools(registry: &mut claude_tools::ToolRegistry, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+
+    let requested = split_tool_args(values);
+    if requested.iter().any(|value| value == "default") {
+        return;
+    }
+
+    if requested.is_empty() {
+        for name in registry
+            .all()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>()
+        {
+            registry.remove(&name);
+        }
+        return;
+    }
+
+    let keep = requested
+        .into_iter()
+        .filter_map(|name| registry.get(&name).map(|tool| tool.name().to_string()))
+        .collect::<std::collections::HashSet<_>>();
+
+    for name in registry
+        .all()
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>()
+    {
+        if !keep.contains(&name) {
+            registry.remove(&name);
+        }
+    }
+}
+
+fn emit_stream_json(value: serde_json::Value) {
+    println!(
+        "{}",
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+    );
+}
+
+fn stream_event_to_json(ev: &claude_core::types::events::StreamEvent) -> serde_json::Value {
+    use claude_core::types::events::{StreamEvent, ToolProgressData};
+    use serde_json::json;
+
+    match ev {
+        StreamEvent::RequestStart { request_id } => {
+            json!({"type": "request_start", "request_id": request_id})
+        }
+        StreamEvent::AssistantMessage(message) => {
+            json!({"type": "assistant_message", "message": format!("{:?}", message)})
+        }
+        StreamEvent::ToolStart {
+            tool_use_id,
+            name,
+            input,
+        } => json!({
+            "type": "tool_start",
+            "tool_use_id": tool_use_id,
+            "name": name,
+            "input": input,
+        }),
+        StreamEvent::ToolProgress {
+            tool_use_id,
+            progress,
+        } => {
+            let progress = match progress {
+                ToolProgressData::BashProgress { stdout, stderr } => {
+                    json!({"kind": "bash", "stdout": stdout, "stderr": stderr})
+                }
+                ToolProgressData::ReadProgress { bytes_read } => {
+                    json!({"kind": "read", "bytes_read": bytes_read})
+                }
+                ToolProgressData::WebSearchProgress { results_found } => {
+                    json!({"kind": "web_search", "results_found": results_found})
+                }
+            };
+            json!({"type": "tool_progress", "tool_use_id": tool_use_id, "progress": progress})
+        }
+        StreamEvent::ToolResult {
+            tool_use_id,
+            result,
+        } => json!({
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "result": result.data,
+            "is_error": result.is_error,
+        }),
+        StreamEvent::ThinkingDelta { text } => json!({"type": "thinking_delta", "text": text}),
+        StreamEvent::TextDelta { text } => json!({"type": "text_delta", "text": text}),
+        StreamEvent::Compacted { summary } => json!({"type": "compacted", "summary": summary}),
+        StreamEvent::UsageUpdate(usage) => json!({
+            "type": "usage",
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+            "cache_read_input_tokens": usage.cache_read_input_tokens,
+        }),
+        StreamEvent::Done { stop_reason } => {
+            json!({"type": "done", "stop_reason": format!("{:?}", stop_reason)})
+        }
+        StreamEvent::Error(error) => json!({"type": "error", "error": format!("{:?}", error)}),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let mut prompt_arg = cli.prompt.clone();
+    if cli.print && prompt_arg.is_none() {
+        use std::io::Read;
+        let mut stdin = String::new();
+        std::io::stdin().read_to_string(&mut stdin)?;
+        let stdin = stdin.trim_end().to_string();
+        if !stdin.is_empty() {
+            prompt_arg = Some(stdin);
+        }
+    }
 
     // Set working directory if specified
     if let Some(dir) = &cli.working_dir {
@@ -241,8 +403,9 @@ async fn main() -> Result<()> {
     // Build tool registry
     let mut tools =
         claude_tools::build_default_registry_with_options(claude_tools::RegistryOptions {
-            is_non_interactive_session: cli.prompt.is_some(),
+            is_non_interactive_session: prompt_arg.is_some(),
         });
+    filter_registry_by_cli_tools(&mut tools, &cli.tools);
 
     // Register bundled skills (simplify, stuck, remember, …).
     // Each skill's registrar applies its own TS-parity gate
@@ -306,6 +469,7 @@ async fn main() -> Result<()> {
     }
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
     claude_tools::register_tool_search_snapshot(&mut tools);
+    filter_registry_by_cli_tools(&mut tools, &cli.tools);
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
 
     // --- Skill discovery ---
@@ -366,7 +530,10 @@ async fn main() -> Result<()> {
     };
     let api_config = claude_core::api::client::ApiConfig {
         max_tokens: resolve_max_output_tokens(&model, &settings),
-        session_id: claude_core::api::client::get_session_id().clone(),
+        session_id: cli
+            .session_id
+            .clone()
+            .unwrap_or_else(|| claude_core::api::client::get_session_id().clone()),
         account_uuid,
         model: model.clone(),
         ..Default::default()
@@ -514,6 +681,8 @@ async fn main() -> Result<()> {
     // propagate the parent's permission mode.
     let permission_mode = if cli.dangerously_skip_permissions {
         claude_core::permissions::types::PermissionMode::BypassPermissions
+    } else if let Some(mode_str) = &cli.permission_mode {
+        claude_core::permissions::types::PermissionMode::from_string(mode_str)
     } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
         claude_core::permissions::types::PermissionMode::from_string(&mode_str)
     } else {
@@ -521,7 +690,7 @@ async fn main() -> Result<()> {
     };
 
     // Handle non-interactive prompt mode
-    if let Some(prompt) = cli.prompt {
+    if let Some(prompt) = prompt_arg {
         // If using OAuth proxy, delegate to real claude binary
         use claude_core::permissions::evaluator::{evaluate_permission, SimpleToolPermissions};
         use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
@@ -558,27 +727,48 @@ async fn main() -> Result<()> {
         query_engine.add_user_message(&effective_prompt);
 
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
+        let mut final_text = String::new();
         loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
+            let output_format = cli.output_format.clone();
 
             // Spawn a task to print streamed text to stdout
             let print_handle = tokio::spawn(async move {
+                let mut text = String::new();
                 while let Some(ev) = stream_rx.recv().await {
-                    match ev {
-                        StreamEvent::TextDelta { text } => {
-                            print!("{}", text);
+                    match &output_format {
+                        OutputFormat::Text => match ev {
+                            StreamEvent::TextDelta { text } => {
+                                print!("{}", text);
+                                use std::io::Write;
+                                let _ = std::io::stdout().flush();
+                            }
+                            StreamEvent::Done { .. } => {
+                                println!();
+                            }
+                            _ => {}
+                        },
+                        OutputFormat::Json => {
+                            if let StreamEvent::TextDelta { text: delta } = ev {
+                                text.push_str(&delta);
+                            }
                         }
-                        StreamEvent::Done { .. } => {
-                            println!();
+                        OutputFormat::StreamJson => {
+                            if let StreamEvent::TextDelta { text: delta } = &ev {
+                                text.push_str(delta);
+                            }
+                            emit_stream_json(stream_event_to_json(&ev));
                         }
-                        _ => {}
                     }
                 }
+                text
             });
 
             let result = query_engine.run_turn(&stream_tx).await?;
             drop(stream_tx);
-            let _ = print_handle.await;
+            if let Ok(text) = print_handle.await {
+                final_text.push_str(&text);
+            }
 
             match result {
                 TurnResult::Done(_) => {
@@ -681,11 +871,32 @@ async fn main() -> Result<()> {
                             }
                         };
 
+                        if cli.output_format == OutputFormat::StreamJson {
+                            emit_stream_json(serde_json::json!({
+                                "type": "tool_result",
+                                "tool_use_id": tool_info.id,
+                                "name": tool_info.name,
+                                "result": result_text,
+                                "is_error": is_error,
+                            }));
+                        }
                         query_engine.add_tool_result(&tool_info.id, &result_text, is_error);
                     }
                     // Continue the loop to call run_turn again with the tool results
                 }
             }
+        }
+
+        if cli.output_format == OutputFormat::Json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": false,
+                    "result": final_text,
+                }))?
+            );
         }
 
         // Gracefully disconnect MCP servers
