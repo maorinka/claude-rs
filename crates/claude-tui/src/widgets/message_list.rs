@@ -445,12 +445,12 @@ fn render_message(
 
             // Model line
             let model_text = format!("Model: {}", model);
-            let model_text = if model_text.len() > inner {
-                format!("{}...", &model_text[..inner.saturating_sub(3)])
+            let model_text = if model_text.chars().count() > inner {
+                truncate_with_ellipsis(&model_text, inner)
             } else {
                 model_text
             };
-            let model_pad = inner.saturating_sub(model_text.len());
+            let model_pad = inner.saturating_sub(model_text.chars().count());
             lines.push(Line::from(vec![
                 Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
                 Span::styled(model_text, Style::default().fg(theme.inactive)),
@@ -460,12 +460,12 @@ fn render_message(
 
             // CWD line
             let cwd_text = format!("cwd: {}", cwd);
-            let cwd_text = if cwd_text.len() > inner {
-                format!("{}...", &cwd_text[..inner.saturating_sub(3)])
+            let cwd_text = if cwd_text.chars().count() > inner {
+                truncate_with_ellipsis(&cwd_text, inner)
             } else {
                 cwd_text
             };
-            let cwd_pad = inner.saturating_sub(cwd_text.len());
+            let cwd_pad = inner.saturating_sub(cwd_text.chars().count());
             lines.push(Line::from(vec![
                 Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
                 Span::styled(cwd_text, Style::default().fg(theme.inactive)),
@@ -765,6 +765,20 @@ impl<'a> Widget for MessageListWidget<'a> {
             buf.set_line(area.x, y, line, area.width);
         }
     }
+}
+
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let prefix: String = s.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
 }
 
 #[cfg(test)]

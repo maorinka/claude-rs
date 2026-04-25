@@ -319,8 +319,8 @@ impl Widget for TrustDialogWidget<'_> {
                 if row >= inner.y + inner.height.saturating_sub(2) {
                     break;
                 }
-                let display = if line_text.len() > max_w {
-                    format!("{}...", &line_text[..max_w.saturating_sub(3)])
+                let display = if line_text.chars().count() > max_w {
+                    truncate_with_ellipsis(line_text, max_w)
                 } else {
                     line_text.to_string()
                 };
@@ -338,6 +338,9 @@ impl Widget for TrustDialogWidget<'_> {
         ];
         let mut x = inner.x + 2;
         for (label, idx) in &buttons {
+            if x >= inner.x + inner.width {
+                break;
+            }
             let style = if *idx == self.dialog.selected_button {
                 Style::default()
                     .fg(Color::Black)
@@ -347,10 +350,25 @@ impl Widget for TrustDialogWidget<'_> {
                 Style::default().fg(Color::White)
             };
             let span = Span::styled(format!(" {} ", label), style);
-            buf.set_span(x, button_y, &span, span.width() as u16);
-            x += span.width() as u16 + 2;
+            let available = (inner.x + inner.width).saturating_sub(x);
+            buf.set_span(x, button_y, &span, available);
+            x = x.saturating_add(span.width() as u16 + 2);
         }
     }
+}
+
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let prefix: String = s.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
 }
 
 // ---------------------------------------------------------------------------

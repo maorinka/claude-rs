@@ -13,7 +13,7 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
     for word in text.split_whitespace() {
         if current.is_empty() {
             current.push_str(word);
-        } else if current.len() + 1 + word.len() <= width {
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
             current.push(' ');
             current.push_str(word);
         } else {
@@ -115,9 +115,11 @@ impl Widget for &PermissionDialog {
         let desc = Line::from(Span::raw(self.description.clone()));
         buf.set_line(inner.x + 1, inner.y, &desc, inner.width.saturating_sub(2));
 
-        // Input preview (truncated)
-        let preview = if self.input_preview.len() > inner.width as usize - 4 {
-            format!("{}...", &self.input_preview[..inner.width as usize - 7])
+        // Input preview (truncated). Keep this char-based so Unicode
+        // command previews and tiny terminals cannot panic on byte slices.
+        let preview_width = inner.width.saturating_sub(2) as usize;
+        let preview = if self.input_preview.chars().count() > preview_width {
+            truncate_with_ellipsis(&self.input_preview, preview_width)
         } else {
             self.input_preview.clone()
         };
@@ -152,6 +154,9 @@ impl Widget for &PermissionDialog {
         let buttons = ["Allow", "Deny", "Always Allow"];
         let mut x = inner.x + 2;
         for (i, label) in buttons.iter().enumerate() {
+            if x >= inner.x + inner.width {
+                break;
+            }
             let style = if i == self.selected_button {
                 Style::default()
                     .fg(Color::Black)
@@ -161,8 +166,41 @@ impl Widget for &PermissionDialog {
                 Style::default().fg(Color::White)
             };
             let span = Span::styled(format!(" {} ", label), style);
-            buf.set_span(x, button_y, &span, span.width() as u16);
-            x += span.width() as u16 + 2;
+            let available = (inner.x + inner.width).saturating_sub(x);
+            buf.set_span(x, button_y, &span, available);
+            x = x.saturating_add(span.width() as u16 + 2);
         }
+    }
+}
+
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let prefix: String = s.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncates_unicode_preview_without_splitting_codepoints() {
+        assert_eq!(truncate_with_ellipsis("éééabcdef", 6), "ééé...");
+    }
+
+    #[test]
+    fn renders_on_tiny_width_without_panicking() {
+        let dialog = PermissionDialog::new("Bash".into(), "Run command".into(), "ééééé".into());
+        let area = Rect::new(0, 0, 8, 6);
+        let mut buf = Buffer::empty(area);
+        (&dialog).render(area, &mut buf);
     }
 }

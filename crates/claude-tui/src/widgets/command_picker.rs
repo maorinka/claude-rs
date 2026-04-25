@@ -119,8 +119,7 @@ impl CommandPicker {
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
-                    e.name.to_lowercase().contains(&q)
-                        || e.description.to_lowercase().contains(&q)
+                    e.name.to_lowercase().contains(&q) || e.description.to_lowercase().contains(&q)
                 })
                 .map(|(i, _)| i)
                 .collect();

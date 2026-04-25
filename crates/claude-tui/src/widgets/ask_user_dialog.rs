@@ -15,6 +15,8 @@ pub struct AskUserDialog {
     pub input: String,
     /// Cursor byte offset within `input`.
     pub cursor: usize,
+    /// Currently highlighted preset option when options are present.
+    selected_option: usize,
 }
 
 impl AskUserDialog {
@@ -24,6 +26,7 @@ impl AskUserDialog {
             options,
             input: String::new(),
             cursor: 0,
+            selected_option: 0,
         }
     }
 
@@ -33,9 +36,19 @@ impl AskUserDialog {
             (_, KeyCode::Enter) => {
                 if !self.input.is_empty() {
                     Some(self.input.clone())
+                } else if !self.options.is_empty() {
+                    self.options.get(self.selected_option).cloned()
                 } else {
                     None
                 }
+            }
+            (_, KeyCode::Tab) | (_, KeyCode::Down) | (_, KeyCode::Right) => {
+                self.next_option();
+                None
+            }
+            (_, KeyCode::BackTab) | (_, KeyCode::Up) | (_, KeyCode::Left) => {
+                self.prev_option();
+                None
             }
             (_, KeyCode::Char(c))
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
@@ -56,29 +69,36 @@ impl AskUserDialog {
                 }
                 None
             }
-            (_, KeyCode::Left) => {
-                if self.cursor > 0 {
-                    let prev = self.input[..self.cursor]
-                        .chars()
-                        .last()
-                        .map(|c| c.len_utf8())
-                        .unwrap_or(0);
-                    self.cursor -= prev;
-                }
-                None
-            }
-            (_, KeyCode::Right) => {
-                if self.cursor < self.input.len() {
-                    let next = self.input[self.cursor..]
-                        .chars()
-                        .next()
-                        .map(|c| c.len_utf8())
-                        .unwrap_or(0);
-                    self.cursor += next;
-                }
-                None
-            }
             _ => None,
+        }
+    }
+
+    fn next_option(&mut self) {
+        if !self.options.is_empty() && self.input.is_empty() {
+            self.selected_option = (self.selected_option + 1) % self.options.len();
+        } else if self.cursor < self.input.len() {
+            let next = self.input[self.cursor..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor += next;
+        }
+    }
+
+    fn prev_option(&mut self) {
+        if !self.options.is_empty() && self.input.is_empty() {
+            self.selected_option = self
+                .selected_option
+                .checked_sub(1)
+                .unwrap_or(self.options.len() - 1);
+        } else if self.cursor > 0 {
+            let prev = self.input[..self.cursor]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor -= prev;
         }
     }
 }
@@ -111,8 +131,23 @@ impl Widget for &AskUserDialog {
         // Optional choices on the next line
         let mut row = inner.y + 1;
         if !self.options.is_empty() {
-            let opts = self.options.join("  |  ");
-            let opt_line = Line::from(Span::styled(opts, Style::default().fg(Color::DarkGray)));
+            let mut spans = Vec::new();
+            for (idx, option) in self.options.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                }
+                let selected = self.input.is_empty() && idx == self.selected_option;
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                spans.push(Span::styled(format!(" {} ", option), style));
+            }
+            let opt_line = Line::from(spans);
             buf.set_line(inner.x + 1, row, &opt_line, inner.width.saturating_sub(2));
             row += 1;
         }
@@ -132,5 +167,36 @@ impl Widget for &AskUserDialog {
                 inner.width.saturating_sub(2),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn enter_selects_highlighted_option_when_input_empty() {
+        let mut dialog = AskUserDialog::new("Pick one", vec!["yes".into(), "no".into()]);
+        assert_eq!(dialog.handle_key(key(KeyCode::Enter)), Some("yes".into()));
+    }
+
+    #[test]
+    fn tab_cycles_options() {
+        let mut dialog = AskUserDialog::new("Pick one", vec!["yes".into(), "no".into()]);
+        dialog.handle_key(key(KeyCode::Tab));
+        assert_eq!(dialog.handle_key(key(KeyCode::Enter)), Some("no".into()));
+    }
+
+    #[test]
+    fn typed_input_overrides_selected_option() {
+        let mut dialog = AskUserDialog::new("Pick one", vec!["yes".into(), "no".into()]);
+        dialog.handle_key(key(KeyCode::Char('m')));
+        dialog.handle_key(key(KeyCode::Char('a')));
+        dialog.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(dialog.handle_key(key(KeyCode::Enter)), Some("may".into()));
     }
 }

@@ -720,7 +720,10 @@ impl App {
                             KeyCode::Up => {
                                 self.command_picker.prev();
                             }
-                            KeyCode::Down | KeyCode::Tab => {
+                            KeyCode::BackTab | KeyCode::Left => {
+                                self.command_picker.prev();
+                            }
+                            KeyCode::Down | KeyCode::Tab | KeyCode::Right => {
                                 self.command_picker.next();
                             }
                             KeyCode::Enter => {
@@ -740,7 +743,11 @@ impl App {
                                     self.command_picker.close();
                                 } else {
                                     let query = new_text.strip_prefix('/').unwrap_or("");
-                                    self.command_picker.set_query(query);
+                                    if query.chars().any(char::is_whitespace) {
+                                        self.command_picker.close();
+                                    } else {
+                                        self.command_picker.set_query(query);
+                                    }
                                 }
                             }
                             KeyCode::Char(_)
@@ -751,7 +758,11 @@ impl App {
                                 // Read updated text and filter picker
                                 let full_text = self.prompt.text().to_string();
                                 if let Some(q) = full_text.strip_prefix('/') {
-                                    self.command_picker.set_query(q);
+                                    if q.chars().any(char::is_whitespace) {
+                                        self.command_picker.close();
+                                    } else {
+                                        self.command_picker.set_query(q);
+                                    }
                                 } else {
                                     self.command_picker.close();
                                 }
@@ -1721,12 +1732,14 @@ impl App {
                     "{} \u{00B7} {} ({}) \u{00B7} {}",
                     model_text, cost_text, pct_text, mode_text
                 );
+                let status = fit_status_for_width(&status, input_area.width as usize);
 
                 // Build the top border with status text embedded:
                 // ── status text ──────────
-                let status_width = status.len();
-                let remaining = (input_area.width as usize).saturating_sub(status_width + 4);
-                let left_dashes = 2;
+                let status_width = status.chars().count();
+                let left_dashes = 2usize.min(input_area.width as usize);
+                let remaining =
+                    (input_area.width as usize).saturating_sub(left_dashes + status_width + 2);
                 let right_dashes = remaining;
 
                 let token_color = if context_pct >= TOKEN_CRITICAL_THRESHOLD {
@@ -2221,10 +2234,50 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
 
+fn fit_status_for_width(status: &str, width: usize) -> String {
+    let max_status = width.saturating_sub(4);
+    let len = status.chars().count();
+    if len <= max_status {
+        return status.to_string();
+    }
+    if max_status == 0 {
+        return String::new();
+    }
+    if max_status <= 3 {
+        return truncate_chars(status, max_status);
+    }
+    format!("{}...", truncate_chars(status, max_status - 3))
+}
+
 /// Calculate a centered rect within the given area.
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let width = area.width * percent_x / 100;
+    let width = (area.width * percent_x / 100).max(1).min(area.width);
+    let height = height.max(1).min(area.height);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width, height.min(area.height))
+    Rect::new(x, y, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_preserves_utf8_boundaries() {
+        assert_eq!(truncate_chars("éééabc", 4), "éééa");
+    }
+
+    #[test]
+    fn fit_status_respects_width_with_unicode_separator() {
+        let fitted = fit_status_for_width("claude-sonnet · $0.00 (1%) · default", 18);
+        assert!(fitted.chars().count() <= 14);
+        assert!(fitted.ends_with("..."));
+    }
+
+    #[test]
+    fn centered_rect_has_nonzero_size_on_tiny_terminals() {
+        let rect = centered_rect(60, 10, Rect::new(0, 0, 1, 1));
+        assert_eq!(rect.width, 1);
+        assert_eq!(rect.height, 1);
+    }
 }
