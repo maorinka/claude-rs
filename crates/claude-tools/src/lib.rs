@@ -133,11 +133,6 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     reg.register(Arc::new(web_fetch::WebFetchTool));
     reg.register(Arc::new(web_search::WebSearchTool));
     reg.register(Arc::new(write::FileWriteTool));
-    reg.register(Arc::new(brief_tool::BriefTool));
-    reg.register(Arc::new(send_message::SendMessageTool));
-    reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool::default()));
-    reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool::default()));
-    reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
 
     if feature_enabled("ENABLE_LSP_TOOL") {
         reg.register(Arc::new(lsp_tool::LSPTool));
@@ -209,10 +204,6 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     }
     if feature_enabled("CLAUDE_CODE_VERIFY_PLAN") {
         reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
-    }
-
-    if tool_search::is_tool_search_enabled_optimistic() {
-        tool_search::register_tool_search_snapshot(&mut reg);
     }
 
     reg

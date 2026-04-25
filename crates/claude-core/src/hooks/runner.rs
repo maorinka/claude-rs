@@ -1017,6 +1017,10 @@ fn process_hook_json_output(
         result.system_message = Some(sys_msg.clone());
     }
 
+    if let Some(ref additional_context) = json.additional_context {
+        result.additional_context = Some(additional_context.clone());
+    }
+
     // Handle reason as permission decision reason (when a permission behavior is set)
     if result.permission_behavior.is_some() {
         if let Some(ref reason) = json.reason {

@@ -128,6 +128,9 @@ pub async fn register_mcp_tools(
     let tool_defs = mgr.tool_definitions().await;
     drop(mgr);
 
+    let mut tool_defs = tool_defs;
+    tool_defs.sort_by(|a, b| a.name.cmp(&b.name));
+
     for tool_info in tool_defs {
         let input_schema = tool_info
             .input_schema

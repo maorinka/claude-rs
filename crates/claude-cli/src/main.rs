@@ -188,6 +188,143 @@ fn filter_registry_by_cli_tools(registry: &mut claude_tools::ToolRegistry, value
     }
 }
 
+fn merge_json_objects(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) else {
+        *base = overlay;
+        return;
+    };
+    for (key, value) in overlay_obj {
+        match (base_obj.get_mut(key), value) {
+            (Some(existing), serde_json::Value::Object(_)) if existing.is_object() => {
+                merge_json_objects(existing, value.clone());
+            }
+            _ => {
+                base_obj.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value {
+    let mut merged = serde_json::json!({});
+    let mut paths = Vec::new();
+    if let Ok(claude_dir) = claude_core::config::paths::claude_dir() {
+        paths.push(claude_dir.join("settings.json"));
+        paths.push(claude_dir.join("settings.local.json"));
+    }
+    paths.push(project_root.join(".claude").join("settings.json"));
+    paths.push(project_root.join(".claude").join("settings.local.json"));
+
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        merge_json_objects(&mut merged, value);
+    }
+    merged
+}
+
+fn enabled_plugin_roots(settings: &serde_json::Value) -> Vec<(String, String, std::path::PathBuf)> {
+    let Some(enabled) = settings.get("enabledPlugins").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let Ok(claude_dir) = claude_core::config::paths::claude_dir() else {
+        return Vec::new();
+    };
+
+    let mut roots = Vec::new();
+    for (plugin_id, value) in enabled {
+        if value.as_bool() != Some(true) {
+            continue;
+        }
+        let Some((name, source)) = plugin_id.split_once('@') else {
+            continue;
+        };
+        let cache_root = claude_dir
+            .join("plugins")
+            .join("cache")
+            .join(source)
+            .join(name);
+        let Ok(entries) = std::fs::read_dir(cache_root) else {
+            continue;
+        };
+        let mut versions: Vec<_> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        versions.sort();
+        if let Some(root) = versions.pop() {
+            roots.push((name.to_string(), source.to_string(), root));
+        }
+    }
+    roots.sort_by(|a, b| a.0.cmp(&b.0));
+    roots
+}
+
+fn replace_plugin_root(value: &mut serde_json::Value, root: &std::path::Path) {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = text.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string());
+            if cfg!(unix) && text.contains(".cmd") && !text.trim_start().starts_with("bash ") {
+                *text = format!("bash {}", text);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                replace_plugin_root(item, root);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                replace_plugin_root(item, root);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value) {
+    for (_, _, root) in enabled_plugin_roots(settings) {
+        let hooks_path = root.join("hooks").join("hooks.json");
+        let Ok(text) = std::fs::read_to_string(hooks_path) else {
+            continue;
+        };
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        replace_plugin_root(&mut value, &root);
+        merge_json_objects(settings, value);
+    }
+}
+
+fn load_enabled_plugin_mcp_servers(
+    settings: &serde_json::Value,
+) -> std::collections::HashMap<String, claude_core::config::settings::McpServerSettingsEntry> {
+    let mut servers = std::collections::HashMap::new();
+    for (plugin_name, _, root) in enabled_plugin_roots(settings) {
+        let mcp_path = root.join(".mcp.json");
+        let Ok(text) = std::fs::read_to_string(mcp_path) else {
+            continue;
+        };
+        let Ok(entries) = serde_json::from_str::<
+            std::collections::HashMap<
+                String,
+                claude_core::config::settings::McpServerSettingsEntry,
+            >,
+        >(&text) else {
+            continue;
+        };
+        for (server_name, entry) in entries {
+            servers.insert(format!("plugin:{}:{}", plugin_name, server_name), entry);
+        }
+    }
+    servers
+}
+
 fn emit_stream_json(value: serde_json::Value) {
     println!(
         "{}",
@@ -399,6 +536,8 @@ async fn main() -> Result<()> {
         Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
         Err(_) => claude_core::config::settings::Settings::default(),
     };
+    let mut raw_settings = load_raw_settings_value(&project_root);
+    merge_enabled_plugin_hooks(&mut raw_settings);
 
     // Build tool registry
     let mut tools =
@@ -418,14 +557,15 @@ async fn main() -> Result<()> {
     // --- MCP server wiring ---
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
-    claude_tools::register_mcp_resource_tools(&mut tools, mcp_manager.clone());
-    if !settings.mcp_servers.is_empty() {
+    let mut mcp_server_settings = settings.mcp_servers.clone();
+    mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&raw_settings));
+    if !mcp_server_settings.is_empty() {
         tracing::info!(
-            count = settings.mcp_servers.len(),
+            count = mcp_server_settings.len(),
             "Connecting to configured MCP servers"
         );
         let mut configs = std::collections::HashMap::new();
-        for (name, entry) in &settings.mcp_servers {
+        for (name, entry) in &mcp_server_settings {
             let env = if entry.env.is_empty() {
                 None
             } else {
@@ -467,8 +607,6 @@ async fn main() -> Result<()> {
         // Register MCP tools into the tool registry
         claude_tools::register_mcp_tools(&mut tools, mcp_manager.clone()).await;
     }
-    claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
-    claude_tools::register_tool_search_snapshot(&mut tools);
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
 
@@ -556,21 +694,22 @@ async fn main() -> Result<()> {
     // user-configured hooks. We serialise the typed Settings to a JSON Value
     // so HookRunner::from_settings can pick the "hooks" subtree out of it.
     // If the user has no hooks configured the runner is a no-op.
-    {
+    let hook_runner = {
         let cwd = std::env::current_dir()
             .ok()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         let session_id = api_config.session_id.clone();
-        let settings_value = serde_json::to_value(settings).unwrap_or(serde_json::Value::Null);
+        let settings_value = raw_settings.clone();
         let runner = std::sync::Arc::new(claude_core::hooks::HookRunner::from_settings(
             &settings_value,
             cwd,
             session_id,
             String::new(),
         ));
-        claude_core::hooks::set_global_runner(runner);
-    }
+        claude_core::hooks::set_global_runner(runner.clone());
+        runner
+    };
 
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth);
 
@@ -631,6 +770,25 @@ async fn main() -> Result<()> {
             );
             query_engine.load_messages(transcript);
         }
+    }
+
+    let session_start = hook_runner
+        .run_hooks(
+            &claude_core::hooks::types::HookEvent::SessionStart,
+            serde_json::json!({
+                "source": if cli.resume.is_some() { "resume" } else { "startup" },
+            }),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+    for context in session_start.additional_contexts {
+        query_engine.append_user_context_block(format!(
+            "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
+            context
+        ));
     }
 
     // Add MCP server instructions as request-time user context, matching TS.

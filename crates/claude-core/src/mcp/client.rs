@@ -1574,7 +1574,7 @@ pub fn build_mcp_tool_name(server_name: &str, tool_name: &str) -> String {
 pub fn normalize_mcp_name(name: &str) -> String {
     name.chars()
         .map(|c| {
-            if c.is_alphanumeric() || c == '_' {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
                 c
             } else {
                 '_'
@@ -2294,7 +2294,7 @@ mod tests {
     fn test_build_mcp_tool_name() {
         assert_eq!(
             build_mcp_tool_name("my-server", "my-tool"),
-            "mcp__my_server__my_tool"
+            "mcp__my-server__my-tool"
         );
         assert_eq!(build_mcp_tool_name("server", "tool"), "mcp__server__tool");
         assert_eq!(
@@ -2306,7 +2306,7 @@ mod tests {
     #[test]
     fn test_normalize_mcp_name() {
         assert_eq!(normalize_mcp_name("simple"), "simple");
-        assert_eq!(normalize_mcp_name("with-dashes"), "with_dashes");
+        assert_eq!(normalize_mcp_name("with-dashes"), "with-dashes");
         assert_eq!(normalize_mcp_name("with.dots"), "with_dots");
         assert_eq!(normalize_mcp_name("with spaces"), "with_spaces");
         assert_eq!(normalize_mcp_name("UPPER"), "UPPER");
