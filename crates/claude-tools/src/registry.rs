@@ -214,6 +214,7 @@ pub trait ToolExecutor: Send + Sync {
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn ToolExecutor>>,
     aliases: HashMap<String, String>,
+    order: Vec<String>,
 }
 
 impl ToolRegistry {
@@ -221,11 +222,15 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
             aliases: HashMap::new(),
+            order: Vec::new(),
         }
     }
 
     pub fn register(&mut self, tool: Arc<dyn ToolExecutor>) {
         let name = tool.name().to_string();
+        if !self.tools.contains_key(&name) {
+            self.order.push(name.clone());
+        }
         for alias in tool.aliases() {
             self.aliases.insert(alias.to_string(), name.clone());
         }
@@ -241,6 +246,7 @@ impl ToolRegistry {
         let removed = self.tools.remove(&canonical);
         if removed.is_some() {
             self.aliases.retain(|_, target| target != &canonical);
+            self.order.retain(|name| name != &canonical);
         }
         removed
     }
@@ -253,19 +259,22 @@ impl ToolRegistry {
     }
 
     pub fn all(&self) -> Vec<Arc<dyn ToolExecutor>> {
-        self.tools.values().cloned().collect()
+        self.order
+            .iter()
+            .filter_map(|name| self.tools.get(name).cloned())
+            .collect()
     }
 
     pub fn schemas(&self) -> Vec<Value> {
-        self.tools
-            .values()
+        self.all()
+            .into_iter()
             .map(|t| serde_json::json!({"name": t.name(), "input_schema": t.input_schema()}))
             .collect()
     }
 
     pub fn tool_definitions(&self) -> Vec<claude_core::api::client::ToolDefinition> {
-        self.tools
-            .values()
+        self.all()
+            .into_iter()
             .map(|t| claude_core::api::client::ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description(),
