@@ -141,11 +141,23 @@ impl Default for CommandPicker {
 /// Stateless widget that renders a `CommandPicker`.
 pub struct CommandPickerWidget<'a> {
     picker: &'a CommandPicker,
+    title: &'a str,
+    prefix: &'a str,
 }
 
 impl<'a> CommandPickerWidget<'a> {
     pub fn new(picker: &'a CommandPicker) -> Self {
-        Self { picker }
+        Self {
+            picker,
+            title: "Commands",
+            prefix: "/",
+        }
+    }
+
+    pub fn titled(mut self, title: &'a str, prefix: &'a str) -> Self {
+        self.title = title;
+        self.prefix = prefix;
+        self
     }
 }
 
@@ -159,7 +171,7 @@ impl<'a> Widget for CommandPickerWidget<'a> {
         Clear.render(area, buf);
 
         let block = Block::default()
-            .title(" Commands ")
+            .title(format!(" {} ", self.title))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(area);
@@ -205,7 +217,7 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
             let line = Line::from(vec![
                 Span::styled(
-                    format!("/{}", entry.name),
+                    format!("{}{}", self.prefix, entry.name),
                     style.add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(

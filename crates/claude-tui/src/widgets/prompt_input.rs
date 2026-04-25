@@ -49,6 +49,13 @@ impl PromptInput {
         self.cursor = 0;
     }
 
+    pub fn set_text(&mut self, text: String) {
+        self.cursor = text.len();
+        self.text = text;
+        self.history_index = None;
+        self.saved_current.clear();
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> InputAction {
         match (key.modifiers, key.code) {
             // Shift+Enter or Alt+Enter: insert newline at cursor (multi-line input)

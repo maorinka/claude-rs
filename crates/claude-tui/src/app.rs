@@ -137,6 +137,8 @@ pub struct App {
     cost_tracker: CostTracker,
     /// Command picker overlay (shown on `/` at start of input)
     command_picker: CommandPicker,
+    /// Rewind picker overlay (shown on Escape while idle)
+    rewind_picker: CommandPicker,
     /// Model picker overlay (shown on `/model`)
     model_picker: ModelPicker,
     /// Theme picker overlay (shown on `/theme`)
@@ -177,6 +179,7 @@ impl App {
             total_tokens: 0,
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
+            rewind_picker: CommandPicker::new(),
             model_picker: ModelPicker::new(),
             theme_picker: ThemePicker::new(),
             theme_setting: ThemeSetting::Auto,
@@ -281,6 +284,33 @@ impl App {
         }
 
         entries
+    }
+
+    fn build_rewind_entries(&self) -> Vec<CommandPickerEntry> {
+        self.message_list
+            .messages()
+            .iter()
+            .enumerate()
+            .rev()
+            .filter_map(|(idx, msg)| {
+                let MessageEntry::User { text } = msg else {
+                    return None;
+                };
+                Some(CommandPickerEntry {
+                    name: format!("#{}", idx),
+                    description: truncate_chars(text.replace('\n', " ").trim(), 96),
+                })
+            })
+            .collect()
+    }
+
+    fn restore_rewind(&mut self, idx: usize) -> Option<String> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        self.message_list.truncate(idx);
+        Some(prompt_text)
     }
 
     /// Try to execute a slash command or skill from user input.
@@ -786,6 +816,42 @@ impl App {
                             }
                             _ => {}
                         }
+                    } else if self.rewind_picker.visible {
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            KeyCode::Up => {
+                                self.rewind_picker.prev();
+                                continue;
+                            }
+                            KeyCode::Down => {
+                                self.rewind_picker.next();
+                                continue;
+                            }
+                            KeyCode::Enter => {
+                                if let Some(name) = self.rewind_picker.selected_name() {
+                                    if let Some(idx) = parse_rewind_picker_name(name) {
+                                        if let Some(prompt_text) = self.restore_rewind(idx) {
+                                            let messages = reconstruct_engine_messages(
+                                                self.message_list.messages(),
+                                            );
+                                            let _ = engine_tx
+                                                .send(EngineCommand::LoadMessages(messages))
+                                                .await;
+                                            self.prompt.set_text(prompt_text);
+                                            self.message_list.push(MessageEntry::System {
+                                                text: "Rewound conversation. Edit the restored prompt, then press Enter to resubmit.".to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            _ => {}
+                        }
                     } else {
                         // Escape: cancel in-progress response (does not quit).
                         if k.code == KeyCode::Esc && k.modifiers.is_empty() {
@@ -827,6 +893,11 @@ impl App {
                                 let _ = engine_tx
                                     .send(EngineCommand::SetCancelToken(cancel.clone()))
                                     .await;
+                            } else {
+                                let entries = self.build_rewind_entries();
+                                if !entries.is_empty() {
+                                    self.rewind_picker.open(entries);
+                                }
                             }
                             continue;
                         }
@@ -1705,6 +1776,7 @@ impl App {
         let permission_dialog = &self.permission_dialog;
         let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
+        let rewind_picker = &self.rewind_picker;
         let model_picker = &self.model_picker;
         let theme_picker = &self.theme_picker;
         let model_name = &self.model_name;
@@ -1874,6 +1946,20 @@ impl App {
                     picker_height,
                 );
                 let picker_widget = CommandPickerWidget::new(command_picker);
+                frame.render_widget(picker_widget, picker_area);
+            }
+
+            if rewind_picker.visible {
+                let picker_height = ((rewind_picker.filtered_count() as u16) + 2)
+                    .max(3)
+                    .min(area.height * 2 / 3);
+                let picker_area = Rect::new(
+                    area.x + 1,
+                    chunks[2].y.saturating_sub(picker_height),
+                    area.width.saturating_sub(2),
+                    picker_height,
+                );
+                let picker_widget = CommandPickerWidget::new(rewind_picker).titled("Rewind", "");
                 frame.render_widget(picker_widget, picker_area);
             }
 
@@ -2267,6 +2353,27 @@ fn truncate_result(s: &str) -> String {
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
+}
+
+fn parse_rewind_picker_name(name: &str) -> Option<usize> {
+    name.strip_prefix('#')?.parse().ok()
+}
+
+fn reconstruct_engine_messages(entries: &[MessageEntry]) -> Vec<serde_json::Value> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MessageEntry::User { text } => Some(serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            })),
+            MessageEntry::Assistant { text } => Some(serde_json::json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}]
+            })),
+            _ => None,
+        })
+        .collect()
 }
 
 fn fit_status_for_width(status: &str, width: usize) -> String {

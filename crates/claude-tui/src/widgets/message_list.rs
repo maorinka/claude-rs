@@ -126,6 +126,13 @@ impl MessageList {
         self.height_cache.iter_mut().for_each(|h| *h = None);
         &mut self.messages
     }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.messages.truncate(len);
+        self.height_cache.truncate(len);
+        self.scroll_to_bottom();
+    }
+
     pub fn len(&self) -> usize {
         self.messages.len()
     }
