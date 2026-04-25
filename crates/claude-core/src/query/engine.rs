@@ -331,14 +331,7 @@ impl QueryEngine {
 
         // Build dynamic user context prepend (Issue 25).
         // Mirrors TS prependUserContext() — injects currentDate as a <system-reminder>.
-        let context_prepend = build_user_context_message();
-        let messages_for_query: Vec<serde_json::Value> = if let Some(prepend) = context_prepend {
-            let mut all = vec![prepend];
-            all.extend(self.messages.iter().cloned());
-            all
-        } else {
-            self.messages.clone()
-        };
+        let messages_for_query = build_messages_for_query(&self.messages);
 
         // Make the API call, with reactive compaction on prompt-too-long (Issue 11).
         // We use a loop with at most 2 iterations: the first attempt, and optionally a
@@ -746,6 +739,53 @@ fn build_user_context_message() -> Option<serde_json::Value> {
     }))
 }
 
+/// Build the request message list with dynamic user context.
+///
+/// TS `prependUserContext()` prepends system-reminder blocks inside the current
+/// user turn, not as a separate `role: user` message. Keeping the reminder and
+/// user prompt in the same API message preserves the original turn shape and
+/// avoids consecutive user messages for a single prompt.
+fn build_messages_for_query(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let Some(prepend) = build_user_context_message() else {
+        return messages.to_vec();
+    };
+    let prepend_blocks = prepend
+        .get("content")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if prepend_blocks.is_empty() {
+        return messages.to_vec();
+    }
+
+    let mut result = messages.to_vec();
+    if let Some(first_user) = result
+        .iter_mut()
+        .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("user"))
+    {
+        match first_user.get_mut("content") {
+            Some(serde_json::Value::Array(content)) => {
+                let mut merged = prepend_blocks;
+                merged.append(content);
+                *content = merged;
+            }
+            Some(serde_json::Value::String(text)) => {
+                let mut merged = prepend_blocks;
+                merged.push(serde_json::json!({"type": "text", "text": text.clone()}));
+                first_user["content"] = serde_json::Value::Array(merged);
+            }
+            _ => {
+                first_user["content"] = serde_json::Value::Array(prepend_blocks);
+            }
+        }
+        result
+    } else {
+        let mut all = vec![prepend];
+        all.extend(result);
+        all
+    }
+}
+
 /// Filter `messages` to only those from the last compact boundary onward.
 ///
 /// If no compact boundary exists, all messages are returned unchanged.
@@ -770,6 +810,45 @@ fn filter_after_compact_boundary(messages: Vec<serde_json::Value>) -> Vec<serde_
     match boundary_idx {
         Some(idx) => messages[idx..].to_vec(),
         None => messages,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_context_is_inserted_into_current_user_turn() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}]
+        })];
+
+        let with_context = build_messages_for_query(&messages);
+
+        assert_eq!(with_context.len(), 1);
+        assert_eq!(with_context[0]["role"], "user");
+        let content = with_context[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert!(content[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("<system-reminder>"));
+        assert_eq!(content[1]["text"], "hi");
+    }
+
+    #[test]
+    fn user_context_preserves_history_when_no_user_message_exists() {
+        let messages = vec![serde_json::json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hello"}]
+        })];
+
+        let with_context = build_messages_for_query(&messages);
+
+        assert_eq!(with_context.len(), 2);
+        assert_eq!(with_context[0]["role"], "user");
+        assert_eq!(with_context[1]["role"], "assistant");
     }
 }
 

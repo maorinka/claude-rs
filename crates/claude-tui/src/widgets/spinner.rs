@@ -136,7 +136,8 @@ pub struct SpinnerState {
     pub frame: usize,
     pub mode: SpinnerMode,
     pub start_time: Instant,
-    pub tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
     pub active: bool,
     /// Number of queued user messages (shown as hint after elapsed time).
     pub queued_count: usize,
@@ -162,7 +163,8 @@ impl SpinnerState {
             frame: 0,
             mode: SpinnerMode::Stopped,
             start_time: Instant::now(),
-            tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
             active: false,
             queued_count: 0,
             verb_index,
@@ -174,7 +176,8 @@ impl SpinnerState {
         self.mode = mode;
         self.start_time = Instant::now();
         self.last_verb_change = Instant::now();
-        self.tokens = 0;
+        self.input_tokens = 0;
+        self.output_tokens = 0;
         self.active = true;
         self.frame = 0;
         // Pick a random starting verb
@@ -246,6 +249,19 @@ fn format_tokens(count: u64) -> String {
     }
 }
 
+fn format_io_tokens(input: u64, output: u64) -> Option<String> {
+    match (input, output) {
+        (0, 0) => None,
+        (0, out) => Some(format!("{} out", format_tokens(out))),
+        (inp, 0) => Some(format!("{} in", format_tokens(inp))),
+        (inp, out) => Some(format!(
+            "{} in / {} out",
+            format_tokens(inp),
+            format_tokens(out)
+        )),
+    }
+}
+
 impl Widget for &SpinnerState {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if !self.active || area.height == 0 {
@@ -271,8 +287,8 @@ impl Widget for &SpinnerState {
 
         // Duration and token info in parentheses, dim
         let mut info_parts = vec![elapsed];
-        if self.tokens > 0 {
-            info_parts.push(format!("{} tokens", format_tokens(self.tokens)));
+        if let Some(tokens) = format_io_tokens(self.input_tokens, self.output_tokens) {
+            info_parts.push(tokens);
         }
         if self.queued_count > 0 {
             info_parts.push(format!("{} queued", self.queued_count));
@@ -322,6 +338,17 @@ mod tests {
         assert_eq!(format_tokens(1000), "1k");
         assert_eq!(format_tokens(1300), "1.3k");
         assert_eq!(format_tokens(12500), "12.5k");
+    }
+
+    #[test]
+    fn format_io_tokens_labels_input_and_output() {
+        assert_eq!(format_io_tokens(0, 0), None);
+        assert_eq!(format_io_tokens(42, 0).as_deref(), Some("42 in"));
+        assert_eq!(format_io_tokens(0, 16).as_deref(), Some("16 out"));
+        assert_eq!(
+            format_io_tokens(12500, 16).as_deref(),
+            Some("12.5k in / 16 out")
+        );
     }
 
     #[test]

@@ -46,6 +46,9 @@ def compare(label_a: str, a: dict[str, Any], label_b: str, b: dict[str, Any]) ->
 
     print(f"{label_a}: {a.get('summary')}")
     print(f"{label_b}: {b.get('summary')}")
+    if a.get("response") or b.get("response"):
+        print(f"{label_a} response usage: {a.get('response', {}).get('usage_events')}")
+        print(f"{label_b} response usage: {b.get('response', {}).get('usage_events')}")
     print()
 
     for key in ["model", "max_tokens", "stream", "thinking", "context_management", "metadata"]:

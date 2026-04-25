@@ -1599,13 +1599,14 @@ impl App {
                 self.spinner.stop();
             }
             StreamEvent::UsageUpdate(ref usage) => {
-                self.spinner.tokens = usage.output_tokens;
                 // Track the latest turn's input_tokens for context window
                 // display. MessageStart carries input_tokens (representing
                 // how full the context is); MessageDelta carries 0 input.
                 if usage.input_tokens > 0 {
                     self.total_tokens = usage.input_tokens;
+                    self.spinner.input_tokens = usage.input_tokens;
                 }
+                self.spinner.output_tokens = usage.output_tokens;
                 self.cost_tracker.add_usage(usage);
                 // Sync shared state for slash commands
                 if let Ok(mut state) = self.shared_state.lock() {

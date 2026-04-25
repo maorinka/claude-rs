@@ -81,6 +81,42 @@ def count_cache_markers(value: Any) -> int:
     return 0
 
 
+def extract_sse_usage_events(text: str) -> list[dict[str, Any]]:
+    usage_events: list[dict[str, Any]] = []
+    for event_text in text.split("\n\n"):
+        data_lines = [
+            line.removeprefix("data:").strip()
+            for line in event_text.splitlines()
+            if line.startswith("data:")
+        ]
+        if not data_lines:
+            continue
+        data = "\n".join(data_lines)
+        if data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except Exception:
+            continue
+        usage = event.get("usage")
+        if isinstance(usage, dict):
+            usage_events.append(
+                {
+                    "event_type": event.get("type"),
+                    "usage": usage,
+                }
+            )
+        message = event.get("message")
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            usage_events.append(
+                {
+                    "event_type": event.get("type"),
+                    "usage": message["usage"],
+                }
+            )
+    return usage_events
+
+
 class CaptureProxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     upstream_base = DEFAULT_UPSTREAM
@@ -98,10 +134,10 @@ class CaptureProxy(BaseHTTPRequestHandler):
         except Exception:
             body_json = {"_raw_body": raw_body.decode("utf-8", errors="replace")}
 
-        self.capture_request(client_tag, body_json)
-        self.relay_request(raw_body)
+        capture_path = self.capture_request(client_tag, body_json)
+        self.relay_request(raw_body, capture_path)
 
-    def capture_request(self, client_tag: str, body_json: Any) -> None:
+    def capture_request(self, client_tag: str, body_json: Any) -> pathlib.Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         path_slug = safe_slug(self.path)
@@ -122,8 +158,9 @@ class CaptureProxy(BaseHTTPRequestHandler):
             f"{payload['summary']}",
             flush=True,
         )
+        return out_path
 
-    def relay_request(self, raw_body: bytes) -> None:
+    def relay_request(self, raw_body: bytes, capture_path: pathlib.Path) -> None:
         path = self.path
         if path.startswith("/api/"):
             upstream = urlsplit(DEFAULT_UPSTREAM)
@@ -167,16 +204,37 @@ class CaptureProxy(BaseHTTPRequestHandler):
                     continue
                 self.send_header(key, value)
             self.end_headers()
+            response_body = bytearray()
             while True:
                 chunk = resp.read(64 * 1024)
                 if not chunk:
                     break
+                response_body.extend(chunk)
                 self.wfile.write(chunk)
                 self.wfile.flush()
+            self.capture_response(capture_path, resp.status, bytes(response_body))
         except Exception as exc:
             self.send_error(502, f"proxy relay failed: {exc}")
         finally:
             conn.close()
+
+    def capture_response(self, capture_path: pathlib.Path, status: int, raw_body: bytes) -> None:
+        try:
+            payload = json.loads(capture_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        text = raw_body.decode("utf-8", errors="replace")
+        usage_events = extract_sse_usage_events(text)
+        payload["response"] = {
+            "status": status,
+            "usage_events": usage_events,
+            "final_usage": usage_events[-1] if usage_events else None,
+            "raw_preview": text[:20_000],
+        }
+        capture_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
