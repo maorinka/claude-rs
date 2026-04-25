@@ -261,7 +261,7 @@ pub fn build_request_body(
         // largest stable prefix and benefits most from caching.
         if let Some(sys_arr) = body["system"].as_array_mut() {
             if let Some(last) = sys_arr.last_mut() {
-                last["cache_control"] = json!({"type": "ephemeral"});
+                last["cache_control"] = cache_control_json();
             }
         }
     }
@@ -274,7 +274,7 @@ pub fn build_request_body(
         // Tool schemas are the second-largest stable prefix.
         if let Some(tools_arr) = body["tools"].as_array_mut() {
             if let Some(last) = tools_arr.last_mut() {
-                last["cache_control"] = json!({"type": "ephemeral"});
+                last["cache_control"] = cache_control_json();
             }
         }
     }
@@ -328,41 +328,51 @@ pub fn build_request_body_with_raw_tools(
         body["tools"] = Value::Array(tools.to_vec());
         if let Some(tools_arr) = body["tools"].as_array_mut() {
             if let Some(last) = tools_arr.last_mut() {
-                last["cache_control"] = json!({"type": "ephemeral"});
+                last["cache_control"] = cache_control_json();
             }
         }
     }
     body
 }
 
-/// Apply cache_control breakpoints to conversation messages in the request
-/// body. Marks the last content block of the last user turn so the prompt
-/// cache covers the stable prefix (system + tools + prior conversation).
+/// Apply cache_control breakpoints to conversation messages in the request body.
+/// Marks the last non-thinking content block of the last message so the prompt
+/// cache covers the stable prefix (system + tools + conversation).
 ///
-/// Matches TS `addCacheControlBreakpoints` which walks messages backward and
-/// stamps `cache_control: {"type": "ephemeral"}` on the last non-thinking
-/// block of the most recent user turn.
+/// Matches TS `addCacheBreakpoints` marker placement: exactly one message-level
+/// marker at `messages.length - 1`, skipping thinking/redacted_thinking blocks.
 fn add_message_cache_markers(body: &mut Value) {
     let Some(messages) = body["messages"].as_array_mut() else {
         return;
     };
-    // Walk backward to find the last user message, mark its last content block.
-    for msg in messages.iter_mut().rev() {
-        if msg["role"].as_str() != Some("user") {
-            continue;
-        }
-        let Some(content) = msg["content"].as_array_mut() else {
-            continue;
-        };
-        // Find the last non-thinking block.
-        for block in content.iter_mut().rev() {
-            let btype = block["type"].as_str().unwrap_or("");
-            if btype != "thinking" && btype != "redacted_thinking" {
-                block["cache_control"] = json!({"type": "ephemeral"});
-                return;
-            }
+    let Some(msg) = messages.last_mut() else {
+        return;
+    };
+    let Some(content) = msg["content"].as_array_mut() else {
+        return;
+    };
+    for block in content.iter_mut().rev() {
+        let btype = block["type"].as_str().unwrap_or("");
+        if btype != "thinking" && btype != "redacted_thinking" {
+            block["cache_control"] = cache_control_json();
+            return;
         }
     }
+}
+
+fn cache_control_json() -> Value {
+    let mut value = json!({"type": "ephemeral"});
+    if let Ok(ttl) = std::env::var("CLAUDE_RS_CACHE_TTL") {
+        if !ttl.is_empty() {
+            value["ttl"] = json!(ttl);
+        }
+    }
+    if let Ok(scope) = std::env::var("CLAUDE_RS_CACHE_SCOPE") {
+        if !scope.is_empty() {
+            value["scope"] = json!(scope);
+        }
+    }
+    value
 }
 
 fn build_minimal_request_body(
@@ -396,7 +406,7 @@ fn build_minimal_request_body(
 
         if let Some(sys_arr) = body["system"].as_array_mut() {
             if let Some(last) = sys_arr.last_mut() {
-                last["cache_control"] = json!({"type": "ephemeral"});
+                last["cache_control"] = cache_control_json();
             }
         }
     }
@@ -406,7 +416,7 @@ fn build_minimal_request_body(
 
         if let Some(tools_arr) = body["tools"].as_array_mut() {
             if let Some(last) = tools_arr.last_mut() {
-                last["cache_control"] = json!({"type": "ephemeral"});
+                last["cache_control"] = cache_control_json();
             }
         }
     }
@@ -603,6 +613,12 @@ mod tests {
     /// Serialize tests that touch environment variables to avoid races.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn clear_cache_env() {
+        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        std::env::remove_var("CLAUDE_RS_CACHE_TTL");
+        std::env::remove_var("CLAUDE_RS_CACHE_SCOPE");
+    }
+
     #[test]
     fn max_output_tokens_match_current_ts_defaults() {
         assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 64_000);
@@ -668,6 +684,7 @@ mod tests {
     #[test]
     fn minimal_transport_body_strips_metadata_and_context_management() {
         let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
         std::env::set_var("CLAUDE_RS_MINIMAL_TRANSPORT", "1");
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
@@ -678,13 +695,13 @@ mod tests {
         assert!(body.get("metadata").is_none());
         assert!(body.get("context_management").is_none());
         assert!(body.get("thinking").is_none());
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
     }
 
     #[test]
     fn cache_markers_on_system_prompt() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -717,7 +734,7 @@ mod tests {
     #[test]
     fn cache_markers_on_tool_definitions() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -748,7 +765,7 @@ mod tests {
     #[test]
     fn raw_tool_request_preserves_server_tool_schema() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -771,9 +788,9 @@ mod tests {
     }
 
     #[test]
-    fn cache_markers_on_last_user_message() {
+    fn cache_markers_on_last_message() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -786,13 +803,13 @@ mod tests {
         ];
         let body = build_request_body(&config, &messages, &[], &[], false);
         let msgs = body["messages"].as_array().unwrap();
-        // Last user message (index 2) should have cache_control on its content block
+        // Last message (index 2) should have cache_control on its content block
         let last_user = &msgs[2];
         let content = last_user["content"].as_array().unwrap();
         assert_eq!(
             content[0]["cache_control"],
             json!({"type": "ephemeral"}),
-            "last user message content block must have cache_control"
+            "last message content block must have cache_control"
         );
         // First user message should NOT have it
         let first_user = &msgs[0];
@@ -804,9 +821,51 @@ mod tests {
     }
 
     #[test]
+    fn cache_markers_use_last_message_even_when_assistant() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let messages = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "hello"}]}),
+            json!({"role": "assistant", "content": [{"type": "text", "text": "hi"}]}),
+        ];
+        let body = build_request_body(&config, &messages, &[], &[], false);
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(msgs[0]["content"][0].get("cache_control").is_none());
+        assert_eq!(
+            msgs[1]["content"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+    }
+
+    #[test]
+    fn cache_control_env_can_set_ttl_and_scope() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        std::env::set_var("CLAUDE_RS_CACHE_TTL", "1h");
+        std::env::set_var("CLAUDE_RS_CACHE_SCOPE", "global");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})];
+        let body = build_request_body(&config, &messages, &[], &[], false);
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h", "scope": "global"})
+        );
+        clear_cache_env();
+    }
+
+    #[test]
     fn cache_markers_skip_thinking_blocks() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -827,6 +886,7 @@ mod tests {
     #[test]
     fn minimal_transport_also_gets_cache_markers() {
         let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
         std::env::set_var("CLAUDE_RS_MINIMAL_TRANSPORT", "1");
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
@@ -851,13 +911,13 @@ mod tests {
             tools_arr.last().unwrap()["cache_control"],
             json!({"type": "ephemeral"})
         );
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
     }
 
     #[test]
     fn oauth_request_includes_billing_attribution_without_user_system_prompt() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
