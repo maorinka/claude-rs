@@ -11,7 +11,9 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
-// Paragraph no longer used — layout renders directly to buffer
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -46,6 +48,48 @@ use crate::widgets::theme_picker::{ThemePicker, ThemePickerWidget};
 const TOKEN_WARNING_THRESHOLD: f64 = 0.80; // Yellow warning at 80%
 const TOKEN_CRITICAL_THRESHOLD: f64 = 0.95; // Red warning at 95%
 const DOUBLE_PRESS_TIMEOUT_MS: u64 = 800;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RewindRestoreOption {
+    RestoreConversation,
+    SummarizeFromHere,
+    NeverMind,
+}
+
+impl RewindRestoreOption {
+    fn label(self) -> &'static str {
+        match self {
+            Self::RestoreConversation => "Restore conversation",
+            Self::SummarizeFromHere => "Summarize from here",
+            Self::NeverMind => "Never mind",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RewindConfirmation {
+    message_index: usize,
+    prompt_text: String,
+    selected: usize,
+}
+
+impl RewindConfirmation {
+    fn selected_option(&self) -> RewindRestoreOption {
+        match self.selected {
+            0 => RewindRestoreOption::RestoreConversation,
+            1 => RewindRestoreOption::SummarizeFromHere,
+            _ => RewindRestoreOption::NeverMind,
+        }
+    }
+
+    fn next(&mut self) {
+        self.selected = (self.selected + 1) % 3;
+    }
+
+    fn prev(&mut self) {
+        self.selected = self.selected.checked_sub(1).unwrap_or(2);
+    }
+}
 
 pub enum AppEvent {
     Key(KeyEvent),
@@ -140,6 +184,8 @@ pub struct App {
     command_picker: CommandPicker,
     /// Rewind picker overlay (shown on Escape while idle)
     rewind_picker: CommandPicker,
+    /// Confirm restore/summarize after choosing a rewind checkpoint.
+    rewind_confirmation: Option<RewindConfirmation>,
     /// Last idle Escape press, used to match TS double-press behavior.
     last_idle_escape: Option<Instant>,
     /// Model picker overlay (shown on `/model`)
@@ -183,6 +229,7 @@ impl App {
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
             rewind_picker: CommandPicker::new(),
+            rewind_confirmation: None,
             last_idle_escape: None,
             model_picker: ModelPicker::new(),
             theme_picker: ThemePicker::new(),
@@ -320,6 +367,59 @@ impl App {
         Some(prompt_text)
     }
 
+    fn prepare_rewind_confirmation(&self, idx: usize) -> Option<RewindConfirmation> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        Some(RewindConfirmation {
+            message_index: idx,
+            prompt_text,
+            selected: 0,
+        })
+    }
+
+    fn summarize_rewind_from(&mut self, idx: usize) -> Option<String> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        let removed = self.message_list.messages()[idx..]
+            .iter()
+            .filter_map(|entry| match entry {
+                MessageEntry::User { text } => Some(format!("User: {text}")),
+                MessageEntry::Assistant { text } => Some(format!("Assistant: {text}")),
+                MessageEntry::ToolUse {
+                    name,
+                    input_summary,
+                    ..
+                } => Some(format!("Tool use {name}: {input_summary}")),
+                MessageEntry::ToolResult {
+                    name,
+                    output,
+                    is_error,
+                    ..
+                } => {
+                    let status = if *is_error { "error" } else { "result" };
+                    Some(format!(
+                        "Tool {name} {status}: {}",
+                        truncate_chars(output, 1000)
+                    ))
+                }
+                MessageEntry::Thinking { text } => Some(format!("Thinking: {text}")),
+                MessageEntry::System { text } => Some(format!("System: {text}")),
+                MessageEntry::Logo { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.message_list.truncate(idx);
+        Some(format!(
+            "Summarize the conversation from the point before I sent this message:\n\n\
+             {prompt_text}\n\n\
+             Conversation after that point:\n\n{removed}"
+        ))
+    }
+
     fn open_rewind_on_double_escape(&mut self) {
         if !self.prompt.is_empty() {
             self.last_idle_escape = None;
@@ -334,6 +434,7 @@ impl App {
 
         if is_double_press {
             self.last_idle_escape = None;
+            self.rewind_confirmation = None;
             let entries = self.build_rewind_entries();
             if !entries.is_empty() {
                 self.rewind_picker.open(entries);
@@ -846,6 +947,87 @@ impl App {
                             }
                             _ => {}
                         }
+                    } else if self.rewind_confirmation.is_some() {
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.rewind_confirmation = None;
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            KeyCode::Up => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.prev();
+                                }
+                                continue;
+                            }
+                            KeyCode::Down => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.next();
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('1') => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.selected = 0;
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('2') => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.selected = 1;
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('3') => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.selected = 2;
+                                }
+                                continue;
+                            }
+                            KeyCode::Enter => {
+                                let Some(confirm) = self.rewind_confirmation.take() else {
+                                    continue;
+                                };
+                                match confirm.selected_option() {
+                                    RewindRestoreOption::RestoreConversation => {
+                                        if let Some(prompt_text) =
+                                            self.restore_rewind(confirm.message_index)
+                                        {
+                                            let messages = reconstruct_engine_messages(
+                                                self.message_list.messages(),
+                                            );
+                                            let _ = engine_tx
+                                                .send(EngineCommand::LoadMessages(messages))
+                                                .await;
+                                            self.prompt.set_text(prompt_text);
+                                            self.message_list.push(MessageEntry::System {
+                                                text: "Rewound conversation. Edit the restored prompt, then press Enter to resubmit.".to_string(),
+                                            });
+                                        }
+                                    }
+                                    RewindRestoreOption::SummarizeFromHere => {
+                                        if let Some(summary_prompt) =
+                                            self.summarize_rewind_from(confirm.message_index)
+                                        {
+                                            let messages = reconstruct_engine_messages(
+                                                self.message_list.messages(),
+                                            );
+                                            let _ = engine_tx
+                                                .send(EngineCommand::LoadMessages(messages))
+                                                .await;
+                                            self.prompt.set_text(summary_prompt);
+                                            self.message_list.push(MessageEntry::System {
+                                                text: "Rewound conversation. Edit the summary prompt, then press Enter to submit.".to_string(),
+                                            });
+                                        }
+                                    }
+                                    RewindRestoreOption::NeverMind => {}
+                                }
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            _ => {}
+                        }
                     } else if self.rewind_picker.visible {
                         match k.code {
                             KeyCode::Esc => {
@@ -863,21 +1045,10 @@ impl App {
                             KeyCode::Enter => {
                                 if let Some(name) = self.rewind_picker.selected_name() {
                                     if let Some(idx) = parse_rewind_picker_name(name) {
-                                        if let Some(prompt_text) = self.restore_rewind(idx) {
-                                            let messages = reconstruct_engine_messages(
-                                                self.message_list.messages(),
-                                            );
-                                            let _ = engine_tx
-                                                .send(EngineCommand::LoadMessages(messages))
-                                                .await;
-                                            self.prompt.set_text(prompt_text);
-                                            self.message_list.push(MessageEntry::System {
-                                                text: "Rewound conversation. Edit the restored prompt, then press Enter to resubmit.".to_string(),
-                                            });
-                                        }
+                                        self.rewind_confirmation =
+                                            self.prepare_rewind_confirmation(idx);
                                     }
                                 }
-                                self.rewind_picker.close();
                                 continue;
                             }
                             _ => {}
@@ -1804,6 +1975,7 @@ impl App {
         let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
         let rewind_picker = &self.rewind_picker;
+        let rewind_confirmation = &self.rewind_confirmation;
         let model_picker = &self.model_picker;
         let theme_picker = &self.theme_picker;
         let model_name = &self.model_name;
@@ -1988,6 +2160,17 @@ impl App {
                 );
                 let picker_widget = CommandPickerWidget::new(rewind_picker).titled("Rewind", "");
                 frame.render_widget(picker_widget, picker_area);
+            }
+
+            if let Some(confirm) = rewind_confirmation {
+                let confirm_height = 14u16.min(area.height.saturating_sub(1)).max(3);
+                let confirm_area = Rect::new(
+                    area.x + 1,
+                    chunks[2].y.saturating_sub(confirm_height),
+                    area.width.saturating_sub(2),
+                    confirm_height,
+                );
+                render_rewind_confirmation(frame, confirm_area, confirm, theme);
             }
 
             // Model picker — rendered inline above the prompt
@@ -2425,6 +2608,73 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     Rect::new(x, y, width, height)
+}
+
+fn render_rewind_confirmation(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    confirm: &RewindConfirmation,
+    theme: &Theme,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let prompt = truncate_chars(confirm.prompt_text.replace('\n', " ").trim(), 96);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Rewind",
+            Style::default()
+                .fg(theme.permission)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Confirm you want to restore to the point before you sent this message:"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("│ ", Style::default().fg(theme.inactive)),
+            Span::styled(prompt, Style::default().fg(theme.text)),
+        ]),
+        Line::from(vec![
+            Span::styled("│ ", Style::default().fg(theme.inactive)),
+            Span::styled("(recently)", Style::default().fg(theme.inactive)),
+        ]),
+        Line::from(""),
+        Line::from("The conversation will be forked."),
+        Line::from("The code will be unchanged."),
+        Line::from(""),
+    ];
+
+    for (idx, option) in [
+        RewindRestoreOption::RestoreConversation,
+        RewindRestoreOption::SummarizeFromHere,
+        RewindRestoreOption::NeverMind,
+    ]
+    .iter()
+    .enumerate()
+    {
+        let selected = idx == confirm.selected;
+        let pointer = if selected { "\u{276F} " } else { "  " };
+        let style = if selected {
+            Style::default()
+                .fg(theme.permission)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(pointer, style),
+            Span::styled(format!("{}. {}", idx + 1, option.label()), style),
+        ]));
+    }
+
+    frame.render_widget(Clear, area);
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme.permission)),
+    );
+    frame.render_widget(paragraph, area);
 }
 
 #[cfg(test)]
