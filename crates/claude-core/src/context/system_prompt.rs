@@ -116,6 +116,47 @@ pub async fn build_system_prompt(
         parts.push(crate::system_prompt_extensions::TOKEN_BUDGET_INSTRUCTION.to_string());
     }
 
+    // 6c-bis. Scratchpad instructions — gated on CLAUDE_CODE_SCRATCHPAD_DIR
+    //         being set (TS gates this on the proactive/sandbox feature
+    //         flag). The variable supplies the literal directory path
+    //         that the prompt advertises.
+    if let Ok(dir) = std::env::var("CLAUDE_CODE_SCRATCHPAD_DIR") {
+        if !dir.is_empty() {
+            parts.push(crate::system_prompt_extensions::scratchpad_instructions(
+                &dir,
+            ));
+        }
+    }
+
+    // 6d. KAIROS daily-log section — instructs the model to record
+    //     observations into a per-day memory file. Gated on auto-memory
+    //     being on (matches TS `isAutoMemoryEnabled()` check). The
+    //     `tengu_coral_fern`-gated `## Searching past context` block is
+    //     spliced in via env-var gate (`CLAUDE_CODE_MEMORY_SEARCH_HINTS`)
+    //     since GrowthBook isn't wired in Rust.
+    if crate::memdir::auto_memory_enabled() {
+        let auto_mem_path = crate::memdir::get_auto_mem_path(project_root);
+        let auto_mem_dir = auto_mem_path.to_string_lossy().to_string();
+        let searching: Vec<String> =
+            if crate::errors_util::is_env_truthy("CLAUDE_CODE_MEMORY_SEARCH_HINTS") {
+                crate::memdir::searching_past_context::build_searching_past_context_section(
+                    &crate::memdir::searching_past_context::SearchingPastContextInputs {
+                        auto_mem_dir: &auto_mem_dir,
+                        project_dir: &project_root.to_string_lossy(),
+                        embedded: false,
+                    },
+                )
+            } else {
+                Vec::new()
+            };
+        let inputs = crate::memdir::DailyLogPromptInputs {
+            auto_mem_dir: &auto_mem_dir,
+            skip_index: false,
+            searching_past_context: &searching,
+        };
+        parts.push(crate::memdir::build_assistant_daily_log_prompt(&inputs));
+    }
+
     // 7. Dynamic sections (brief mode, plan mode, etc.)
     for section in collect_dynamic_sections() {
         parts.push(section);
@@ -748,5 +789,51 @@ mod tests {
         let last = results.last().unwrap();
         assert!(last.0.contains("CLAUDE.local.md"));
         assert_eq!(last.1, "Local overrides");
+    }
+
+    // Auto-memory is governed by process-wide env vars; serialize the
+    // two tests that mutate them so they don't race when tokio runs
+    // them on different threads of the same process.
+    static AUTO_MEM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // test-only env serialization
+    async fn build_system_prompt_skips_kairos_when_auto_memory_disabled() {
+        let _g = AUTO_MEM_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        let blocks = build_system_prompt(tmp.path(), &[], "claude-sonnet-4-6")
+            .await
+            .unwrap();
+        std::env::remove_var("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+        let joined: String = blocks
+            .iter()
+            .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains("# auto memory"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // test-only env serialization
+    async fn build_system_prompt_emits_kairos_daily_log_when_enabled() {
+        let _g = AUTO_MEM_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        // Force auto-memory ON by clearing the disable flags.
+        std::env::remove_var("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+        std::env::remove_var("CLAUDE_CODE_SIMPLE");
+        let blocks = build_system_prompt(tmp.path(), &[], "claude-sonnet-4-6")
+            .await
+            .unwrap();
+        let joined: String = blocks
+            .iter()
+            .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("# auto memory"),
+            "expected daily-log section in prompt blocks; got:\n{joined}"
+        );
+        assert!(joined.contains("logs/YYYY/MM/YYYY-MM-DD.md"));
     }
 }
