@@ -89,6 +89,22 @@ pub struct Settings {
     /// `languagePreference` setting.
     #[serde(rename = "languagePreference", skip_serializing_if = "Option::is_none")]
     pub language_preference: Option<String>,
+
+    /// Allowlist of URL patterns HTTP hooks may target. `None` means no
+    /// allowlist restriction; `Some([])` blocks all HTTP hooks.
+    #[serde(
+        rename = "allowedHttpHookUrls",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allowed_http_hook_urls: Option<Vec<String>>,
+
+    /// Policy-level env var allowlist for HTTP hook header interpolation.
+    /// Intersected with each hook's own `allowedEnvVars`.
+    #[serde(
+        rename = "httpHookAllowedEnvVars",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub http_hook_allowed_env_vars: Option<Vec<String>>,
 }
 
 impl Settings {
@@ -107,6 +123,22 @@ impl Settings {
     /// they are non-empty, otherwise self's are kept.
     /// For `mcp_servers`, the overlay's map is merged on top of self's.
     pub fn merge(&self, overlay: &Settings) -> Settings {
+        fn merge_opt_vecs(
+            base: &Option<Vec<String>>,
+            overlay: &Option<Vec<String>>,
+        ) -> Option<Vec<String>> {
+            match (base, overlay) {
+                (None, None) => None,
+                (Some(base), None) => Some(base.clone()),
+                (None, Some(overlay)) => Some(overlay.clone()),
+                (Some(base), Some(overlay)) => {
+                    let mut merged = base.clone();
+                    merged.extend(overlay.iter().cloned());
+                    Some(merged)
+                }
+            }
+        }
+
         let mut merged_mcp = self.mcp_servers.clone();
         for (k, v) in &overlay.mcp_servers {
             merged_mcp.insert(k.clone(), v.clone());
@@ -142,6 +174,14 @@ impl Settings {
                 .language_preference
                 .clone()
                 .or_else(|| self.language_preference.clone()),
+            allowed_http_hook_urls: merge_opt_vecs(
+                &self.allowed_http_hook_urls,
+                &overlay.allowed_http_hook_urls,
+            ),
+            http_hook_allowed_env_vars: merge_opt_vecs(
+                &self.http_hook_allowed_env_vars,
+                &overlay.http_hook_allowed_env_vars,
+            ),
         }
     }
 }
