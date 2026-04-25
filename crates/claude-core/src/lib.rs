@@ -94,6 +94,7 @@ pub mod policy_limits;
 pub mod privacy_level;
 pub mod process_utils;
 pub mod prompt_suggestion;
+pub mod proxy;
 pub mod query;
 pub mod query_context;
 pub mod rate_limit_messages;

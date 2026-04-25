@@ -176,6 +176,15 @@ TS reference:
 - `src/upstreamproxy/upstreamproxy.ts`
 - `src/upstreamproxy/relay.ts`
 
+Improved:
+- `crates/claude-core/src/proxy/*` is now compiled/exported rather than dead
+  code.
+- Rust proxy env handling now follows TS `utils/proxy.ts` active-proxy
+  precedence (`https_proxy > HTTPS_PROXY > http_proxy > HTTP_PROXY`) and uses a
+  single active proxy URL for HTTP clients.
+- Rust now reads/exports `NODE_EXTRA_CA_CERTS` alongside `SSL_CERT_FILE`,
+  `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE`.
+
 Missing or partial:
 - Full bridge messaging.
 - `initReplBridge` / `replBridge` behavior.
@@ -191,6 +200,10 @@ Missing or partial:
 - Bridge UI.
 - Direct WebSocket session manager.
 - Upstream relay/proxy.
+- Proxy `NO_PROXY` URL matching, WebSocket proxy helpers, global HTTP-agent
+  configuration, keepalive disable-on-reset behavior, mTLS helpers, AWS client
+  proxy config, Anthropic unix-socket tunneling, and sandbox/upstream relay
+  proxy integration.
 
 Needs work:
 - Decide whether Rust aims to support the same bridge/server product surface.

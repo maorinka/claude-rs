@@ -14,15 +14,26 @@ pub struct ProxyConfig {
 impl ProxyConfig {
     pub fn from_env() -> Self {
         Self {
-            https_proxy: read_env_pair("HTTPS_PROXY", "https_proxy"),
-            http_proxy: read_env_pair("HTTP_PROXY", "http_proxy"),
-            no_proxy: read_env_pair("NO_PROXY", "no_proxy"),
-            ca_bundle_path: read_env_pair("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"),
+            https_proxy: read_env_pair("https_proxy", "HTTPS_PROXY"),
+            http_proxy: read_env_pair("http_proxy", "HTTP_PROXY"),
+            no_proxy: read_env_pair("no_proxy", "NO_PROXY"),
+            ca_bundle_path: read_env_any(&[
+                "NODE_EXTRA_CA_CERTS",
+                "SSL_CERT_FILE",
+                "REQUESTS_CA_BUNDLE",
+                "CURL_CA_BUNDLE",
+            ]),
         }
     }
 
     pub fn is_proxy_configured(&self) -> bool {
         self.https_proxy.is_some() || self.http_proxy.is_some()
+    }
+
+    /// TS `getProxyUrl` parity: one active proxy URL, preferring
+    /// `https_proxy > HTTPS_PROXY > http_proxy > HTTP_PROXY`.
+    pub fn active_proxy_url(&self) -> Option<&str> {
+        self.https_proxy.as_deref().or(self.http_proxy.as_deref())
     }
 
     pub fn to_env_map(&self) -> HashMap<String, String> {
@@ -51,11 +62,17 @@ impl ProxyConfig {
 
 pub const DEFAULT_NO_PROXY: &str = "localhost,127.0.0.1,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,anthropic.com,.anthropic.com,*.anthropic.com,github.com,api.github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,pypi.org,files.pythonhosted.org,index.crates.io,proxy.golang.org";
 
-fn read_env_pair(upper: &str, lower: &str) -> Option<String> {
-    std::env::var(upper)
+fn read_env_pair(preferred: &str, fallback: &str) -> Option<String> {
+    std::env::var(preferred)
         .ok()
         .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var(lower).ok().filter(|v| !v.is_empty()))
+        .or_else(|| std::env::var(fallback).ok().filter(|v| !v.is_empty()))
+}
+
+fn read_env_any(names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
 }
 
 #[cfg(test)]
@@ -76,9 +93,20 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.is_proxy_configured());
+        assert_eq!(cfg.active_proxy_url(), Some("http://proxy:8080"));
         let env = cfg.to_env_map();
         assert_eq!(env.get("HTTPS_PROXY").unwrap(), "http://proxy:8080");
         assert_eq!(env.get("https_proxy").unwrap(), "http://proxy:8080");
+    }
+
+    #[test]
+    fn test_active_proxy_url_prefers_https_over_http() {
+        let cfg = ProxyConfig {
+            https_proxy: Some("http://https-proxy:8080".into()),
+            http_proxy: Some("http://http-proxy:8080".into()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.active_proxy_url(), Some("http://https-proxy:8080"));
     }
 
     #[test]
@@ -89,6 +117,7 @@ mod tests {
         };
         let env = cfg.to_env_map();
         assert_eq!(env.get("SSL_CERT_FILE").unwrap(), "/tmp/ca.crt");
+        assert_eq!(env.get("NODE_EXTRA_CA_CERTS").unwrap(), "/tmp/ca.crt");
         assert_eq!(env.get("CURL_CA_BUNDLE").unwrap(), "/tmp/ca.crt");
     }
 
