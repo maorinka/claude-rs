@@ -111,7 +111,6 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(powershell::PowerShellTool));
     reg.register(Arc::new(skill_tool::SkillTool));
     reg.register(Arc::new(sleep_tool::SleepTool));
-    reg.register(Arc::new(synthetic_output::SyntheticOutputTool));
     reg.register(Arc::new(todo_write::TodoWriteTool));
     reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
 

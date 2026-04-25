@@ -10,6 +10,10 @@ fn test_default_registry_has_all_phase1_tools() {
     assert!(reg.get("Grep").is_some());
     assert!(reg.get("Glob").is_some());
     assert!(reg.get("LSP").is_some());
+    assert!(
+        reg.get("StructuredOutput").is_none(),
+        "StructuredOutput is synthetic and should only be injected for structured-output requests"
+    );
 }
 
 #[test]
