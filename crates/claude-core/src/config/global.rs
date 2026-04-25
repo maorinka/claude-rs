@@ -40,6 +40,12 @@ pub struct GlobalConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_completed_onboarding: Option<bool>,
 
+    /// Stable anonymous user/device id.
+    ///
+    /// TS uses the exact key `userID` rather than camelCase `userId`.
+    #[serde(rename = "userID", skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth_account: Option<AccountInfo>,
 
@@ -161,11 +167,11 @@ mod tests {
 
         let config: GlobalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.has_completed_onboarding, Some(true));
+        assert_eq!(config.user_id.as_deref(), Some("uid-xyz"));
         assert!(config.oauth_account.is_some());
         // Unknown fields preserved in `extra`
         assert_eq!(config.extra["numStartups"], 42);
         assert_eq!(config.extra["theme"], "dark");
-        assert_eq!(config.extra["userID"], "uid-xyz");
 
         // Round-trip: unknown fields must survive serialization
         let reserialized = serde_json::to_string(&config).unwrap();
@@ -200,6 +206,7 @@ mod tests {
 
         let config: GlobalConfig = serde_json::from_str(ts_json).unwrap();
         assert_eq!(config.has_completed_onboarding, Some(true));
+        assert_eq!(config.user_id, None);
         let account = config.oauth_account.unwrap();
         assert_eq!(account.account_uuid, "acc-123");
         assert_eq!(account.email_address, "user@example.com");

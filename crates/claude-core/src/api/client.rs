@@ -1,5 +1,6 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
+use rand::RngCore;
 use reqwest::Response;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -425,24 +426,27 @@ fn build_minimal_request_body(
 
 /// Get or create a persistent device ID (matches TS `getOrCreateUserID()`).
 fn get_or_create_device_id() -> String {
-    let config_dir = std::env::var("HOME")
-        .map(|h| format!("{}/.claude", h))
-        .unwrap_or_else(|_| "/tmp/.claude".to_string());
-    let id_path = format!("{}/device_id", config_dir);
-
-    // Try to read existing ID
-    if let Ok(id) = std::fs::read_to_string(&id_path) {
-        let id = id.trim().to_string();
-        if !id.is_empty() {
-            return id;
+    if let Ok(config) = crate::config::global::load_global_config() {
+        if let Some(user_id) = config.user_id {
+            if !user_id.is_empty() {
+                return user_id;
+            }
         }
     }
 
-    // Generate and persist a new one
-    let id = uuid::Uuid::new_v4().to_string();
-    let _ = std::fs::create_dir_all(&config_dir);
-    let _ = std::fs::write(&id_path, &id);
+    let id = generate_user_id();
+    let saved_id = id.clone();
+    let _ = crate::config::global::save_global_config(|mut config| {
+        config.user_id = Some(saved_id);
+        config
+    });
     id
+}
+
+fn generate_user_id() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -603,6 +607,14 @@ mod tests {
         let parsed: Value = serde_json::from_str(user_id).unwrap();
         assert_eq!(parsed["session_id"], "session-123");
         assert_eq!(parsed["account_uuid"], "account-456");
+    }
+
+    #[test]
+    fn generated_user_id_matches_ts_shape() {
+        let id = generate_user_id();
+        assert_eq!(id.len(), 64);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(id.chars().all(|c| !c.is_ascii_uppercase()));
     }
 
     #[test]
