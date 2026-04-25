@@ -25,6 +25,7 @@ const BLACK_CIRCLE: &str = "\u{25CF}";
 const TOOL_RESULT_PREFIX: &str = "  \u{23BF}  ";
 const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
 const INTERRUPT_DISPLAY: &str = "Interrupted \u{00B7} What should Claude do instead?";
+const TOOL_RUNNING_DISPLAY: &str = "Running\u{2026}";
 
 /// Teardrop asterisk used for system/compact messages in the original.
 #[allow(dead_code)]
@@ -827,6 +828,45 @@ fn render_message(
     lines
 }
 
+fn render_pending_tool_response(theme: &Theme) -> Line<'static> {
+    let dim_style = Style::default()
+        .fg(theme.inactive)
+        .add_modifier(Modifier::DIM);
+    Line::from(vec![
+        Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style),
+        Span::styled(TOOL_RUNNING_DISPLAY.to_string(), dim_style),
+    ])
+}
+
+fn render_messages(
+    messages: &[MessageEntry],
+    width: u16,
+    show_thinking: bool,
+    expanded_tools: &HashSet<String>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let completed_tool_ids: HashSet<&str> = messages
+        .iter()
+        .filter_map(|msg| match msg {
+            MessageEntry::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    let mut all_lines: Vec<Line> = Vec::new();
+    for msg in messages {
+        let msg_lines = render_message(msg, width, show_thinking, expanded_tools, theme);
+        all_lines.extend(msg_lines);
+
+        if let MessageEntry::ToolUse { tool_use_id, .. } = msg {
+            if !completed_tool_ids.contains(tool_use_id.as_str()) {
+                all_lines.push(render_pending_tool_response(theme));
+            }
+        }
+    }
+    all_lines
+}
+
 impl<'a> Widget for MessageListWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 {
@@ -838,17 +878,13 @@ impl<'a> Widget for MessageListWidget<'a> {
         let fallback = crate::theme::dark_theme();
         let theme = self.theme.unwrap_or(&fallback);
 
-        let mut all_lines: Vec<Line> = Vec::new();
-        for msg in &self.list.messages {
-            let msg_lines = render_message(
-                msg,
-                area.width,
-                show_thinking,
-                &self.list.expanded_tools,
-                theme,
-            );
-            all_lines.extend(msg_lines);
-        }
+        let all_lines = render_messages(
+            &self.list.messages,
+            area.width,
+            show_thinking,
+            &self.list.expanded_tools,
+            theme,
+        );
 
         let total_lines = all_lines.len();
 
@@ -1022,6 +1058,59 @@ mod tests {
         let text = lines[0].to_string();
         assert!(text.contains("Read"));
         assert!(text.contains("(/foo.rs)"));
+    }
+
+    #[test]
+    fn unresolved_tool_use_shows_running_response() {
+        let theme = crate::theme::dark_theme();
+        let lines = render_messages(
+            &[MessageEntry::ToolUse {
+                name: "Bash".to_string(),
+                input_summary: "git status".to_string(),
+                tool_use_id: "tool-1".to_string(),
+            }],
+            80,
+            false,
+            &HashSet::new(),
+            &theme,
+        );
+
+        assert_eq!(lines.len(), 2);
+        let text = lines[1].to_string();
+        assert!(text.contains('\u{23BF}'));
+        assert!(text.contains(TOOL_RUNNING_DISPLAY));
+    }
+
+    #[test]
+    fn resolved_tool_use_does_not_show_running_response() {
+        let theme = crate::theme::dark_theme();
+        let lines = render_messages(
+            &[
+                MessageEntry::ToolUse {
+                    name: "Bash".to_string(),
+                    input_summary: "git status".to_string(),
+                    tool_use_id: "tool-1".to_string(),
+                },
+                MessageEntry::ToolResult {
+                    name: "Bash".to_string(),
+                    output: "clean".to_string(),
+                    is_error: false,
+                    tool_use_id: "tool-1".to_string(),
+                },
+            ],
+            80,
+            false,
+            &HashSet::new(),
+            &theme,
+        );
+
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains(TOOL_RUNNING_DISPLAY));
+        assert!(rendered.contains("clean"));
     }
 
     #[test]
