@@ -2594,7 +2594,7 @@ This is a very large prompt (~6000+ words) with 8 phases:
 - **Phase 8**: Summary and next steps (recap + to-do list of further optimizations)
 
 Full source is at `src/commands/init.ts:28-224` (the `NEW_INIT_PROMPT` constant).
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/commands/builtin.rs::NEW_INIT_PROMPT` (loads `crates/claude-core/src/prompts/new_init.md`, verbatim from TS). All 8 phase headers are asserted in a unit test. The `/init` command still dispatches to [`INIT_PROMPT`] (OLD_INIT_PROMPT) because the runtime deps (subagent-from-commands, AskUserQuestion-from-commands, skills-creation flow, `update-config` skill) aren't wired yet.
+**Status: ✅ FULLY WIRED in Rust** — `commands::builtin::NEW_INIT_PROMPT` loads `prompts/new_init.md` verbatim. `InitHandler::execute` dispatches it when `USER_TYPE === 'ant'` or `CLAUDE_CODE_NEW_INIT` is truthy (matches TS `init.ts:247-250` exactly), otherwise falls back to OLD `INIT_PROMPT`.
 
 ---
 
@@ -2637,7 +2637,7 @@ use AskUserQuestion to confirm and then Edit this SKILL.md with a minimal target
 ```
 
 Full source is at `src/commands/init-verifiers.ts:15-256`.
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/commands/builtin.rs::INIT_VERIFIERS_PROMPT` (loads `crates/claude-core/src/prompts/init_verifiers.md`, verbatim from TS). Core structure is asserted in a unit test. The `/init-verifiers` command is not yet registered; it still needs the wizard infra (auto-detection, Playwright/MCP/CLI/Tmux integration, Q&A, skill-template writer).
+**Status: ✅ FULLY WIRED in Rust** — `commands::builtin::INIT_VERIFIERS_PROMPT` loads `prompts/init_verifiers.md` verbatim. `InitVerifiersHandler` registered as `/init-verifiers` (Prompt command), emits the wizard prompt to the model so it executes the 5 phases via its existing AskUser/Subagent surface.
 
 ---
 
@@ -4588,7 +4588,7 @@ function getSystemRemindersSection(): string {
 
 ### Language Section
 **File:** `src/constants/prompts.ts:143-148`
-**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::build_language_section(Option<&str>)`. Emits the exact TS string for a given preference; settings-level `languagePreference` wiring is still missing — the caller must supply it for now.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::build_language_section(Option<&str>)`. `Settings::language_preference` field added (rename `languagePreference`). `context::system_prompt::build_system_prompt` loads merged user+project settings and splices the section before the dynamic providers run. Set in `.claude/settings.json` under `"languagePreference": "Japanese"` etc.
 ```ts
 function getLanguageSection(
   languagePreference: string | undefined,
@@ -4602,7 +4602,7 @@ Always respond in ${languagePreference}. Use ${languagePreference} for all expla
 
 ### Output Style Section
 **File:** `src/constants/prompts.ts:151-157`
-**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::build_output_style_section(name, prompt)`. Wraps `(name, prompt)` into the `# Output Style: <name>\n<prompt>` string verbatim; OutputStyleConfig loader/dispatcher is still to wire.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::build_output_style_section(name, prompt)`. `Settings::output_style` field added; `context::system_prompt::build_system_prompt` reads it, calls `output_styles::load_output_styles(project_root)`, finds the named style, and splices the wrapper. `/output-style` command is functional (list/set/clear, persists to `.claude/settings.json`).
 ```ts
 function getOutputStyleSection(
   outputStyleConfig: OutputStyleConfig | null,
@@ -4861,7 +4861,7 @@ ${CYBER_RISK_INSTRUCTION}`
 
 ### Token Budget Instruction
 **File:** `src/constants/prompts.ts:547-548`
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::TOKEN_BUDGET_INSTRUCTION` + `NUMERIC_LENGTH_ANCHORS`. Prompt-text ported verbatim; the run-time injection that detects the user's "+500k / spend 2M" directive and splices this into the system prompt is not yet wired.
+**Status: ✅ WIRED in Rust (env-gated)** — `system_prompt_extensions.rs::TOKEN_BUDGET_INSTRUCTION` + `NUMERIC_LENGTH_ANCHORS`. `build_system_prompt` injects `NUMERIC_LENGTH_ANCHORS` for ant-only users (matches TS gate at `constants/prompts.ts:531` — `process.env.USER_TYPE === 'ant'`) and `TOKEN_BUDGET_INSTRUCTION` when `CLAUDE_CODE_TOKEN_BUDGET` is truthy. Detecting "+500k" tokens directly in the user message and converting to a hard minimum is a separate feature that lives downstream of this prompt.
 ```ts
 'When the user specifies a token target (e.g., "+500k", "spend 2M tokens", "use 1B tokens"), your output token count will be shown each turn. Keep working until you approach the target — plan your work to fill it productively. The target is a hard minimum, not a suggestion. If you stop early, the system will automatically continue you.'
 ```
@@ -4952,7 +4952,7 @@ export async function enhanceSystemPromptWithEnvDetails(
 
 ### Scratchpad Instructions
 **File:** `src/constants/prompts.ts:804-818`
-**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::scratchpad_instructions(dir)`. Full prompt ported; session-specific scratchpad directory allocation not yet wired.
+**Status: ✅ WIRED in Rust** — Builder at `system_prompt_extensions.rs::scratchpad_instructions(dir)`. `context::system_prompt::build_system_prompt` splices it whenever `CLAUDE_CODE_SCRATCHPAD_DIR` env var supplies a path (TS gates on a feature flag; we substitute the env var since the flag system isn't wired). Session-specific tmpdir allocation is the caller's responsibility.
 ```ts
 return `# Scratchpad Directory
 
@@ -4989,7 +4989,7 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
 
 ### Proactive / Autonomous Work Section
 **File:** `src/constants/prompts.ts:864-913`
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::PROACTIVE_AUTONOMOUS_WORK_SECTION`. Full prompt text ported verbatim. The runtime infra it depends on (tick loop, Sleep tool, terminal focus detection, context injection) is not yet implemented — the /proactive command is still a stub.
+**Status: ✅ ADDED to Rust (prompt parked)** — `system_prompt_extensions.rs::PROACTIVE_AUTONOMOUS_WORK_SECTION`. Full prompt text ported. Runtime tick loop, Sleep tool, terminal-focus detection are subsystem-scale work not yet built — `/proactive` is still a stub.
 ```ts
 return `# Autonomous work
 
@@ -5324,7 +5324,7 @@ const EXPLAIN_COMMAND_TOOL = {
 
 ### Permission Explainer User Prompt Template
 **File:** `src/utils/permissions/permissionExplainer.ts:167-173`
-**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::permission_explainer_user_prompt(...)`. Elides Description/Context lines exactly when the inputs are absent; caller still to wire.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::permission_explainer_user_prompt(...)`. Caller: `crate::permission_explainer_prompt::explain_command(tool_name, tool_description, formatted_input, conversation_context, cancel)` runs the Haiku call via `secondary_model::get_global()` and returns `Ok(Some(text))` or `Ok(None)` when no model is registered. TUI dialog still surfaces the raw command rather than the explanation — wiring `explain_command` into `widgets::permission_dialog` is a small async refactor.
 ```ts
 const userPrompt = `Tool: ${toolName}
 ${toolDescription ? `Description: ${toolDescription}\n` : ''}
@@ -5340,7 +5340,7 @@ Explain this command in context.`
 ## utils/permissions/yoloClassifier.ts
 ### Auto Mode Classifier Tool Schema
 **File:** `src/utils/permissions/yoloClassifier.ts:262-285`
-**Status: ✅ ADDED to Rust (schema parked)** — `crates/claude-core/src/system_prompt_extensions.rs::yolo_classifier_tool_schema()` returns the full `BetaToolUnion` shape as `serde_json::Value`, with `thinking` / `shouldBlock` / `reason` properties and the `required` list matching TS exactly. Constants `YOLO_CLASSIFIER_TOOL_NAME` (`classify_result`) + `_TOOL_DESCRIPTION` also exposed. The LLM-classifier caller is still to wire — the Rust auto-mode path at `permissions/evaluator.rs:465` uses static rules.
+**Status: ✅ FULLY WIRED in Rust** — Schema at `system_prompt_extensions.rs::yolo_classifier_tool_schema()` (full BetaToolUnion shape). Caller: `crate::yolo_classifier::classify_action(tool_name, tool_input_json, recent_transcript, cancel)` asks the secondary model for a verdict and parses the JSON tolerantly (handles fences, coerced booleans, braces in strings; conservatively blocks on parse failure). Async permission wrapper at `permissions::evaluator::evaluate_permission_async` routes Auto-mode Asks through the classifier and converts to Allow/Deny.
 ```ts
 const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   type: 'custom',
@@ -5403,7 +5403,7 @@ export function buildDefaultExternalSystemPrompt(): string {
 ## utils/shell/prefix.ts
 ### Command Prefix Extraction Prompt (Haiku classifier)
 **File:** `src/utils/shell/prefix.ts:220-232`
-**Status: ✅ ADDED to Rust (builders parked)** — `crates/claude-core/src/system_prompt_extensions.rs::build_command_prefix_classifier_system_prompt` / `_user_prompt`. Both TS branches on `useSystemPromptPolicySpec` are reproduced verbatim; the Haiku-call wiring itself still lives in the static `bash_security.rs` path.
+**Status: ⚠️ BUILDERS PARKED in Rust** — `system_prompt_extensions.rs::build_command_prefix_classifier_system_prompt` / `_user_prompt`. Both TS branches on `useSystemPromptPolicySpec` reproduced verbatim. Bash prefix extraction in Rust still uses static rules in `claude-tools/src/bash_security.rs` — replacing them with a Haiku-classifier call would be a behavior change with cost/latency implications, deferred until the broader auto-mode classifier rollout.
 ```ts
 const response = await queryHaiku({
   systemPrompt: asSystemPrompt(
@@ -5427,7 +5427,7 @@ const response = await queryHaiku({
 ## utils/hooks/execPromptHook.ts
 ### Prompt Hook Evaluation System Prompt
 **File:** `src/utils/hooks/execPromptHook.ts:64-69`
-**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::PROMPT_HOOK_EVALUATION_SYSTEM_PROMPT`. Full prompt ported; `hooks/runner.rs:605` still returns the placeholder error until LLM-query infrastructure lands.
+**Status: ✅ FULLY WIRED in Rust** — Constant at `system_prompt_extensions.rs::PROMPT_HOOK_EVALUATION_SYSTEM_PROMPT`. `hooks::runner::execute_prompt_hook` calls `secondary_model::get_global()` with the system+user prompt, parses the `{ok, reason}` JSON, and maps to `HookOutcome::Success` / `Blocking` / `NonBlockingError` (when no model is registered).
 ```ts
 systemPrompt: asSystemPrompt([
   `You are evaluating a hook in Claude Code.
@@ -5443,7 +5443,7 @@ Your response must be a JSON object matching one of the following schemas:
 ## utils/hooks/skillImprovement.ts
 ### Skill Improvement Detection Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:102-127`
-**Status: ⚠️ PARTIAL in Rust** — System prompt is parked at `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_DETECTION_SYSTEM_PROMPT`. The user-turn template (with `<skill_definition>` / `<recent_messages>` interpolation) still needs to be ported; no caller wired yet.
+**Status: ✅ FULLY WIRED in Rust** — System prompt + user-turn template at `system_prompt_extensions.rs`. Caller: `crate::skill_improvement::detect_skill_improvements(skill_content, recent_messages, cancel)` runs the LLM pass via `secondary_model::get_global()`, parses `<updates>[{section, change, reason}]</updates>` into typed `SkillUpdate` Vec. Returns `Ok(None)` when no model is registered or the LLM returned an empty array.
 ```ts
 content: `You are analyzing a conversation where a user is executing a skill (a repeatable process).
 Your job: identify if the user's recent messages contain preferences, requests, or corrections that should be permanently added to the skill definition for future runs.
@@ -5479,7 +5479,7 @@ systemPrompt:
 
 ### Skill Improvement Apply Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:215-230`
-**Status: ⚠️ PARTIAL in Rust** — System prompt is parked at `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_APPLY_SYSTEM_PROMPT`. User-turn template with `<current_skill_file>` / `<improvements>` interpolation still needs porting.
+**Status: ✅ FULLY WIRED in Rust** — System prompt + user-turn template at `system_prompt_extensions.rs`. Caller: `crate::skill_improvement::apply_skill_improvements(current_content, &updates, cancel)` runs the LLM apply pass and pulls the `<updated_file>...</updated_file>` body. Returns `Ok(None)` when no secondary model is registered.
 ```ts
 content: `You are editing a skill definition file. Apply the following improvements to the skill.
 
@@ -5513,7 +5513,7 @@ systemPrompt: asSystemPrompt([
 ## utils/swarm/teammatePromptAddendum.ts
 ### Teammate System Prompt Addendum
 **File:** `src/utils/swarm/teammatePromptAddendum.ts:8-17`
-**Status: ✅ ADDED to Rust** — `crates/claude-core/src/system_prompt_extensions.rs::TEAMMATE_SYSTEM_PROMPT_ADDENDUM` (verbatim port; awaits wiring into teammate-worker system prompt assembly in `teams/spawn.rs` / backend `build_system_prompt`).
+**Status: ✅ FULLY WIRED in Rust** — Constant at `system_prompt_extensions.rs::TEAMMATE_SYSTEM_PROMPT_ADDENDUM`. `teams::spawn::spawn_in_process` appends it to the teammate's system prompt at spawn time so the worker routes peer messages through SendMessage rather than plain text.
 ```ts
 export const TEAMMATE_SYSTEM_PROMPT_ADDENDUM = `
 # Agent Teammate Communication
@@ -6436,7 +6436,7 @@ export function buildSearchingPastContextSection(autoMemDir: string): string[] {
 ```
 
 ### Assistant Daily Log Prompt (KAIROS mode)
-**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/memdir/daily_log_prompt.rs::build_assistant_daily_log_prompt(DailyLogPromptInputs)`. Verbatim port of the TS line-by-line builder; reuses the existing `WHAT_NOT_TO_SAVE_SECTION` + `ENTRYPOINT_NAME` constants and accepts caller-provided `buildSearchingPastContextSection` output for the feature-gated tail. KAIROS runtime (auto-memory daily log path resolution + system-prompt injection) is still unwired.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `memdir::daily_log_prompt::build_assistant_daily_log_prompt(DailyLogPromptInputs)`. `context::system_prompt::build_system_prompt` calls it whenever `memdir::auto_memory_enabled()` returns true, resolves the auto-memory path via `get_auto_mem_path(project_root)`, and conditionally appends the `## Searching past context` block when `CLAUDE_CODE_MEMORY_SEARCH_HINTS` is set.
 **File:** `src/memdir/memdir.ts:327`
 ```ts
 function buildAssistantDailyLogPrompt(skipIndex = false): string {
