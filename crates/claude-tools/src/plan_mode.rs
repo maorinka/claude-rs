@@ -43,7 +43,7 @@ pub fn set_plan_mode(active: bool) {
 /// Check if a tool should be blocked by plan mode.
 ///
 /// In plan mode, only read-only tools, EnterPlanMode, ExitPlanMode, and
-/// AskUser are allowed to proceed. All other tools should require explicit
+/// AskUserQuestion is allowed to proceed. All other tools should require explicit
 /// user confirmation (Ask).
 pub fn should_plan_mode_block(tool_name: &str, is_read_only: bool) -> bool {
     if !is_plan_mode_active() {
@@ -51,7 +51,7 @@ pub fn should_plan_mode_block(tool_name: &str, is_read_only: bool) -> bool {
     }
 
     match tool_name {
-        "EnterPlanMode" | "ExitPlanMode" | "AskUser" | "Brief" => false,
+        "EnterPlanMode" | "ExitPlanMode" | "AskUserQuestion" | "AskUser" | "Brief" => false,
         _ if is_read_only => false,
         _ => true,
     }
@@ -591,6 +591,7 @@ mod tests {
 
         assert!(!should_plan_mode_block("EnterPlanMode", true));
         assert!(!should_plan_mode_block("ExitPlanMode", false));
+        assert!(!should_plan_mode_block("AskUserQuestion", true));
         assert!(!should_plan_mode_block("AskUser", true));
         assert!(!should_plan_mode_block("Brief", false));
 

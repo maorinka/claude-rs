@@ -68,7 +68,11 @@ pub const ASK_USER_PROMPT: &str = include_str!("prompts/ask_user.md");
 #[async_trait]
 impl ToolExecutor for AskUserQuestionTool {
     fn name(&self) -> &str {
-        "AskUser"
+        "AskUserQuestion"
+    }
+
+    fn aliases(&self) -> &[&str] {
+        &["AskUser"]
     }
 
     fn description(&self) -> String {
@@ -336,7 +340,8 @@ mod tests {
     #[test]
     fn test_ask_user_tool_properties() {
         let tool = AskUserQuestionTool;
-        assert_eq!(tool.name(), "AskUser");
+        assert_eq!(tool.name(), "AskUserQuestion");
+        assert_eq!(tool.aliases(), &["AskUser"]);
         assert!(tool.is_read_only(&json!({})));
         assert!(!tool.is_concurrency_safe(&json!({})));
     }

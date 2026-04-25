@@ -100,6 +100,7 @@ fn test_plan_mode_blocks_write_tools() {
     // Plan mode tools themselves are NOT blocked
     assert!(!should_plan_mode_block("EnterPlanMode", true));
     assert!(!should_plan_mode_block("ExitPlanMode", false));
+    assert!(!should_plan_mode_block("AskUserQuestion", true));
     assert!(!should_plan_mode_block("AskUser", true));
 
     set_plan_mode(false);

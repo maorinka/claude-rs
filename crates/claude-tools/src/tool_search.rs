@@ -21,7 +21,10 @@ const ALL_TOOLS: &[(&str, &str)] = &[
         "Switch to plan mode for describing actions before executing",
     ),
     ("ExitPlanMode", "Return to normal mode after planning"),
-    ("AskUser", "Ask the user a question and receive an answer"),
+    (
+        "AskUserQuestion",
+        "Ask the user a question and receive an answer",
+    ),
     ("Brief", "Toggle brief mode for more concise output"),
     ("SendMessage", "Send a message to another agent or channel"),
     ("MCP", "Call a tool on a connected MCP server"),
