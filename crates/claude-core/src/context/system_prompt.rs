@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 
 use super::environment::build_environment_context;
 use super::git::get_git_context;
+use crate::config::settings::Settings;
+use crate::output_styles::load_output_styles;
+use crate::system_prompt_extensions::{build_language_section, build_output_style_section};
 
 /// External hook for adding mode-specific sections to the system prompt.
 /// Populated by claude-tools::brief_tool and claude-tools::plan_mode.
@@ -80,7 +83,26 @@ pub async fn build_system_prompt(
         }
     }
 
-    // 6. Dynamic sections (brief mode, plan mode, etc.)
+    // 6. Settings-driven sections (language preference, output style)
+    //    Loads ~/.claude/settings.json + project .claude/settings.json,
+    //    matches TS Settings → getLanguageSection/getOutputStyleSection
+    //    via build_language_section / build_output_style_section.
+    let settings = load_merged_settings(project_root);
+    if let Some(section) = build_language_section(settings.language_preference.as_deref()) {
+        parts.push(section);
+    }
+    if let Some(style_name) = settings.output_style.as_deref() {
+        let styles = load_output_styles(project_root);
+        if let Some(style) = styles.iter().find(|s| s.name == style_name) {
+            if let Some(section) =
+                build_output_style_section(Some(&style.name), Some(&style.prompt))
+            {
+                parts.push(section);
+            }
+        }
+    }
+
+    // 7. Dynamic sections (brief mode, plan mode, etc.)
     for section in collect_dynamic_sections() {
         parts.push(section);
     }
@@ -92,6 +114,18 @@ pub async fn build_system_prompt(
         .collect();
 
     Ok(blocks)
+}
+
+/// Load and merge user-level + project-level settings. User-level
+/// (`~/.claude/settings.json`) is the base; project-level
+/// (`<project>/.claude/settings.json`) overlays on top so project
+/// preferences win. Missing or unparseable files yield `Default`.
+fn load_merged_settings(project_root: &Path) -> Settings {
+    let user = dirs::home_dir()
+        .map(|h| Settings::load_from_file(&h.join(".claude").join("settings.json")))
+        .unwrap_or_default();
+    let project = Settings::load_from_file(&project_root.join(".claude").join("settings.json"));
+    user.merge(&project)
 }
 
 /// Map model ID to a human-readable marketing name (matches TS getPublicModelDisplayName).

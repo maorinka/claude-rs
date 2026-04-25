@@ -3,6 +3,7 @@ use std::process::Command as ProcessCommand;
 use anyhow::Result;
 
 use super::registry::{Command, CommandContext, CommandHandler, CommandRegistry, CommandResult};
+use crate::config::settings::Settings;
 
 // ---------------------------------------------------------------------------
 // Action-type command handlers
@@ -934,11 +935,19 @@ pub const NEW_INIT_PROMPT: &str = include_str!("../prompts/new_init.md");
 
 /// Verbatim port of TS `/init-verifiers` prompt
 /// (src/commands/init-verifiers.ts:15-256). The 5-phase verifier-skill
-/// creation wizard. Not wired as a command in Rust yet — it needs
-/// auto-detection of frameworks/servers, AskUserQuestion from commands,
-/// and skill-template writing. Parking the text preserves exact parity
-/// for when those land.
+/// creation wizard.
 pub const INIT_VERIFIERS_PROMPT: &str = include_str!("../prompts/init_verifiers.md");
+
+/// `/init-verifiers` — emits the 5-phase verifier-skill creation wizard
+/// prompt as a user-side message so the model executes it. Subagent
+/// spawning, AskUserQuestion, Playwright/MCP integration etc. are
+/// expected to be available to the model; we just ship the prompt.
+pub struct InitVerifiersHandler;
+impl CommandHandler for InitVerifiersHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Message(INIT_VERIFIERS_PROMPT.to_string()))
+    }
+}
 
 impl CommandHandler for InitHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
@@ -954,8 +963,19 @@ impl CommandHandler for InitHandler {
             let _ = std::fs::write(&settings_file, "{}");
         }
 
-        // Return the init prompt so the model can analyze the codebase
-        Ok(CommandResult::Message(INIT_PROMPT.to_string()))
+        // Pick OLD vs NEW init prompt the same way TS does:
+        //   USER_TYPE === 'ant' OR CLAUDE_CODE_NEW_INIT truthy → NEW_INIT_PROMPT
+        //   otherwise → OLD INIT_PROMPT.
+        // (TS reference: src/commands/init.ts:247-250)
+        let prompt = if crate::user_type::is_ant()
+            || crate::errors_util::is_env_truthy("CLAUDE_CODE_NEW_INIT")
+        {
+            NEW_INIT_PROMPT
+        } else {
+            INIT_PROMPT
+        };
+
+        Ok(CommandResult::Message(prompt.to_string()))
     }
 }
 
@@ -2038,16 +2058,91 @@ impl CommandHandler for SandboxHandler {
     }
 }
 
-/// /output-style — Deprecated, redirects to /config
+/// /output-style — Set, clear, or list output styles. Reads styles from
+/// `~/.claude/output-styles/*.md` and `<project>/.claude/output-styles/*.md`
+/// via [`crate::output_styles::load_output_styles`], persists the selection
+/// to `<project>/.claude/settings.json` under the `outputStyle` key.
+///
+/// Args:
+/// - empty            → list available styles + show the current one
+/// - `<name>`         → set the active style
+/// - `clear` / `none` → unset the active style
 pub struct OutputStyleHandler;
 impl CommandHandler for OutputStyleHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
-        Ok(CommandResult::Action(
-            "/output-style has been deprecated. Use /config to change your output style, \
-             or set it in your settings file. Changes take effect on the next session."
-                .to_string(),
-        ))
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let styles = crate::output_styles::load_output_styles(&ctx.working_directory);
+        let settings_path = ctx.working_directory.join(".claude").join("settings.json");
+
+        let arg = args.trim();
+        if arg.is_empty() {
+            // List styles + show current
+            let mut s: Settings = if settings_path.exists() {
+                Settings::load_from_file(&settings_path)
+            } else {
+                Settings::default()
+            };
+            // Reload from disk so the displayed value reflects external edits.
+            s = if settings_path.exists() {
+                Settings::load_from_file(&settings_path)
+            } else {
+                s
+            };
+            let current = s.output_style.as_deref().unwrap_or("(none)");
+            let mut out = format!("Active output style: {current}\n\nAvailable styles:\n");
+            if styles.is_empty() {
+                out.push_str(
+                    "  (none — drop a markdown file in `.claude/output-styles/<name>.md`)\n",
+                );
+            } else {
+                for style in &styles {
+                    out.push_str(&format!("  - {} — {}\n", style.name, style.description));
+                }
+                out.push_str(
+                    "\nUsage: `/output-style <name>` to set, `/output-style clear` to unset.\n",
+                );
+            }
+            return Ok(CommandResult::Action(out));
+        }
+
+        if arg.eq_ignore_ascii_case("clear") || arg.eq_ignore_ascii_case("none") {
+            return persist_output_style(&settings_path, None)
+                .map(|_| CommandResult::Action("Output style cleared.".to_string()));
+        }
+
+        // Set: validate the name exists.
+        if !styles.iter().any(|s| s.name == arg) {
+            let names: Vec<&str> = styles.iter().map(|s| s.name.as_str()).collect();
+            let suggestion = if names.is_empty() {
+                "no styles installed".to_string()
+            } else {
+                format!("available: {}", names.join(", "))
+            };
+            return Ok(CommandResult::Action(format!(
+                "No output style named `{arg}` ({suggestion})"
+            )));
+        }
+        persist_output_style(&settings_path, Some(arg))
+            .map(|_| CommandResult::Action(format!("Output style set to `{arg}`.")))
     }
+}
+
+/// Read settings.json (or default), set/clear `outputStyle`, write back.
+/// Atomic-ish: writes to a tmp file then renames.
+fn persist_output_style(settings_path: &std::path::Path, style: Option<&str>) -> Result<()> {
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let mut s = if settings_path.exists() {
+        Settings::load_from_file(settings_path)
+    } else {
+        Settings::default()
+    };
+    s.output_style = style.map(|s| s.to_string());
+    let json = serde_json::to_string_pretty(&s)?;
+    let tmp = settings_path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, settings_path)?;
+    Ok(())
 }
 
 /// /commit-push-pr — Git commit + push + create PR in one step (Prompt command)
@@ -2689,6 +2784,12 @@ pub fn build_default_commands() -> CommandRegistry {
         "Initialize Claude Code in project",
         Prompt,
         InitHandler
+    );
+    register!(
+        "init-verifiers",
+        "Create verifier skill(s) for automated verification of code changes",
+        Prompt,
+        InitVerifiersHandler
     );
     register!("stats", "Show usage statistics", Action, StatsHandler);
     register!("env", "Show environment variables", Action, EnvHandler);
@@ -3821,17 +3922,62 @@ mod tests {
     }
 
     #[test]
-    fn test_output_style_deprecated() {
+    fn test_output_style_lists_when_no_args() {
+        // No styles installed → handler should still respond, not error.
         let handler = OutputStyleHandler;
         let ctx = test_ctx();
         let result = handler.execute("", &ctx).unwrap();
         match result {
             CommandResult::Action(text) => {
-                assert!(text.contains("deprecated"));
-                assert!(text.contains("/config"));
+                assert!(text.contains("Active output style"));
+                assert!(text.contains("Available styles:"));
             }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
+    }
+
+    #[test]
+    fn test_output_style_unknown_name() {
+        let handler = OutputStyleHandler;
+        let ctx = test_ctx();
+        let result = handler.execute("nonsuch-style", &ctx).unwrap();
+        match result {
+            CommandResult::Action(text) => {
+                assert!(text.contains("No output style named"));
+                assert!(text.contains("nonsuch-style"));
+            }
+            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_output_style_set_and_clear_round_trip() {
+        // Use a temp project with one fake style and verify the handler
+        // sets + clears it through settings.json.
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(claude_dir.join("output-styles")).unwrap();
+        std::fs::write(
+            claude_dir.join("output-styles").join("terse.md"),
+            "---\ndescription: Short\n---\n\nBe brief.\n",
+        )
+        .unwrap();
+
+        let ctx = CommandContext {
+            working_directory: tmp.path().to_path_buf(),
+            ..test_ctx()
+        };
+        let handler = OutputStyleHandler;
+
+        // Set
+        handler.execute("terse", &ctx).unwrap();
+        let settings = Settings::load_from_file(&claude_dir.join("settings.json"));
+        assert_eq!(settings.output_style.as_deref(), Some("terse"));
+
+        // Clear
+        handler.execute("clear", &ctx).unwrap();
+        let settings = Settings::load_from_file(&claude_dir.join("settings.json"));
+        assert!(settings.output_style.is_none());
     }
 
     #[test]

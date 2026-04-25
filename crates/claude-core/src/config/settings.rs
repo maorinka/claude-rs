@@ -77,6 +77,18 @@ pub struct Settings {
     /// Sandbox configuration for isolated bash command execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxSettings>,
+
+    /// Active output style name. Matches a file basename under
+    /// `~/.claude/output-styles/` or `<project>/.claude/output-styles/`.
+    /// Mirrors TS `outputStyle.name` setting.
+    #[serde(rename = "outputStyle", skip_serializing_if = "Option::is_none")]
+    pub output_style: Option<String>,
+
+    /// Language preference (e.g. `"Japanese"`, `"French"`). Injected into
+    /// the system prompt via `build_language_section(...)`. Mirrors TS
+    /// `languagePreference` setting.
+    #[serde(rename = "languagePreference", skip_serializing_if = "Option::is_none")]
+    pub language_preference: Option<String>,
 }
 
 impl Settings {
@@ -122,6 +134,14 @@ impl Settings {
             },
             mcp_servers: merged_mcp,
             sandbox: overlay.sandbox.clone().or_else(|| self.sandbox.clone()),
+            output_style: overlay
+                .output_style
+                .clone()
+                .or_else(|| self.output_style.clone()),
+            language_preference: overlay
+                .language_preference
+                .clone()
+                .or_else(|| self.language_preference.clone()),
         }
     }
 }

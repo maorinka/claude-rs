@@ -349,6 +349,11 @@ async fn spawn_in_process(
     let teammate_id = format_agent_id(&sanitized_name, team_name);
 
     let backend = InProcessBackend::new();
+    // Append the teammate-communication addendum so the worker knows to
+    // route peer messages through SendMessage instead of plain text.
+    // Matches TS swarm/teammatePromptAddendum.ts:8-17 behaviour.
+    let teammate_system_prompt =
+        config.prompt.clone() + crate::system_prompt_extensions::TEAMMATE_SYSTEM_PROMPT_ADDENDUM;
     let spawn_config = TeammateSpawnConfig {
         name: sanitized_name.clone(),
         team_name: team_name.to_string(),
@@ -357,7 +362,7 @@ async fn spawn_in_process(
         prompt: config.prompt.clone(),
         cwd: config.cwd.clone().unwrap_or_else(|| ".".to_string()),
         model: Some(model.clone()),
-        system_prompt: None,
+        system_prompt: Some(teammate_system_prompt),
         system_prompt_mode: SystemPromptMode::Default,
         worktree_path: None,
         parent_session_id: parent_session_id.to_string(),
