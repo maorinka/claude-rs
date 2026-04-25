@@ -313,13 +313,12 @@ pub fn build_request_body(
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
     // containing device_id, account_uuid, and session_id.
     let device_id = get_or_create_device_id();
-    let user_id_obj = json!({
-        "device_id": device_id,
-        "account_uuid": config.account_uuid,
-        "session_id": config.session_id,
-    });
+    let mut user_id_obj = extra_metadata();
+    user_id_obj.insert("device_id".into(), json!(device_id));
+    user_id_obj.insert("account_uuid".into(), json!(config.account_uuid));
+    user_id_obj.insert("session_id".into(), json!(config.session_id));
     body["metadata"] = json!({
-        "user_id": user_id_obj.to_string(),
+        "user_id": Value::Object(user_id_obj).to_string(),
     });
 
     // context_management: mirrors TS getAPIContextManagement().
@@ -447,6 +446,16 @@ fn generate_user_id() -> String {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     hex::encode(bytes)
+}
+
+fn extra_metadata() -> serde_json::Map<String, Value> {
+    let Ok(raw) = std::env::var("CLAUDE_CODE_EXTRA_METADATA") else {
+        return serde_json::Map::new();
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -595,6 +604,7 @@ mod tests {
     #[test]
     fn request_metadata_uses_stable_session_and_account_uuid() {
         let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("CLAUDE_CODE_EXTRA_METADATA");
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -607,6 +617,30 @@ mod tests {
         let parsed: Value = serde_json::from_str(user_id).unwrap();
         assert_eq!(parsed["session_id"], "session-123");
         assert_eq!(parsed["account_uuid"], "account-456");
+    }
+
+    #[test]
+    fn request_metadata_merges_extra_metadata() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(
+            "CLAUDE_CODE_EXTRA_METADATA",
+            r#"{"source":"test","device_id":"ignored"}"#,
+        );
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            session_id: "session-123".into(),
+            account_uuid: "account-456".into(),
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[], false);
+        let user_id = body["metadata"]["user_id"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(user_id).unwrap();
+        assert_eq!(parsed["source"], "test");
+        assert_eq!(parsed["session_id"], "session-123");
+        assert_eq!(parsed["account_uuid"], "account-456");
+        assert_ne!(parsed["device_id"], "ignored");
+        std::env::remove_var("CLAUDE_CODE_EXTRA_METADATA");
     }
 
     #[test]
