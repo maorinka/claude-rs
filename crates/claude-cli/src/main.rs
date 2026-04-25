@@ -279,6 +279,7 @@ async fn main() -> Result<()> {
         // Register MCP tools into the tool registry
         claude_tools::register_mcp_tools(&mut tools, mcp_manager.clone()).await;
     }
+    claude_tools::register_tool_search_snapshot(&mut tools);
 
     // --- Skill discovery ---
     let skills = claude_core::plugins::skill::discover_skills(&project_root);

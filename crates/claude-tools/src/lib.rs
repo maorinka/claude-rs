@@ -57,6 +57,7 @@ pub mod write;
 pub use mcp_resource_tools::register_mcp_resource_tools;
 pub use mcp_tool::register_mcp_tools;
 pub use registry::{ProgressSender, ReadFileState, ToolExecutor, ToolRegistry, ToolUseContext};
+pub use tool_search::register_tool_search_snapshot;
 
 use std::sync::Arc;
 
@@ -101,7 +102,7 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(brief_tool::BriefTool));
     reg.register(Arc::new(send_message::SendMessageTool));
     reg.register(Arc::new(lsp_tool::LSPTool));
-    reg.register(Arc::new(tool_search::ToolSearchTool));
+    reg.register(Arc::new(tool_search::ToolSearchTool::default()));
     reg.register(Arc::new(team_tools::TeamCreateTool));
     reg.register(Arc::new(team_tools::TeamDeleteTool));
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
@@ -171,6 +172,8 @@ pub fn build_default_registry() -> ToolRegistry {
     if feature_enabled("CLAUDE_CODE_VERIFY_PLAN") {
         reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
     }
+
+    tool_search::register_tool_search_snapshot(&mut reg);
 
     reg
 }
