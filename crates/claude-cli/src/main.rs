@@ -587,7 +587,6 @@ async fn main() -> Result<()> {
         tool_defs,
         cancel.clone(),
     );
-
     if let Some(max) = cli.max_turns {
         query_engine.set_max_turns(max);
     }
@@ -634,21 +633,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Append skill descriptions to the system prompt so the model knows about them
-    if !skills.is_empty() {
-        let mut skills_text = String::from("\n# Available Skills\n\n");
-        skills_text.push_str("The following skills are available for use with the Skill tool:\n\n");
-        for skill in &skills {
-            skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
-            if let Some(ref hint) = skill.when_to_use {
-                skills_text.push_str(&format!(" (use when: {})", hint));
-            }
-            skills_text.push('\n');
-        }
-        query_engine.append_system_prompt(skills_text);
-    }
-
-    // Append MCP server instructions to the system prompt
+    // Add MCP server instructions as request-time user context, matching TS.
     {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
@@ -663,11 +648,33 @@ async fn main() -> Result<()> {
             }
         }
         if !instructions_parts.is_empty() {
-            query_engine.append_system_prompt(format!(
-                "\n# MCP Server Instructions\n\n{}",
+            query_engine.append_user_context_block(format!(
+                "<system-reminder>\n# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n{}\n</system-reminder>",
                 instructions_parts.join("\n\n")
             ));
         }
+    }
+
+    // Add skill descriptions as request-time user context, matching TS.
+    if !skills.is_empty() {
+        let mut skills_text = String::from(
+            "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n",
+        );
+        for skill in &skills {
+            skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
+            if let Some(ref hint) = skill.when_to_use {
+                skills_text.push_str(&format!(" (use when: {})", hint));
+            }
+            skills_text.push('\n');
+        }
+        skills_text.push_str("</system-reminder>");
+        query_engine.append_user_context_block(skills_text);
+    }
+
+    if let Some(context) =
+        claude_core::context::system_prompt::build_project_user_context_block(&project_root)
+    {
+        query_engine.append_user_context_block(context);
     }
 
     // Append --append-system-prompt text (M2: was parsed but never applied)

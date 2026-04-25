@@ -2,8 +2,6 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use super::environment::build_environment_context;
-use super::git::get_git_context;
 use crate::config::settings::Settings;
 use crate::output_styles::load_output_styles;
 use crate::system_prompt_extensions::{build_language_section, build_output_style_section};
@@ -51,28 +49,14 @@ pub async fn build_system_prompt(
 ) -> Result<Vec<Value>> {
     let mut parts: Vec<String> = Vec::new();
 
-    // 1. Base system prompt
+    // TS sends the Agent SDK identity as its own system block, then the main
+    // Claude Code prompt as the next block. Dynamic project context is sent as
+    // user-visible system-reminder blocks, not as system prompt blocks.
+    parts.push(AGENT_SDK_PREFIX.to_string());
     parts.push(base_system_prompt());
     let _ = model; // retained for API compatibility with callers
 
-    // 2. Git context
-    if let Ok(Some(git_ctx)) = get_git_context(project_root).await {
-        parts.push(format!("# Git Context\n{}", git_ctx));
-    }
-
-    // 3. Environment
-    parts.push(build_environment_context());
-
-    // 4. CLAUDE.md files from parent directories, user home, and project root
-    let claude_md_contents = load_claude_md_files(project_root);
-    if !claude_md_contents.is_empty() {
-        parts.push(MEMORY_INSTRUCTION_PROMPT.to_string());
-        for (source, content) in &claude_md_contents {
-            parts.push(format!("# Instructions from {}\n\n{}", source, content));
-        }
-    }
-
-    // 5. Settings-driven sections (language preference, output style)
+    // Settings-driven sections (language preference, output style)
     //    Loads ~/.claude/settings.json + project .claude/settings.json,
     //    matches TS Settings → getLanguageSection/getOutputStyleSection
     //    via build_language_section / build_output_style_section.
@@ -91,21 +75,21 @@ pub async fn build_system_prompt(
         }
     }
 
-    // 5b. Ant-only numeric length anchors. Mirrors TS gate at
+    // Ant-only numeric length anchors. Mirrors TS gate at
     //     constants/prompts.ts:531 — `process.env.USER_TYPE === 'ant'`.
     //     ~1.2% output token reduction vs qualitative "be concise".
     if crate::user_type::is_ant() {
         parts.push(crate::system_prompt_extensions::NUMERIC_LENGTH_ANCHORS.to_string());
     }
 
-    // 5c. Token budget instruction — gated by the same TOKEN_BUDGET
+    // Token budget instruction — gated by the same TOKEN_BUDGET
     //     feature flag in TS (env var here). Lets users specify "+500k"
     //     in messages and have Claude treat it as a hard minimum.
     if crate::errors_util::is_env_truthy("CLAUDE_CODE_TOKEN_BUDGET") {
         parts.push(crate::system_prompt_extensions::TOKEN_BUDGET_INSTRUCTION.to_string());
     }
 
-    // 5c-bis. Scratchpad instructions — gated on CLAUDE_CODE_SCRATCHPAD_DIR
+    // Scratchpad instructions — gated on CLAUDE_CODE_SCRATCHPAD_DIR
     //         being set (TS gates this on the proactive/sandbox feature
     //         flag). The variable supplies the literal directory path
     //         that the prompt advertises.
@@ -117,36 +101,7 @@ pub async fn build_system_prompt(
         }
     }
 
-    // 5d. KAIROS daily-log section — instructs the model to record
-    //     observations into a per-day memory file. Gated on auto-memory
-    //     being on (matches TS `isAutoMemoryEnabled()` check). The
-    //     `tengu_coral_fern`-gated `## Searching past context` block is
-    //     spliced in via env-var gate (`CLAUDE_CODE_MEMORY_SEARCH_HINTS`)
-    //     since GrowthBook isn't wired in Rust.
-    if crate::memdir::auto_memory_enabled() {
-        let auto_mem_path = crate::memdir::get_auto_mem_path(project_root);
-        let auto_mem_dir = auto_mem_path.to_string_lossy().to_string();
-        let searching: Vec<String> =
-            if crate::errors_util::is_env_truthy("CLAUDE_CODE_MEMORY_SEARCH_HINTS") {
-                crate::memdir::searching_past_context::build_searching_past_context_section(
-                    &crate::memdir::searching_past_context::SearchingPastContextInputs {
-                        auto_mem_dir: &auto_mem_dir,
-                        project_dir: &project_root.to_string_lossy(),
-                        embedded: false,
-                    },
-                )
-            } else {
-                Vec::new()
-            };
-        let inputs = crate::memdir::DailyLogPromptInputs {
-            auto_mem_dir: &auto_mem_dir,
-            skip_index: false,
-            searching_past_context: &searching,
-        };
-        parts.push(crate::memdir::build_assistant_daily_log_prompt(&inputs));
-    }
-
-    // 6. Dynamic sections (brief mode, plan mode, etc.)
+    // Dynamic sections (brief mode, plan mode, etc.)
     for section in collect_dynamic_sections() {
         parts.push(section);
     }
@@ -158,6 +113,72 @@ pub async fn build_system_prompt(
         .collect();
 
     Ok(blocks)
+}
+
+/// Build TS-style request-time context blocks for the first user message.
+pub fn build_project_user_context_block(project_root: &Path) -> Option<String> {
+    let mut body = String::from(
+        "<system-reminder>\nAs you answer the user's questions, you can use the following context:",
+    );
+
+    let claude_md_contents = load_claude_md_files(project_root);
+    if !claude_md_contents.is_empty() {
+        body.push_str("\n# claudeMd\n");
+        body.push_str(MEMORY_INSTRUCTION_PROMPT);
+        body.push('\n');
+
+        let mut seen_sources = std::collections::HashSet::new();
+        for (source, content) in claude_md_contents {
+            let display_source = normalize_context_source(&source);
+            if !seen_sources.insert(display_source.clone()) {
+                continue;
+            }
+            let label = if display_source.ends_with("/.claude/CLAUDE.md") {
+                "user's private global instructions for all projects"
+            } else if display_source.ends_with("/CLAUDE.md") {
+                "project instructions, checked into the codebase"
+            } else {
+                "instructions"
+            };
+            body.push_str(&format!(
+                "\nContents of {} ({}):\n\n{}\n",
+                display_source, label, content
+            ));
+        }
+    }
+
+    if crate::memdir::auto_memory_enabled() {
+        let entrypoint = crate::memdir::get_auto_mem_entrypoint(project_root);
+        if let Ok(content) = std::fs::read_to_string(&entrypoint) {
+            if !content.trim().is_empty() {
+                body.push_str(&format!(
+                    "\nContents of {} (user's auto-memory, persists across conversations):\n\n{}\n",
+                    entrypoint.display(),
+                    content
+                ));
+            }
+        }
+    }
+
+    body.push_str("# currentDate\n");
+    body.push_str(&format!(
+        "Today's date is {}.\n\n",
+        chrono::Local::now().format("%Y-%m-%d")
+    ));
+    body.push_str(
+        "IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n",
+    );
+
+    Some(body)
+}
+
+fn normalize_context_source(source: &str) -> String {
+    if let Some(rest) = source.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest).display().to_string();
+        }
+    }
+    source.to_string()
 }
 
 /// Load and merge user-level + project-level settings. User-level
@@ -200,6 +221,7 @@ fn model_marketing_name(model: &str) -> &str {
 // ── Prefix variants (constants/system.ts) ─────────────────────────────────────
 
 /// Default prefix for CLI invocations (matches TS DEFAULT_PREFIX).
+#[allow(dead_code)]
 const DEFAULT_PREFIX: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Prefix when running inside the Claude Agent SDK with the Claude Code preset
@@ -548,8 +570,6 @@ const SUMMARIZE_TOOL_RESULTS_SECTION: &str =
 
 fn base_system_prompt() -> String {
     let parts: Vec<String> = vec![
-        // Identity prefix
-        DEFAULT_PREFIX.to_string(),
         // Intro section (identity + cyber risk)
         get_simple_intro_section(),
         // System section
@@ -804,7 +824,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // test-only env serialization
-    async fn build_system_prompt_emits_kairos_daily_log_when_enabled() {
+    async fn build_system_prompt_keeps_kairos_out_of_system_prompt() {
         let _g = AUTO_MEM_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         // Force auto-memory ON by clearing the disable flags.
@@ -818,10 +838,7 @@ mod tests {
             .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(
-            joined.contains("# auto memory"),
-            "expected daily-log section in prompt blocks; got:\n{joined}"
-        );
-        assert!(joined.contains("logs/YYYY/MM/YYYY-MM-DD.md"));
+        assert!(!joined.contains("# auto memory"));
+        assert!(!joined.contains("logs/YYYY/MM/YYYY-MM-DD.md"));
     }
 }

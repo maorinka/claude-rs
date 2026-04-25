@@ -34,6 +34,7 @@ pub struct QueryEngine {
     api_client: ApiClient,
     messages: Vec<serde_json::Value>,
     system_prompt: Vec<ContentBlock>,
+    user_context_blocks: Vec<serde_json::Value>,
     tool_schemas: Vec<ToolDefinition>,
     state: QueryState,
     cancel: CancellationToken,
@@ -73,6 +74,7 @@ impl QueryEngine {
             api_client,
             messages: Vec::new(),
             system_prompt,
+            user_context_blocks: Vec::new(),
             tool_schemas,
             state: QueryState::Querying,
             cancel,
@@ -114,6 +116,12 @@ impl QueryEngine {
     /// Append a text block to the system prompt.
     pub fn append_system_prompt(&mut self, text: String) {
         self.system_prompt.push(ContentBlock::Text { text });
+    }
+
+    /// Append a request-time user context block.
+    pub fn append_user_context_block(&mut self, text: String) {
+        self.user_context_blocks
+            .push(serde_json::json!({"type": "text", "text": text}));
     }
 
     /// Add additional tool schemas (e.g. from MCP servers discovered at runtime).
@@ -363,7 +371,8 @@ impl QueryEngine {
             // Build dynamic user context prepend (Issue 25).
             // Mirrors TS prependUserContext() — injects currentDate as a
             // separate meta user message at request time.
-            let messages_for_query = build_messages_for_query(&self.messages);
+            let messages_for_query =
+                build_messages_for_query(&self.messages, &self.user_context_blocks);
             match self
                 .api_client
                 .stream_request_with_events(
@@ -801,8 +810,17 @@ fn build_user_context_block() -> Option<serde_json::Value> {
 ///
 /// TS `prependUserContext()` prepends system-reminder content blocks to the
 /// first user message rather than creating a separate user turn.
-fn build_messages_for_query(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let Some(context_block) = build_user_context_block() else {
+fn build_messages_for_query(
+    messages: &[serde_json::Value],
+    extra_context_blocks: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let mut context_blocks = extra_context_blocks.to_vec();
+    if context_blocks.is_empty() {
+        if let Some(context_block) = build_user_context_block() {
+            context_blocks.push(context_block);
+        }
+    }
+    if context_blocks.is_empty() {
         return messages.to_vec();
     };
 
@@ -813,14 +831,15 @@ fn build_messages_for_query(messages: &[serde_json::Value]) -> Vec<serde_json::V
     {
         match first_user.get_mut("content") {
             Some(serde_json::Value::Array(content)) => {
-                content.insert(0, context_block);
+                content.splice(0..0, context_blocks);
             }
             Some(content) => {
                 let existing = content.take();
-                *content = serde_json::Value::Array(vec![context_block, existing]);
+                context_blocks.push(existing);
+                *content = serde_json::Value::Array(context_blocks);
             }
             None => {
-                first_user["content"] = serde_json::Value::Array(vec![context_block]);
+                first_user["content"] = serde_json::Value::Array(context_blocks);
             }
         }
         return result;
@@ -829,7 +848,7 @@ fn build_messages_for_query(messages: &[serde_json::Value]) -> Vec<serde_json::V
     let mut with_context = Vec::with_capacity(result.len() + 1);
     with_context.push(serde_json::json!({
         "role": "user",
-        "content": [context_block],
+        "content": context_blocks,
     }));
     with_context.extend(result);
     with_context
@@ -873,7 +892,7 @@ mod tests {
             "content": [{"type": "text", "text": "hi"}]
         })];
 
-        let with_context = build_messages_for_query(&messages);
+        let with_context = build_messages_for_query(&messages, &[]);
 
         assert_eq!(with_context.len(), 1);
         assert_eq!(with_context[0]["role"], "user");
@@ -893,11 +912,30 @@ mod tests {
             "content": [{"type": "text", "text": "hello"}]
         })];
 
-        let with_context = build_messages_for_query(&messages);
+        let with_context = build_messages_for_query(&messages, &[]);
 
         assert_eq!(with_context.len(), 2);
         assert_eq!(with_context[0]["role"], "user");
         assert_eq!(with_context[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn extra_user_context_blocks_are_prepended_in_order() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}]
+        })];
+        let extra = vec![
+            serde_json::json!({"type": "text", "text": "first"}),
+            serde_json::json!({"type": "text", "text": "second"}),
+        ];
+
+        let with_context = build_messages_for_query(&messages, &extra);
+        let content = with_context[0]["content"].as_array().unwrap();
+
+        assert_eq!(content[0]["text"], "first");
+        assert_eq!(content[1]["text"], "second");
+        assert_eq!(content[2]["text"], "hi");
     }
 }
 

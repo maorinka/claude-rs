@@ -98,29 +98,21 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     let todo_v2_enabled = is_todo_v2_enabled(options);
 
     // ── Baseline tools (always registered in TS tools.ts getAllBaseTools()) ──
-    reg.register(Arc::new(bash::BashTool::new()));
-    reg.register(Arc::new(read::FileReadTool));
-    reg.register(Arc::new(write::FileWriteTool));
-    reg.register(Arc::new(edit::FileEditTool));
-    reg.register(Arc::new(grep::GrepTool));
-    reg.register(Arc::new(glob_tool::GlobTool));
-    reg.register(Arc::new(web_fetch::WebFetchTool));
-    reg.register(Arc::new(web_search::WebSearchTool));
-    reg.register(Arc::new(task_tools::TaskStopTool));
-    reg.register(Arc::new(task_tools::TaskOutputTool));
-    reg.register(Arc::new(notebook_edit::NotebookEditTool));
     reg.register(Arc::new(agent_tool::AgentTool));
-    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
-    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
     reg.register(Arc::new(ask_user::AskUserQuestionTool));
-    reg.register(Arc::new(brief_tool::BriefTool));
-    reg.register(Arc::new(send_message::SendMessageTool));
+    reg.register(Arc::new(bash::BashTool::new()));
+    reg.register(Arc::new(edit::FileEditTool));
+    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
+    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
     reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
-    reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool::default()));
-    reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool::default()));
+    reg.register(Arc::new(glob_tool::GlobTool));
+    reg.register(Arc::new(grep::GrepTool));
+    reg.register(Arc::new(notebook_edit::NotebookEditTool));
+    reg.register(Arc::new(read::FileReadTool));
     reg.register(Arc::new(skill_tool::SkillTool));
-    reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
+    reg.register(Arc::new(task_tools::TaskOutputTool));
+    reg.register(Arc::new(task_tools::TaskStopTool));
 
     if todo_v2_enabled {
         reg.register(Arc::new(task_tools::TaskCreateTool));
@@ -130,6 +122,14 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     } else {
         reg.register(Arc::new(todo_write::TodoWriteTool));
     }
+    reg.register(Arc::new(web_fetch::WebFetchTool));
+    reg.register(Arc::new(web_search::WebSearchTool));
+    reg.register(Arc::new(write::FileWriteTool));
+    reg.register(Arc::new(brief_tool::BriefTool));
+    reg.register(Arc::new(send_message::SendMessageTool));
+    reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool::default()));
+    reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool::default()));
+    reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
 
     if feature_enabled("ENABLE_LSP_TOOL") {
         reg.register(Arc::new(lsp_tool::LSPTool));
