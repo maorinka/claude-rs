@@ -65,6 +65,7 @@ fn test_cost_tracker_cache_tokens() {
 #[test]
 fn test_cost_tracker_summary_format() {
     let mut tracker = CostTracker::new("claude-sonnet");
+    tracker.increment_request_count();
     tracker.add_usage(&make_usage(100, 50, Some(10), Some(5)));
     let summary = tracker.summary();
     assert!(summary.contains("100 in"));
@@ -79,8 +80,27 @@ fn test_cost_tracker_summary_format() {
 fn test_cost_tracker_multiple_requests_count() {
     let mut tracker = CostTracker::new("claude-sonnet");
     for _ in 0..5 {
+        tracker.increment_request_count();
         tracker.add_usage(&make_usage(10, 5, None, None));
     }
     assert!(tracker.summary().contains("Requests: 5"));
     assert_eq!(tracker.total_tokens(), 75);
+}
+
+#[test]
+fn test_cost_tracker_streaming_snapshots_are_not_double_counted() {
+    let mut tracker = CostTracker::new("claude-sonnet");
+    tracker.increment_request_count();
+
+    tracker.add_usage(&make_usage(1_000, 0, Some(800), Some(25)));
+    tracker.add_usage(&make_usage(0, 10, None, None));
+    tracker.add_usage(&make_usage(0, 25, None, None));
+    tracker.add_usage(&make_usage(0, 40, None, None));
+
+    assert_eq!(tracker.total_tokens(), 1_040);
+    assert!(tracker.summary().contains("1000 in"));
+    assert!(tracker.summary().contains("40 out"));
+    assert!(tracker.summary().contains("800 read"));
+    assert!(tracker.summary().contains("25 write"));
+    assert!(tracker.summary().contains("Requests: 1"));
 }

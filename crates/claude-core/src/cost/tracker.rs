@@ -46,6 +46,11 @@ pub struct CostTracker {
     total_cache_read_tokens: u64,
     total_cache_write_tokens: u64,
     request_count: u32,
+    request_in_progress: bool,
+    request_input_tokens: u64,
+    request_output_tokens: u64,
+    request_cache_read_tokens: u64,
+    request_cache_write_tokens: u64,
 }
 
 impl CostTracker {
@@ -57,16 +62,58 @@ impl CostTracker {
             total_cache_read_tokens: 0,
             total_cache_write_tokens: 0,
             request_count: 0,
+            request_in_progress: false,
+            request_input_tokens: 0,
+            request_output_tokens: 0,
+            request_cache_read_tokens: 0,
+            request_cache_write_tokens: 0,
         }
     }
 
-    /// Record usage from a single API response.
+    /// Accumulate token counts from a UsageUpdate event.
+    ///
+    /// Streaming responses can emit more than one usage event per API request.
+    /// Anthropic's `message_delta.usage.output_tokens` is cumulative for the
+    /// current response, so while a request is active we add only the delta from
+    /// the last usage snapshot. Without that, token/cost totals climb far too
+    /// fast on long streamed responses.
     pub fn add_usage(&mut self, usage: &Usage) {
-        self.total_input_tokens += usage.input_tokens;
-        self.total_output_tokens += usage.output_tokens;
-        self.total_cache_read_tokens += usage.cache_read_input_tokens.unwrap_or(0);
-        self.total_cache_write_tokens += usage.cache_creation_input_tokens.unwrap_or(0);
+        if self.request_in_progress {
+            let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+            let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
+
+            self.total_input_tokens += usage.input_tokens.saturating_sub(self.request_input_tokens);
+            self.total_output_tokens += usage
+                .output_tokens
+                .saturating_sub(self.request_output_tokens);
+            self.total_cache_read_tokens +=
+                cache_read.saturating_sub(self.request_cache_read_tokens);
+            self.total_cache_write_tokens +=
+                cache_write.saturating_sub(self.request_cache_write_tokens);
+
+            self.request_input_tokens = self.request_input_tokens.max(usage.input_tokens);
+            self.request_output_tokens = self.request_output_tokens.max(usage.output_tokens);
+            self.request_cache_read_tokens = self.request_cache_read_tokens.max(cache_read);
+            self.request_cache_write_tokens = self.request_cache_write_tokens.max(cache_write);
+        } else {
+            // Backwards-compatible path for tests/headless callers that feed
+            // already-final per-request usage directly.
+            self.total_input_tokens += usage.input_tokens;
+            self.total_output_tokens += usage.output_tokens;
+            self.total_cache_read_tokens += usage.cache_read_input_tokens.unwrap_or(0);
+            self.total_cache_write_tokens += usage.cache_creation_input_tokens.unwrap_or(0);
+        }
+    }
+
+    /// Increment the request counter. Called once per API request from
+    /// the RequestStart event handler, not from add_usage.
+    pub fn increment_request_count(&mut self) {
         self.request_count += 1;
+        self.request_in_progress = true;
+        self.request_input_tokens = 0;
+        self.request_output_tokens = 0;
+        self.request_cache_read_tokens = 0;
+        self.request_cache_write_tokens = 0;
     }
 
     pub fn total_cost_usd(&self) -> f64 {
@@ -182,6 +229,53 @@ mod tests {
         assert_eq!(tracker.total_input_tokens(), 300);
         assert_eq!(tracker.total_output_tokens(), 125);
         assert_eq!(tracker.total_tokens(), 425);
+        // add_usage does NOT bump request_count — that comes from
+        // increment_request_count() on RequestStart events.
+        assert_eq!(tracker.request_count(), 0);
+    }
+
+    #[test]
+    fn test_request_count_increments_separately() {
+        let mut tracker = CostTracker::new("claude-sonnet-4-6");
+        // Simulate one API request: MessageStart + MessageDelta = 2 add_usage calls
+        tracker.increment_request_count();
+        tracker.add_usage(&make_usage(1000, 0, Some(800), None));
+        tracker.add_usage(&make_usage(0, 200, None, None));
+
+        assert_eq!(tracker.request_count(), 1);
+        assert_eq!(tracker.total_input_tokens(), 1000);
+        assert_eq!(tracker.total_output_tokens(), 200);
+    }
+
+    #[test]
+    fn test_streaming_usage_snapshots_do_not_overcount_output() {
+        let mut tracker = CostTracker::new("claude-sonnet-4-6");
+        tracker.increment_request_count();
+        tracker.add_usage(&make_usage(1_000, 0, Some(800), Some(25)));
+        tracker.add_usage(&make_usage(0, 10, None, None));
+        tracker.add_usage(&make_usage(0, 25, None, None));
+        tracker.add_usage(&make_usage(0, 40, None, None));
+
+        assert_eq!(tracker.total_input_tokens(), 1_000);
+        assert_eq!(tracker.total_output_tokens(), 40);
+        assert_eq!(tracker.total_cache_read_tokens, 800);
+        assert_eq!(tracker.total_cache_write_tokens, 25);
+        assert_eq!(tracker.request_count(), 1);
+    }
+
+    #[test]
+    fn test_new_request_resets_streaming_usage_snapshot() {
+        let mut tracker = CostTracker::new("claude-sonnet-4-6");
+        tracker.increment_request_count();
+        tracker.add_usage(&make_usage(1_000, 0, None, None));
+        tracker.add_usage(&make_usage(0, 50, None, None));
+
+        tracker.increment_request_count();
+        tracker.add_usage(&make_usage(1_200, 0, None, None));
+        tracker.add_usage(&make_usage(0, 10, None, None));
+
+        assert_eq!(tracker.total_input_tokens(), 2_200);
+        assert_eq!(tracker.total_output_tokens(), 60);
         assert_eq!(tracker.request_count(), 2);
     }
 
@@ -243,6 +337,7 @@ mod tests {
     #[test]
     fn test_summary_format() {
         let mut tracker = CostTracker::new("claude-sonnet-4-6");
+        tracker.increment_request_count();
         tracker.add_usage(&make_usage(100, 50, Some(20), Some(10)));
         let s = tracker.summary();
         assert!(s.contains("100 in"));

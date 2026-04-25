@@ -1594,7 +1594,12 @@ impl App {
             }
             StreamEvent::UsageUpdate(ref usage) => {
                 self.spinner.tokens = usage.output_tokens;
-                self.total_tokens = self.total_tokens.saturating_add(usage.output_tokens);
+                // Track the latest turn's input_tokens for context window
+                // display. MessageStart carries input_tokens (representing
+                // how full the context is); MessageDelta carries 0 input.
+                if usage.input_tokens > 0 {
+                    self.total_tokens = usage.input_tokens;
+                }
                 self.cost_tracker.add_usage(usage);
                 // Sync shared state for slash commands
                 if let Ok(mut state) = self.shared_state.lock() {
@@ -1605,6 +1610,7 @@ impl App {
             }
             StreamEvent::RequestStart { request_id: _ } => {
                 self.spinner.start(SpinnerMode::Thinking);
+                self.cost_tracker.increment_request_count();
             }
             StreamEvent::Error(err) => {
                 self.message_list.push(MessageEntry::System {
