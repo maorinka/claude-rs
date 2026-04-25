@@ -1445,9 +1445,7 @@ impl App {
                             // Execute this tool in background to keep UI responsive
                             let info = &pending_tools[tool_idx].info;
                             self.message_list.set_tool_running(&info.id, true);
-                            self.spinner.start(SpinnerMode::Tool {
-                                name: info.name.clone(),
-                            });
+                            self.spinner.start(SpinnerMode::Thinking);
                             let tool_name = info.name.clone();
                             let tool_input = info.input.clone();
                             let tools_clone = tools.clone();
@@ -1875,7 +1873,7 @@ impl App {
                     input_summary: summary,
                     tool_use_id,
                 });
-                self.spinner.start(SpinnerMode::Tool { name });
+                self.spinner.start(SpinnerMode::Thinking);
             }
             StreamEvent::ToolResult {
                 tool_use_id,
