@@ -1,5 +1,14 @@
 use claude_tui::markdown::*;
 use claude_tui::widgets::message_list::*;
+use ratatui::text::Line;
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("")
+}
 
 #[test]
 fn test_message_list_push_and_len() {
@@ -54,6 +63,43 @@ fn test_markdown_code_block() {
 fn test_markdown_list() {
     let lines = render_markdown("- item one\n- item two");
     assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn test_markdown_ordered_list() {
+    let lines = render_markdown("1. first\n2. second");
+    assert_eq!(lines.len(), 2);
+    assert!(line_text(&lines[0]).contains("1. first"));
+}
+
+#[test]
+fn test_markdown_blockquote() {
+    let lines = render_markdown("> quoted text");
+    assert_eq!(lines.len(), 1);
+    assert!(line_text(&lines[0]).contains("│ quoted text"));
+}
+
+#[test]
+fn test_markdown_horizontal_rule() {
+    let lines = render_markdown("---");
+    assert_eq!(lines.len(), 1);
+    assert!(line_text(&lines[0]).starts_with("───"));
+}
+
+#[test]
+fn test_markdown_table() {
+    let lines = render_markdown("| Name | Value |\n| --- | --- |\n| one | two |");
+    assert_eq!(lines.len(), 2);
+    assert!(line_text(&lines[0]).contains("Name"));
+    assert!(line_text(&lines[1]).contains("two"));
+}
+
+#[test]
+fn test_markdown_link() {
+    let lines = render_markdown("See [docs](https://example.com).");
+    assert_eq!(lines.len(), 1);
+    let text = line_text(&lines[0]);
+    assert!(text.contains("docs (https://example.com)"));
 }
 
 #[test]
