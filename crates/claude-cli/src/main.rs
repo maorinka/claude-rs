@@ -72,6 +72,12 @@ pub enum SubCommand {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Connect your local environment for remote-control sessions via claude.ai/code
+    #[command(alias = "rc", aliases = ["remote", "sync", "bridge"])]
+    RemoteControl {
+        /// Optional session name
+        name: Option<String>,
+    },
 }
 
 /// Resolve short model names to full API model IDs.
@@ -169,6 +175,22 @@ async fn main() -> Result<()> {
             tracing::info!("Starting IDE bridge server...");
             server.start().await?;
             return Ok(());
+        }
+        Some(SubCommand::RemoteControl { name }) => {
+            let name_suffix = name
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|value| format!(" for `{value}`"))
+                .unwrap_or_default();
+            eprintln!(
+                "Remote Control{name_suffix} is not fully ported in claude-rs yet.\n\n\
+                 The original TS path starts a Claude.ai bridge runtime here: \
+                 entitlement/policy checks, environment registration, session creation, \
+                 session-ingress WebSocket forwarding, and inbound prompt queueing.\n\n\
+                 Current Rust support is limited to the local IDE bridge server via \
+                 `claude-rs server --port <N>` and the in-TUI `/remote-control` status command."
+            );
+            std::process::exit(1);
         }
         None => {}
     }

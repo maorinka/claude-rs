@@ -541,7 +541,12 @@ Missing or partial:
 - Prompt cache break detection.
 - Empty usage helpers.
 - Detailed logging/diagnostics depth.
-- Full remote session manager behavior.
+- Full remote-control/session manager behavior. Rust now exposes the
+  `remote-control` / `rc` CLI surface and `/remote-control` TUI command, but
+  it is intentionally a guarded stub until the real TS bridge runtime is
+  ported. Still missing: entitlement/policy checks, environment registration,
+  session creation/reconnect, session-ingress WebSocket forwarding, inbound
+  web/mobile prompt queueing, and connected/disconnect lifecycle.
 - Remote managed settings.
 - Settings sync.
 - Policy limits.
@@ -607,7 +612,10 @@ Rust has a smaller ratatui UI. Missing or partial:
 - MCP server approval, reconnect, parsing warnings, server list/detail,
   settings, capabilities, elicitation dialogs.
 - IDE/Chrome/Desktop onboarding.
-- Bridge dialogs.
+- Bridge dialogs and live Remote Control state. `/remote-control` exists in
+  Rust and records the local request in shared command state, but it cannot yet
+  show the TS `/remote-control is active · Code in CLI or at ...` callout
+  because no `session_*` URL is created without the bridge runtime.
 - Export dialog.
 - Worktree exit dialog.
 - Idle return dialog.

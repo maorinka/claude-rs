@@ -2636,6 +2636,60 @@ impl CommandHandler for RemoteSetupHandler {
     }
 }
 
+/// /remote-control — Claude.ai Remote Control.
+///
+/// TS wires this command to `useReplBridge`, which registers an environment,
+/// creates a session, opens session-ingress, and injects inbound web/mobile
+/// prompts into the REPL. The Rust port only has IDE bridge helpers today, so
+/// keep the command visible but make the missing runtime explicit.
+pub struct RemoteControlHandler;
+impl CommandHandler for RemoteControlHandler {
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let name = args.trim();
+
+        if let Some(shared) = &ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                if state.remote_control_enabled {
+                    state.remote_control_enabled = false;
+                    state.remote_control_initial_name = None;
+                    state.remote_control_session_url = None;
+                    return Ok(CommandResult::Action(
+                        "Remote Control disconnected.\n\n\
+                         Note: the Rust port still needs the Claude.ai bridge runtime; \
+                         this cleared the local session request."
+                            .to_string(),
+                    ));
+                }
+
+                state.remote_control_enabled = true;
+                state.remote_control_initial_name = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                };
+            }
+        }
+
+        let display_name = if name.is_empty() {
+            String::new()
+        } else {
+            format!("\nRequested session name: {name}")
+        };
+
+        Ok(CommandResult::Action(format!(
+            "Remote Control requested.{display_name}\n\n\
+             The Rust port does not yet include the Claude.ai session-ingress \
+             bridge runtime, so it cannot show a claude.ai/code session URL yet.\n\n\
+             Still needed for full TS parity:\n\
+             - environment registration and entitlement/policy checks\n\
+             - remote session creation and reconnect/continue support\n\
+             - session-ingress WebSocket forwarding\n\
+             - inbound web/mobile message queue injection\n\
+             - connected/disconnect dialog and footer status"
+        )))
+    }
+}
+
 /// /passes — Issues / PRs awaiting reply from the user. Since the real TS
 /// version depends on GitHub-webhook + subscription state we don't have in
 /// Rust yet, this ships as a prompt handler that asks the model to summarise
@@ -3014,6 +3068,18 @@ pub fn build_default_commands() -> CommandRegistry {
         RemoteSetupHandler
     );
     register!(
+        "remote-control",
+        "Connect this terminal for remote-control sessions",
+        Action,
+        RemoteControlHandler
+    );
+    register!(
+        "rc",
+        "Alias for /remote-control",
+        Action,
+        RemoteControlHandler
+    );
+    register!(
         "passes",
         "Summarise GitHub items waiting on the user",
         Prompt,
@@ -3028,6 +3094,7 @@ pub fn build_default_commands() -> CommandRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn test_ctx() -> CommandContext {
         CommandContext {
@@ -4346,6 +4413,57 @@ mod tests {
             }
             _ => panic!("expected Action"),
         }
+    }
+
+    #[test]
+    fn test_remote_control_reports_missing_runtime_and_sets_state() {
+        let shared = Arc::new(Mutex::new(
+            super::super::registry::SharedCommandState::default(),
+        ));
+        let ctx = CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp/test-project"),
+            model: "claude-sonnet-4-20250514".to_string(),
+            shared: Some(shared.clone()),
+        };
+
+        let r = RemoteControlHandler.execute("demo", &ctx).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("Remote Control requested"));
+                assert!(t.contains("session-ingress"));
+            }
+            _ => panic!("expected Action"),
+        }
+
+        let state = shared.lock().unwrap();
+        assert!(state.remote_control_enabled);
+        assert_eq!(state.remote_control_initial_name.as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn test_remote_control_second_call_disconnects() {
+        let shared = Arc::new(Mutex::new(super::super::registry::SharedCommandState {
+            remote_control_enabled: true,
+            remote_control_initial_name: Some("demo".to_string()),
+            remote_control_session_url: Some("https://claude.ai/code/session_test".to_string()),
+            ..super::super::registry::SharedCommandState::default()
+        }));
+        let ctx = CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp/test-project"),
+            model: "claude-sonnet-4-20250514".to_string(),
+            shared: Some(shared.clone()),
+        };
+
+        let r = RemoteControlHandler.execute("", &ctx).unwrap();
+        match r {
+            CommandResult::Action(t) => assert!(t.contains("disconnected")),
+            _ => panic!("expected Action"),
+        }
+
+        let state = shared.lock().unwrap();
+        assert!(!state.remote_control_enabled);
+        assert!(state.remote_control_initial_name.is_none());
+        assert!(state.remote_control_session_url.is_none());
     }
 
     #[test]

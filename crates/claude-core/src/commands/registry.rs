@@ -70,6 +70,12 @@ pub struct SharedCommandState {
     pub extra_dirs: Vec<String>,
     /// Per-turn token usage: Vec<(turn_number, input_tokens, output_tokens)>
     pub per_turn_tokens: Vec<(usize, u64, u64)>,
+    /// Whether the user requested Claude.ai remote-control for this session.
+    pub remote_control_enabled: bool,
+    /// Optional display/name argument passed to `/remote-control <name>`.
+    pub remote_control_initial_name: Option<String>,
+    /// Remote-control session URL once the bridge runtime creates one.
+    pub remote_control_session_url: Option<String>,
 }
 
 impl Default for SharedCommandState {
@@ -98,6 +104,9 @@ impl Default for SharedCommandState {
             session_color: String::new(),
             extra_dirs: Vec::new(),
             per_turn_tokens: Vec::new(),
+            remote_control_enabled: false,
+            remote_control_initial_name: None,
+            remote_control_session_url: None,
         }
     }
 }
