@@ -1,4 +1,4 @@
-use claude_tools::build_default_registry;
+use claude_tools::{build_default_registry, build_default_registry_with_options, RegistryOptions};
 
 #[test]
 fn test_default_registry_has_all_phase1_tools() {
@@ -9,7 +9,15 @@ fn test_default_registry_has_all_phase1_tools() {
     assert!(reg.get("Edit").is_some());
     assert!(reg.get("Grep").is_some());
     assert!(reg.get("Glob").is_some());
-    assert!(reg.get("LSP").is_some());
+    assert!(
+        reg.get("LSP").is_none(),
+        "LSP is hidden unless ENABLE_LSP_TOOL is truthy"
+    );
+    assert!(
+        reg.get("TodoWrite").is_none(),
+        "TodoWrite is hidden when interactive Task v2 tools are enabled"
+    );
+    assert!(reg.get("TaskCreate").is_some());
     assert!(
         reg.get("StructuredOutput").is_none(),
         "StructuredOutput is synthetic and should only be injected for structured-output requests"
@@ -21,8 +29,8 @@ fn test_default_registry_schemas() {
     let reg = build_default_registry();
     let schemas = reg.schemas();
     assert!(
-        schemas.len() >= 27,
-        "expected at least 27 tools, got {}",
+        schemas.len() >= 20,
+        "expected at least 20 tools, got {}",
         schemas.len()
     );
     for schema in &schemas {
@@ -53,6 +61,10 @@ fn test_gated_tools_hidden_by_default() {
         "KAIROS",
         "KAIROS_PUSH_NOTIFICATION",
         "KAIROS_GITHUB_WEBHOOKS",
+        "PROACTIVE",
+        "ENABLE_LSP_TOOL",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+        "CLAUDE_CODE_USE_POWERSHELL_TOOL",
         "USER_TYPE",
     ];
     for g in &gates {
@@ -83,6 +95,11 @@ fn test_gated_tools_hidden_by_default() {
         "Config",
         "REPL",
         "SuggestBackgroundPR",
+        "LSP",
+        "TeamCreate",
+        "TeamDelete",
+        "Sleep",
+        "PowerShell",
     ];
     for name in &hidden {
         assert!(
@@ -90,4 +107,23 @@ fn test_gated_tools_hidden_by_default() {
             "{name} should be hidden by default — is its feature gate wired?"
         );
     }
+}
+
+#[test]
+fn test_non_interactive_uses_todowrite_unless_tasks_are_forced() {
+    if std::env::var("CLAUDE_CODE_ENABLE_TASKS").is_ok() {
+        eprintln!("skipping non-interactive task assertion: CLAUDE_CODE_ENABLE_TASKS is set");
+        return;
+    }
+
+    let reg = build_default_registry_with_options(RegistryOptions {
+        is_non_interactive_session: true,
+    });
+    assert!(reg.get("TodoWrite").is_some());
+    assert!(reg.get("TaskCreate").is_none());
+    assert!(reg.get("TaskList").is_none());
+    assert!(reg.get("TaskUpdate").is_none());
+    assert!(reg.get("TaskGet").is_none());
+    assert!(reg.get("TaskStop").is_some());
+    assert!(reg.get("TaskOutput").is_some());
 }

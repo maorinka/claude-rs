@@ -6,6 +6,13 @@ use tokio_util::sync::CancellationToken;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
+pub fn is_tool_search_enabled_optimistic() -> bool {
+    if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") {
+        return false;
+    }
+    !claude_core::errors_util::is_env_definitely_falsy("ENABLE_TOOL_SEARCH")
+}
+
 /// Fallback list used by direct tests or embedders that construct the tool
 /// without a registry snapshot.
 const FALLBACK_TOOLS: &[(&str, &str)] = &[
@@ -167,6 +174,10 @@ Query forms:
 }
 
 pub fn register_tool_search_snapshot(registry: &mut crate::registry::ToolRegistry) {
+    if !is_tool_search_enabled_optimistic() {
+        return;
+    }
+
     let tools = registry
         .all()
         .iter()

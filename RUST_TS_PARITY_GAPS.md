@@ -32,19 +32,11 @@ The largest remaining gaps are behavioral depth, not just missing files:
 
 ## P0: Wrong Or Risky Behavior
 
-### Tool registry exposes tools TS keeps gated
+### Tool registry exposure/gating still needs request-time parity
 
 Rust registers several tools unconditionally in
 `crates/claude-tools/src/lib.rs`, including:
 
-- Task v2 tools: `TaskCreateTool`, `TaskListTool`, `TaskUpdateTool`,
-  `TaskGetTool`, `TaskOutputTool`
-- `LSPTool`
-- `ToolSearchTool`
-- Team tools: `TeamCreateTool`, `TeamDeleteTool`
-- Worktree tools: `EnterWorktreeTool`, `ExitWorktreeTool`
-- `PowerShellTool`
-- `SleepTool`
 - MCP auth/resources tools
 
 TS gates comparable tools in `src/tools.ts` with checks such as:
@@ -60,14 +52,24 @@ TS gates comparable tools in `src/tools.ts` with checks such as:
 - REPL mode filtering and `REPL_ONLY_TOOLS`
 - deny-rule filtering via `filterToolsByDenyRules`
 
+Improved:
+- Rust now gates `LSPTool`, `SleepTool`, team tools, and `PowerShellTool`
+  at registry construction.
+- Rust now matches TS Task v2/TodoWrite visibility for interactive vs
+  noninteractive startup, including `CLAUDE_CODE_ENABLE_TASKS`.
+- Rust now keeps ToolSearch out of the registry when explicitly disabled by
+  `ENABLE_TOOL_SEARCH` or the experimental-beta kill switch.
+- Worktree tools remain visible by default because the inspected TS reference
+  now returns `true` from `isWorktreeModeEnabled()`.
+
 Needs work:
-- Align Rust `build_default_registry()` with TS `getAllBaseTools()` and
-  `getTools()`.
 - Add deny-rule filtering before tools are exposed to the model.
 - Hide REPL-only primitive tools when REPL mode is active.
 - Keep tool ordering stable for prompt-cache compatibility.
-- Revisit whether `SleepTool`, task v2, teams, worktree, LSP, ToolSearch, and
-  PowerShell should be default-visible.
+- Implement the model/provider/threshold parts of ToolSearch enablement and
+  request-time deferral.
+- Revisit MCP auth/resource tool visibility against TS `specialTools` and MCP
+  connection state.
 
 ### MCP resource tools need deeper parity
 
@@ -356,7 +358,8 @@ Files:
 - TS reference: worktree mode helpers and UI flows.
 
 Needs work:
-- Gate with TS `isWorktreeModeEnabled()`.
+- Gate only if TS reintroduces `isWorktreeModeEnabled()` gating; the inspected
+  TS reference currently enables worktree mode unconditionally.
 - Worktree create/remove hooks.
 - UI exit dialog parity.
 - Session cwd restore edge cases.

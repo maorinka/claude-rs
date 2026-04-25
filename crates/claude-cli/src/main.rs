@@ -217,7 +217,10 @@ async fn main() -> Result<()> {
     };
 
     // Build tool registry
-    let mut tools = claude_tools::build_default_registry();
+    let mut tools =
+        claude_tools::build_default_registry_with_options(claude_tools::RegistryOptions {
+            is_non_interactive_session: cli.prompt.is_some(),
+        });
 
     // Register bundled skills (simplify, stuck, remember, …).
     // Each skill's registrar applies its own TS-parity gate

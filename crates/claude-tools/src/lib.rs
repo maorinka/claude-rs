@@ -61,6 +61,11 @@ pub use tool_search::register_tool_search_snapshot;
 
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RegistryOptions {
+    pub is_non_interactive_session: bool,
+}
+
 /// Check whether an env-var-based feature flag is enabled.
 /// Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). Anything else
 /// (including unset) is false. Mirrors the behaviour of TS `feature('X')`
@@ -76,8 +81,21 @@ fn is_ant_user() -> bool {
     claude_core::user_type::is_ant()
 }
 
+fn is_todo_v2_enabled(options: RegistryOptions) -> bool {
+    feature_enabled("CLAUDE_CODE_ENABLE_TASKS") || !options.is_non_interactive_session
+}
+
+fn is_agent_swarms_enabled() -> bool {
+    is_ant_user() || feature_enabled("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+}
+
 pub fn build_default_registry() -> ToolRegistry {
+    build_default_registry_with_options(RegistryOptions::default())
+}
+
+pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
+    let todo_v2_enabled = is_todo_v2_enabled(options);
 
     // ── Baseline tools (always registered in TS tools.ts getAllBaseTools()) ──
     reg.register(Arc::new(bash::BashTool::new()));
@@ -88,10 +106,6 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(glob_tool::GlobTool));
     reg.register(Arc::new(web_fetch::WebFetchTool));
     reg.register(Arc::new(web_search::WebSearchTool));
-    reg.register(Arc::new(task_tools::TaskCreateTool));
-    reg.register(Arc::new(task_tools::TaskListTool));
-    reg.register(Arc::new(task_tools::TaskUpdateTool));
-    reg.register(Arc::new(task_tools::TaskGetTool));
     reg.register(Arc::new(task_tools::TaskStopTool));
     reg.register(Arc::new(task_tools::TaskOutputTool));
     reg.register(Arc::new(notebook_edit::NotebookEditTool));
@@ -101,19 +115,35 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(ask_user::AskUserQuestionTool));
     reg.register(Arc::new(brief_tool::BriefTool));
     reg.register(Arc::new(send_message::SendMessageTool));
-    reg.register(Arc::new(lsp_tool::LSPTool));
-    reg.register(Arc::new(tool_search::ToolSearchTool::default()));
-    reg.register(Arc::new(team_tools::TeamCreateTool));
-    reg.register(Arc::new(team_tools::TeamDeleteTool));
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
     reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
     reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool::default()));
     reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool::default()));
-    reg.register(Arc::new(powershell::PowerShellTool));
     reg.register(Arc::new(skill_tool::SkillTool));
-    reg.register(Arc::new(sleep_tool::SleepTool));
-    reg.register(Arc::new(todo_write::TodoWriteTool));
     reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
+
+    if todo_v2_enabled {
+        reg.register(Arc::new(task_tools::TaskCreateTool));
+        reg.register(Arc::new(task_tools::TaskListTool));
+        reg.register(Arc::new(task_tools::TaskUpdateTool));
+        reg.register(Arc::new(task_tools::TaskGetTool));
+    } else {
+        reg.register(Arc::new(todo_write::TodoWriteTool));
+    }
+
+    if feature_enabled("ENABLE_LSP_TOOL") {
+        reg.register(Arc::new(lsp_tool::LSPTool));
+    }
+    if is_agent_swarms_enabled() {
+        reg.register(Arc::new(team_tools::TeamCreateTool));
+        reg.register(Arc::new(team_tools::TeamDeleteTool));
+    }
+    if feature_enabled("PROACTIVE") || feature_enabled("KAIROS") {
+        reg.register(Arc::new(sleep_tool::SleepTool));
+    }
+    if claude_core::shell_tool_utils::is_powershell_tool_enabled() {
+        reg.register(Arc::new(powershell::PowerShellTool));
+    }
 
     // ── USER_TYPE=ant gated (TS: process.env.USER_TYPE === 'ant') ────────────
     if is_ant_user() {
@@ -173,7 +203,9 @@ pub fn build_default_registry() -> ToolRegistry {
         reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
     }
 
-    tool_search::register_tool_search_snapshot(&mut reg);
+    if tool_search::is_tool_search_enabled_optimistic() {
+        tool_search::register_tool_search_snapshot(&mut reg);
+    }
 
     reg
 }
