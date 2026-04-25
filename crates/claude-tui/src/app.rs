@@ -210,6 +210,24 @@ impl App {
         });
     }
 
+    fn enqueue_message(&mut self, text: String) {
+        let preview = truncate_chars(text.trim(), 160);
+        self.message_queue.push(text);
+        self.prompt.clear();
+        self.spinner.queued_count = 0;
+        self.message_list.push(MessageEntry::System {
+            text: format!("Queued message: {}", preview),
+        });
+    }
+
+    fn pop_queued_message(&mut self) -> Option<String> {
+        if self.message_queue.is_empty() {
+            return None;
+        }
+        self.spinner.queued_count = 0;
+        Some(self.message_queue.remove(0))
+    }
+
     /// Set the model name displayed in the header and cost tracker.
     pub fn set_model_name(&mut self, name: &str) {
         self.model_name = name.to_string();
@@ -584,9 +602,7 @@ impl App {
                     // Reactive queue drain — mirrors TS useQueueProcessor:
                     // when engine becomes idle and there's a queued message, dispatch it.
                     if !self.engine_busy {
-                        if let Some(queued) = self.message_queue.first().cloned() {
-                            self.message_queue.remove(0);
-                            self.spinner.queued_count = self.message_queue.len();
+                        if let Some(queued) = self.pop_queued_message() {
                             let tx2 = tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -785,9 +801,7 @@ impl App {
                                 });
 
                                 // Dispatch queued message if any
-                                if let Some(queued) = self.message_queue.first().cloned() {
-                                    self.message_queue.remove(0);
-                                    self.spinner.queued_count = self.message_queue.len();
+                                if let Some(queued) = self.pop_queued_message() {
                                     let tx2 = tx.clone();
                                     tokio::spawn(async move {
                                         let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -885,10 +899,9 @@ impl App {
                     }
                     if self.engine_busy {
                         // TS behavior (handlePromptSubmit.ts:336): enqueue and clear
-                        // input. Show hint on spinner line so user sees it was accepted.
-                        self.message_queue.push(text);
-                        self.prompt.clear();
-                        self.spinner.queued_count = self.message_queue.len();
+                        // input. Show the queued text in the transcript so the
+                        // user can see exactly what will run next.
+                        self.enqueue_message(text);
                         continue;
                     }
 
@@ -1123,9 +1136,7 @@ impl App {
                             self.spinner.stop();
                             self.spinner.queued_count = 0;
                             self.engine_busy = false;
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1276,9 +1287,7 @@ impl App {
                         if self.engine_busy {
                             self.engine_busy = false;
                             self.spinner.queued_count = 0;
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1399,9 +1408,7 @@ impl App {
                             self.engine_busy = false;
 
                             // Dispatch any message that was queued while busy
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1441,9 +1448,7 @@ impl App {
                             });
 
                             // Dispatch any message that was queued while busy
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -2308,5 +2313,22 @@ mod tests {
         let rect = centered_rect(60, 10, Rect::new(0, 0, 1, 1));
         assert_eq!(rect.width, 1);
         assert_eq!(rect.height, 1);
+    }
+
+    #[test]
+    fn queued_messages_are_visible_and_not_spinner_counted() {
+        let mut app = App::new().unwrap();
+        app.enqueue_message("follow up after this".to_string());
+
+        assert_eq!(app.spinner.queued_count, 0);
+        assert_eq!(
+            app.pop_queued_message().as_deref(),
+            Some("follow up after this")
+        );
+        assert_eq!(app.spinner.queued_count, 0);
+        assert!(matches!(
+            app.message_list.messages().last(),
+            Some(MessageEntry::System { text }) if text.contains("Queued message: follow up after this")
+        ));
     }
 }
