@@ -11,6 +11,12 @@ pub enum ContentBlock {
         name: String,
         input: serde_json::Value,
     },
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,

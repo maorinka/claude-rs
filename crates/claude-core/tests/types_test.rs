@@ -73,6 +73,23 @@ fn test_tool_result_content_block() {
 }
 
 #[test]
+fn test_server_tool_use_content_block() {
+    let block = ContentBlock::ServerToolUse {
+        id: "srv_1".into(),
+        name: "web_search".into(),
+        input: serde_json::json!({"query": "rust"}),
+    };
+    let json = serde_json::to_value(&block).unwrap();
+    assert_eq!(json["type"], "server_tool_use");
+    assert_eq!(json["id"], "srv_1");
+    assert_eq!(json["name"], "web_search");
+    assert_eq!(json["input"]["query"], "rust");
+
+    let round_trip: ContentBlock = serde_json::from_value(json).unwrap();
+    assert!(matches!(round_trip, ContentBlock::ServerToolUse { .. }));
+}
+
+#[test]
 fn test_thinking_content_block() {
     let block = ContentBlock::Thinking {
         thinking: "I need to consider...".into(),

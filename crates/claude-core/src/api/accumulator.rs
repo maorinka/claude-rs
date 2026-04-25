@@ -151,7 +151,7 @@ impl ContentBlockAccumulator {
                     serde_json::from_str(&input_json)
                         .map_err(|e| anyhow!("Failed to parse server tool input JSON: {}", e))?
                 };
-                ContentBlock::ToolUse { id, name, input }
+                ContentBlock::ServerToolUse { id, name, input }
             }
         };
 

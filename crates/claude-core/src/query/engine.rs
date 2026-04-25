@@ -570,6 +570,14 @@ impl QueryEngine {
                                                     "input": input,
                                                 }));
                                             }
+                                            ContentBlock::ServerToolUse { id, name, input } => {
+                                                assistant_content.push(serde_json::json!({
+                                                    "type": "server_tool_use",
+                                                    "id": id,
+                                                    "name": name,
+                                                    "input": input,
+                                                }));
+                                            }
                                             ContentBlock::Text { text } => {
                                                 assistant_content.push(serde_json::json!({
                                                     "type": "text",

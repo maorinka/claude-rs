@@ -59,6 +59,34 @@ fn test_accumulate_tool_use_block() {
 }
 
 #[test]
+fn test_accumulate_server_tool_use_block() {
+    let mut acc = ContentBlockAccumulator::new();
+    acc.on_start(
+        0,
+        ContentBlockStart::ServerToolUse {
+            id: "srv_1".into(),
+            name: "web_search".into(),
+        },
+    );
+    acc.on_delta(
+        0,
+        ContentDelta::InputJsonDelta {
+            partial_json: r#"{"query": "rust"}"#.into(),
+        },
+    );
+
+    let block = acc.on_stop(0).unwrap();
+    match block {
+        ContentBlock::ServerToolUse { id, name, input } => {
+            assert_eq!(id, "srv_1");
+            assert_eq!(name, "web_search");
+            assert_eq!(input["query"], "rust");
+        }
+        _ => panic!("Expected ServerToolUse"),
+    }
+}
+
+#[test]
 fn test_accumulate_thinking_block() {
     let mut acc = ContentBlockAccumulator::new();
     acc.on_start(0, ContentBlockStart::Thinking);
