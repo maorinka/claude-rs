@@ -1,6 +1,6 @@
 use std::io::{self, Stdout};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -45,6 +45,7 @@ use crate::widgets::theme_picker::{ThemePicker, ThemePickerWidget};
 /// Token budget warning thresholds.
 const TOKEN_WARNING_THRESHOLD: f64 = 0.80; // Yellow warning at 80%
 const TOKEN_CRITICAL_THRESHOLD: f64 = 0.95; // Red warning at 95%
+const DOUBLE_PRESS_TIMEOUT_MS: u64 = 800;
 
 pub enum AppEvent {
     Key(KeyEvent),
@@ -139,6 +140,8 @@ pub struct App {
     command_picker: CommandPicker,
     /// Rewind picker overlay (shown on Escape while idle)
     rewind_picker: CommandPicker,
+    /// Last idle Escape press, used to match TS double-press behavior.
+    last_idle_escape: Option<Instant>,
     /// Model picker overlay (shown on `/model`)
     model_picker: ModelPicker,
     /// Theme picker overlay (shown on `/theme`)
@@ -180,6 +183,7 @@ impl App {
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
             rewind_picker: CommandPicker::new(),
+            last_idle_escape: None,
             model_picker: ModelPicker::new(),
             theme_picker: ThemePicker::new(),
             theme_setting: ThemeSetting::Auto,
@@ -268,6 +272,7 @@ impl App {
             .map(|cmd| CommandPickerEntry {
                 name: cmd.name.clone(),
                 description: cmd.description.clone(),
+                display_name: None,
             })
             .collect();
         // Sort commands alphabetically
@@ -279,6 +284,7 @@ impl App {
                 entries.push(CommandPickerEntry {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
+                    display_name: None,
                 });
             }
         }
@@ -298,7 +304,8 @@ impl App {
                 };
                 Some(CommandPickerEntry {
                     name: format!("#{}", idx),
-                    description: truncate_chars(text.replace('\n', " ").trim(), 96),
+                    description: "No code changes".to_string(),
+                    display_name: Some(truncate_chars(text.replace('\n', " ").trim(), 96)),
                 })
             })
             .collect()
@@ -311,6 +318,29 @@ impl App {
         };
         self.message_list.truncate(idx);
         Some(prompt_text)
+    }
+
+    fn open_rewind_on_double_escape(&mut self) {
+        if !self.prompt.is_empty() {
+            self.last_idle_escape = None;
+            return;
+        }
+
+        let now = Instant::now();
+        let is_double_press = self
+            .last_idle_escape
+            .map(|last| now.duration_since(last) <= Duration::from_millis(DOUBLE_PRESS_TIMEOUT_MS))
+            .unwrap_or(false);
+
+        if is_double_press {
+            self.last_idle_escape = None;
+            let entries = self.build_rewind_entries();
+            if !entries.is_empty() {
+                self.rewind_picker.open(entries);
+            }
+        } else {
+            self.last_idle_escape = Some(now);
+        }
     }
 
     /// Try to execute a slash command or skill from user input.
@@ -894,10 +924,7 @@ impl App {
                                     .send(EngineCommand::SetCancelToken(cancel.clone()))
                                     .await;
                             } else {
-                                let entries = self.build_rewind_entries();
-                                if !entries.is_empty() {
-                                    self.rewind_picker.open(entries);
-                                }
+                                self.open_rewind_on_double_escape();
                             }
                             continue;
                         }

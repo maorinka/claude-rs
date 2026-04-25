@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 pub struct CommandPickerEntry {
     pub name: String,
     pub description: String,
+    pub display_name: Option<String>,
 }
 
 /// State for the slash-command picker overlay.
@@ -204,6 +205,7 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
         for (row, &entry_idx) in visible_entries.enumerate() {
             let entry = &self.picker.entries[entry_idx];
+            let display_name = entry.display_name.as_deref().unwrap_or(&entry.name);
             let is_selected = (row + scroll_offset) == self.picker.selected;
 
             let style = if is_selected {
@@ -217,7 +219,7 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
             let line = Line::from(vec![
                 Span::styled(
-                    format!("{}{}", self.prefix, entry.name),
+                    format!("{}{}", self.prefix, display_name),
                     style.add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -246,10 +248,12 @@ mod tests {
             CommandPickerEntry {
                 name: "doctor".into(),
                 description: "Run environment health checks".into(),
+                display_name: None,
             },
             CommandPickerEntry {
                 name: "export".into(),
                 description: "Export session to file".into(),
+                display_name: None,
             },
         ]);
         picker
