@@ -46,7 +46,7 @@ const MEMORY_INSTRUCTION_PROMPT: &str =
 
 pub async fn build_system_prompt(
     project_root: &Path,
-    tool_descriptions: &[(String, String)], // (name, description)
+    _tool_descriptions: &[(String, String)], // tool schemas are sent through the API `tools` field
     model: &str,
 ) -> Result<Vec<Value>> {
     let mut parts: Vec<String> = Vec::new();
@@ -57,24 +57,15 @@ pub async fn build_system_prompt(
     // so it always reflects the current model (even after /model switch).
     let _ = model; // used by callers, identity injected at API layer
 
-    // 2. Tool descriptions
-    if !tool_descriptions.is_empty() {
-        let mut tools_text = String::from("# Available Tools\n\n");
-        for (name, desc) in tool_descriptions {
-            tools_text.push_str(&format!("## {}\n{}\n\n", name, desc));
-        }
-        parts.push(tools_text);
-    }
-
-    // 3. Git context
+    // 2. Git context
     if let Ok(Some(git_ctx)) = get_git_context(project_root).await {
         parts.push(format!("# Git Context\n{}", git_ctx));
     }
 
-    // 4. Environment
+    // 3. Environment
     parts.push(build_environment_context());
 
-    // 5. CLAUDE.md files from parent directories, user home, and project root
+    // 4. CLAUDE.md files from parent directories, user home, and project root
     let claude_md_contents = load_claude_md_files(project_root);
     if !claude_md_contents.is_empty() {
         parts.push(MEMORY_INSTRUCTION_PROMPT.to_string());
@@ -83,7 +74,7 @@ pub async fn build_system_prompt(
         }
     }
 
-    // 6. Settings-driven sections (language preference, output style)
+    // 5. Settings-driven sections (language preference, output style)
     //    Loads ~/.claude/settings.json + project .claude/settings.json,
     //    matches TS Settings → getLanguageSection/getOutputStyleSection
     //    via build_language_section / build_output_style_section.
@@ -102,21 +93,21 @@ pub async fn build_system_prompt(
         }
     }
 
-    // 6b. Ant-only numeric length anchors. Mirrors TS gate at
+    // 5b. Ant-only numeric length anchors. Mirrors TS gate at
     //     constants/prompts.ts:531 — `process.env.USER_TYPE === 'ant'`.
     //     ~1.2% output token reduction vs qualitative "be concise".
     if crate::user_type::is_ant() {
         parts.push(crate::system_prompt_extensions::NUMERIC_LENGTH_ANCHORS.to_string());
     }
 
-    // 6c. Token budget instruction — gated by the same TOKEN_BUDGET
+    // 5c. Token budget instruction — gated by the same TOKEN_BUDGET
     //     feature flag in TS (env var here). Lets users specify "+500k"
     //     in messages and have Claude treat it as a hard minimum.
     if crate::errors_util::is_env_truthy("CLAUDE_CODE_TOKEN_BUDGET") {
         parts.push(crate::system_prompt_extensions::TOKEN_BUDGET_INSTRUCTION.to_string());
     }
 
-    // 6c-bis. Scratchpad instructions — gated on CLAUDE_CODE_SCRATCHPAD_DIR
+    // 5c-bis. Scratchpad instructions — gated on CLAUDE_CODE_SCRATCHPAD_DIR
     //         being set (TS gates this on the proactive/sandbox feature
     //         flag). The variable supplies the literal directory path
     //         that the prompt advertises.
@@ -128,7 +119,7 @@ pub async fn build_system_prompt(
         }
     }
 
-    // 6d. KAIROS daily-log section — instructs the model to record
+    // 5d. KAIROS daily-log section — instructs the model to record
     //     observations into a per-day memory file. Gated on auto-memory
     //     being on (matches TS `isAutoMemoryEnabled()` check). The
     //     `tengu_coral_fern`-gated `## Searching past context` block is
@@ -157,7 +148,7 @@ pub async fn build_system_prompt(
         parts.push(crate::memdir::build_assistant_daily_log_prompt(&inputs));
     }
 
-    // 7. Dynamic sections (brief mode, plan mode, etc.)
+    // 6. Dynamic sections (brief mode, plan mode, etc.)
     for section in collect_dynamic_sections() {
         parts.push(section);
     }

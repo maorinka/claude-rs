@@ -24,7 +24,7 @@ async fn test_build_system_prompt_basic() {
     let blocks = build_system_prompt(tmp.path(), &tools, "claude-sonnet-4-6")
         .await
         .unwrap();
-    assert!(blocks.len() >= 3); // base + tools + environment (git may or may not be present)
+    assert!(blocks.len() >= 2); // base + environment (git may or may not be present)
 
     // Check base prompt is first
     let first_text = blocks[0]["text"].as_str().unwrap();
@@ -32,9 +32,12 @@ async fn test_build_system_prompt_basic() {
 }
 
 #[tokio::test]
-async fn test_build_system_prompt_includes_tools() {
+async fn test_build_system_prompt_omits_duplicate_tools() {
     let tmp = tempfile::tempdir().unwrap();
-    let tools = vec![("Grep".into(), "Search files".into())];
+    let tools = vec![(
+        "ParityOnlyToolName".into(),
+        "Parity-only tool description".into(),
+    )];
     let blocks = build_system_prompt(tmp.path(), &tools, "claude-sonnet-4-6")
         .await
         .unwrap();
@@ -44,8 +47,8 @@ async fn test_build_system_prompt_includes_tools() {
         .filter_map(|b| b["text"].as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(all_text.contains("Grep"));
-    assert!(all_text.contains("Search files"));
+    assert!(!all_text.contains("ParityOnlyToolName"));
+    assert!(!all_text.contains("Parity-only tool description"));
 }
 
 #[tokio::test]

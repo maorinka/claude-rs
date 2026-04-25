@@ -121,8 +121,6 @@ impl Default for ApiConfig {
     }
 }
 
-const CAPPED_DEFAULT_MAX_TOKENS: u64 = 8_192;
-
 static PROCESS_SESSION_ID: Lazy<String> = Lazy::new(|| uuid::Uuid::new_v4().to_string());
 
 pub fn get_session_id() -> &'static String {
@@ -141,7 +139,12 @@ pub fn minimal_transport_enabled() -> bool {
 
 pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
-    let default_tokens = if lower.contains("opus-4-1") || lower.contains("opus-4") {
+    if lower.contains("opus-4-6")
+        || lower.contains("sonnet-4-6")
+        || lower.contains("haiku-4-5")
+    {
+        64_000
+    } else if lower.contains("opus-4-1") || lower.contains("opus-4") {
         32_000
     } else if lower.contains("claude-3-opus") {
         4_096
@@ -153,11 +156,7 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
         8_192
     } else {
         32_000
-    };
-
-    // Match TS slot-reservation cap: normal requests default to 8k unless the
-    // model's native default is lower.
-    std::cmp::min(default_tokens, CAPPED_DEFAULT_MAX_TOKENS)
+    }
 }
 
 /// Map model ID to marketing name (matches TS getPublicModelDisplayName).
@@ -578,10 +577,11 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn max_output_tokens_match_ts_slot_reservation_cap() {
-        assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 8_192);
-        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-6"), 8_192);
-        assert_eq!(get_max_output_tokens_for_model("claude-haiku-4-5"), 8_192);
+    fn max_output_tokens_match_current_ts_defaults() {
+        assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-6"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-haiku-4-5"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-1"), 32_000);
         assert_eq!(
             get_max_output_tokens_for_model("claude-3-opus-20240229"),
             4_096
