@@ -413,16 +413,25 @@ impl App {
                 }
                 MessageEntry::Thinking { text } => Some(format!("Thinking: {text}")),
                 MessageEntry::System { text } => Some(format!("System: {text}")),
+                MessageEntry::CompactionSummary { text } => {
+                    Some(format!("Compaction summary: {text}"))
+                }
                 MessageEntry::Logo { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("\n\n");
         self.message_list.truncate(idx);
-        Some(format!(
-            "Summarize the conversation from the point before I sent this message:\n\n\
-             {prompt_text}\n\n\
-             Conversation after that point:\n\n{removed}"
-        ))
+        let summary = if removed.trim().is_empty() {
+            "No messages were available to summarize after this point.".to_string()
+        } else {
+            format!("Messages after this point were summarized locally:\n\n{removed}")
+        };
+        let compact_user_msg =
+            claude_core::compact::prompt::format_compact_user_message_simple(&summary);
+        self.message_list.push(MessageEntry::CompactionSummary {
+            text: compact_user_msg,
+        });
+        Some(prompt_text)
     }
 
     fn open_rewind_on_double_escape(&mut self) {
@@ -1011,7 +1020,7 @@ impl App {
                                         }
                                     }
                                     RewindRestoreOption::SummarizeFromHere => {
-                                        if let Some(summary_prompt) =
+                                        if let Some(prompt_text) =
                                             self.summarize_rewind_from(confirm.message_index)
                                         {
                                             let messages = reconstruct_engine_messages(
@@ -1020,9 +1029,9 @@ impl App {
                                             let _ = engine_tx
                                                 .send(EngineCommand::LoadMessages(messages))
                                                 .await;
-                                            self.prompt.set_text(summary_prompt);
+                                            self.prompt.set_text(prompt_text);
                                             self.message_list.push(MessageEntry::System {
-                                                text: "Rewound conversation. Edit the summary prompt, then press Enter to submit.".to_string(),
+                                                text: "Conversation summarized. Edit the restored prompt, then press Enter to resubmit.".to_string(),
                                             });
                                         }
                                     }
@@ -2625,6 +2634,10 @@ fn reconstruct_engine_messages(entries: &[MessageEntry]) -> Vec<serde_json::Valu
                 "role": "assistant",
                 "content": [{"type": "text", "text": text}]
             })),
+            MessageEntry::CompactionSummary { text } => Some(serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            })),
             _ => None,
         })
         .collect()
@@ -2684,8 +2697,17 @@ fn render_rewind_confirmation(
             Span::styled("(recently)", Style::default().fg(theme.inactive)),
         ]),
         Line::from(""),
-        Line::from("The conversation will be forked."),
-        Line::from("The code will be unchanged."),
+        Line::from(match confirm.selected_option() {
+            RewindRestoreOption::SummarizeFromHere => {
+                "Messages after this point will be summarized."
+            }
+            RewindRestoreOption::RestoreConversation => "The conversation will be forked.",
+            RewindRestoreOption::NeverMind => "The conversation will be unchanged.",
+        }),
+        Line::from(match confirm.selected_option() {
+            RewindRestoreOption::SummarizeFromHere => "",
+            _ => "The code will be unchanged.",
+        }),
         Line::from(""),
     ];
 
@@ -2760,5 +2782,38 @@ mod tests {
         assert_eq!(app.prompt.text(), "follow up after this");
         assert!(app.message_queue.is_empty());
         assert_eq!(app.spinner.queued_count, 0);
+    }
+
+    #[test]
+    fn summarize_rewind_from_replaces_tail_and_restores_prompt() {
+        let mut app = App::new().unwrap();
+        app.message_list.push(MessageEntry::User {
+            text: "first".to_string(),
+        });
+        app.message_list.push(MessageEntry::Assistant {
+            text: "first answer".to_string(),
+        });
+        app.message_list.push(MessageEntry::User {
+            text: "second".to_string(),
+        });
+        app.message_list.push(MessageEntry::Assistant {
+            text: "second answer".to_string(),
+        });
+
+        let restored = app.summarize_rewind_from(2);
+
+        assert_eq!(restored.as_deref(), Some("second"));
+        assert_eq!(app.message_list.messages().len(), 3);
+        assert!(matches!(
+            app.message_list.messages().last(),
+            Some(MessageEntry::CompactionSummary { text })
+                if text.contains("Messages after this point were summarized")
+                    && text.contains("User: second")
+                    && text.contains("Assistant: second answer")
+        ));
+
+        let engine_messages = reconstruct_engine_messages(app.message_list.messages());
+        assert_eq!(engine_messages.len(), 3);
+        assert_eq!(engine_messages[2]["role"], "user");
     }
 }

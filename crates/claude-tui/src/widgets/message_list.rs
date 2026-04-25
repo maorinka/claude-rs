@@ -60,6 +60,9 @@ pub enum MessageEntry {
     System {
         text: String,
     },
+    CompactionSummary {
+        text: String,
+    },
 }
 
 pub struct MessageList {
@@ -781,6 +784,28 @@ fn render_message(
                         wrapped,
                         Style::default().fg(theme.inactive),
                     )]));
+                }
+            }
+        }
+        MessageEntry::CompactionSummary { text } => {
+            let sys_width = (width as usize).max(1);
+            lines.push(Line::from(vec![Span::styled(
+                "\u{203B} Conversation summarized",
+                Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM),
+            )]));
+            for line_text in text.lines().take(3) {
+                for wrapped in word_wrap(line_text, sys_width.saturating_sub(2).max(1)) {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            wrapped,
+                            Style::default()
+                                .fg(theme.inactive)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
                 }
             }
         }
