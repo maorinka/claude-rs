@@ -559,19 +559,78 @@ async fn exec_prompt_hook(
 
     // Substitute $ARGUMENTS in the prompt with the JSON input.
     let resolved_prompt = hook.prompt.replace("$ARGUMENTS", json_input);
+    let display = format!("prompt: {}", truncate(&hook.prompt, 60));
 
-    // In the full implementation this would call into the LLM query pipeline.
-    // For now, we return a non-blocking error indicating prompt hooks need
-    // the full query infrastructure.
-    Ok(HookResult {
-        outcome: HookOutcome::NonBlockingError,
-        stderr: format!(
-            "Prompt hook execution requires LLM query infrastructure. Prompt: {}",
-            truncate(&resolved_prompt, 200)
-        ),
-        command_display: format!("prompt: {}", truncate(&hook.prompt, 60)),
-        ..Default::default()
-    })
+    // Compose the LLM call: the system prompt is the verbatim TS one
+    // from `execPromptHook.ts:64-69`; the user message is the resolved
+    // hook prompt. Returns NonBlockingError when no secondary model is
+    // registered (matches TS's "best-effort" semantics for hooks).
+    let Some(model) = crate::secondary_model::get_global() else {
+        return Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: "Prompt hook execution requires a secondary model — none registered."
+                .to_string(),
+            command_display: display,
+            ..Default::default()
+        });
+    };
+
+    let composed = format!(
+        "{system}\n\n{user}",
+        system = crate::system_prompt_extensions::PROMPT_HOOK_EVALUATION_SYSTEM_PROMPT,
+        user = resolved_prompt,
+    );
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let response = match model.summarize(&composed, cancel).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Ok(HookResult {
+                outcome: HookOutcome::NonBlockingError,
+                stderr: format!("Prompt hook LLM call failed: {e}"),
+                command_display: display,
+                ..Default::default()
+            });
+        }
+    };
+
+    // Parse the JSON response. TS expects exactly one of:
+    //   { "ok": true }
+    //   { "ok": false, "reason": "<why>" }
+    let trimmed = response.trim();
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(v) => {
+            let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+            if ok {
+                Ok(HookResult {
+                    outcome: HookOutcome::Success,
+                    command_display: display,
+                    ..Default::default()
+                })
+            } else {
+                let reason = v
+                    .get("reason")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("(no reason provided)")
+                    .to_string();
+                Ok(HookResult {
+                    outcome: HookOutcome::Blocking,
+                    stderr: reason,
+                    command_display: display,
+                    ..Default::default()
+                })
+            }
+        }
+        Err(e) => Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: format!(
+                "Prompt hook returned non-JSON: {e}; response (truncated): {}",
+                truncate(trimmed, 200)
+            ),
+            command_display: display,
+            ..Default::default()
+        }),
+    }
 }
 
 // ============================================================================

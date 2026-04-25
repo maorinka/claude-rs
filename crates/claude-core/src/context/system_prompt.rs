@@ -102,6 +102,20 @@ pub async fn build_system_prompt(
         }
     }
 
+    // 6b. Ant-only numeric length anchors. Mirrors TS gate at
+    //     constants/prompts.ts:531 — `process.env.USER_TYPE === 'ant'`.
+    //     ~1.2% output token reduction vs qualitative "be concise".
+    if crate::user_type::is_ant() {
+        parts.push(crate::system_prompt_extensions::NUMERIC_LENGTH_ANCHORS.to_string());
+    }
+
+    // 6c. Token budget instruction — gated by the same TOKEN_BUDGET
+    //     feature flag in TS (env var here). Lets users specify "+500k"
+    //     in messages and have Claude treat it as a hard minimum.
+    if crate::errors_util::is_env_truthy("CLAUDE_CODE_TOKEN_BUDGET") {
+        parts.push(crate::system_prompt_extensions::TOKEN_BUDGET_INSTRUCTION.to_string());
+    }
+
     // 7. Dynamic sections (brief mode, plan mode, etc.)
     for section in collect_dynamic_sections() {
         parts.push(section);

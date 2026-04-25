@@ -118,6 +118,7 @@ pub mod shell_quote;
 pub mod shell_quoting;
 pub mod shell_tool_utils;
 pub mod side_question;
+pub mod skill_improvement;
 pub mod skillify_prompt;
 pub mod slash_command_parsing;
 pub mod string_utils;
