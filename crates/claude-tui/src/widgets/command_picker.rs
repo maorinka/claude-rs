@@ -103,21 +103,25 @@ impl CommandPicker {
                 if q.is_empty() {
                     true
                 } else {
-                    // Match by command name starting with query (like TS)
-                    // Then fuzzy match name contains, then description contains
+                    // Match by command name starting with query (like TS).
                     e.name.to_lowercase().starts_with(&q)
                 }
             })
             .map(|(i, _)| i)
             .collect();
 
-        // If no prefix matches, fall back to substring match on name only
+        // If no prefix matches, fall back to substring match on name,
+        // then description. This keeps discovery useful for terms like
+        // "session", "cost", or "mcp" even when the command name differs.
         if self.filtered.is_empty() && !q.is_empty() {
             self.filtered = self
                 .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| e.name.to_lowercase().contains(&q))
+                .filter(|(_, e)| {
+                    e.name.to_lowercase().contains(&q)
+                        || e.description.to_lowercase().contains(&q)
+                })
                 .map(|(i, _)| i)
                 .collect();
         }
@@ -164,6 +168,15 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
         let max_visible = inner.height as usize;
 
+        if self.picker.filtered.is_empty() {
+            let line = Line::from(Span::styled(
+                "No matching commands",
+                Style::default().fg(Color::DarkGray),
+            ));
+            buf.set_line(inner.x, inner.y, &line, inner.width);
+            return;
+        }
+
         // Scroll so the selected item is always visible
         let scroll_offset = if self.picker.selected >= max_visible {
             self.picker.selected - max_visible + 1
@@ -208,5 +221,52 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
             buf.set_line(inner.x, inner.y + row as u16, &line, inner.width);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    fn picker_with_entries() -> CommandPicker {
+        let mut picker = CommandPicker::new();
+        picker.open(vec![
+            CommandPickerEntry {
+                name: "doctor".into(),
+                description: "Run environment health checks".into(),
+            },
+            CommandPickerEntry {
+                name: "export".into(),
+                description: "Export session to file".into(),
+            },
+        ]);
+        picker
+    }
+
+    #[test]
+    fn filters_by_description_when_name_does_not_match() {
+        let mut picker = picker_with_entries();
+        picker.set_query("session");
+
+        assert_eq!(picker.filtered_count(), 1);
+        assert_eq!(picker.selected_name(), Some("export"));
+    }
+
+    #[test]
+    fn renders_empty_state_for_no_matches() {
+        let mut picker = picker_with_entries();
+        picker.set_query("zzzz");
+
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+        CommandPickerWidget::new(&picker).render(area, &mut buf);
+
+        let rendered = buf
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("No matching commands"));
     }
 }

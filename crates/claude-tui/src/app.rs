@@ -1814,7 +1814,7 @@ impl App {
             }
 
             // Command picker overlay (positioned above the input area)
-            if command_picker.visible && command_picker.has_entries() {
+            if command_picker.visible {
                 // +2 for border top/bottom
                 let picker_height = ((command_picker.filtered_count() as u16) + 2)
                     .max(3)
@@ -2100,8 +2100,8 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
         }
         "Bash" => {
             let cmd = input["command"].as_str().unwrap_or("?");
-            if cmd.len() > 100 {
-                format!("{}...", &cmd[..97])
+            if cmd.chars().count() > 100 {
+                format!("{}...", truncate_chars(cmd, 97))
             } else {
                 cmd.to_string()
             }
@@ -2128,8 +2128,8 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
                 subtype.to_string()
             } else {
                 let prompt = input["prompt"].as_str().unwrap_or("?");
-                if prompt.len() > 80 {
-                    format!("{}...", &prompt[..77])
+                if prompt.chars().count() > 80 {
+                    format!("{}...", truncate_chars(prompt, 77))
                 } else {
                     prompt.to_string()
                 }
@@ -2138,8 +2138,8 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
         _ => {
             // Fallback: compact JSON, truncated
             let s = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
-            if s.len() > 120 {
-                format!("{}...", &s[..117])
+            if s.chars().count() > 120 {
+                format!("{}...", truncate_chars(&s, 117))
             } else {
                 s
             }
@@ -2205,11 +2205,20 @@ fn format_edit_result(data: &serde_json::Value) -> Option<String> {
 /// Truncate long tool results for display.
 fn truncate_result(s: &str) -> String {
     const MAX_DISPLAY: usize = 2000;
-    if s.len() <= MAX_DISPLAY {
+    if s.chars().count() <= MAX_DISPLAY {
         s.to_string()
     } else {
-        format!("{}... ({} chars total)", &s[..MAX_DISPLAY], s.len())
+        let total = s.chars().count();
+        format!(
+            "{}... ({} chars total)",
+            truncate_chars(s, MAX_DISPLAY),
+            total
+        )
     }
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
 
 /// Calculate a centered rect within the given area.
