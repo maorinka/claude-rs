@@ -1,9 +1,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use claude_core::mcp::manager::McpManager;
 use claude_core::types::events::ToolResultData;
 
 // ─── ListMcpResourcesTool ────────────────────────────────────────────────────
@@ -14,7 +17,18 @@ use claude_core::types::events::ToolResultData;
 /// the detailed variant to the model.
 pub const LIST_MCP_RESOURCES_PROMPT: &str = include_str!("prompts/list_mcp_resources.md");
 
-pub struct ListMcpResourcesTool;
+#[derive(Default)]
+pub struct ListMcpResourcesTool {
+    manager: Option<Arc<RwLock<McpManager>>>,
+}
+
+impl ListMcpResourcesTool {
+    pub fn new(manager: Arc<RwLock<McpManager>>) -> Self {
+        Self {
+            manager: Some(manager),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolExecutor for ListMcpResourcesTool {
@@ -53,12 +67,21 @@ impl ToolExecutor for ListMcpResourcesTool {
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
-        let _server = input.get("server").and_then(|v| v.as_str());
+        let server = input.get("server").and_then(|v| v.as_str());
 
-        // MCP resource listing requires a connected MCP manager.
-        // In the current architecture, MCP resources are served through the
-        // McpManager. This tool acts as a stub that returns an empty list
-        // until the full MCP resource API is wired up.
+        if let Some(manager) = &self.manager {
+            let manager = manager.read().await;
+            let mut resources = manager.list_resources().await?;
+            if let Some(server) = server {
+                resources.retain(|resource| resource.server == server);
+            }
+
+            return Ok(ToolResultData {
+                data: json!({ "resources": resources }),
+                is_error: false,
+            });
+        }
+
         Ok(ToolResultData {
             data: json!({
                 "resources": [],
@@ -71,7 +94,18 @@ impl ToolExecutor for ListMcpResourcesTool {
 
 // ─── ReadMcpResourceTool ─────────────────────────────────────────────────────
 
-pub struct ReadMcpResourceTool;
+#[derive(Default)]
+pub struct ReadMcpResourceTool {
+    manager: Option<Arc<RwLock<McpManager>>>,
+}
+
+impl ReadMcpResourceTool {
+    pub fn new(manager: Arc<RwLock<McpManager>>) -> Self {
+        Self {
+            manager: Some(manager),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolExecutor for ReadMcpResourceTool {
@@ -140,9 +174,20 @@ Parameters:
             }
         };
 
-        // MCP resource reading requires a connected MCP manager.
-        // This tool acts as a stub that returns a not-found error
-        // until the full MCP resource API is wired up.
+        if let Some(manager) = &self.manager {
+            let manager = manager.read().await;
+            return match manager.read_resource(server, uri).await {
+                Ok(data) => Ok(ToolResultData {
+                    data,
+                    is_error: false,
+                }),
+                Err(error) => Ok(ToolResultData {
+                    data: json!({ "error": error.to_string() }),
+                    is_error: true,
+                }),
+            };
+        }
+
         Ok(ToolResultData {
             data: json!({
                 "error": format!(
@@ -155,10 +200,20 @@ Parameters:
     }
 }
 
+/// Register manager-backed MCP resource tools.
+pub fn register_mcp_resource_tools(
+    registry: &mut crate::registry::ToolRegistry,
+    manager: Arc<RwLock<McpManager>>,
+) {
+    registry.register(Arc::new(ListMcpResourcesTool::new(manager.clone())));
+    registry.register(Arc::new(ReadMcpResourceTool::new(manager)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::registry::ReadFileState;
+    use claude_core::mcp::manager::McpManager;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -172,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_mcp_resources_returns_empty() {
-        let tool = ListMcpResourcesTool;
+        let tool = ListMcpResourcesTool::default();
         let input = json!({});
         let ctx = make_ctx();
         let cancel = CancellationToken::new();
@@ -184,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_mcp_resources_with_server_filter() {
-        let tool = ListMcpResourcesTool;
+        let tool = ListMcpResourcesTool::default();
         let input = json!({ "server": "test-server" });
         let ctx = make_ctx();
         let cancel = CancellationToken::new();
@@ -195,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_mcp_resource_missing_server() {
-        let tool = ReadMcpResourceTool;
+        let tool = ReadMcpResourceTool::default();
         let input = json!({ "uri": "test://resource" });
         let ctx = make_ctx();
         let cancel = CancellationToken::new();
@@ -210,7 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_mcp_resource_missing_uri() {
-        let tool = ReadMcpResourceTool;
+        let tool = ReadMcpResourceTool::default();
         let input = json!({ "server": "test-server" });
         let ctx = make_ctx();
         let cancel = CancellationToken::new();
@@ -225,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_mcp_resource_stub_error() {
-        let tool = ReadMcpResourceTool;
+        let tool = ReadMcpResourceTool::default();
         let input = json!({ "server": "my-server", "uri": "file://test.txt" });
         let ctx = make_ctx();
         let cancel = CancellationToken::new();
@@ -233,5 +288,35 @@ mod tests {
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
         assert!(result.data["error"].as_str().unwrap().contains("my-server"));
+    }
+
+    #[tokio::test]
+    async fn manager_backed_list_uses_connected_manager() {
+        let manager = Arc::new(RwLock::new(McpManager::new()));
+        let tool = ListMcpResourcesTool::new(manager);
+        let input = json!({});
+        let ctx = make_ctx();
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.data["resources"].as_array().unwrap().is_empty());
+        assert!(result.data.get("message").is_none());
+    }
+
+    #[tokio::test]
+    async fn manager_backed_read_reports_manager_error() {
+        let manager = Arc::new(RwLock::new(McpManager::new()));
+        let tool = ReadMcpResourceTool::new(manager);
+        let input = json!({ "server": "missing", "uri": "file://test.txt" });
+        let ctx = make_ctx();
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(result.is_error);
+        assert!(result.data["error"]
+            .as_str()
+            .unwrap()
+            .contains("MCP server 'missing' is not connected"));
     }
 }

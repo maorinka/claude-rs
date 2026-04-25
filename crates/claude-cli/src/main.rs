@@ -230,6 +230,7 @@ async fn main() -> Result<()> {
     // --- MCP server wiring ---
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
+    claude_tools::register_mcp_resource_tools(&mut tools, mcp_manager.clone());
     if !settings.mcp_servers.is_empty() {
         tracing::info!(
             count = settings.mcp_servers.len(),
