@@ -101,6 +101,9 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     reg.register(Arc::new(agent_tool::AgentTool));
     reg.register(Arc::new(ask_user::AskUserQuestionTool));
     reg.register(Arc::new(bash::BashTool::new()));
+    reg.register(Arc::new(cron_tool::ScheduleCronTool));
+    reg.register(Arc::new(cron_tool::CronDeleteTool));
+    reg.register(Arc::new(cron_tool::CronListTool));
     reg.register(Arc::new(edit::FileEditTool));
     reg.register(Arc::new(plan_mode::EnterPlanModeTool));
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
@@ -108,8 +111,13 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
     reg.register(Arc::new(glob_tool::GlobTool));
     reg.register(Arc::new(grep::GrepTool));
+    reg.register(Arc::new(lsp_tool::LSPTool));
+    reg.register(Arc::new(monitor_tool::MonitorTool));
     reg.register(Arc::new(notebook_edit::NotebookEditTool));
+    reg.register(Arc::new(push_notification_tool::PushNotificationTool));
     reg.register(Arc::new(read::FileReadTool));
+    reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
+    reg.register(Arc::new(sleep_tool::SleepTool));
     reg.register(Arc::new(skill_tool::SkillTool));
     reg.register(Arc::new(task_tools::TaskOutputTool));
     reg.register(Arc::new(task_tools::TaskStopTool));
