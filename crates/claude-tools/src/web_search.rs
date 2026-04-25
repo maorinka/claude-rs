@@ -1,10 +1,15 @@
+use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
+
+use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use claude_core::secondary_model;
+use claude_core::types::events::ToolResultData;
 
 /// Verbatim port of TS WebSearchTool/prompt.ts `getWebSearchPrompt()`.
-/// The TS side splices this into the system prompt as behavioural
-/// guidance (mandatory "Sources:" section, current-year search
-/// queries, US-only note). Consumed by the system-prompt builder,
-/// not by the tool registry — web_search is server-side.
+/// Tool description ported from TS, including behavioural guidance
+/// (mandatory "Sources:" section, current-year search queries, US-only note).
 ///
 /// TS interpolates `${currentMonthYear}` computed at call time; the
 /// literal month shifts daily, so the Rust port keeps the "current
@@ -12,22 +17,118 @@ use serde_json::{json, Value};
 /// specificity should format it in at splice time.
 pub const WEB_SEARCH_PROMPT: &str = include_str!("prompts/web_search.md");
 
-/// WebSearchTool is a **server-side** tool.
+/// WebSearchTool is a client-visible tool backed by an Anthropic server tool.
 ///
-/// Unlike regular client-side tools, web search is handled by Anthropic's API
-/// server. The tool definition (`web_search_20250305`) is injected into the
-/// request body by `build_request_body()` in `claude-core`, and the API handles
-/// search execution internally via `server_tool_use` / `web_search_tool_result`
-/// content blocks.
-///
-/// This struct is **NOT** registered in the tool registry because it is not a
-/// client-side tool. It only provides the server tool definition that should be
-/// included in the API request's `tools` array.
-///
-/// The TS implementation sends `web_search_20250305` in the request tools and
-/// the API handles the search execution without any client-side tool_result
-/// round-trip. This Rust implementation matches that behavior exactly.
+/// The model sees and calls `WebSearch`. The executor then makes a nested
+/// request containing the server-side `web_search_20250305` schema and maps
+/// `web_search_tool_result` blocks into a normal tool result, matching TS.
 pub struct WebSearchTool;
+
+#[async_trait]
+impl ToolExecutor for WebSearchTool {
+    fn name(&self) -> &str {
+        "WebSearch"
+    }
+
+    fn description(&self) -> String {
+        WEB_SEARCH_PROMPT.to_string()
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "minLength": 2,
+                    "description": "The search query to use"
+                },
+                "allowed_domains": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Only include search results from these domains"
+                },
+                "blocked_domains": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Never include search results from these domains"
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false,
+            "$schema": "https://json-schema.org/draft/2020-12/schema"
+        })
+    }
+
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
+
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
+
+    async fn call(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+        cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData> {
+        let Some(query) = input.get("query").and_then(Value::as_str) else {
+            return Ok(ToolResultData {
+                data: json!("Error: Missing query"),
+                is_error: true,
+            });
+        };
+        if query.is_empty() {
+            return Ok(ToolResultData {
+                data: json!("Error: Missing query"),
+                is_error: true,
+            });
+        }
+
+        let allowed_domains = string_array(input.get("allowed_domains"));
+        let blocked_domains = string_array(input.get("blocked_domains"));
+        if allowed_domains.as_ref().is_some_and(|v| !v.is_empty())
+            && blocked_domains.as_ref().is_some_and(|v| !v.is_empty())
+        {
+            return Ok(ToolResultData {
+                data: json!(
+                    "Error: Cannot specify both allowed_domains and blocked_domains in the same request"
+                ),
+                is_error: true,
+            });
+        }
+
+        let Some(model) = secondary_model::get_global() else {
+            return Ok(ToolResultData {
+                data: json!(
+                    "Error: WebSearch is unavailable because no secondary model is configured"
+                ),
+                is_error: true,
+            });
+        };
+
+        let result = model
+            .web_search(query, allowed_domains, blocked_domains, cancel)
+            .await?;
+        Ok(ToolResultData {
+            data: json!(result),
+            is_error: false,
+        })
+    }
+}
+
+fn string_array(value: Option<&Value>) -> Option<Vec<String>> {
+    value.and_then(Value::as_array).map(|items| {
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect()
+    })
+}
 
 impl WebSearchTool {
     /// Returns the server tool definition that should be included in the API
@@ -112,13 +213,10 @@ mod tests {
     }
 
     #[test]
-    fn test_not_a_tool_executor() {
-        // WebSearchTool intentionally does NOT implement ToolExecutor.
-        // It is a server-side tool. This test documents that design decision.
-        // If someone tries to register it as a client tool, they'll get a
-        // compile error because it doesn't impl ToolExecutor.
-        let def = WebSearchTool::server_tool_definition();
-        assert_eq!(def["name"], "web_search");
+    fn test_tool_executor_schema_name_matches_ts() {
+        let tool = WebSearchTool;
+        assert_eq!(tool.name(), "WebSearch");
+        assert_eq!(tool.input_schema()["required"][0], "query");
     }
 
     #[test]

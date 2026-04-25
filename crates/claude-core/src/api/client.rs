@@ -311,6 +311,30 @@ pub fn build_request_body(
     body
 }
 
+/// Build a request body with raw tool schema values.
+///
+/// This is used for Anthropic server-side tools such as `web_search_20250305`,
+/// whose schema shape is not the normal client tool `{name, description,
+/// input_schema}` form.
+pub fn build_request_body_with_raw_tools(
+    config: &ApiConfig,
+    messages: &[Value],
+    system: &[ContentBlock],
+    tools: &[Value],
+    is_oauth: bool,
+) -> Value {
+    let mut body = build_request_body(config, messages, system, &[], is_oauth);
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools.to_vec());
+        if let Some(tools_arr) = body["tools"].as_array_mut() {
+            if let Some(last) = tools_arr.last_mut() {
+                last["cache_control"] = json!({"type": "ephemeral"});
+            }
+        }
+    }
+    body
+}
+
 /// Apply cache_control breakpoints to conversation messages in the request
 /// body. Marks the last content block of the last user turn so the prompt
 /// cache covers the stable prefix (system + tools + prior conversation).
@@ -464,6 +488,23 @@ impl ApiClient {
             .await
     }
 
+    /// POST a streaming request with raw tool schema values.
+    pub async fn stream_request_with_raw_tools(
+        &self,
+        messages: &[Value],
+        system: &[ContentBlock],
+        tools: &[Value],
+    ) -> Result<Response> {
+        let body = build_request_body_with_raw_tools(
+            &self.config,
+            messages,
+            system,
+            tools,
+            self.auth.is_oauth(),
+        );
+        self.send_streaming_body(body).await
+    }
+
     /// POST a streaming request with optional event feedback.
     pub async fn stream_request_with_events(
         &self,
@@ -472,8 +513,12 @@ impl ApiClient {
         tools: &[ToolDefinition],
         _event_tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<Response> {
-        let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools, self.auth.is_oauth());
+        self.send_streaming_body(body).await
+    }
+
+    async fn send_streaming_body(&self, body: Value) -> Result<Response> {
+        let url = format!("{}/v1/messages", self.config.base_url);
         let minimal_transport = minimal_transport_enabled();
 
         // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
@@ -698,6 +743,31 @@ mod tests {
             json!({"type": "ephemeral"}),
             "last tool must have cache_control"
         );
+    }
+
+    #[test]
+    fn raw_tool_request_preserves_server_tool_schema() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let raw_tools = vec![json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 8
+        })];
+        let body = build_request_body_with_raw_tools(&config, &[], &[], &raw_tools, false);
+        assert_eq!(body["tools"][0]["type"], "web_search_20250305");
+        assert_eq!(body["tools"][0]["name"], "web_search");
+        assert_eq!(body["tools"][0]["max_uses"], 8);
+        assert_eq!(
+            body["tools"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+        assert!(body["tools"][0].get("input_schema").is_none());
     }
 
     #[test]

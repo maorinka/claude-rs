@@ -15,6 +15,7 @@ const ALL_TOOLS: &[(&str, &str)] = &[
     ("Edit", "Edit a specific portion of a file"),
     ("Grep", "Search for patterns in files using ripgrep"),
     ("Glob", "Find files matching a glob pattern"),
+    ("WebSearch", "Search the web for current information"),
     ("Config", "Get, set, or list Claude configuration settings"),
     (
         "EnterPlanMode",

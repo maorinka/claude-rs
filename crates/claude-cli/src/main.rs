@@ -351,6 +351,7 @@ async fn main() -> Result<()> {
             auth.clone(),
             api_config.base_url.clone(),
             api_config.session_id.clone(),
+            model.clone(),
         ));
         claude_core::secondary_model::set_global(haiku);
     }

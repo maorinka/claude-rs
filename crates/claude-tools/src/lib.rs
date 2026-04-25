@@ -85,8 +85,7 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(Arc::new(grep::GrepTool));
     reg.register(Arc::new(glob_tool::GlobTool));
     reg.register(Arc::new(web_fetch::WebFetchTool));
-    // WebSearchTool is a server-side tool (handled by the API, not client-side).
-    // It is NOT registered here. Its definition is injected into the API request.
+    reg.register(Arc::new(web_search::WebSearchTool));
     reg.register(Arc::new(task_tools::TaskCreateTool));
     reg.register(Arc::new(task_tools::TaskListTool));
     reg.register(Arc::new(task_tools::TaskUpdateTool));
