@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
@@ -1637,6 +1638,28 @@ impl App {
     /// Handle mouse events (scroll wheel).
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.permission_dialog.is_some() || self.ask_user_dialog.is_some() {
+                    return;
+                }
+                let Ok(area) = self.terminal.size() else {
+                    return;
+                };
+                let spinner_height = if self.spinner.active { 1 } else { 0 };
+                let messages_height = area.height.saturating_sub(spinner_height + 3);
+                if mouse.row >= messages_height {
+                    return;
+                }
+                if let Some(tool_use_id) = self.message_list.tool_result_at_row(
+                    mouse.row as usize,
+                    area.width,
+                    messages_height as usize,
+                    &self.theme,
+                ) {
+                    self.message_list.toggle_tool_expand(&tool_use_id);
+                    self.message_list.scroll_to_bottom();
+                }
+            }
             MouseEventKind::ScrollUp => {
                 self.message_list.scroll_up(3);
             }

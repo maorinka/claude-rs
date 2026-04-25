@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -68,6 +70,8 @@ pub struct MessageList {
     show_thinking: bool,
     /// Cached rendered heights per message (invalidated on push/clear).
     height_cache: Vec<Option<usize>>,
+    /// Tool use IDs whose results are expanded (show all lines).
+    expanded_tools: HashSet<String>,
 }
 
 impl Default for MessageList {
@@ -84,6 +88,7 @@ impl MessageList {
             sticky_bottom: true,
             show_thinking: false,
             height_cache: Vec::new(),
+            expanded_tools: HashSet::new(),
         }
     }
 
@@ -157,6 +162,7 @@ impl MessageList {
     pub fn clear(&mut self) {
         self.messages.clear();
         self.height_cache.clear();
+        self.expanded_tools.clear();
         self.scroll_offset = 0;
         self.sticky_bottom = true;
     }
@@ -174,6 +180,61 @@ impl MessageList {
     /// Whether thinking blocks are currently visible.
     pub fn show_thinking(&self) -> bool {
         self.show_thinking
+    }
+
+    /// Toggle expand/collapse for a tool result by its tool_use_id.
+    pub fn toggle_tool_expand(&mut self, tool_use_id: &str) {
+        if !self.expanded_tools.remove(tool_use_id) {
+            self.expanded_tools.insert(tool_use_id.to_string());
+        }
+        self.height_cache.iter_mut().for_each(|h| *h = None);
+    }
+
+    /// Whether a tool result is currently expanded.
+    pub fn is_tool_expanded(&self, tool_use_id: &str) -> bool {
+        self.expanded_tools.contains(tool_use_id)
+    }
+
+    /// Return the tool result rendered at a visible row, if any.
+    pub fn tool_result_at_row(
+        &self,
+        row: usize,
+        width: u16,
+        visible_height: usize,
+        theme: &Theme,
+    ) -> Option<String> {
+        if visible_height == 0 {
+            return None;
+        }
+
+        let mut owners: Vec<Option<String>> = Vec::new();
+        for msg in &self.messages {
+            let msg_lines =
+                render_message(msg, width, self.show_thinking, &self.expanded_tools, theme);
+            let owner = match msg {
+                MessageEntry::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            };
+            owners.extend(std::iter::repeat(owner).take(msg_lines.len()));
+        }
+
+        let total_lines = owners.len();
+        let scroll = if self.sticky_bottom {
+            total_lines.saturating_sub(visible_height)
+        } else {
+            self.scroll_offset
+                .min(total_lines.saturating_sub(visible_height))
+        };
+        let end = total_lines.min(scroll + visible_height);
+        let visible_len = end.saturating_sub(scroll);
+        let top_offset = visible_height.saturating_sub(visible_len);
+
+        if row < top_offset {
+            return None;
+        }
+        owners
+            .get(scroll + row - top_offset)
+            .and_then(|owner| owner.clone())
     }
 }
 
@@ -396,6 +457,7 @@ fn render_message(
     msg: &MessageEntry,
     width: u16,
     show_thinking: bool,
+    expanded_tools: &HashSet<String>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -596,9 +658,10 @@ fn render_message(
             name: _,
             output,
             is_error,
-            tool_use_id: _,
+            tool_use_id,
         } => {
             let w = width as usize;
+            let is_expanded = expanded_tools.contains(tool_use_id);
             // Tool results show with "  ⎿  " prefix.
             // The ToolUse entry above already has the colored circle.
             if *is_error {
@@ -640,15 +703,15 @@ fn render_message(
                     lines.push(Line::from(spans));
                 }
             } else {
-                let max_preview_lines = 6;
+                let max_preview_lines = if is_expanded { usize::MAX } else { 6 };
                 for line in output.lines().take(max_preview_lines) {
                     lines.extend(render_tool_output_lines(line, w, theme));
                 }
                 let output_line_count = output.lines().count();
-                if output_line_count > max_preview_lines {
+                if !is_expanded && output_line_count > max_preview_lines {
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "{}... ({} more lines)",
+                            "{}... ({} more lines, click to expand)",
                             TOOL_RESULT_PREFIX,
                             output_line_count - max_preview_lines
                         ),
@@ -732,7 +795,13 @@ impl<'a> Widget for MessageListWidget<'a> {
 
         let mut all_lines: Vec<Line> = Vec::new();
         for msg in &self.list.messages {
-            let msg_lines = render_message(msg, area.width, show_thinking, theme);
+            let msg_lines = render_message(
+                msg,
+                area.width,
+                show_thinking,
+                &self.list.expanded_tools,
+                theme,
+            );
             all_lines.extend(msg_lines);
         }
 
@@ -785,6 +854,19 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
+    fn render_msg_simple(
+        msg: &MessageEntry,
+        width: u16,
+        show_thinking: bool,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        render_message(msg, width, show_thinking, &HashSet::new(), theme)
+    }
+
+    fn lines_to_plain(lines: &[Line<'static>]) -> String {
+        lines.iter().map(ToString::to_string).collect::<String>()
+    }
+
     #[test]
     fn black_circle_char() {
         // Verify the correct Unicode character is used
@@ -802,9 +884,53 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_at_row_returns_visible_tool_id() {
+        let theme = crate::theme::dark_theme();
+        let mut list = MessageList::new();
+        list.push(MessageEntry::ToolUse {
+            name: "Read".to_string(),
+            input_summary: "file.txt".to_string(),
+            tool_use_id: "tool-1".to_string(),
+        });
+        list.push(MessageEntry::ToolResult {
+            name: "Read".to_string(),
+            output: "first\nsecond".to_string(),
+            is_error: false,
+            tool_use_id: "tool-1".to_string(),
+        });
+
+        let hit = (0..10).find_map(|row| list.tool_result_at_row(row, 80, 10, &theme));
+        assert_eq!(hit, Some("tool-1".to_string()));
+    }
+
+    #[test]
+    fn expanded_tool_result_renders_past_preview_limit() {
+        let theme = crate::theme::dark_theme();
+        let mut expanded = HashSet::new();
+        expanded.insert("tool-1".to_string());
+        let output = (1..=8)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let msg = MessageEntry::ToolResult {
+            name: "Read".to_string(),
+            output,
+            is_error: false,
+            tool_use_id: "tool-1".to_string(),
+        };
+
+        let collapsed = render_msg_simple(&msg, 80, false, &theme);
+        let expanded_lines = render_message(&msg, 80, false, &expanded, &theme);
+
+        assert!(lines_to_plain(&collapsed).contains("click to expand"));
+        assert!(lines_to_plain(&expanded_lines).contains("line 8"));
+        assert!(!lines_to_plain(&expanded_lines).contains("click to expand"));
+    }
+
+    #[test]
     fn user_message_has_blank_line_before() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::User {
                 text: "hello".to_string(),
             },
@@ -819,7 +945,7 @@ mod tests {
     #[test]
     fn assistant_message_has_circle() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Assistant {
                 text: "hi".to_string(),
             },
@@ -837,7 +963,7 @@ mod tests {
     #[test]
     fn tool_use_has_bold_name() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::ToolUse {
                 name: "Read".to_string(),
                 input_summary: "/foo.rs".to_string(),
@@ -856,7 +982,7 @@ mod tests {
     #[test]
     fn thinking_collapsed_shows_ctrl_o() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Thinking {
                 text: "let me think...".to_string(),
             },
@@ -872,7 +998,7 @@ mod tests {
     #[test]
     fn thinking_expanded_shows_content() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Thinking {
                 text: "let me think about this".to_string(),
             },
@@ -913,7 +1039,7 @@ mod tests {
     fn assistant_message_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_text = "This is a very long assistant message that should definitely wrap when the terminal width is narrow, like 40 columns wide.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Assistant {
                 text: long_text.to_string(),
             },
@@ -939,7 +1065,7 @@ mod tests {
     fn user_message_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_text = "Please explain what this project does in detail with lots of examples and code snippets showing usage.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::User {
                 text: long_text.to_string(),
             },
@@ -964,7 +1090,7 @@ mod tests {
     fn tool_result_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_output = "This is a very long tool output line that contains a lot of text and should definitely wrap properly within the terminal.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::ToolResult {
                 name: "Read".to_string(),
                 output: long_output.to_string(),
@@ -992,7 +1118,7 @@ mod tests {
     fn system_message_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_text = "A system notification that is very long and needs to be wrapped properly when displayed in a narrow terminal window.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::System {
                 text: long_text.to_string(),
             },
