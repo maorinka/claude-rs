@@ -140,7 +140,11 @@ pub fn minimal_transport_enabled() -> bool {
 
 pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
-    if lower.contains("opus-4-6") || lower.contains("sonnet-4-6") || lower.contains("haiku-4-5") {
+    if lower.contains("opus-4-7")
+        || lower.contains("opus-4-6")
+        || lower.contains("sonnet-4-6")
+        || lower.contains("haiku-4-5")
+    {
         64_000
     } else if lower.contains("opus-4-1") || lower.contains("opus-4") {
         32_000
@@ -622,6 +626,7 @@ mod tests {
     #[test]
     fn max_output_tokens_match_current_ts_defaults() {
         assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-7"), 64_000);
         assert_eq!(get_max_output_tokens_for_model("claude-opus-4-6"), 64_000);
         assert_eq!(get_max_output_tokens_for_model("claude-haiku-4-5"), 64_000);
         assert_eq!(get_max_output_tokens_for_model("claude-opus-4-1"), 32_000);

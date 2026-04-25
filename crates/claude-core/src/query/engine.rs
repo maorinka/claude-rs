@@ -780,11 +780,11 @@ impl QueryEngine {
     }
 }
 
-/// Build a `<system-reminder>` prepend message containing dynamic context.
+/// Build a `<system-reminder>` prepend content block containing dynamic context.
 /// Mirrors TS prependUserContext() in src/utils/api.ts.
 /// Injects the current date so the model always has up-to-date temporal context.
 /// Returns None if no context is available (currently always returns Some).
-fn build_user_context_message() -> Option<serde_json::Value> {
+fn build_user_context_block() -> Option<serde_json::Value> {
     use chrono::Local;
     let current_date = format!("Today's date is {}.", Local::now().format("%a %b %d %Y"));
 
@@ -794,25 +794,45 @@ fn build_user_context_message() -> Option<serde_json::Value> {
         inner
     );
 
-    Some(serde_json::json!({
-        "role": "user",
-        "content": [{"type": "text", "text": content}]
-    }))
+    Some(serde_json::json!({"type": "text", "text": content}))
 }
 
 /// Build the request message list with dynamic user context.
 ///
-/// TS `prependUserContext()` prepends a separate meta `role: user` message
-/// containing system-reminder text, then sends the persisted messages unchanged.
+/// TS `prependUserContext()` prepends system-reminder content blocks to the
+/// first user message rather than creating a separate user turn.
 fn build_messages_for_query(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let Some(prepend) = build_user_context_message() else {
+    let Some(context_block) = build_user_context_block() else {
         return messages.to_vec();
     };
 
-    let mut result = Vec::with_capacity(messages.len() + 1);
-    result.push(prepend);
-    result.extend_from_slice(messages);
-    result
+    let mut result = messages.to_vec();
+    if let Some(first_user) = result
+        .iter_mut()
+        .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("user"))
+    {
+        match first_user.get_mut("content") {
+            Some(serde_json::Value::Array(content)) => {
+                content.insert(0, context_block);
+            }
+            Some(content) => {
+                let existing = content.take();
+                *content = serde_json::Value::Array(vec![context_block, existing]);
+            }
+            None => {
+                first_user["content"] = serde_json::Value::Array(vec![context_block]);
+            }
+        }
+        return result;
+    }
+
+    let mut with_context = Vec::with_capacity(result.len() + 1);
+    with_context.push(serde_json::json!({
+        "role": "user",
+        "content": [context_block],
+    }));
+    with_context.extend(result);
+    with_context
 }
 
 /// Filter `messages` to only those from the last compact boundary onward.
@@ -847,7 +867,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn user_context_is_prepended_as_meta_user_message() {
+    fn user_context_is_prepended_to_first_user_message() {
         let messages = vec![serde_json::json!({
             "role": "user",
             "content": [{"type": "text", "text": "hi"}]
@@ -855,14 +875,15 @@ mod tests {
 
         let with_context = build_messages_for_query(&messages);
 
-        assert_eq!(with_context.len(), 2);
+        assert_eq!(with_context.len(), 1);
         assert_eq!(with_context[0]["role"], "user");
-        assert!(with_context[0]["content"][0]["text"]
+        let content = with_context[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert!(content[0]["text"]
             .as_str()
             .unwrap()
             .contains("<system-reminder>"));
-        assert_eq!(with_context[1]["role"], "user");
-        assert_eq!(with_context[1]["content"][0]["text"], "hi");
+        assert_eq!(content[1]["text"], "hi");
     }
 
     #[test]
