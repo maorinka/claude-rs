@@ -1077,6 +1077,7 @@ impl App {
                                 self.engine_busy = false;
                                 self.spinner.stop();
                                 self.spinner.queued_count = 0;
+                                self.message_list.clear_running_tools();
                                 self.message_list.push(MessageEntry::System {
                                     text: "[Request interrupted by user]".to_string(),
                                 });
@@ -1443,6 +1444,7 @@ impl App {
                         "allow" | "always" => {
                             // Execute this tool in background to keep UI responsive
                             let info = &pending_tools[tool_idx].info;
+                            self.message_list.set_tool_running(&info.id, true);
                             self.spinner.start(SpinnerMode::Tool {
                                 name: info.name.clone(),
                             });
@@ -1589,6 +1591,7 @@ impl App {
                         continue;
                     }
                     let info = &pending_tools[tool_idx].info;
+                    self.message_list.set_tool_running(&info.id, false);
 
                     // Update working directory for worktree tools
                     if let Ok(ref data) = result {

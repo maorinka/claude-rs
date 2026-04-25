@@ -78,6 +78,8 @@ pub struct MessageList {
     height_cache: Vec<Option<usize>>,
     /// Tool use IDs whose results are expanded (show all lines).
     expanded_tools: HashSet<String>,
+    /// Tool use IDs currently executing.
+    running_tools: HashSet<String>,
 }
 
 impl Default for MessageList {
@@ -95,6 +97,7 @@ impl MessageList {
             show_thinking: false,
             height_cache: Vec::new(),
             expanded_tools: HashSet::new(),
+            running_tools: HashSet::new(),
         }
     }
 
@@ -176,6 +179,7 @@ impl MessageList {
         self.messages.clear();
         self.height_cache.clear();
         self.expanded_tools.clear();
+        self.running_tools.clear();
         self.scroll_offset = 0;
         self.sticky_bottom = true;
     }
@@ -206,6 +210,20 @@ impl MessageList {
     /// Whether a tool result is currently expanded.
     pub fn is_tool_expanded(&self, tool_use_id: &str) -> bool {
         self.expanded_tools.contains(tool_use_id)
+    }
+
+    pub fn set_tool_running(&mut self, tool_use_id: &str, running: bool) {
+        if running {
+            self.running_tools.insert(tool_use_id.to_string());
+        } else {
+            self.running_tools.remove(tool_use_id);
+        }
+        self.height_cache.iter_mut().for_each(|h| *h = None);
+    }
+
+    pub fn clear_running_tools(&mut self) {
+        self.running_tools.clear();
+        self.height_cache.iter_mut().for_each(|h| *h = None);
     }
 
     /// Return the tool result rendered at a visible row, if any.
@@ -843,23 +861,16 @@ fn render_messages(
     width: u16,
     show_thinking: bool,
     expanded_tools: &HashSet<String>,
+    running_tools: &HashSet<String>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let completed_tool_ids: HashSet<&str> = messages
-        .iter()
-        .filter_map(|msg| match msg {
-            MessageEntry::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
-            _ => None,
-        })
-        .collect();
-
     let mut all_lines: Vec<Line> = Vec::new();
     for msg in messages {
         let msg_lines = render_message(msg, width, show_thinking, expanded_tools, theme);
         all_lines.extend(msg_lines);
 
         if let MessageEntry::ToolUse { tool_use_id, .. } = msg {
-            if !completed_tool_ids.contains(tool_use_id.as_str()) {
+            if running_tools.contains(tool_use_id.as_str()) {
                 all_lines.push(render_pending_tool_response(theme));
             }
         }
@@ -883,6 +894,7 @@ impl<'a> Widget for MessageListWidget<'a> {
             area.width,
             show_thinking,
             &self.list.expanded_tools,
+            &self.list.running_tools,
             theme,
         );
 
@@ -1063,6 +1075,7 @@ mod tests {
     #[test]
     fn unresolved_tool_use_shows_running_response() {
         let theme = crate::theme::dark_theme();
+        let running_tools = HashSet::from(["tool-1".to_string()]);
         let lines = render_messages(
             &[MessageEntry::ToolUse {
                 name: "Bash".to_string(),
@@ -1072,6 +1085,7 @@ mod tests {
             80,
             false,
             &HashSet::new(),
+            &running_tools,
             &theme,
         );
 
@@ -1100,6 +1114,7 @@ mod tests {
             ],
             80,
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &theme,
         );
