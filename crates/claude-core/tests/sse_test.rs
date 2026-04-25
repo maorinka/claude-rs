@@ -112,6 +112,16 @@ fn test_parse_message_stop() {
 }
 
 #[test]
+fn test_parse_error_event() {
+    let data = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+    let event = parse_sse_event("error", data).unwrap();
+    match event {
+        SseEvent::Error { message } => assert_eq!(message, "Overloaded"),
+        _ => panic!("Expected Error"),
+    }
+}
+
+#[test]
 fn test_parse_sse_lines() {
     let raw = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"model\":\"claude-sonnet-4-6\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n";
     let events = parse_sse_stream(raw);

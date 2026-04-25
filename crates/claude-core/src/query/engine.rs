@@ -635,6 +635,20 @@ impl QueryEngine {
                                         .send(StreamEvent::UsageUpdate(message.usage.clone()))
                                         .await;
                                 }
+                                SseEvent::Error { message } => {
+                                    tracing::error!("Streaming API error mid-stream: {}", message);
+                                    let error =
+                                        crate::types::error::QueryError::Api { status: 0, message };
+                                    let _ = event_tx.send(StreamEvent::Error(error.clone())).await;
+                                    self.state = QueryState::Terminal {
+                                        stop_reason: StopReason::EndTurn,
+                                        transition: TransitionReason::Error(error.clone()),
+                                    };
+                                    return Err(anyhow::anyhow!(
+                                        "Streaming API error received mid-stream: {}",
+                                        error
+                                    ));
+                                }
                                 _ => {}
                             },
                         }
