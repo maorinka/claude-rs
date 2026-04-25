@@ -5324,7 +5324,7 @@ const EXPLAIN_COMMAND_TOOL = {
 
 ### Permission Explainer User Prompt Template
 **File:** `src/utils/permissions/permissionExplainer.ts:167-173`
-**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::permission_explainer_user_prompt(...)`. Caller: `crate::permission_explainer_prompt::explain_command(tool_name, tool_description, formatted_input, conversation_context, cancel)` runs the Haiku call via `secondary_model::get_global()` and returns `Ok(Some(text))` or `Ok(None)` when no model is registered. TUI dialog still surfaces the raw command rather than the explanation — wiring `explain_command` into `widgets::permission_dialog` is a small async refactor.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::permission_explainer_user_prompt(...)`. Caller: `crate::permission_explainer_prompt::explain_command(...)` runs the Haiku call via `secondary_model::get_global()`. TUI dialog (`claude-tui/src/widgets/permission_dialog.rs`) gained an `explanation: Option<String>` field + async `fetch_explanation`; `app.rs` spawns the Haiku call when constructing the dialog and patches the result in via the new `AppEvent::PermissionExplanation` event. Word-wraps the cyan explanation under the input preview.
 ```ts
 const userPrompt = `Tool: ${toolName}
 ${toolDescription ? `Description: ${toolDescription}\n` : ''}

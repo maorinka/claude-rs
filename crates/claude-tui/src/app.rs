@@ -76,6 +76,10 @@ pub enum AppEvent {
         tool_idx: usize,
         result: Result<ToolResultData, String>,
     },
+    /// Fired when the background Haiku permission-explainer call finishes.
+    /// `Some(text)` populates the dialog's explanation field; `None`
+    /// silently leaves it unset (no model registered, or the call failed).
+    PermissionExplanation(Option<String>),
 }
 
 /// Commands sent to the dedicated engine task via a channel.
@@ -1242,6 +1246,12 @@ impl App {
                     });
                 }
 
+                AppEvent::PermissionExplanation(text) => {
+                    if let Some(ref mut dialog) = self.permission_dialog {
+                        dialog.set_explanation(text);
+                    }
+                }
+
                 AppEvent::ToolExecutionComplete { tool_idx, result } => {
                     self.spinner.stop();
 
@@ -1481,11 +1491,28 @@ impl App {
                 PermissionDecision::Ask(ask) => {
                     let input_preview = serde_json::to_string_pretty(&info.input)
                         .unwrap_or_else(|_| info.input.to_string());
+                    let tool_name_for_explainer = info.name.clone();
+                    let description_for_explainer = ask.message.clone();
+                    let preview_for_explainer = input_preview.clone();
                     self.permission_dialog = Some(PermissionDialog::new(
                         info.name.clone(),
                         ask.message,
                         input_preview,
                     ));
+                    // Fire the Haiku explainer in the background; result
+                    // arrives via AppEvent::PermissionExplanation. No-op
+                    // when no secondary model is registered.
+                    let tx_explain = tx.clone();
+                    tokio::spawn(async move {
+                        let text = PermissionDialog::fetch_explanation(
+                            &tool_name_for_explainer,
+                            &description_for_explainer,
+                            &preview_for_explainer,
+                            "",
+                        )
+                        .await;
+                        let _ = tx_explain.send(AppEvent::PermissionExplanation(text)).await;
+                    });
                 }
                 PermissionDecision::Deny(deny) => {
                     let message = deny.message;
