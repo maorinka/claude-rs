@@ -639,7 +639,7 @@ fn render_message(
             let summary_text = if input_summary.is_empty() {
                 name.clone()
             } else {
-                format!("{} ({})", name, input_summary)
+                format!("{}({})", name, input_summary)
             };
 
             // Wrap the summary if it's too long.

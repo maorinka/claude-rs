@@ -271,18 +271,17 @@ impl Widget for &SpinnerState {
         let frame_char = frames[self.frame % frames.len()];
         let elapsed = self.elapsed_str();
 
-        // The original renders: {spinner_glyph} {verb}... ({elapsed})
-        // Color: spinner glyph in claude orange, verb text in claude orange,
-        // parenthetical info in dim
+        // The original renders this as a subtle activity line; tool rows carry
+        // the stronger accent color.
         let verb = self.current_verb();
-        let claude_color = Color::Rgb(215, 119, 87); // Claude orange
+        let activity_color = Color::DarkGray;
 
         let mut spans = vec![
             Span::styled(
                 format!("{} ", frame_char),
-                Style::default().fg(claude_color),
+                Style::default().fg(activity_color),
             ),
-            Span::styled(format!("{}…", verb), Style::default().fg(claude_color)),
+            Span::styled(format!("{}…", verb), Style::default().fg(activity_color)),
         ];
 
         // Duration and token info in parentheses, dim
