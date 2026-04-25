@@ -9,6 +9,7 @@ use crate::api::sse::{self, ContentDelta, SseEvent};
 use crate::types::content::ContentBlock;
 use crate::types::events::StreamEvent;
 use crate::types::message::StopReason;
+use crate::types::usage::Usage;
 
 use super::state::{QueryState, TransitionReason};
 
@@ -22,6 +23,12 @@ const STREAM_IDLE_TIMEOUT_MS: u64 = 90_000;
 /// Matches TS CANCEL_MESSAGE in src/services/tools/toolExecution.ts.
 const CANCEL_MSG: &str =
     "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
+
+#[derive(Clone, Debug)]
+struct UsageAnchor {
+    message_count: usize,
+    usage: Usage,
+}
 
 pub struct QueryEngine {
     api_client: ApiClient,
@@ -48,6 +55,11 @@ pub struct QueryEngine {
     /// When true, we have already attempted a reactive compact on prompt-too-long.
     /// Prevents infinite retry loops.
     has_attempted_reactive_compact: bool,
+    /// Last real API usage and the history length at that assistant response.
+    /// TS uses the latest assistant usage as a token-count anchor, then only
+    /// estimates messages appended after it. This keeps post-first-turn
+    /// autocompact checks cheap and aligned with server accounting.
+    usage_anchor: Option<UsageAnchor>,
 }
 
 impl QueryEngine {
@@ -72,6 +84,7 @@ impl QueryEngine {
             has_escalated_max_tokens: false,
             skip_autocompact: false,
             has_attempted_reactive_compact: false,
+            usage_anchor: None,
         }
     }
 
@@ -95,6 +108,7 @@ impl QueryEngine {
     /// post-compaction point (matches TS `getMessagesAfterCompactBoundary`).
     pub fn load_messages(&mut self, messages: Vec<serde_json::Value>) {
         self.messages = filter_after_compact_boundary(messages);
+        self.usage_anchor = None;
     }
 
     /// Append a text block to the system prompt.
@@ -245,6 +259,23 @@ impl QueryEngine {
         }));
     }
 
+    fn should_compact_now(&self) -> bool {
+        let context_window = crate::compact::compactor::default_context_window();
+        let estimated = if let Some(anchor) = &self.usage_anchor {
+            if anchor.message_count <= self.messages.len() {
+                crate::compact::compactor::token_count_from_usage(&anchor.usage)
+                    + crate::compact::compactor::estimate_tokens(
+                        &self.messages[anchor.message_count..],
+                    )
+            } else {
+                crate::compact::compactor::estimate_tokens(&self.messages)
+            }
+        } else {
+            crate::compact::compactor::estimate_tokens(&self.messages)
+        };
+        crate::compact::compactor::should_compact_estimated(estimated, context_window)
+    }
+
     /// Run one turn of the query loop.
     /// Returns collected tool_use blocks (if any) and the stop reason.
     pub async fn run_turn(&mut self, event_tx: &mpsc::Sender<StreamEvent>) -> Result<TurnResult> {
@@ -277,12 +308,7 @@ impl QueryEngine {
         // autocompact runs BEFORE the API call, not after the response).
         // Auto-compact guard: skip if we just compacted (prevents re-entry).
         // Mirrors TS: querySource !== 'compact' check in query.ts:630.
-        if !self.skip_autocompact
-            && crate::compact::compactor::should_compact(
-                &self.messages,
-                crate::compact::compactor::default_context_window(),
-            )
-        {
+        if !self.skip_autocompact && self.should_compact_now() {
             let _ = event_tx
                 .send(StreamEvent::Compacted {
                     summary: "Compacting conversation...".into(),
@@ -297,6 +323,7 @@ impl QueryEngine {
             {
                 Ok(compacted) => {
                     self.messages = compacted;
+                    self.usage_anchor = None;
                     // Block re-compaction for the immediately following turn (Issue 38).
                     self.skip_autocompact = true;
                     // Reset post-compact turn counter (Issue 39).
@@ -329,14 +356,14 @@ impl QueryEngine {
         // This can happen if a tool execution fails silently or the event flow is interrupted.
         self.repair_tool_use_results();
 
-        // Build dynamic user context prepend (Issue 25).
-        // Mirrors TS prependUserContext() — injects currentDate as a <system-reminder>.
-        let messages_for_query = build_messages_for_query(&self.messages);
-
         // Make the API call, with reactive compaction on prompt-too-long (Issue 11).
         // We use a loop with at most 2 iterations: the first attempt, and optionally a
         // single retry after reactive compaction (avoids async recursion / Box::pin).
         let response = 'api_call: loop {
+            // Build dynamic user context prepend (Issue 25).
+            // Mirrors TS prependUserContext() — injects currentDate as a
+            // separate meta user message at request time.
+            let messages_for_query = build_messages_for_query(&self.messages);
             match self
                 .api_client
                 .stream_request_with_events(
@@ -368,6 +395,7 @@ impl QueryEngine {
                         .await
                         {
                             self.messages = compacted;
+                            self.usage_anchor = None;
                             // Loop will retry the API call with the compacted messages.
                             continue 'api_call;
                         }
@@ -431,6 +459,7 @@ impl QueryEngine {
         let mut needs_follow_up = false;
         let mut stop_reason = StopReason::EndTurn;
         let mut assistant_content: Vec<serde_json::Value> = Vec::new();
+        let mut response_usage: Option<Usage> = None;
 
         loop {
             // Issue 27: apply idle timeout to each chunk read.
@@ -618,6 +647,9 @@ impl QueryEngine {
                                         };
                                     }
                                     if let Some(u) = usage {
+                                        if let Some(accumulated) = response_usage.as_mut() {
+                                            accumulated.output_tokens = u.output_tokens;
+                                        }
                                         let _ = event_tx
                                             .send(StreamEvent::UsageUpdate(
                                                 crate::types::usage::Usage {
@@ -631,6 +663,7 @@ impl QueryEngine {
                                     }
                                 }
                                 SseEvent::MessageStart { message } => {
+                                    response_usage = Some(message.usage.clone());
                                     let _ = event_tx
                                         .send(StreamEvent::UsageUpdate(message.usage.clone()))
                                         .await;
@@ -660,6 +693,12 @@ impl QueryEngine {
         // Add assistant message to history
         if !assistant_content.is_empty() {
             self.add_assistant_message(assistant_content);
+            if let Some(usage) = response_usage {
+                self.usage_anchor = Some(UsageAnchor {
+                    message_count: self.messages.len(),
+                    usage,
+                });
+            }
         }
 
         // Issue 6: Do NOT rely on stop_reason == ToolUse (unreliable per API docs).
@@ -763,49 +802,17 @@ fn build_user_context_message() -> Option<serde_json::Value> {
 
 /// Build the request message list with dynamic user context.
 ///
-/// TS `prependUserContext()` prepends system-reminder blocks inside the current
-/// user turn, not as a separate `role: user` message. Keeping the reminder and
-/// user prompt in the same API message preserves the original turn shape and
-/// avoids consecutive user messages for a single prompt.
+/// TS `prependUserContext()` prepends a separate meta `role: user` message
+/// containing system-reminder text, then sends the persisted messages unchanged.
 fn build_messages_for_query(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let Some(prepend) = build_user_context_message() else {
         return messages.to_vec();
     };
-    let prepend_blocks = prepend
-        .get("content")
-        .and_then(|c| c.as_array())
-        .cloned()
-        .unwrap_or_default();
-    if prepend_blocks.is_empty() {
-        return messages.to_vec();
-    }
 
-    let mut result = messages.to_vec();
-    if let Some(first_user) = result
-        .iter_mut()
-        .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("user"))
-    {
-        match first_user.get_mut("content") {
-            Some(serde_json::Value::Array(content)) => {
-                let mut merged = prepend_blocks;
-                merged.append(content);
-                *content = merged;
-            }
-            Some(serde_json::Value::String(text)) => {
-                let mut merged = prepend_blocks;
-                merged.push(serde_json::json!({"type": "text", "text": text.clone()}));
-                first_user["content"] = serde_json::Value::Array(merged);
-            }
-            _ => {
-                first_user["content"] = serde_json::Value::Array(prepend_blocks);
-            }
-        }
-        result
-    } else {
-        let mut all = vec![prepend];
-        all.extend(result);
-        all
-    }
+    let mut result = Vec::with_capacity(messages.len() + 1);
+    result.push(prepend);
+    result.extend_from_slice(messages);
+    result
 }
 
 /// Filter `messages` to only those from the last compact boundary onward.
@@ -840,7 +847,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn user_context_is_inserted_into_current_user_turn() {
+    fn user_context_is_prepended_as_meta_user_message() {
         let messages = vec![serde_json::json!({
             "role": "user",
             "content": [{"type": "text", "text": "hi"}]
@@ -848,15 +855,14 @@ mod tests {
 
         let with_context = build_messages_for_query(&messages);
 
-        assert_eq!(with_context.len(), 1);
+        assert_eq!(with_context.len(), 2);
         assert_eq!(with_context[0]["role"], "user");
-        let content = with_context[0]["content"].as_array().unwrap();
-        assert_eq!(content.len(), 2);
-        assert!(content[0]["text"]
+        assert!(with_context[0]["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("<system-reminder>"));
-        assert_eq!(content[1]["text"], "hi");
+        assert_eq!(with_context[1]["role"], "user");
+        assert_eq!(with_context[1]["content"][0]["text"], "hi");
     }
 
     #[test]
