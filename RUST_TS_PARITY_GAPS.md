@@ -59,15 +59,18 @@ Improved:
   noninteractive startup, including `CLAUDE_CODE_ENABLE_TASKS`.
 - Rust now keeps ToolSearch out of the registry when explicitly disabled by
   `ENABLE_TOOL_SEARCH` or the experimental-beta kill switch.
+- CLI startup now filters blanket-denied tools before exposing them to the
+  model, including the refreshed ToolSearch snapshot.
 - Worktree tools remain visible by default because the inspected TS reference
   now returns `true` from `isWorktreeModeEnabled()`.
 
 Needs work:
-- Add deny-rule filtering before tools are exposed to the model.
 - Hide REPL-only primitive tools when REPL mode is active.
 - Keep tool ordering stable for prompt-cache compatibility.
 - Implement the model/provider/threshold parts of ToolSearch enablement and
   request-time deferral.
+- Broaden deny-rule filtering to all registry construction paths and add MCP
+  integration coverage with real connected tools.
 - Revisit MCP auth/resource tool visibility against TS `specialTools` and MCP
   connection state.
 

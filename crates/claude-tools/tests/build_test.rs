@@ -1,4 +1,8 @@
-use claude_tools::{build_default_registry, build_default_registry_with_options, RegistryOptions};
+use claude_core::config::settings::PermissionRuleConfig;
+use claude_tools::{
+    build_default_registry, build_default_registry_with_options, filter_registry_by_deny_rules,
+    RegistryOptions,
+};
 
 #[test]
 fn test_default_registry_has_all_phase1_tools() {
@@ -126,4 +130,33 @@ fn test_non_interactive_uses_todowrite_unless_tasks_are_forced() {
     assert!(reg.get("TaskGet").is_none());
     assert!(reg.get("TaskStop").is_some());
     assert!(reg.get("TaskOutput").is_some());
+}
+
+#[test]
+fn test_blanket_deny_rules_filter_default_registry() {
+    let mut reg = build_default_registry();
+    filter_registry_by_deny_rules(
+        &mut reg,
+        &[
+            PermissionRuleConfig {
+                tool: "Read".to_string(),
+                pattern: None,
+            },
+            PermissionRuleConfig {
+                tool: "Bash".to_string(),
+                pattern: Some("git status".to_string()),
+            },
+            PermissionRuleConfig {
+                tool: "ToolSearch".to_string(),
+                pattern: Some("*".to_string()),
+            },
+        ],
+    );
+
+    assert!(reg.get("Read").is_none());
+    assert!(
+        reg.get("Bash").is_some(),
+        "content-specific deny rules must not hide the whole tool"
+    );
+    assert!(reg.get("ToolSearch").is_none());
 }

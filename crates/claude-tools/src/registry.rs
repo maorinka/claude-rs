@@ -232,6 +232,19 @@ impl ToolRegistry {
         self.tools.insert(name, tool);
     }
 
+    pub fn remove(&mut self, name: &str) -> Option<Arc<dyn ToolExecutor>> {
+        let canonical = self
+            .aliases
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string());
+        let removed = self.tools.remove(&canonical);
+        if removed.is_some() {
+            self.aliases.retain(|_, target| target != &canonical);
+        }
+        removed
+    }
+
     pub fn get(&self, name: &str) -> Option<Arc<dyn ToolExecutor>> {
         self.tools
             .get(name)

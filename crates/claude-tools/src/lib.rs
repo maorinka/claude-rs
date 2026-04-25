@@ -209,3 +209,57 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
 
     reg
 }
+
+pub fn filter_registry_by_deny_rules(
+    registry: &mut ToolRegistry,
+    deny_rules: &[claude_core::config::settings::PermissionRuleConfig],
+) {
+    let denied_names = registry
+        .all()
+        .iter()
+        .filter(|tool| {
+            deny_rules
+                .iter()
+                .any(|rule| rule_denies_whole_tool(tool.name(), rule))
+        })
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+
+    for name in denied_names {
+        registry.remove(&name);
+    }
+}
+
+fn rule_denies_whole_tool(
+    tool_name: &str,
+    rule: &claude_core::config::settings::PermissionRuleConfig,
+) -> bool {
+    if rule
+        .pattern
+        .as_deref()
+        .is_some_and(|pattern| !pattern.is_empty() && pattern != "*")
+    {
+        return false;
+    }
+
+    if rule.tool == tool_name {
+        return true;
+    }
+
+    let Some((rule_server, rule_tool)) = parse_mcp_tool_name(&rule.tool) else {
+        return false;
+    };
+    let Some((tool_server, _)) = parse_mcp_tool_name(tool_name) else {
+        return false;
+    };
+
+    rule_server == tool_server && rule_tool.is_none_or(|name| name == "*")
+}
+
+fn parse_mcp_tool_name(name: &str) -> Option<(&str, Option<&str>)> {
+    let rest = name.strip_prefix("mcp__")?;
+    match rest.split_once("__") {
+        Some((server, tool)) => Some((server, Some(tool))),
+        None => Some((rest, None)),
+    }
+}
