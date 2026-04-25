@@ -1,5 +1,6 @@
 use claude_core::context::environment::*;
 use claude_core::context::system_prompt::*;
+use std::process::Command;
 
 #[test]
 fn test_environment_context_contains_platform() {
@@ -58,4 +59,60 @@ async fn test_git_context_in_non_git_dir() {
         .await
         .unwrap();
     assert!(git_ctx.is_none());
+}
+
+#[tokio::test]
+async fn test_git_context_prefers_origin_head_default_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    run_git(tmp.path(), &["init"]);
+    run_git(tmp.path(), &["checkout", "-b", "feature"]);
+    run_git(
+        tmp.path(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ],
+    );
+
+    let git_ctx = claude_core::context::git::get_git_context(tmp.path())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(git_ctx.contains("Current branch: feature"));
+    assert!(git_ctx.contains("Main branch (you will usually use this for PRs): trunk"));
+}
+
+#[tokio::test]
+async fn test_git_context_includes_user_and_truncates_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    run_git(tmp.path(), &["init"]);
+    run_git(tmp.path(), &["config", "user.name", "Test User"]);
+
+    for i in 0..180 {
+        std::fs::write(tmp.path().join(format!("very-long-file-name-{i}.txt")), "x").unwrap();
+    }
+
+    let git_ctx = claude_core::context::git::get_git_context(tmp.path())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(git_ctx.contains("Git user: Test User"));
+    assert!(git_ctx.contains("... (truncated because it exceeds 2k characters."));
+}
+
+fn run_git(dir: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

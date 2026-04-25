@@ -69,21 +69,24 @@ Needs work:
 - Revisit whether `SleepTool`, task v2, teams, worktree, LSP, ToolSearch, and
   PowerShell should be default-visible.
 
-### MCP resource tools are stubs
+### MCP resource tools need deeper parity
 
 Files:
 - `crates/claude-tools/src/mcp_resource_tools.rs`
 - TS reference: `src/tools/ListMcpResourcesTool`,
   `src/tools/ReadMcpResourceTool`, `src/services/mcp`
 
-Current Rust behavior:
-- `ListMcpResourcesTool` always returns an empty list.
-- `ReadMcpResourceTool` always returns a not-found error.
+Improved:
+- Rust now registers manager-backed `ListMcpResourcesTool` and
+  `ReadMcpResourceTool` in CLI startup.
+- `ListMcpResourcesTool` reads live resources from `McpManager` and supports
+  server filtering.
+- `ReadMcpResourceTool` reads from the requested connected MCP server and
+  returns manager errors when the server/resource is unavailable.
 
-Needs work:
-- Wire both tools to the live `McpManager`.
-- Support server filtering, pagination/cursors if applicable, resource
-  templates, and server-not-found errors that match TS.
+Still needs work:
+- Verify pagination/cursors if applicable, resource templates, and
+  server-not-found error text against TS.
 - Include MCP resource output in the same result shape the model expects.
 - Add integration tests with a real or fake MCP server exposing resources.
 
@@ -696,4 +699,3 @@ Needs work:
 7. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
 8. Update or replace `feature-gap-analysis.md` once this checklist is validated.
-

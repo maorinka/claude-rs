@@ -2,6 +2,8 @@ use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
 
+const MAX_STATUS_CHARS: usize = 2000;
+
 /// Build the git status context prepended to conversations.
 ///
 /// Matches TS `src/context.ts:96-103`:
@@ -40,7 +42,7 @@ pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
         }
     }
 
-    // Main branch (detect main vs master)
+    // Main branch (prefer origin/HEAD, then local main/master)
     let main_branch = detect_main_branch(project_root).await;
     parts.push(format!(
         "Main branch (you will usually use this for PRs): {}",
@@ -56,10 +58,12 @@ pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
     }
 
     // Status (truncated to avoid bloating context)
-    if let Ok(status) = git_output(project_root, &["status", "--short"]).await {
+    if let Ok(status) =
+        git_output(project_root, &["--no-optional-locks", "status", "--short"]).await
+    {
         let status = status.trim();
-        let truncated = if status.len() > 2000 {
-            let truncated_str = &status[..2000];
+        let truncated = if status.chars().count() > MAX_STATUS_CHARS {
+            let truncated_str: String = status.chars().take(MAX_STATUS_CHARS).collect();
             format!(
                 "{}\n... (truncated because it exceeds 2k characters. If you need more information, run \"git status\" using BashTool)",
                 truncated_str
@@ -73,7 +77,18 @@ pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
     }
 
     // Recent commits
-    if let Ok(log) = git_output(project_root, &["log", "--oneline", "-5", "--no-decorate"]).await {
+    if let Ok(log) = git_output(
+        project_root,
+        &[
+            "--no-optional-locks",
+            "log",
+            "--oneline",
+            "-5",
+            "--no-decorate",
+        ],
+    )
+    .await
+    {
         if !log.trim().is_empty() {
             parts.push(format!("Recent commits:\n{}", log.trim()));
         }
@@ -82,8 +97,24 @@ pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
     Ok(Some(parts.join("\n\n")))
 }
 
-/// Detect the main branch name (main vs master).
+/// Detect the main branch name.
 async fn detect_main_branch(project_root: &Path) -> String {
+    if let Ok(output) = git_output(
+        project_root,
+        &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+    )
+    .await
+    {
+        let branch = output.trim();
+        if !branch.is_empty() {
+            return branch
+                .rsplit_once('/')
+                .map(|(_, name)| name)
+                .unwrap_or(branch)
+                .to_string();
+        }
+    }
+
     // Try 'main' first
     if let Ok(output) =
         git_output(project_root, &["rev-parse", "--verify", "refs/heads/main"]).await
@@ -113,5 +144,12 @@ async fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
         .current_dir(dir)
         .output()
         .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
