@@ -35,12 +35,20 @@ fn test_detect_project_root_with_cargo_toml() {
 
 #[test]
 fn test_settings_deserialize() {
-    let json = r#"{"model":"claude-opus-4-6","verbose":true,"permissions":{"allow":[{"tool":"Read"}],"deny":[]}}"#;
+    let json = r#"{"model":"claude-opus-4-6","verbose":true,"permissions":{"allow":[{"tool":"Read"}],"deny":[]},"allowedHttpHookUrls":["https://hooks.example.com/*"],"httpHookAllowedEnvVars":["TOKEN"]}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
     assert_eq!(settings.model.as_deref(), Some("claude-opus-4-6"));
     assert_eq!(settings.verbose, Some(true));
     assert_eq!(settings.permissions.allow.len(), 1);
     assert_eq!(settings.permissions.allow[0].tool, "Read");
+    assert_eq!(
+        settings.allowed_http_hook_urls.as_ref().unwrap(),
+        &vec!["https://hooks.example.com/*".to_string()]
+    );
+    assert_eq!(
+        settings.http_hook_allowed_env_vars.as_ref().unwrap(),
+        &vec!["TOKEN".to_string()]
+    );
 }
 
 #[test]
@@ -57,4 +65,30 @@ fn test_settings_merge() {
     let merged = base.merge(&overlay);
     assert_eq!(merged.model.as_deref(), Some("claude-opus-4-6"));
     assert_eq!(merged.verbose, Some(false));
+}
+
+#[test]
+fn test_settings_merge_http_hook_policy_lists() {
+    let base = Settings {
+        allowed_http_hook_urls: Some(vec!["https://base.example.com/*".into()]),
+        http_hook_allowed_env_vars: Some(vec!["BASE_TOKEN".into()]),
+        ..Default::default()
+    };
+    let overlay = Settings {
+        allowed_http_hook_urls: Some(vec!["https://overlay.example.com/*".into()]),
+        http_hook_allowed_env_vars: Some(vec!["OVERLAY_TOKEN".into()]),
+        ..Default::default()
+    };
+    let merged = base.merge(&overlay);
+    assert_eq!(
+        merged.allowed_http_hook_urls.unwrap(),
+        vec![
+            "https://base.example.com/*".to_string(),
+            "https://overlay.example.com/*".to_string()
+        ]
+    );
+    assert_eq!(
+        merged.http_hook_allowed_env_vars.unwrap(),
+        vec!["BASE_TOKEN".to_string(), "OVERLAY_TOKEN".to_string()]
+    );
 }

@@ -577,6 +577,10 @@ pub struct SyncHookJsonOutput {
     #[serde(rename = "systemMessage")]
     pub system_message: Option<String>,
 
+    /// Additional model context. Some plugin hooks emit this at top level.
+    #[serde(rename = "additionalContext")]
+    pub additional_context: Option<String>,
+
     /// Event-specific output fields.
     #[serde(rename = "hookSpecificOutput")]
     pub hook_specific_output: Option<HookSpecificOutput>,

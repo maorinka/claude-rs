@@ -179,11 +179,8 @@ impl DiffViewWidget {
             .unwrap_or_else(|| "    ".to_string());
 
         let content_width = (width as usize).saturating_sub(gutter_width + 1); // +1 for marker
-        let content = if diff_line.content.len() > content_width {
-            format!(
-                "{}...",
-                &diff_line.content[..content_width.saturating_sub(3)]
-            )
+        let content = if diff_line.content.chars().count() > content_width {
+            truncate_with_ellipsis(&diff_line.content, content_width)
         } else {
             diff_line.content.clone()
         };
@@ -218,6 +215,20 @@ impl Widget for DiffViewWidget {
             buf.set_line(area.x, y, &rendered, area.width);
         }
     }
+}
+
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let prefix: String = s.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
 }
 
 /// Convert parsed diff lines into styled ratatui Lines (for embedding

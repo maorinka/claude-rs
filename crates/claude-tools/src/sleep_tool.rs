@@ -14,7 +14,11 @@ pub struct SleepTool;
 #[async_trait]
 impl ToolExecutor for SleepTool {
     fn name(&self) -> &str {
-        "Sleep"
+        "ScheduleWakeup"
+    }
+
+    fn aliases(&self) -> &[&str] {
+        &["Sleep"]
     }
 
     fn description(&self) -> String {

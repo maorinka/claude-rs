@@ -134,17 +134,14 @@ impl ToolExecutor for TodoWriteTool {
             }
         };
 
-        // Parse todo items
+        // Parse todo items. TS TodoWrite does not expose an `id` field to the
+        // model, so synthesize one when absent while keeping backward
+        // compatibility with older Rust callers that still send it.
         let mut todos: Vec<TodoItem> = Vec::new();
-        for item in todos_array {
+        for (index, item) in todos_array.iter().enumerate() {
             let id = match item.get("id").and_then(|v| v.as_str()) {
-                Some(s) => s.to_string(),
-                None => {
-                    return Ok(ToolResultData {
-                        data: json!({ "error": "each todo must have an 'id' field" }),
-                        is_error: true,
-                    });
-                }
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => format!("todo-{}", index + 1),
             };
 
             let content = match item.get("content").and_then(|v| v.as_str()) {

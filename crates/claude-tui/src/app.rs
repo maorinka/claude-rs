@@ -1,16 +1,19 @@
 use std::io::{self, Stdout};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
-    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
-// Paragraph no longer used — layout renders directly to buffer
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -44,6 +47,49 @@ use crate::widgets::theme_picker::{ThemePicker, ThemePickerWidget};
 /// Token budget warning thresholds.
 const TOKEN_WARNING_THRESHOLD: f64 = 0.80; // Yellow warning at 80%
 const TOKEN_CRITICAL_THRESHOLD: f64 = 0.95; // Red warning at 95%
+const DOUBLE_PRESS_TIMEOUT_MS: u64 = 800;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RewindRestoreOption {
+    RestoreConversation,
+    SummarizeFromHere,
+    NeverMind,
+}
+
+impl RewindRestoreOption {
+    fn label(self) -> &'static str {
+        match self {
+            Self::RestoreConversation => "Restore conversation",
+            Self::SummarizeFromHere => "Summarize from here",
+            Self::NeverMind => "Never mind",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RewindConfirmation {
+    message_index: usize,
+    prompt_text: String,
+    selected: usize,
+}
+
+impl RewindConfirmation {
+    fn selected_option(&self) -> RewindRestoreOption {
+        match self.selected {
+            0 => RewindRestoreOption::RestoreConversation,
+            1 => RewindRestoreOption::SummarizeFromHere,
+            _ => RewindRestoreOption::NeverMind,
+        }
+    }
+
+    fn next(&mut self) {
+        self.selected = (self.selected + 1) % 3;
+    }
+
+    fn prev(&mut self) {
+        self.selected = self.selected.checked_sub(1).unwrap_or(2);
+    }
+}
 
 pub enum AppEvent {
     Key(KeyEvent),
@@ -76,6 +122,10 @@ pub enum AppEvent {
         tool_idx: usize,
         result: Result<ToolResultData, String>,
     },
+    /// Fired when the background Haiku permission-explainer call finishes.
+    /// `Some(text)` populates the dialog's explanation field; `None`
+    /// silently leaves it unset (no model registered, or the call failed).
+    PermissionExplanation(Option<String>),
 }
 
 /// Commands sent to the dedicated engine task via a channel.
@@ -132,6 +182,12 @@ pub struct App {
     cost_tracker: CostTracker,
     /// Command picker overlay (shown on `/` at start of input)
     command_picker: CommandPicker,
+    /// Rewind picker overlay (shown on Escape while idle)
+    rewind_picker: CommandPicker,
+    /// Confirm restore/summarize after choosing a rewind checkpoint.
+    rewind_confirmation: Option<RewindConfirmation>,
+    /// Last idle Escape press, used to match TS double-press behavior.
+    last_idle_escape: Option<Instant>,
     /// Model picker overlay (shown on `/model`)
     model_picker: ModelPicker,
     /// Theme picker overlay (shown on `/theme`)
@@ -172,6 +228,9 @@ impl App {
             total_tokens: 0,
             cost_tracker: CostTracker::new("claude-sonnet-4-6"),
             command_picker: CommandPicker::new(),
+            rewind_picker: CommandPicker::new(),
+            rewind_confirmation: None,
+            last_idle_escape: None,
             model_picker: ModelPicker::new(),
             theme_picker: ThemePicker::new(),
             theme_setting: ThemeSetting::Auto,
@@ -203,6 +262,29 @@ impl App {
             model: self.model_name.clone(),
             cwd: display_cwd,
         });
+    }
+
+    fn enqueue_message(&mut self, text: String) {
+        self.message_queue.push(text);
+        self.prompt.clear();
+        self.spinner.queued_count = 0;
+    }
+
+    fn pop_queued_message(&mut self) -> Option<String> {
+        if self.message_queue.is_empty() {
+            return None;
+        }
+        self.spinner.queued_count = 0;
+        Some(self.message_queue.remove(0))
+    }
+
+    fn edit_last_queued_message(&mut self) -> bool {
+        let Some(text) = self.message_queue.pop() else {
+            return false;
+        };
+        self.spinner.queued_count = 0;
+        self.prompt.set_text(text);
+        true
     }
 
     /// Set the model name displayed in the header and cost tracker.
@@ -242,6 +324,7 @@ impl App {
             .map(|cmd| CommandPickerEntry {
                 name: cmd.name.clone(),
                 description: cmd.description.clone(),
+                display_name: None,
             })
             .collect();
         // Sort commands alphabetically
@@ -253,11 +336,126 @@ impl App {
                 entries.push(CommandPickerEntry {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
+                    display_name: None,
                 });
             }
         }
 
         entries
+    }
+
+    fn build_rewind_entries(&self) -> Vec<CommandPickerEntry> {
+        self.message_list
+            .messages()
+            .iter()
+            .enumerate()
+            .rev()
+            .filter_map(|(idx, msg)| {
+                let MessageEntry::User { text } = msg else {
+                    return None;
+                };
+                Some(CommandPickerEntry {
+                    name: format!("#{}", idx),
+                    description: "No code changes".to_string(),
+                    display_name: Some(truncate_chars(text.replace('\n', " ").trim(), 96)),
+                })
+            })
+            .collect()
+    }
+
+    fn restore_rewind(&mut self, idx: usize) -> Option<String> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        self.message_list.truncate(idx);
+        Some(prompt_text)
+    }
+
+    fn prepare_rewind_confirmation(&self, idx: usize) -> Option<RewindConfirmation> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        Some(RewindConfirmation {
+            message_index: idx,
+            prompt_text,
+            selected: 0,
+        })
+    }
+
+    fn summarize_rewind_from(&mut self, idx: usize) -> Option<String> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        let removed = self.message_list.messages()[idx..]
+            .iter()
+            .filter_map(|entry| match entry {
+                MessageEntry::User { text } => Some(format!("User: {text}")),
+                MessageEntry::Assistant { text } => Some(format!("Assistant: {text}")),
+                MessageEntry::ToolUse {
+                    name,
+                    input_summary,
+                    ..
+                } => Some(format!("Tool use {name}: {input_summary}")),
+                MessageEntry::ToolResult {
+                    name,
+                    output,
+                    is_error,
+                    ..
+                } => {
+                    let status = if *is_error { "error" } else { "result" };
+                    Some(format!(
+                        "Tool {name} {status}: {}",
+                        truncate_chars(output, 1000)
+                    ))
+                }
+                MessageEntry::Thinking { text } => Some(format!("Thinking: {text}")),
+                MessageEntry::System { text } => Some(format!("System: {text}")),
+                MessageEntry::CompactionSummary { text } => {
+                    Some(format!("Compaction summary: {text}"))
+                }
+                MessageEntry::Logo { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.message_list.truncate(idx);
+        let summary = if removed.trim().is_empty() {
+            "No messages were available to summarize after this point.".to_string()
+        } else {
+            format!("Messages after this point were summarized locally:\n\n{removed}")
+        };
+        let compact_user_msg =
+            claude_core::compact::prompt::format_compact_user_message_simple(&summary);
+        self.message_list.push(MessageEntry::CompactionSummary {
+            text: compact_user_msg,
+        });
+        Some(prompt_text)
+    }
+
+    fn open_rewind_on_double_escape(&mut self) {
+        if !self.prompt.is_empty() {
+            self.last_idle_escape = None;
+            return;
+        }
+
+        let now = Instant::now();
+        let is_double_press = self
+            .last_idle_escape
+            .map(|last| now.duration_since(last) <= Duration::from_millis(DOUBLE_PRESS_TIMEOUT_MS))
+            .unwrap_or(false);
+
+        if is_double_press {
+            self.last_idle_escape = None;
+            self.rewind_confirmation = None;
+            let entries = self.build_rewind_entries();
+            if !entries.is_empty() {
+                self.rewind_picker.open(entries);
+            }
+        } else {
+            self.last_idle_escape = Some(now);
+        }
     }
 
     /// Try to execute a slash command or skill from user input.
@@ -579,9 +777,7 @@ impl App {
                     // Reactive queue drain — mirrors TS useQueueProcessor:
                     // when engine becomes idle and there's a queued message, dispatch it.
                     if !self.engine_busy {
-                        if let Some(queued) = self.message_queue.first().cloned() {
-                            self.message_queue.remove(0);
-                            self.spinner.queued_count = self.message_queue.len();
+                        if let Some(queued) = self.pop_queued_message() {
                             let tx2 = tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -716,7 +912,10 @@ impl App {
                             KeyCode::Up => {
                                 self.command_picker.prev();
                             }
-                            KeyCode::Down | KeyCode::Tab => {
+                            KeyCode::BackTab | KeyCode::Left => {
+                                self.command_picker.prev();
+                            }
+                            KeyCode::Down | KeyCode::Tab | KeyCode::Right => {
                                 self.command_picker.next();
                             }
                             KeyCode::Enter => {
@@ -736,7 +935,11 @@ impl App {
                                     self.command_picker.close();
                                 } else {
                                     let query = new_text.strip_prefix('/').unwrap_or("");
-                                    self.command_picker.set_query(query);
+                                    if query.chars().any(char::is_whitespace) {
+                                        self.command_picker.close();
+                                    } else {
+                                        self.command_picker.set_query(query);
+                                    }
                                 }
                             }
                             KeyCode::Char(_)
@@ -747,10 +950,120 @@ impl App {
                                 // Read updated text and filter picker
                                 let full_text = self.prompt.text().to_string();
                                 if let Some(q) = full_text.strip_prefix('/') {
-                                    self.command_picker.set_query(q);
+                                    if q.chars().any(char::is_whitespace) {
+                                        self.command_picker.close();
+                                    } else {
+                                        self.command_picker.set_query(q);
+                                    }
                                 } else {
                                     self.command_picker.close();
                                 }
+                            }
+                            _ => {}
+                        }
+                    } else if self.rewind_confirmation.is_some() {
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.rewind_confirmation = None;
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            KeyCode::Up => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.prev();
+                                }
+                                continue;
+                            }
+                            KeyCode::Down => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.next();
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('1') => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.selected = 0;
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('2') => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.selected = 1;
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('3') => {
+                                if let Some(confirm) = &mut self.rewind_confirmation {
+                                    confirm.selected = 2;
+                                }
+                                continue;
+                            }
+                            KeyCode::Enter => {
+                                let Some(confirm) = self.rewind_confirmation.take() else {
+                                    continue;
+                                };
+                                match confirm.selected_option() {
+                                    RewindRestoreOption::RestoreConversation => {
+                                        if let Some(prompt_text) =
+                                            self.restore_rewind(confirm.message_index)
+                                        {
+                                            let messages = reconstruct_engine_messages(
+                                                self.message_list.messages(),
+                                            );
+                                            let _ = engine_tx
+                                                .send(EngineCommand::LoadMessages(messages))
+                                                .await;
+                                            self.prompt.set_text(prompt_text);
+                                            self.message_list.push(MessageEntry::System {
+                                                text: "Rewound conversation. Edit the restored prompt, then press Enter to resubmit.".to_string(),
+                                            });
+                                        }
+                                    }
+                                    RewindRestoreOption::SummarizeFromHere => {
+                                        if let Some(prompt_text) =
+                                            self.summarize_rewind_from(confirm.message_index)
+                                        {
+                                            let messages = reconstruct_engine_messages(
+                                                self.message_list.messages(),
+                                            );
+                                            let _ = engine_tx
+                                                .send(EngineCommand::LoadMessages(messages))
+                                                .await;
+                                            self.prompt.set_text(prompt_text);
+                                            self.message_list.push(MessageEntry::System {
+                                                text: "Conversation summarized. Edit the restored prompt, then press Enter to resubmit.".to_string(),
+                                            });
+                                        }
+                                    }
+                                    RewindRestoreOption::NeverMind => {}
+                                }
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    } else if self.rewind_picker.visible {
+                        match k.code {
+                            KeyCode::Esc => {
+                                self.rewind_picker.close();
+                                continue;
+                            }
+                            KeyCode::Up => {
+                                self.rewind_picker.prev();
+                                continue;
+                            }
+                            KeyCode::Down => {
+                                self.rewind_picker.next();
+                                continue;
+                            }
+                            KeyCode::Enter => {
+                                if let Some(name) = self.rewind_picker.selected_name() {
+                                    if let Some(idx) = parse_rewind_picker_name(name) {
+                                        self.rewind_confirmation =
+                                            self.prepare_rewind_confirmation(idx);
+                                    }
+                                }
+                                continue;
                             }
                             _ => {}
                         }
@@ -764,14 +1077,13 @@ impl App {
                                 self.engine_busy = false;
                                 self.spinner.stop();
                                 self.spinner.queued_count = 0;
+                                self.message_list.clear_running_tools();
                                 self.message_list.push(MessageEntry::System {
                                     text: "[Request interrupted by user]".to_string(),
                                 });
 
                                 // Dispatch queued message if any
-                                if let Some(queued) = self.message_queue.first().cloned() {
-                                    self.message_queue.remove(0);
-                                    self.spinner.queued_count = self.message_queue.len();
+                                if let Some(queued) = self.pop_queued_message() {
                                     let tx2 = tx.clone();
                                     tokio::spawn(async move {
                                         let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -797,6 +1109,8 @@ impl App {
                                 let _ = engine_tx
                                     .send(EngineCommand::SetCancelToken(cancel.clone()))
                                     .await;
+                            } else {
+                                self.open_rewind_on_double_escape();
                             }
                             continue;
                         }
@@ -817,6 +1131,14 @@ impl App {
                             }
                             (KeyModifiers::NONE, KeyCode::End) => {
                                 self.message_list.scroll_to_bottom();
+                                continue;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Up)
+                                if self.engine_busy
+                                    && self.prompt.is_empty()
+                                    && !self.message_queue.is_empty() =>
+                            {
+                                self.edit_last_queued_message();
                                 continue;
                             }
                             (KeyModifiers::CONTROL, KeyCode::Up) => {
@@ -869,10 +1191,10 @@ impl App {
                     }
                     if self.engine_busy {
                         // TS behavior (handlePromptSubmit.ts:336): enqueue and clear
-                        // input. Show hint on spinner line so user sees it was accepted.
-                        self.message_queue.push(text);
-                        self.prompt.clear();
-                        self.spinner.queued_count = self.message_queue.len();
+                        // input. The render path keeps the queued text visible
+                        // above the prompt and lets Up move it back into the
+                        // editor.
+                        self.enqueue_message(text);
                         continue;
                     }
 
@@ -1107,9 +1429,7 @@ impl App {
                             self.spinner.stop();
                             self.spinner.queued_count = 0;
                             self.engine_busy = false;
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1124,9 +1444,8 @@ impl App {
                         "allow" | "always" => {
                             // Execute this tool in background to keep UI responsive
                             let info = &pending_tools[tool_idx].info;
-                            self.spinner.start(SpinnerMode::Tool {
-                                name: info.name.clone(),
-                            });
+                            self.message_list.set_tool_running(&info.id, true);
+                            self.spinner.start(SpinnerMode::Thinking);
                             let tool_name = info.name.clone();
                             let tool_input = info.input.clone();
                             let tools_clone = tools.clone();
@@ -1242,6 +1561,12 @@ impl App {
                     });
                 }
 
+                AppEvent::PermissionExplanation(text) => {
+                    if let Some(ref mut dialog) = self.permission_dialog {
+                        dialog.set_explanation(text);
+                    }
+                }
+
                 AppEvent::ToolExecutionComplete { tool_idx, result } => {
                     self.spinner.stop();
 
@@ -1254,9 +1579,7 @@ impl App {
                         if self.engine_busy {
                             self.engine_busy = false;
                             self.spinner.queued_count = 0;
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1266,6 +1589,7 @@ impl App {
                         continue;
                     }
                     let info = &pending_tools[tool_idx].info;
+                    self.message_list.set_tool_running(&info.id, false);
 
                     // Update working directory for worktree tools
                     if let Ok(ref data) = result {
@@ -1377,9 +1701,7 @@ impl App {
                             self.engine_busy = false;
 
                             // Dispatch any message that was queued while busy
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1419,9 +1741,7 @@ impl App {
                             });
 
                             // Dispatch any message that was queued while busy
-                            if let Some(queued) = self.message_queue.first().cloned() {
-                                self.message_queue.remove(0);
-                                self.spinner.queued_count = self.message_queue.len();
+                            if let Some(queued) = self.pop_queued_message() {
                                 let tx2 = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
@@ -1481,11 +1801,28 @@ impl App {
                 PermissionDecision::Ask(ask) => {
                     let input_preview = serde_json::to_string_pretty(&info.input)
                         .unwrap_or_else(|_| info.input.to_string());
+                    let tool_name_for_explainer = info.name.clone();
+                    let description_for_explainer = ask.message.clone();
+                    let preview_for_explainer = input_preview.clone();
                     self.permission_dialog = Some(PermissionDialog::new(
                         info.name.clone(),
                         ask.message,
                         input_preview,
                     ));
+                    // Fire the Haiku explainer in the background; result
+                    // arrives via AppEvent::PermissionExplanation. No-op
+                    // when no secondary model is registered.
+                    let tx_explain = tx.clone();
+                    tokio::spawn(async move {
+                        let text = PermissionDialog::fetch_explanation(
+                            &tool_name_for_explainer,
+                            &description_for_explainer,
+                            &preview_for_explainer,
+                            "",
+                        )
+                        .await;
+                        let _ = tx_explain.send(AppEvent::PermissionExplanation(text)).await;
+                    });
                 }
                 PermissionDecision::Deny(deny) => {
                     let message = deny.message;
@@ -1536,7 +1873,7 @@ impl App {
                     input_summary: summary,
                     tool_use_id,
                 });
-                self.spinner.start(SpinnerMode::Tool { name });
+                self.spinner.start(SpinnerMode::Thinking);
             }
             StreamEvent::ToolResult {
                 tool_use_id,
@@ -1555,8 +1892,14 @@ impl App {
                 self.spinner.stop();
             }
             StreamEvent::UsageUpdate(ref usage) => {
-                self.spinner.tokens = usage.output_tokens;
-                self.total_tokens = self.total_tokens.saturating_add(usage.output_tokens);
+                // Track the latest turn's input_tokens for context window
+                // display. MessageStart carries input_tokens (representing
+                // how full the context is); MessageDelta carries 0 input.
+                if usage.input_tokens > 0 {
+                    self.total_tokens = usage.input_tokens;
+                    self.spinner.input_tokens = usage.input_tokens;
+                }
+                self.spinner.output_tokens = usage.output_tokens;
                 self.cost_tracker.add_usage(usage);
                 // Sync shared state for slash commands
                 if let Ok(mut state) = self.shared_state.lock() {
@@ -1567,6 +1910,7 @@ impl App {
             }
             StreamEvent::RequestStart { request_id: _ } => {
                 self.spinner.start(SpinnerMode::Thinking);
+                self.cost_tracker.increment_request_count();
             }
             StreamEvent::Error(err) => {
                 self.message_list.push(MessageEntry::System {
@@ -1593,6 +1937,28 @@ impl App {
     /// Handle mouse events (scroll wheel).
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.permission_dialog.is_some() || self.ask_user_dialog.is_some() {
+                    return;
+                }
+                let Ok(area) = self.terminal.size() else {
+                    return;
+                };
+                let spinner_height = if self.spinner.active { 1 } else { 0 };
+                let messages_height = area.height.saturating_sub(spinner_height + 3);
+                if mouse.row >= messages_height {
+                    return;
+                }
+                if let Some(tool_use_id) = self.message_list.tool_result_at_row(
+                    mouse.row as usize,
+                    area.width,
+                    messages_height as usize,
+                    &self.theme,
+                ) {
+                    self.message_list.toggle_tool_expand(&tool_use_id);
+                    self.message_list.scroll_to_bottom();
+                }
+            }
             MouseEventKind::ScrollUp => {
                 self.message_list.scroll_up(3);
             }
@@ -1632,6 +1998,9 @@ impl App {
         let permission_dialog = &self.permission_dialog;
         let ask_user_dialog = &self.ask_user_dialog;
         let command_picker = &self.command_picker;
+        let rewind_picker = &self.rewind_picker;
+        let rewind_confirmation = &self.rewind_confirmation;
+        let message_queue = &self.message_queue;
         let model_picker = &self.model_picker;
         let theme_picker = &self.theme_picker;
         let model_name = &self.model_name;
@@ -1654,12 +2023,14 @@ impl App {
             // - Spinner row (1 line when active, 0 otherwise)
             // - Blank margin row (1 line, matches original marginTop=1 on prompt)
             // - Prompt input (3 lines: top border, input line, bottom border)
+            let queued_message_visible = engine_busy && !message_queue.is_empty();
             let spinner_height = if spinner.active { 1 } else { 0 };
+            let activity_height = spinner_height + if queued_message_visible { 2 } else { 0 };
             let chunks = Layout::default()
                 .constraints([
-                    Constraint::Min(1),                 // Messages
-                    Constraint::Length(spinner_height), // Spinner
-                    Constraint::Length(3),              // Input (border + input + border)
+                    Constraint::Min(1),                  // Messages
+                    Constraint::Length(activity_height), // Spinner + queued message preview
+                    Constraint::Length(3),               // Input (border + input + border)
                 ])
                 .split(area);
 
@@ -1669,7 +2040,26 @@ impl App {
 
             // Spinner (inline with messages, like the original)
             if spinner.active {
-                frame.render_widget(spinner, chunks[1]);
+                let spinner_area = Rect::new(chunks[1].x, chunks[1].y, chunks[1].width, 1);
+                frame.render_widget(spinner, spinner_area);
+            }
+
+            if queued_message_visible {
+                let queue_y = chunks[1].y + spinner_height + 1;
+                if queue_y < chunks[1].y + chunks[1].height {
+                    let preview = truncate_chars(message_queue[0].replace('\n', " ").trim(), 160);
+                    let queued_line = Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled("\u{276F} ", Style::default().fg(theme.permission)),
+                        Span::styled(preview, Style::default().fg(theme.text)),
+                    ]);
+                    frame.buffer_mut().set_line(
+                        chunks[1].x,
+                        queue_y,
+                        &queued_line,
+                        chunks[1].width,
+                    );
+                }
             }
 
             // Prompt input with border matching the original's promptBorder color.
@@ -1694,12 +2084,14 @@ impl App {
                     "{} \u{00B7} {} ({}) \u{00B7} {}",
                     model_text, cost_text, pct_text, mode_text
                 );
+                let status = fit_status_for_width(&status, input_area.width as usize);
 
                 // Build the top border with status text embedded:
                 // ── status text ──────────
-                let status_width = status.len();
-                let remaining = (input_area.width as usize).saturating_sub(status_width + 4);
-                let left_dashes = 2;
+                let status_width = status.chars().count();
+                let left_dashes = 2usize.min(input_area.width as usize);
+                let remaining =
+                    (input_area.width as usize).saturating_sub(left_dashes + status_width + 2);
                 let right_dashes = remaining;
 
                 let token_color = if context_pct >= TOKEN_CRITICAL_THRESHOLD {
@@ -1740,7 +2132,11 @@ impl App {
                     };
 
                     // Multi-line aware rendering: split on '\n' and render each line.
-                    let text_str = prompt.text().to_string();
+                    let text_str = if queued_message_visible {
+                        "Press up to edit queued messages".to_string()
+                    } else {
+                        prompt.text().to_string()
+                    };
                     let lines: Vec<&str> = text_str.split('\n').collect();
                     let max_visible = (input_area.height.saturating_sub(2)) as usize; // leave room for borders
                     let visible_lines = if lines.len() > max_visible && max_visible > 0 {
@@ -1776,7 +2172,11 @@ impl App {
                     } else {
                         ratatui::style::Style::default()
                     };
-                    let text_str = prompt.text().to_string();
+                    let text_str = if queued_message_visible {
+                        "Press up to edit queued messages".to_string()
+                    } else {
+                        prompt.text().to_string()
+                    };
                     let last_line = text_str.split('\n').next_back().unwrap_or("");
                     let prompt_line = ratatui::text::Line::from(vec![
                         ratatui::text::Span::styled("\u{276F} ", prompt_style),
@@ -1787,7 +2187,7 @@ impl App {
             }
 
             // Command picker overlay (positioned above the input area)
-            if command_picker.visible && command_picker.has_entries() {
+            if command_picker.visible {
                 // +2 for border top/bottom
                 let picker_height = ((command_picker.filtered_count() as u16) + 2)
                     .max(3)
@@ -1800,6 +2200,31 @@ impl App {
                 );
                 let picker_widget = CommandPickerWidget::new(command_picker);
                 frame.render_widget(picker_widget, picker_area);
+            }
+
+            if rewind_picker.visible {
+                let picker_height = ((rewind_picker.filtered_count() as u16) + 2)
+                    .max(3)
+                    .min(area.height * 2 / 3);
+                let picker_area = Rect::new(
+                    area.x + 1,
+                    chunks[2].y.saturating_sub(picker_height),
+                    area.width.saturating_sub(2),
+                    picker_height,
+                );
+                let picker_widget = CommandPickerWidget::new(rewind_picker).titled("Rewind", "");
+                frame.render_widget(picker_widget, picker_area);
+            }
+
+            if let Some(confirm) = rewind_confirmation {
+                let confirm_height = 14u16.min(area.height.saturating_sub(1)).max(3);
+                let confirm_area = Rect::new(
+                    area.x + 1,
+                    chunks[2].y.saturating_sub(confirm_height),
+                    area.width.saturating_sub(2),
+                    confirm_height,
+                );
+                render_rewind_confirmation(frame, confirm_area, confirm, theme);
             }
 
             // Model picker — rendered inline above the prompt
@@ -2073,8 +2498,8 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
         }
         "Bash" => {
             let cmd = input["command"].as_str().unwrap_or("?");
-            if cmd.len() > 100 {
-                format!("{}...", &cmd[..97])
+            if cmd.chars().count() > 100 {
+                format!("{}...", truncate_chars(cmd, 97))
             } else {
                 cmd.to_string()
             }
@@ -2101,8 +2526,8 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
                 subtype.to_string()
             } else {
                 let prompt = input["prompt"].as_str().unwrap_or("?");
-                if prompt.len() > 80 {
-                    format!("{}...", &prompt[..77])
+                if prompt.chars().count() > 80 {
+                    format!("{}...", truncate_chars(prompt, 77))
                 } else {
                     prompt.to_string()
                 }
@@ -2111,8 +2536,8 @@ fn format_tool_use_summary(name: &str, input: &serde_json::Value) -> String {
         _ => {
             // Fallback: compact JSON, truncated
             let s = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
-            if s.len() > 120 {
-                format!("{}...", &s[..117])
+            if s.chars().count() > 120 {
+                format!("{}...", truncate_chars(&s, 117))
             } else {
                 s
             }
@@ -2178,17 +2603,218 @@ fn format_edit_result(data: &serde_json::Value) -> Option<String> {
 /// Truncate long tool results for display.
 fn truncate_result(s: &str) -> String {
     const MAX_DISPLAY: usize = 2000;
-    if s.len() <= MAX_DISPLAY {
+    if s.chars().count() <= MAX_DISPLAY {
         s.to_string()
     } else {
-        format!("{}... ({} chars total)", &s[..MAX_DISPLAY], s.len())
+        let total = s.chars().count();
+        format!(
+            "{}... ({} chars total)",
+            truncate_chars(s, MAX_DISPLAY),
+            total
+        )
     }
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
+fn parse_rewind_picker_name(name: &str) -> Option<usize> {
+    name.strip_prefix('#')?.parse().ok()
+}
+
+fn reconstruct_engine_messages(entries: &[MessageEntry]) -> Vec<serde_json::Value> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MessageEntry::User { text } => Some(serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            })),
+            MessageEntry::Assistant { text } => Some(serde_json::json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}]
+            })),
+            MessageEntry::CompactionSummary { text } => Some(serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            })),
+            _ => None,
+        })
+        .collect()
+}
+
+fn fit_status_for_width(status: &str, width: usize) -> String {
+    let max_status = width.saturating_sub(4);
+    let len = status.chars().count();
+    if len <= max_status {
+        return status.to_string();
+    }
+    if max_status == 0 {
+        return String::new();
+    }
+    if max_status <= 3 {
+        return truncate_chars(status, max_status);
+    }
+    format!("{}...", truncate_chars(status, max_status - 3))
 }
 
 /// Calculate a centered rect within the given area.
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let width = area.width * percent_x / 100;
+    let width = (area.width * percent_x / 100).max(1).min(area.width);
+    let height = height.max(1).min(area.height);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width, height.min(area.height))
+    Rect::new(x, y, width, height)
+}
+
+fn render_rewind_confirmation(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    confirm: &RewindConfirmation,
+    theme: &Theme,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let prompt = truncate_chars(confirm.prompt_text.replace('\n', " ").trim(), 96);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Rewind",
+            Style::default()
+                .fg(theme.permission)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Confirm you want to restore to the point before you sent this message:"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("│ ", Style::default().fg(theme.inactive)),
+            Span::styled(prompt, Style::default().fg(theme.text)),
+        ]),
+        Line::from(vec![
+            Span::styled("│ ", Style::default().fg(theme.inactive)),
+            Span::styled("(recently)", Style::default().fg(theme.inactive)),
+        ]),
+        Line::from(""),
+        Line::from(match confirm.selected_option() {
+            RewindRestoreOption::SummarizeFromHere => {
+                "Messages after this point will be summarized."
+            }
+            RewindRestoreOption::RestoreConversation => "The conversation will be forked.",
+            RewindRestoreOption::NeverMind => "The conversation will be unchanged.",
+        }),
+        Line::from(match confirm.selected_option() {
+            RewindRestoreOption::SummarizeFromHere => "",
+            _ => "The code will be unchanged.",
+        }),
+        Line::from(""),
+    ];
+
+    for (idx, option) in [
+        RewindRestoreOption::RestoreConversation,
+        RewindRestoreOption::SummarizeFromHere,
+        RewindRestoreOption::NeverMind,
+    ]
+    .iter()
+    .enumerate()
+    {
+        let selected = idx == confirm.selected;
+        let pointer = if selected { "\u{276F} " } else { "  " };
+        let style = if selected {
+            Style::default()
+                .fg(theme.permission)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(pointer, style),
+            Span::styled(format!("{}. {}", idx + 1, option.label()), style),
+        ]));
+    }
+
+    frame.render_widget(Clear, area);
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme.permission)),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_preserves_utf8_boundaries() {
+        assert_eq!(truncate_chars("éééabc", 4), "éééa");
+    }
+
+    #[test]
+    fn fit_status_respects_width_with_unicode_separator() {
+        let fitted = fit_status_for_width("claude-sonnet · $0.00 (1%) · default", 18);
+        assert!(fitted.chars().count() <= 14);
+        assert!(fitted.ends_with("..."));
+    }
+
+    #[test]
+    fn centered_rect_has_nonzero_size_on_tiny_terminals() {
+        let rect = centered_rect(60, 10, Rect::new(0, 0, 1, 1));
+        assert_eq!(rect.width, 1);
+        assert_eq!(rect.height, 1);
+    }
+
+    #[test]
+    fn queued_messages_stay_out_of_transcript_and_can_be_edited() {
+        let mut app = App::new().unwrap();
+        app.enqueue_message("follow up after this".to_string());
+
+        assert_eq!(app.spinner.queued_count, 0);
+        assert_eq!(app.message_queue, vec!["follow up after this".to_string()]);
+        assert!(!matches!(
+            app.message_list.messages().last(),
+            Some(MessageEntry::System { text }) if text.contains("Queued message:")
+        ));
+
+        assert!(app.edit_last_queued_message());
+        assert_eq!(app.prompt.text(), "follow up after this");
+        assert!(app.message_queue.is_empty());
+        assert_eq!(app.spinner.queued_count, 0);
+    }
+
+    #[test]
+    fn summarize_rewind_from_replaces_tail_and_restores_prompt() {
+        let mut app = App::new().unwrap();
+        app.message_list.push(MessageEntry::User {
+            text: "first".to_string(),
+        });
+        app.message_list.push(MessageEntry::Assistant {
+            text: "first answer".to_string(),
+        });
+        app.message_list.push(MessageEntry::User {
+            text: "second".to_string(),
+        });
+        app.message_list.push(MessageEntry::Assistant {
+            text: "second answer".to_string(),
+        });
+
+        let restored = app.summarize_rewind_from(2);
+
+        assert_eq!(restored.as_deref(), Some("second"));
+        assert_eq!(app.message_list.messages().len(), 3);
+        assert!(matches!(
+            app.message_list.messages().last(),
+            Some(MessageEntry::CompactionSummary { text })
+                if text.contains("Messages after this point were summarized")
+                    && text.contains("User: second")
+                    && text.contains("Assistant: second answer")
+        ));
+
+        let engine_messages = reconstruct_engine_messages(app.message_list.messages());
+        assert_eq!(engine_messages.len(), 3);
+        assert_eq!(engine_messages[2]["role"], "user");
+    }
 }

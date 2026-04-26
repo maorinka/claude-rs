@@ -54,10 +54,17 @@ pub mod workflow_tool;
 pub mod worktree_tools;
 pub mod write;
 
+pub use mcp_resource_tools::register_mcp_resource_tools;
 pub use mcp_tool::register_mcp_tools;
 pub use registry::{ProgressSender, ReadFileState, ToolExecutor, ToolRegistry, ToolUseContext};
+pub use tool_search::register_tool_search_snapshot;
 
 use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RegistryOptions {
+    pub is_non_interactive_session: bool,
+}
 
 /// Check whether an env-var-based feature flag is enabled.
 /// Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). Anything else
@@ -74,46 +81,72 @@ fn is_ant_user() -> bool {
     claude_core::user_type::is_ant()
 }
 
+fn is_todo_v2_enabled(options: RegistryOptions) -> bool {
+    feature_enabled("CLAUDE_CODE_ENABLE_TASKS") || !options.is_non_interactive_session
+}
+
+fn is_agent_swarms_enabled() -> bool {
+    is_ant_user() || feature_enabled("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+}
+
 pub fn build_default_registry() -> ToolRegistry {
+    build_default_registry_with_options(RegistryOptions::default())
+}
+
+pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
+    let todo_v2_enabled = is_todo_v2_enabled(options);
 
     // ── Baseline tools (always registered in TS tools.ts getAllBaseTools()) ──
-    reg.register(Arc::new(bash::BashTool::new()));
-    reg.register(Arc::new(read::FileReadTool));
-    reg.register(Arc::new(write::FileWriteTool));
-    reg.register(Arc::new(edit::FileEditTool));
-    reg.register(Arc::new(grep::GrepTool));
-    reg.register(Arc::new(glob_tool::GlobTool));
-    reg.register(Arc::new(web_fetch::WebFetchTool));
-    // WebSearchTool is a server-side tool (handled by the API, not client-side).
-    // It is NOT registered here. Its definition is injected into the API request.
-    reg.register(Arc::new(task_tools::TaskCreateTool));
-    reg.register(Arc::new(task_tools::TaskListTool));
-    reg.register(Arc::new(task_tools::TaskUpdateTool));
-    reg.register(Arc::new(task_tools::TaskGetTool));
-    reg.register(Arc::new(task_tools::TaskStopTool));
-    reg.register(Arc::new(task_tools::TaskOutputTool));
-    reg.register(Arc::new(notebook_edit::NotebookEditTool));
     reg.register(Arc::new(agent_tool::AgentTool));
-    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
-    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
     reg.register(Arc::new(ask_user::AskUserQuestionTool));
-    reg.register(Arc::new(brief_tool::BriefTool));
-    reg.register(Arc::new(send_message::SendMessageTool));
-    reg.register(Arc::new(lsp_tool::LSPTool));
-    reg.register(Arc::new(tool_search::ToolSearchTool));
-    reg.register(Arc::new(team_tools::TeamCreateTool));
-    reg.register(Arc::new(team_tools::TeamDeleteTool));
+    reg.register(Arc::new(bash::BashTool::new()));
+    reg.register(Arc::new(cron_tool::ScheduleCronTool));
+    reg.register(Arc::new(cron_tool::CronDeleteTool));
+    reg.register(Arc::new(cron_tool::CronListTool));
+    reg.register(Arc::new(edit::FileEditTool));
+    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
+    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
     reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
-    reg.register(Arc::new(mcp_resource_tools::ListMcpResourcesTool));
-    reg.register(Arc::new(mcp_resource_tools::ReadMcpResourceTool));
-    reg.register(Arc::new(powershell::PowerShellTool));
-    reg.register(Arc::new(skill_tool::SkillTool));
+    reg.register(Arc::new(glob_tool::GlobTool));
+    reg.register(Arc::new(grep::GrepTool));
+    reg.register(Arc::new(lsp_tool::LSPTool));
+    reg.register(Arc::new(monitor_tool::MonitorTool));
+    reg.register(Arc::new(notebook_edit::NotebookEditTool));
+    reg.register(Arc::new(push_notification_tool::PushNotificationTool));
+    reg.register(Arc::new(read::FileReadTool));
+    reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
     reg.register(Arc::new(sleep_tool::SleepTool));
-    reg.register(Arc::new(synthetic_output::SyntheticOutputTool));
-    reg.register(Arc::new(todo_write::TodoWriteTool));
-    reg.register(Arc::new(mcp_auth_tool::McpAuthTool));
+    reg.register(Arc::new(skill_tool::SkillTool));
+    reg.register(Arc::new(task_tools::TaskOutputTool));
+    reg.register(Arc::new(task_tools::TaskStopTool));
+
+    if todo_v2_enabled {
+        reg.register(Arc::new(task_tools::TaskCreateTool));
+        reg.register(Arc::new(task_tools::TaskListTool));
+        reg.register(Arc::new(task_tools::TaskUpdateTool));
+        reg.register(Arc::new(task_tools::TaskGetTool));
+    } else {
+        reg.register(Arc::new(todo_write::TodoWriteTool));
+    }
+    reg.register(Arc::new(web_fetch::WebFetchTool));
+    reg.register(Arc::new(web_search::WebSearchTool));
+    reg.register(Arc::new(write::FileWriteTool));
+
+    if feature_enabled("ENABLE_LSP_TOOL") {
+        reg.register(Arc::new(lsp_tool::LSPTool));
+    }
+    if is_agent_swarms_enabled() {
+        reg.register(Arc::new(team_tools::TeamCreateTool));
+        reg.register(Arc::new(team_tools::TeamDeleteTool));
+    }
+    if feature_enabled("PROACTIVE") || feature_enabled("KAIROS") {
+        reg.register(Arc::new(sleep_tool::SleepTool));
+    }
+    if claude_core::shell_tool_utils::is_powershell_tool_enabled() {
+        reg.register(Arc::new(powershell::PowerShellTool));
+    }
 
     // ── USER_TYPE=ant gated (TS: process.env.USER_TYPE === 'ant') ────────────
     if is_ant_user() {
@@ -174,4 +207,58 @@ pub fn build_default_registry() -> ToolRegistry {
     }
 
     reg
+}
+
+pub fn filter_registry_by_deny_rules(
+    registry: &mut ToolRegistry,
+    deny_rules: &[claude_core::config::settings::PermissionRuleConfig],
+) {
+    let denied_names = registry
+        .all()
+        .iter()
+        .filter(|tool| {
+            deny_rules
+                .iter()
+                .any(|rule| rule_denies_whole_tool(tool.name(), rule))
+        })
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+
+    for name in denied_names {
+        registry.remove(&name);
+    }
+}
+
+fn rule_denies_whole_tool(
+    tool_name: &str,
+    rule: &claude_core::config::settings::PermissionRuleConfig,
+) -> bool {
+    if rule
+        .pattern
+        .as_deref()
+        .is_some_and(|pattern| !pattern.is_empty() && pattern != "*")
+    {
+        return false;
+    }
+
+    if rule.tool == tool_name {
+        return true;
+    }
+
+    let Some((rule_server, rule_tool)) = parse_mcp_tool_name(&rule.tool) else {
+        return false;
+    };
+    let Some((tool_server, _)) = parse_mcp_tool_name(tool_name) else {
+        return false;
+    };
+
+    rule_server == tool_server && rule_tool.is_none_or(|name| name == "*")
+}
+
+fn parse_mcp_tool_name(name: &str) -> Option<(&str, Option<&str>)> {
+    let rest = name.strip_prefix("mcp__")?;
+    match rest.split_once("__") {
+        Some((server, tool)) => Some((server, Some(tool))),
+        None => Some((rest, None)),
+    }
 }

@@ -260,6 +260,120 @@ pub const PERMISSION_EXPLAINER_TOOL_NAME: &str = "explain_command";
 /// Permission-explainer tool description.
 pub const PERMISSION_EXPLAINER_TOOL_DESCRIPTION: &str = "Provide an explanation of a shell command";
 
+/// Language preference section. Port of TS
+/// `src/constants/prompts.ts:143-148`. Takes the `languagePreference`
+/// setting string (e.g. `"Japanese"`, `"French"`) and returns the
+/// exact prompt the TS builder emits. Returns `None` when no
+/// preference is configured (TS returns `null` in the same case).
+/// Settings-level `languagePreference` is not yet wired in Rust; this
+/// helper only produces the prompt string once a caller supplies it.
+pub fn build_language_section(language_preference: Option<&str>) -> Option<String> {
+    let lang = language_preference?;
+    if lang.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "# Language\nAlways respond in {lang}. Use {lang} for all explanations, comments, and communications with the user. Technical terms and code identifiers should remain in their original form."
+    ))
+}
+
+/// Output-style section wrapper. Port of TS
+/// `src/constants/prompts.ts:151-157`: `getOutputStyleSection`. Wraps a
+/// style's `prompt` field under a `# Output Style: {name}` heading
+/// when a style is configured; returns `None` otherwise. Output-style
+/// loading infrastructure (`loadOutputStylesDir`) is not yet wired in
+/// Rust; this helper only produces the wrapper once a caller has the
+/// name + prompt.
+pub fn build_output_style_section(name: Option<&str>, prompt: Option<&str>) -> Option<String> {
+    let n = name?;
+    let p = prompt?;
+    Some(format!("# Output Style: {n}\n{p}"))
+}
+
+/// Auto-mode (YOLO) classifier tool name. Verbatim port of TS
+/// `src/utils/permissions/yoloClassifier.ts:260`: `classify_result`.
+pub const YOLO_CLASSIFIER_TOOL_NAME: &str = "classify_result";
+
+/// Auto-mode classifier tool description. Port of TS
+/// `yoloClassifier.ts:265`.
+pub const YOLO_CLASSIFIER_TOOL_DESCRIPTION: &str =
+    "Report the security classification result for the agent action";
+
+/// Full Auto-mode classifier tool JSON schema. Verbatim port of TS
+/// `yoloClassifier.ts:262-285` (`YOLO_CLASSIFIER_TOOL_SCHEMA`). The TS
+/// value is typed `BetaToolUnion` with `type: 'custom'`; the Rust port
+/// returns a `serde_json::Value` so callers can splice it into API
+/// request bodies without needing a dedicated type today. Shape,
+/// property ordering, and the `required` list match TS exactly.
+pub fn yolo_classifier_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "custom",
+        "name": YOLO_CLASSIFIER_TOOL_NAME,
+        "description": YOLO_CLASSIFIER_TOOL_DESCRIPTION,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "thinking": {
+                    "type": "string",
+                    "description": "Brief step-by-step reasoning."
+                },
+                "shouldBlock": {
+                    "type": "boolean",
+                    "description": "Whether the action should be blocked (true) or allowed (false)"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief explanation of the classification decision"
+                }
+            },
+            "required": ["thinking", "shouldBlock", "reason"]
+        }
+    })
+}
+
+/// Command-prefix extraction Haiku-classifier system prompt. Port of
+/// TS `src/utils/shell/prefix.ts:220-232`. TS picks between two framings
+/// based on `useSystemPromptPolicySpec`; the policy-spec variant bakes
+/// the policy into the system prompt so the user message stays small.
+pub fn build_command_prefix_classifier_system_prompt(
+    tool_name: &str,
+    policy_spec: &str,
+    use_system_prompt_policy_spec: bool,
+) -> String {
+    if use_system_prompt_policy_spec {
+        format!(
+            "Your task is to process {tool_name} commands that an AI coding agent wants to run.\n\n{policy_spec}"
+        )
+    } else {
+        format!(
+            "Your task is to process {tool_name} commands that an AI coding agent wants to run.\n\nThis policy spec defines how to determine the prefix of a {tool_name} command:"
+        )
+    }
+}
+
+/// Command-prefix extraction Haiku-classifier user prompt. Port of TS
+/// `prefix.ts:218` (user message). Mirrors the same TS branch on
+/// `useSystemPromptPolicySpec`.
+pub fn build_command_prefix_classifier_user_prompt(
+    command: &str,
+    policy_spec: &str,
+    use_system_prompt_policy_spec: bool,
+) -> String {
+    if use_system_prompt_policy_spec {
+        format!("Command: {command}")
+    } else {
+        format!("{policy_spec}\n\nCommand: {command}")
+    }
+}
+
+/// Terminal-focus context hint. Port of TS `src/screens/REPL.tsx:2776`:
+/// when proactive/KAIROS mode is active and the terminal is unfocused,
+/// this string is injected as `terminalFocus` into the user context so
+/// the model knows not to expect immediate user attention. TS uses the
+/// em-dash `—`; Rust uses the same Unicode code point (`\u{2014}`).
+pub const TERMINAL_FOCUS_UNFOCUSED_HINT: &str =
+    "The terminal is unfocused \u{2014} the user is not actively watching.";
+
 /// Sanity: Agent tool name the teammate addendum bakes in.
 #[doc(hidden)]
 pub fn _agent_tool_name_sanity() -> &'static str {
@@ -412,5 +526,78 @@ mod tests {
     fn numeric_length_anchors_states_cap() {
         assert!(NUMERIC_LENGTH_ANCHORS.contains("≤25 words"));
         assert!(NUMERIC_LENGTH_ANCHORS.contains("≤100 words"));
+    }
+
+    #[test]
+    fn language_section_builds_when_pref_present() {
+        let s = build_language_section(Some("Japanese")).unwrap();
+        assert!(s.starts_with("# Language\n"));
+        assert!(s.contains("Always respond in Japanese."));
+        assert!(s.contains("Use Japanese for all explanations"));
+    }
+
+    #[test]
+    fn language_section_absent_on_none_or_empty() {
+        assert!(build_language_section(None).is_none());
+        assert!(build_language_section(Some("")).is_none());
+    }
+
+    #[test]
+    fn output_style_section_wraps_name_and_prompt() {
+        let s = build_output_style_section(Some("Explanatory"), Some("body text"))
+            .expect("should produce Some when both fields present");
+        assert_eq!(s, "# Output Style: Explanatory\nbody text");
+    }
+
+    #[test]
+    fn output_style_section_absent_when_name_or_prompt_missing() {
+        assert!(build_output_style_section(None, Some("body")).is_none());
+        assert!(build_output_style_section(Some("X"), None).is_none());
+    }
+
+    #[test]
+    fn yolo_classifier_identifier_literals() {
+        assert_eq!(YOLO_CLASSIFIER_TOOL_NAME, "classify_result");
+        assert!(YOLO_CLASSIFIER_TOOL_DESCRIPTION.contains("security classification"));
+    }
+
+    #[test]
+    fn yolo_classifier_tool_schema_matches_ts_shape() {
+        let s = yolo_classifier_tool_schema();
+        assert_eq!(s["type"], "custom");
+        assert_eq!(s["name"], "classify_result");
+        let props = &s["input_schema"]["properties"];
+        assert_eq!(props["thinking"]["type"], "string");
+        assert_eq!(props["shouldBlock"]["type"], "boolean");
+        assert_eq!(props["reason"]["type"], "string");
+        let req = s["input_schema"]["required"].as_array().unwrap();
+        let req_strs: Vec<_> = req.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(req_strs, vec!["thinking", "shouldBlock", "reason"]);
+    }
+
+    #[test]
+    fn command_prefix_system_prompt_branches() {
+        let with = build_command_prefix_classifier_system_prompt("Bash", "POLICY", true);
+        assert!(with.contains("Your task is to process Bash commands"));
+        assert!(with.ends_with("POLICY"));
+
+        let without = build_command_prefix_classifier_system_prompt("Bash", "POLICY", false);
+        assert!(without
+            .contains("This policy spec defines how to determine the prefix of a Bash command:"));
+        assert!(!without.ends_with("POLICY"));
+    }
+
+    #[test]
+    fn command_prefix_user_prompt_branches() {
+        let with = build_command_prefix_classifier_user_prompt("ls -la", "POLICY", true);
+        assert_eq!(with, "Command: ls -la");
+        let without = build_command_prefix_classifier_user_prompt("ls -la", "POLICY", false);
+        assert_eq!(without, "POLICY\n\nCommand: ls -la");
+    }
+
+    #[test]
+    fn terminal_focus_hint_uses_em_dash() {
+        assert!(TERMINAL_FOCUS_UNFOCUSED_HINT.contains('\u{2014}'));
+        assert!(TERMINAL_FOCUS_UNFOCUSED_HINT.contains("terminal is unfocused"));
     }
 }

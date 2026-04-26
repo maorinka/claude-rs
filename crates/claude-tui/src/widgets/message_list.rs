@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -21,6 +23,9 @@ const BLACK_CIRCLE: &str = "\u{25CF}";
 /// The return symbol used for tool result indentation (MessageResponse).
 /// The original uses "  ⎿  " — two spaces, ⎿, two spaces.
 const TOOL_RESULT_PREFIX: &str = "  \u{23BF}  ";
+const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
+const INTERRUPT_DISPLAY: &str = "Interrupted \u{00B7} What should Claude do instead?";
+const TOOL_RUNNING_DISPLAY: &str = "Running\u{2026}";
 
 /// Teardrop asterisk used for system/compact messages in the original.
 #[allow(dead_code)]
@@ -58,6 +63,9 @@ pub enum MessageEntry {
     System {
         text: String,
     },
+    CompactionSummary {
+        text: String,
+    },
 }
 
 pub struct MessageList {
@@ -68,6 +76,10 @@ pub struct MessageList {
     show_thinking: bool,
     /// Cached rendered heights per message (invalidated on push/clear).
     height_cache: Vec<Option<usize>>,
+    /// Tool use IDs whose results are expanded (show all lines).
+    expanded_tools: HashSet<String>,
+    /// Tool use IDs currently executing.
+    running_tools: HashSet<String>,
 }
 
 impl Default for MessageList {
@@ -84,6 +96,8 @@ impl MessageList {
             sticky_bottom: true,
             show_thinking: false,
             height_cache: Vec::new(),
+            expanded_tools: HashSet::new(),
+            running_tools: HashSet::new(),
         }
     }
 
@@ -121,6 +135,13 @@ impl MessageList {
         self.height_cache.iter_mut().for_each(|h| *h = None);
         &mut self.messages
     }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.messages.truncate(len);
+        self.height_cache.truncate(len);
+        self.scroll_to_bottom();
+    }
+
     pub fn len(&self) -> usize {
         self.messages.len()
     }
@@ -157,6 +178,8 @@ impl MessageList {
     pub fn clear(&mut self) {
         self.messages.clear();
         self.height_cache.clear();
+        self.expanded_tools.clear();
+        self.running_tools.clear();
         self.scroll_offset = 0;
         self.sticky_bottom = true;
     }
@@ -174,6 +197,75 @@ impl MessageList {
     /// Whether thinking blocks are currently visible.
     pub fn show_thinking(&self) -> bool {
         self.show_thinking
+    }
+
+    /// Toggle expand/collapse for a tool result by its tool_use_id.
+    pub fn toggle_tool_expand(&mut self, tool_use_id: &str) {
+        if !self.expanded_tools.remove(tool_use_id) {
+            self.expanded_tools.insert(tool_use_id.to_string());
+        }
+        self.height_cache.iter_mut().for_each(|h| *h = None);
+    }
+
+    /// Whether a tool result is currently expanded.
+    pub fn is_tool_expanded(&self, tool_use_id: &str) -> bool {
+        self.expanded_tools.contains(tool_use_id)
+    }
+
+    pub fn set_tool_running(&mut self, tool_use_id: &str, running: bool) {
+        if running {
+            self.running_tools.insert(tool_use_id.to_string());
+        } else {
+            self.running_tools.remove(tool_use_id);
+        }
+        self.height_cache.iter_mut().for_each(|h| *h = None);
+    }
+
+    pub fn clear_running_tools(&mut self) {
+        self.running_tools.clear();
+        self.height_cache.iter_mut().for_each(|h| *h = None);
+    }
+
+    /// Return the tool result rendered at a visible row, if any.
+    pub fn tool_result_at_row(
+        &self,
+        row: usize,
+        width: u16,
+        visible_height: usize,
+        theme: &Theme,
+    ) -> Option<String> {
+        if visible_height == 0 {
+            return None;
+        }
+
+        let mut owners: Vec<Option<String>> = Vec::new();
+        for msg in &self.messages {
+            let msg_lines =
+                render_message(msg, width, self.show_thinking, &self.expanded_tools, theme);
+            let owner = match msg {
+                MessageEntry::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            };
+            owners.extend(std::iter::repeat(owner).take(msg_lines.len()));
+        }
+
+        let total_lines = owners.len();
+        let scroll = if self.sticky_bottom {
+            total_lines.saturating_sub(visible_height)
+        } else {
+            self.scroll_offset
+                .min(total_lines.saturating_sub(visible_height))
+        };
+        let end = total_lines.min(scroll + visible_height);
+        let visible_len = end.saturating_sub(scroll);
+        let top_offset = visible_height.saturating_sub(visible_len);
+
+        if row < top_offset {
+            return None;
+        }
+        owners
+            .get(scroll + row - top_offset)
+            .and_then(|owner| owner.clone())
     }
 }
 
@@ -396,6 +488,7 @@ fn render_message(
     msg: &MessageEntry,
     width: u16,
     show_thinking: bool,
+    expanded_tools: &HashSet<String>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -445,12 +538,12 @@ fn render_message(
 
             // Model line
             let model_text = format!("Model: {}", model);
-            let model_text = if model_text.len() > inner {
-                format!("{}...", &model_text[..inner.saturating_sub(3)])
+            let model_text = if model_text.chars().count() > inner {
+                truncate_with_ellipsis(&model_text, inner)
             } else {
                 model_text
             };
-            let model_pad = inner.saturating_sub(model_text.len());
+            let model_pad = inner.saturating_sub(model_text.chars().count());
             lines.push(Line::from(vec![
                 Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
                 Span::styled(model_text, Style::default().fg(theme.inactive)),
@@ -460,12 +553,12 @@ fn render_message(
 
             // CWD line
             let cwd_text = format!("cwd: {}", cwd);
-            let cwd_text = if cwd_text.len() > inner {
-                format!("{}...", &cwd_text[..inner.saturating_sub(3)])
+            let cwd_text = if cwd_text.chars().count() > inner {
+                truncate_with_ellipsis(&cwd_text, inner)
             } else {
                 cwd_text
             };
-            let cwd_pad = inner.saturating_sub(cwd_text.len());
+            let cwd_pad = inner.saturating_sub(cwd_text.chars().count());
             lines.push(Line::from(vec![
                 Span::styled("  \u{2502} ", Style::default().fg(theme.claude)),
                 Span::styled(cwd_text, Style::default().fg(theme.inactive)),
@@ -546,7 +639,7 @@ fn render_message(
             let summary_text = if input_summary.is_empty() {
                 name.clone()
             } else {
-                format!("{} ({})", name, input_summary)
+                format!("{}({})", name, input_summary)
             };
 
             // Wrap the summary if it's too long.
@@ -596,9 +689,10 @@ fn render_message(
             name: _,
             output,
             is_error,
-            tool_use_id: _,
+            tool_use_id,
         } => {
             let w = width as usize;
+            let is_expanded = expanded_tools.contains(tool_use_id);
             // Tool results show with "  ⎿  " prefix.
             // The ToolUse entry above already has the colored circle.
             if *is_error {
@@ -640,15 +734,15 @@ fn render_message(
                     lines.push(Line::from(spans));
                 }
             } else {
-                let max_preview_lines = 6;
+                let max_preview_lines = if is_expanded { usize::MAX } else { 6 };
                 for line in output.lines().take(max_preview_lines) {
                     lines.extend(render_tool_output_lines(line, w, theme));
                 }
                 let output_line_count = output.lines().count();
-                if output_line_count > max_preview_lines {
+                if !is_expanded && output_line_count > max_preview_lines {
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "{}... ({} more lines)",
+                            "{}... ({} more lines, click to expand)",
                             TOOL_RESULT_PREFIX,
                             output_line_count - max_preview_lines
                         ),
@@ -703,6 +797,17 @@ fn render_message(
             }
         }
         MessageEntry::System { text } => {
+            if text.trim() == INTERRUPT_MESSAGE {
+                let dim_style = Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM);
+                lines.push(Line::from(vec![
+                    Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style),
+                    Span::styled(INTERRUPT_DISPLAY.to_string(), dim_style),
+                ]));
+                return lines;
+            }
+
             // System messages: plain text in inactive/muted color, word-wrapped.
             let sys_width = (width as usize).max(1);
             for line_text in text.split('\n') {
@@ -714,9 +819,63 @@ fn render_message(
                 }
             }
         }
+        MessageEntry::CompactionSummary { text } => {
+            let sys_width = (width as usize).max(1);
+            lines.push(Line::from(vec![Span::styled(
+                "\u{203B} Conversation summarized",
+                Style::default()
+                    .fg(theme.inactive)
+                    .add_modifier(Modifier::DIM),
+            )]));
+            for line_text in text.lines().take(3) {
+                for wrapped in word_wrap(line_text, sys_width.saturating_sub(2).max(1)) {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            wrapped,
+                            Style::default()
+                                .fg(theme.inactive)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                }
+            }
+        }
     }
 
     lines
+}
+
+fn render_pending_tool_response(theme: &Theme) -> Line<'static> {
+    let dim_style = Style::default()
+        .fg(theme.inactive)
+        .add_modifier(Modifier::DIM);
+    Line::from(vec![
+        Span::styled(TOOL_RESULT_PREFIX.to_string(), dim_style),
+        Span::styled(TOOL_RUNNING_DISPLAY.to_string(), dim_style),
+    ])
+}
+
+fn render_messages(
+    messages: &[MessageEntry],
+    width: u16,
+    show_thinking: bool,
+    expanded_tools: &HashSet<String>,
+    running_tools: &HashSet<String>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut all_lines: Vec<Line> = Vec::new();
+    for msg in messages {
+        let msg_lines = render_message(msg, width, show_thinking, expanded_tools, theme);
+        all_lines.extend(msg_lines);
+
+        if let MessageEntry::ToolUse { tool_use_id, .. } = msg {
+            if running_tools.contains(tool_use_id.as_str()) {
+                all_lines.push(render_pending_tool_response(theme));
+            }
+        }
+    }
+    all_lines
 }
 
 impl<'a> Widget for MessageListWidget<'a> {
@@ -730,11 +889,14 @@ impl<'a> Widget for MessageListWidget<'a> {
         let fallback = crate::theme::dark_theme();
         let theme = self.theme.unwrap_or(&fallback);
 
-        let mut all_lines: Vec<Line> = Vec::new();
-        for msg in &self.list.messages {
-            let msg_lines = render_message(msg, area.width, show_thinking, theme);
-            all_lines.extend(msg_lines);
-        }
+        let all_lines = render_messages(
+            &self.list.messages,
+            area.width,
+            show_thinking,
+            &self.list.expanded_tools,
+            &self.list.running_tools,
+            theme,
+        );
 
         let total_lines = all_lines.len();
 
@@ -767,9 +929,36 @@ impl<'a> Widget for MessageListWidget<'a> {
     }
 }
 
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let prefix: String = s.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render_msg_simple(
+        msg: &MessageEntry,
+        width: u16,
+        show_thinking: bool,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        render_message(msg, width, show_thinking, &HashSet::new(), theme)
+    }
+
+    fn lines_to_plain(lines: &[Line<'static>]) -> String {
+        lines.iter().map(ToString::to_string).collect::<String>()
+    }
 
     #[test]
     fn black_circle_char() {
@@ -788,9 +977,53 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_at_row_returns_visible_tool_id() {
+        let theme = crate::theme::dark_theme();
+        let mut list = MessageList::new();
+        list.push(MessageEntry::ToolUse {
+            name: "Read".to_string(),
+            input_summary: "file.txt".to_string(),
+            tool_use_id: "tool-1".to_string(),
+        });
+        list.push(MessageEntry::ToolResult {
+            name: "Read".to_string(),
+            output: "first\nsecond".to_string(),
+            is_error: false,
+            tool_use_id: "tool-1".to_string(),
+        });
+
+        let hit = (0..10).find_map(|row| list.tool_result_at_row(row, 80, 10, &theme));
+        assert_eq!(hit, Some("tool-1".to_string()));
+    }
+
+    #[test]
+    fn expanded_tool_result_renders_past_preview_limit() {
+        let theme = crate::theme::dark_theme();
+        let mut expanded = HashSet::new();
+        expanded.insert("tool-1".to_string());
+        let output = (1..=8)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let msg = MessageEntry::ToolResult {
+            name: "Read".to_string(),
+            output,
+            is_error: false,
+            tool_use_id: "tool-1".to_string(),
+        };
+
+        let collapsed = render_msg_simple(&msg, 80, false, &theme);
+        let expanded_lines = render_message(&msg, 80, false, &expanded, &theme);
+
+        assert!(lines_to_plain(&collapsed).contains("click to expand"));
+        assert!(lines_to_plain(&expanded_lines).contains("line 8"));
+        assert!(!lines_to_plain(&expanded_lines).contains("click to expand"));
+    }
+
+    #[test]
     fn user_message_has_blank_line_before() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::User {
                 text: "hello".to_string(),
             },
@@ -805,7 +1038,7 @@ mod tests {
     #[test]
     fn assistant_message_has_circle() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Assistant {
                 text: "hi".to_string(),
             },
@@ -823,7 +1056,7 @@ mod tests {
     #[test]
     fn tool_use_has_bold_name() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::ToolUse {
                 name: "Read".to_string(),
                 input_summary: "/foo.rs".to_string(),
@@ -840,9 +1073,65 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_tool_use_shows_running_response() {
+        let theme = crate::theme::dark_theme();
+        let running_tools = HashSet::from(["tool-1".to_string()]);
+        let lines = render_messages(
+            &[MessageEntry::ToolUse {
+                name: "Bash".to_string(),
+                input_summary: "git status".to_string(),
+                tool_use_id: "tool-1".to_string(),
+            }],
+            80,
+            false,
+            &HashSet::new(),
+            &running_tools,
+            &theme,
+        );
+
+        assert_eq!(lines.len(), 2);
+        let text = lines[1].to_string();
+        assert!(text.contains('\u{23BF}'));
+        assert!(text.contains(TOOL_RUNNING_DISPLAY));
+    }
+
+    #[test]
+    fn resolved_tool_use_does_not_show_running_response() {
+        let theme = crate::theme::dark_theme();
+        let lines = render_messages(
+            &[
+                MessageEntry::ToolUse {
+                    name: "Bash".to_string(),
+                    input_summary: "git status".to_string(),
+                    tool_use_id: "tool-1".to_string(),
+                },
+                MessageEntry::ToolResult {
+                    name: "Bash".to_string(),
+                    output: "clean".to_string(),
+                    is_error: false,
+                    tool_use_id: "tool-1".to_string(),
+                },
+            ],
+            80,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &theme,
+        );
+
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains(TOOL_RUNNING_DISPLAY));
+        assert!(rendered.contains("clean"));
+    }
+
+    #[test]
     fn thinking_collapsed_shows_ctrl_o() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Thinking {
                 text: "let me think...".to_string(),
             },
@@ -858,7 +1147,7 @@ mod tests {
     #[test]
     fn thinking_expanded_shows_content() {
         let theme = crate::theme::dark_theme();
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Thinking {
                 text: "let me think about this".to_string(),
             },
@@ -899,7 +1188,7 @@ mod tests {
     fn assistant_message_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_text = "This is a very long assistant message that should definitely wrap when the terminal width is narrow, like 40 columns wide.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::Assistant {
                 text: long_text.to_string(),
             },
@@ -925,7 +1214,7 @@ mod tests {
     fn user_message_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_text = "Please explain what this project does in detail with lots of examples and code snippets showing usage.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::User {
                 text: long_text.to_string(),
             },
@@ -950,7 +1239,7 @@ mod tests {
     fn tool_result_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_output = "This is a very long tool output line that contains a lot of text and should definitely wrap properly within the terminal.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::ToolResult {
                 name: "Read".to_string(),
                 output: long_output.to_string(),
@@ -978,7 +1267,7 @@ mod tests {
     fn system_message_wraps_at_width() {
         let theme = crate::theme::dark_theme();
         let long_text = "A system notification that is very long and needs to be wrapped properly when displayed in a narrow terminal window.";
-        let lines = render_message(
+        let lines = render_msg_simple(
             &MessageEntry::System {
                 text: long_text.to_string(),
             },
@@ -997,6 +1286,25 @@ mod tests {
                 w
             );
         }
+    }
+
+    #[test]
+    fn interrupted_marker_renders_like_message_response() {
+        let theme = crate::theme::dark_theme();
+        let lines = render_msg_simple(
+            &MessageEntry::System {
+                text: INTERRUPT_MESSAGE.to_string(),
+            },
+            80,
+            false,
+            &theme,
+        );
+
+        assert_eq!(lines.len(), 1);
+        let text = lines[0].to_string();
+        assert!(text.contains('\u{23BF}'));
+        assert!(text.contains(INTERRUPT_DISPLAY));
+        assert!(!text.contains(INTERRUPT_MESSAGE));
     }
 
     #[test]

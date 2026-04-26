@@ -7,6 +7,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::MutexGuard;
 use tokio_util::sync::CancellationToken;
 
+use crate::read_only_validation::{classify_command, Classification};
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::sandbox::SandboxExecutor;
 use claude_core::types::events::ToolResultData;
@@ -742,12 +743,15 @@ While the Bash tool can do similar things, it's better to use the built-in tools
         }
     }
 
-    fn is_concurrency_safe(&self, _input: &Value) -> bool {
-        false
+    fn is_concurrency_safe(&self, input: &Value) -> bool {
+        self.is_read_only(input)
     }
 
-    fn is_read_only(&self, _input: &Value) -> bool {
-        false
+    fn is_read_only(&self, input: &Value) -> bool {
+        input
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| classify_command(command) == Classification::ReadOnly)
     }
 
     fn max_result_size_chars(&self) -> usize {
@@ -931,6 +935,43 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
             crate::registry::PermissionMode::Default,
         )
+    }
+
+    #[test]
+    fn test_bash_read_only_detection_matches_project_status_commands() {
+        let tool = BashTool::new();
+
+        for command in [
+            "git log --oneline -20",
+            "git status",
+            "git diff main --stat",
+            "find src -name '*.rs' | head -60",
+            "wc -l src/**/*.rs src/*.rs | tail -5",
+        ] {
+            let input = json!({ "command": command });
+            assert!(tool.is_read_only(&input), "{command} should be read-only");
+            assert!(
+                tool.is_concurrency_safe(&input),
+                "{command} should be concurrency-safe"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bash_mutating_or_build_commands_are_not_concurrency_safe() {
+        let tool = BashTool::new();
+
+        for command in ["cargo build 2>&1 | tail -5", "rm -rf /tmp/claude-rs-test"] {
+            let input = json!({ "command": command });
+            assert!(
+                !tool.is_read_only(&input),
+                "{command} should not be read-only"
+            );
+            assert!(
+                !tool.is_concurrency_safe(&input),
+                "{command} should not be concurrency-safe"
+            );
+        }
     }
 
     #[tokio::test]

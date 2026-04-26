@@ -16,8 +16,8 @@
 //! - `simplify` — unconditional (all user types)
 //! - `stuck`    — ant-only (`USER_TYPE === 'ant'`)
 //! - `remember` — ant-only + `auto_memory_enabled()`
-//! - `loop`     — `AGENT_TRIGGERS` env flag (matches TS
-//!   `isKairosCronEnabled`'s `feature('AGENT_TRIGGERS')` gate)
+//! - `loop`     — unconditional in current TS builds that expose
+//!   CronCreate/CronDelete/CronList alongside it.
 //!
 //! ## TS parity notes
 //!
@@ -38,7 +38,6 @@
 //!    `auto_memory_enabled()` gate so the skill is hidden when
 //!    auto-memory is off — matches TS `remember.ts:71`.
 
-use crate::cron_tool::is_kairos_cron_enabled;
 use crate::skill_tool::{register_skill_full, register_skill_with_arg_header};
 use claude_core::memdir::auto_memory_enabled;
 use claude_core::user_type;
@@ -53,10 +52,44 @@ const LOOP_USAGE: &str = include_str!("loop_usage.md");
 /// user type. Idempotent: `register_skill` replaces by name, so
 /// calling this twice is harmless.
 pub fn register_bundled_skills() {
+    register_update_config_skill();
+    register_keybindings_help_skill();
     register_simplify_skill();
+    register_fewer_permission_prompts_skill();
     register_stuck_skill();
     register_remember_skill();
     register_loop_skill();
+    register_schedule_skill();
+    register_claude_api_skill();
+    register_init_skill();
+    register_review_skill();
+    register_security_review_skill();
+}
+
+pub fn register_update_config_skill() {
+    register_skill_full(
+        "update-config",
+        "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.",
+        &claude_core::update_config_skill_prompt::update_config_prompt(None, ""),
+        None,
+        None,
+    );
+}
+
+pub fn register_keybindings_help_skill() {
+    let inputs = claude_core::keybindings_skill_prompt::KeybindingsPromptInputs {
+        reserved_shortcuts: "",
+        contexts_table: "",
+        actions_table: "",
+        args: "",
+    };
+    register_skill_full(
+        "keybindings-help",
+        "Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".",
+        &claude_core::keybindings_skill_prompt::assemble_keybindings_prompt(&inputs),
+        None,
+        None,
+    );
 }
 
 /// Port of TS `registerSimplifySkill`. Reviews changed files for
@@ -68,6 +101,16 @@ pub fn register_simplify_skill() {
         "Review changed code for reuse, quality, and efficiency, then fix any issues found.",
         SIMPLIFY_PROMPT,
         Some("Additional Focus"),
+    );
+}
+
+pub fn register_fewer_permission_prompts_skill() {
+    register_skill_full(
+        "fewer-permission-prompts",
+        "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.",
+        "Review recent usage and project settings, identify safe read-only commands and MCP calls that are repeatedly approved, then update `.claude/settings.json` permissions with a narrow allowlist. Preserve existing settings and explain what was added.",
+        None,
+        None,
     );
 }
 
@@ -117,29 +160,80 @@ pub fn register_remember_skill() {
 /// the `## Input` header so the model parses them as in TS
 /// `buildPrompt(args)`.
 ///
-/// Gate: `isKairosCronEnabled` in TS requires the
-/// `feature('AGENT_TRIGGERS')` build flag + a GrowthBook flag.
-/// Rust has the same AGENT_TRIGGERS env gate on the cron tool
-/// registry (see `claude-tools/src/lib.rs`). We reuse it here so
-/// `/loop` and the `CronCreate` tool it references show up
-/// together — registering `/loop` without the cron tools would
-/// give the model a broken reference.
-///
 /// TS interpolations baked into loop.md as literals:
 /// - `${CRON_CREATE_TOOL_NAME}` → `CronCreate`
 /// - `${CRON_DELETE_TOOL_NAME}` → `CronDelete`
 /// - `${DEFAULT_INTERVAL}` → `10m`
 /// - `${DEFAULT_MAX_AGE_DAYS}` → `30`
 pub fn register_loop_skill() {
-    if !is_kairos_cron_enabled() {
-        return;
-    }
     register_skill_full(
         "loop",
-        "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo, defaults to 10m)",
+        "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.",
         LOOP_PROMPT,
         Some("Input"),
         Some(LOOP_USAGE),
+    );
+}
+
+pub fn register_schedule_skill() {
+    let user_timezone = chrono::Local::now().format("%Z").to_string();
+    let inputs = claude_core::schedule_remote_agents_prompt::ScheduleRemoteAgentsInputs {
+        user_timezone: &user_timezone,
+        connectors_info: claude_core::schedule_remote_agents_prompt::SCHEDULE_NO_CONNECTORS_MESSAGE,
+        git_repo_url: None,
+        environments_info: "- No remote environments have been loaded yet.",
+        created_environment_note: "",
+        setup_notes: "",
+        needs_github_access_reminder: false,
+        user_args: "",
+        cobalt_lantern_enabled: false,
+    };
+    register_skill_full(
+        "schedule",
+        "Create, update, list, or run scheduled remote agents (routines) on a cron schedule or once at a specific time. - When the user wants to schedule a recurring or one-time remote agent (\"run this every Monday\", \"open a cleanup PR for X in 2 weeks\"), or to manage existing routines. ALSO OFFER PROACTIVELY: after you finish work that has a natural future follow-up, end your reply with a one-line offer to schedule a background agent to do it. Strong signals: a feature flag / gate / experiment / staged rollout was just shipped (offer a one-time agent in ~2 weeks to open a cleanup PR or evaluate results), a new alert/monitor was created (offer a recurring agent to triage it), a TODO/migration with a \"remove once X\" condition was left behind (offer a one-time agent to do the removal). Skip the offer for refactors, bug fixes, and anything that is done once it ships. Name a concrete action and cadence (\"in 2 weeks\", \"every Monday\") and only offer when the run just succeeded — do not pitch a schedule for something that has not happened yet.",
+        &claude_core::schedule_remote_agents_prompt::schedule_remote_agents_prompt(&inputs),
+        None,
+        None,
+    );
+}
+
+pub fn register_claude_api_skill() {
+    register_skill_full(
+        "claude-api",
+        "Build, debug, and optimize Claude API / Anthropic SDK apps. Apps built with this skill should include prompt caching. Also handles migrating existing Claude API code between Claude model versions (4.5 → 4.6, 4.6 → 4.7, retired-model replacements).\nTRIGGER when: code imports `anthropic`/`@anthropic-ai/sdk`; user asks for the Claude API, Anthropic SDK, or Managed Agents; user adds/modifies/tunes a Claude feature (caching, thinking, compaction, tool use, batch, files, citations, memory) or model (Opus/Sonnet/Haiku) in a file; questions about prompt caching / cache hit rate in an Anthropic SDK project.\nSKIP: file imports `openai`/other-provider SDK, filename like `*-openai.py`/`*-generic.py`, provider-neutral code, general programming/ML.",
+        &claude_core::claude_api_skill_prompt::apply_language_to_reading_guide("unknown"),
+        None,
+        None,
+    );
+}
+
+pub fn register_init_skill() {
+    register_skill_full(
+        "init",
+        "Initialize a new CLAUDE.md file with codebase documentation",
+        claude_core::commands::builtin::NEW_INIT_PROMPT,
+        None,
+        None,
+    );
+}
+
+pub fn register_review_skill() {
+    register_skill_full(
+        "review",
+        "Review a pull request",
+        "Review the current branch or requested pull request. Inspect the diff, relevant project instructions, and surrounding context. Report only concrete findings with file and line references, ordered by severity.",
+        None,
+        None,
+    );
+}
+
+pub fn register_security_review_skill() {
+    register_skill_full(
+        "security-review",
+        "Complete a security review of the pending changes on the current branch",
+        "Conduct a focused security review of the pending changes on the current branch. Gather git status, diff, changed files, and commits, then report only high-confidence security vulnerabilities with exploit scenario and fix.",
+        None,
+        None,
     );
 }
 

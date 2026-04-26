@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 pub struct CommandPickerEntry {
     pub name: String,
     pub description: String,
+    pub display_name: Option<String>,
 }
 
 /// State for the slash-command picker overlay.
@@ -103,21 +104,24 @@ impl CommandPicker {
                 if q.is_empty() {
                     true
                 } else {
-                    // Match by command name starting with query (like TS)
-                    // Then fuzzy match name contains, then description contains
+                    // Match by command name starting with query (like TS).
                     e.name.to_lowercase().starts_with(&q)
                 }
             })
             .map(|(i, _)| i)
             .collect();
 
-        // If no prefix matches, fall back to substring match on name only
+        // If no prefix matches, fall back to substring match on name,
+        // then description. This keeps discovery useful for terms like
+        // "session", "cost", or "mcp" even when the command name differs.
         if self.filtered.is_empty() && !q.is_empty() {
             self.filtered = self
                 .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| e.name.to_lowercase().contains(&q))
+                .filter(|(_, e)| {
+                    e.name.to_lowercase().contains(&q) || e.description.to_lowercase().contains(&q)
+                })
                 .map(|(i, _)| i)
                 .collect();
         }
@@ -138,11 +142,23 @@ impl Default for CommandPicker {
 /// Stateless widget that renders a `CommandPicker`.
 pub struct CommandPickerWidget<'a> {
     picker: &'a CommandPicker,
+    title: &'a str,
+    prefix: &'a str,
 }
 
 impl<'a> CommandPickerWidget<'a> {
     pub fn new(picker: &'a CommandPicker) -> Self {
-        Self { picker }
+        Self {
+            picker,
+            title: "Commands",
+            prefix: "/",
+        }
+    }
+
+    pub fn titled(mut self, title: &'a str, prefix: &'a str) -> Self {
+        self.title = title;
+        self.prefix = prefix;
+        self
     }
 }
 
@@ -156,13 +172,22 @@ impl<'a> Widget for CommandPickerWidget<'a> {
         Clear.render(area, buf);
 
         let block = Block::default()
-            .title(" Commands ")
+            .title(format!(" {} ", self.title))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(area);
         block.render(area, buf);
 
         let max_visible = inner.height as usize;
+
+        if self.picker.filtered.is_empty() {
+            let line = Line::from(Span::styled(
+                "No matching commands",
+                Style::default().fg(Color::DarkGray),
+            ));
+            buf.set_line(inner.x, inner.y, &line, inner.width);
+            return;
+        }
 
         // Scroll so the selected item is always visible
         let scroll_offset = if self.picker.selected >= max_visible {
@@ -180,6 +205,7 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
         for (row, &entry_idx) in visible_entries.enumerate() {
             let entry = &self.picker.entries[entry_idx];
+            let display_name = entry.display_name.as_deref().unwrap_or(&entry.name);
             let is_selected = (row + scroll_offset) == self.picker.selected;
 
             let style = if is_selected {
@@ -193,7 +219,7 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
             let line = Line::from(vec![
                 Span::styled(
-                    format!("/{}", entry.name),
+                    format!("{}{}", self.prefix, display_name),
                     style.add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -208,5 +234,54 @@ impl<'a> Widget for CommandPickerWidget<'a> {
 
             buf.set_line(inner.x, inner.y + row as u16, &line, inner.width);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    fn picker_with_entries() -> CommandPicker {
+        let mut picker = CommandPicker::new();
+        picker.open(vec![
+            CommandPickerEntry {
+                name: "doctor".into(),
+                description: "Run environment health checks".into(),
+                display_name: None,
+            },
+            CommandPickerEntry {
+                name: "export".into(),
+                description: "Export session to file".into(),
+                display_name: None,
+            },
+        ]);
+        picker
+    }
+
+    #[test]
+    fn filters_by_description_when_name_does_not_match() {
+        let mut picker = picker_with_entries();
+        picker.set_query("session");
+
+        assert_eq!(picker.filtered_count(), 1);
+        assert_eq!(picker.selected_name(), Some("export"));
+    }
+
+    #[test]
+    fn renders_empty_state_for_no_matches() {
+        let mut picker = picker_with_entries();
+        picker.set_query("zzzz");
+
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+        CommandPickerWidget::new(&picker).render(area, &mut buf);
+
+        let rendered = buf
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("No matching commands"));
     }
 }

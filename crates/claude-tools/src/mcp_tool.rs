@@ -62,6 +62,10 @@ impl ToolExecutor for McpTool {
         self.input_schema.clone()
     }
 
+    fn description(&self) -> String {
+        self.description.clone()
+    }
+
     async fn call(
         &self,
         input: &Value,
@@ -127,6 +131,9 @@ pub async fn register_mcp_tools(
     let mgr = manager.read().await;
     let tool_defs = mgr.tool_definitions().await;
     drop(mgr);
+
+    let mut tool_defs = tool_defs;
+    tool_defs.sort_by(|a, b| a.name.cmp(&b.name));
 
     for tool_info in tool_defs {
         let input_schema = tool_info

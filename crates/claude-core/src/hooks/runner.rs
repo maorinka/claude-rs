@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures_util::future::join_all;
+use std::collections::HashSet;
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
@@ -24,6 +25,54 @@ const SESSION_END_HOOK_TIMEOUT_MS_DEFAULT: u64 = 1500;
 /// Default timeout for HTTP hooks: 30 seconds.
 const DEFAULT_HTTP_HOOK_TIMEOUT_MS: u64 = 30 * 1000;
 
+#[derive(Clone, Debug, Default)]
+struct HttpHookPolicy {
+    allowed_urls: Option<Vec<String>>,
+    allowed_env_vars: Option<Vec<String>>,
+}
+
+impl HttpHookPolicy {
+    fn from_settings_value(settings: &serde_json::Value) -> Self {
+        Self {
+            allowed_urls: settings
+                .get("allowedHttpHookUrls")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            allowed_env_vars: settings
+                .get("httpHookAllowedEnvVars")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        }
+    }
+
+    fn allows_url(&self, url: &str) -> bool {
+        match &self.allowed_urls {
+            None => true,
+            Some(patterns) => patterns
+                .iter()
+                .any(|pattern| url_matches_pattern(url, pattern)),
+        }
+    }
+
+    fn allowed_env_vars_for_hook<'a>(&'a self, hook: &'a HttpHook) -> HashSet<&'a str> {
+        let hook_allowed: HashSet<&str> = hook
+            .allowed_env_vars
+            .as_ref()
+            .map(|vars| vars.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+
+        match &self.allowed_env_vars {
+            None => hook_allowed,
+            Some(policy_allowed) => {
+                let policy_allowed: HashSet<&str> =
+                    policy_allowed.iter().map(String::as_str).collect();
+                hook_allowed
+                    .into_iter()
+                    .filter(|var| policy_allowed.contains(var))
+                    .collect()
+            }
+        }
+    }
+}
+
 // ============================================================================
 // HookRunner — the main entry point
 // ============================================================================
@@ -34,6 +83,7 @@ const DEFAULT_HTTP_HOOK_TIMEOUT_MS: u64 = 30 * 1000;
 /// for various events with proper matching, execution, and aggregation.
 pub struct HookRunner {
     settings: HooksSettings,
+    http_policy: HttpHookPolicy,
     /// The current working directory for hook execution.
     cwd: String,
     /// Session ID.
@@ -52,6 +102,7 @@ impl HookRunner {
     ) -> Self {
         Self {
             settings,
+            http_policy: HttpHookPolicy::default(),
             cwd,
             session_id,
             transcript_path,
@@ -72,7 +123,14 @@ impl HookRunner {
             .get("hooks")
             .and_then(|h| serde_json::from_value::<HooksSettings>(h.clone()).ok())
             .unwrap_or_default();
-        Self::new(hooks_settings, cwd, session_id, transcript_path)
+        let http_policy = HttpHookPolicy::from_settings_value(settings_value);
+        Self {
+            settings: hooks_settings,
+            http_policy,
+            cwd,
+            session_id,
+            transcript_path,
+        }
     }
 
     /// Update the current working directory (e.g., on CwdChanged).
@@ -181,19 +239,28 @@ impl HookRunner {
 
         // Run all hooks in parallel
         let batch_start = Instant::now();
-        let hook_futures =
-            matching
-                .into_iter()
-                .map(|matched| {
-                    let json_input = json_input.clone();
-                    let hook_name = hook_name.clone();
-                    let cwd = self.cwd.clone();
-                    let event = event.clone();
-                    async move {
-                        exec_hook(&matched, &event, &hook_name, &json_input, &cwd, timeout).await
-                    }
-                })
-                .collect::<Vec<_>>();
+        let hook_futures = matching
+            .into_iter()
+            .map(|matched| {
+                let json_input = json_input.clone();
+                let hook_name = hook_name.clone();
+                let cwd = self.cwd.clone();
+                let event = event.clone();
+                let http_policy = self.http_policy.clone();
+                async move {
+                    exec_hook(
+                        &matched,
+                        &event,
+                        &hook_name,
+                        &json_input,
+                        &cwd,
+                        timeout,
+                        &http_policy,
+                    )
+                    .await
+                }
+            })
+            .collect::<Vec<_>>();
 
         let results: Vec<HookResult> = join_all(hook_futures).await;
         let duration = batch_start.elapsed();
@@ -255,9 +322,18 @@ impl HookRunner {
                 let cwd = self.cwd.clone();
                 let event = event.clone();
                 let command_display = matched.hook.display_text();
+                let http_policy = self.http_policy.clone();
                 async move {
-                    let result =
-                        exec_hook(&matched, &event, &hook_name, &json_input, &cwd, timeout).await;
+                    let result = exec_hook(
+                        &matched,
+                        &event,
+                        &hook_name,
+                        &json_input,
+                        &cwd,
+                        timeout,
+                        &http_policy,
+                    )
+                    .await;
                     HookOutsideReplResult {
                         command: command_display,
                         succeeded: result.outcome == HookOutcome::Success,
@@ -290,6 +366,7 @@ async fn exec_hook(
     json_input: &str,
     cwd: &str,
     timeout_ms: u64,
+    http_policy: &HttpHookPolicy,
 ) -> HookResult {
     let start = Instant::now();
     let command_display = matched.hook.display_text();
@@ -309,7 +386,15 @@ async fn exec_hook(
             exec_prompt_hook(prompt, event, hook_name, json_input, effective_timeout_ms).await
         }
         HookCommand::Http(http) => {
-            exec_http_hook(http, event, hook_name, json_input, effective_timeout_ms).await
+            exec_http_hook(
+                http,
+                event,
+                hook_name,
+                json_input,
+                effective_timeout_ms,
+                http_policy,
+            )
+            .await
         }
         HookCommand::Agent(agent) => {
             exec_agent_hook(agent, event, hook_name, json_input, effective_timeout_ms).await
@@ -559,19 +644,78 @@ async fn exec_prompt_hook(
 
     // Substitute $ARGUMENTS in the prompt with the JSON input.
     let resolved_prompt = hook.prompt.replace("$ARGUMENTS", json_input);
+    let display = format!("prompt: {}", truncate(&hook.prompt, 60));
 
-    // In the full implementation this would call into the LLM query pipeline.
-    // For now, we return a non-blocking error indicating prompt hooks need
-    // the full query infrastructure.
-    Ok(HookResult {
-        outcome: HookOutcome::NonBlockingError,
-        stderr: format!(
-            "Prompt hook execution requires LLM query infrastructure. Prompt: {}",
-            truncate(&resolved_prompt, 200)
-        ),
-        command_display: format!("prompt: {}", truncate(&hook.prompt, 60)),
-        ..Default::default()
-    })
+    // Compose the LLM call: the system prompt is the verbatim TS one
+    // from `execPromptHook.ts:64-69`; the user message is the resolved
+    // hook prompt. Returns NonBlockingError when no secondary model is
+    // registered (matches TS's "best-effort" semantics for hooks).
+    let Some(model) = crate::secondary_model::get_global() else {
+        return Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: "Prompt hook execution requires a secondary model — none registered."
+                .to_string(),
+            command_display: display,
+            ..Default::default()
+        });
+    };
+
+    let composed = format!(
+        "{system}\n\n{user}",
+        system = crate::system_prompt_extensions::PROMPT_HOOK_EVALUATION_SYSTEM_PROMPT,
+        user = resolved_prompt,
+    );
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let response = match model.summarize(&composed, cancel).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Ok(HookResult {
+                outcome: HookOutcome::NonBlockingError,
+                stderr: format!("Prompt hook LLM call failed: {e}"),
+                command_display: display,
+                ..Default::default()
+            });
+        }
+    };
+
+    // Parse the JSON response. TS expects exactly one of:
+    //   { "ok": true }
+    //   { "ok": false, "reason": "<why>" }
+    let trimmed = response.trim();
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(v) => {
+            let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+            if ok {
+                Ok(HookResult {
+                    outcome: HookOutcome::Success,
+                    command_display: display,
+                    ..Default::default()
+                })
+            } else {
+                let reason = v
+                    .get("reason")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("(no reason provided)")
+                    .to_string();
+                Ok(HookResult {
+                    outcome: HookOutcome::Blocking,
+                    stderr: reason,
+                    command_display: display,
+                    ..Default::default()
+                })
+            }
+        }
+        Err(e) => Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: format!(
+                "Prompt hook returned non-JSON: {e}; response (truncated): {}",
+                truncate(trimmed, 200)
+            ),
+            command_display: display,
+            ..Default::default()
+        }),
+    }
 }
 
 // ============================================================================
@@ -589,10 +733,22 @@ async fn exec_http_hook(
     hook_name: &str,
     json_input: &str,
     timeout_ms: u64,
+    http_policy: &HttpHookPolicy,
 ) -> Result<HookResult> {
     use super::ssrf::ssrf_check;
 
     debug!("Executing HTTP hook for {}: {}", hook_name, hook.url);
+
+    if !http_policy.allows_url(&hook.url) {
+        return Ok(HookResult {
+            outcome: HookOutcome::NonBlockingError,
+            stderr: format!(
+                "HTTP hook blocked by allowedHttpHookUrls policy: {}",
+                hook.url
+            ),
+            ..Default::default()
+        });
+    }
 
     // ── SSRF guard ────────────────────────────────────────────────────────────
     // Resolve the hostname and reject private/link-local ranges before making
@@ -628,11 +784,7 @@ async fn exec_http_hook(
 
     // Interpolate headers with env vars and apply CRLF sanitization.
     if let Some(ref headers) = hook.headers {
-        let allowed_vars: std::collections::HashSet<&str> = hook
-            .allowed_env_vars
-            .as_ref()
-            .map(|v| v.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
+        let allowed_vars = http_policy.allowed_env_vars_for_hook(hook);
 
         for (key, value_template) in headers {
             let resolved = interpolate_env_vars(value_template, &allowed_vars);
@@ -865,6 +1017,10 @@ fn process_hook_json_output(
         result.system_message = Some(sys_msg.clone());
     }
 
+    if let Some(ref additional_context) = json.additional_context {
+        result.additional_context = Some(additional_context.clone());
+    }
+
     // Handle reason as permission decision reason (when a permission behavior is set)
     if result.permission_behavior.is_some() {
         if let Some(ref reason) = json.reason {
@@ -1037,6 +1193,25 @@ fn sanitize_header_value(value: &str) -> String {
         .chars()
         .filter(|&c| c != '\r' && c != '\n' && c != '\0')
         .collect()
+}
+
+/// Match a URL against an allowlist pattern where `*` means any sequence.
+fn url_matches_pattern(url: &str, pattern: &str) -> bool {
+    let mut regex_pattern = String::from("^");
+    for ch in pattern.chars() {
+        match ch {
+            '*' => regex_pattern.push_str(".*"),
+            '.' | '+' | '?' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\' => {
+                regex_pattern.push('\\');
+                regex_pattern.push(ch);
+            }
+            _ => regex_pattern.push(ch),
+        }
+    }
+    regex_pattern.push('$');
+    regex::Regex::new(&regex_pattern)
+        .map(|regex| regex.is_match(url))
+        .unwrap_or(false)
 }
 
 /// Interpolate environment variables in a header value string.
@@ -1259,6 +1434,45 @@ mod tests {
         let result = interpolate_env_vars("x-${TEST_HOOK_BRACED}-y", &allowed);
         assert_eq!(result, "x-val-y");
         std::env::remove_var("TEST_HOOK_BRACED");
+    }
+
+    #[test]
+    fn test_sanitize_header_value_strips_injection_chars() {
+        assert_eq!(sanitize_header_value("a\r\nb\0c"), "abc");
+    }
+
+    #[test]
+    fn test_url_matches_pattern() {
+        assert!(url_matches_pattern(
+            "https://hooks.example.com/claude/a",
+            "https://hooks.example.com/claude/*"
+        ));
+        assert!(!url_matches_pattern(
+            "https://evil.example.com/claude/a",
+            "https://hooks.example.com/claude/*"
+        ));
+    }
+
+    #[test]
+    fn test_http_policy_intersects_env_var_allowlists() {
+        let policy = HttpHookPolicy {
+            allowed_urls: Some(vec!["https://hooks.example.com/*".to_string()]),
+            allowed_env_vars: Some(vec!["TOKEN".to_string()]),
+        };
+        let hook = HttpHook {
+            url: "https://hooks.example.com/a".to_string(),
+            headers: None,
+            allowed_env_vars: Some(vec!["TOKEN".to_string(), "SECRET".to_string()]),
+            timeout: None,
+            if_condition: None,
+            status_message: None,
+            once: None,
+        };
+
+        assert!(policy.allows_url(&hook.url));
+        let allowed = policy.allowed_env_vars_for_hook(&hook);
+        assert!(allowed.contains("TOKEN"));
+        assert!(!allowed.contains("SECRET"));
     }
 
     #[test]

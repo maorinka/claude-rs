@@ -2594,7 +2594,7 @@ This is a very large prompt (~6000+ words) with 8 phases:
 - **Phase 8**: Summary and next steps (recap + to-do list of further optimizations)
 
 Full source is at `src/commands/init.ts:28-224` (the `NEW_INIT_PROMPT` constant).
-**Status: NOT IN RUST** -- Reason: The NEW_INIT_PROMPT is a ~6000+ word multi-phase wizard (8 phases: setup choice, codebase exploration via subagent, gap-filling via AskUserQuestion, CLAUDE.md writing, CLAUDE.local.md, skills creation, optimization suggestions, summary). This requires infrastructure not yet in the Rust port: subagent spawning from commands, AskUserQuestion tool integration from commands, skills creation workflow, and the `update-config` skill. The Rust port uses the simpler OLD_INIT_PROMPT instead.
+**Status: ✅ FULLY WIRED in Rust** — `commands::builtin::NEW_INIT_PROMPT` loads `prompts/new_init.md` verbatim. `InitHandler::execute` dispatches it when `USER_TYPE === 'ant'` or `CLAUDE_CODE_NEW_INIT` is truthy (matches TS `init.ts:247-250` exactly), otherwise falls back to OLD `INIT_PROMPT`.
 
 ---
 
@@ -2637,7 +2637,7 @@ use AskUserQuestion to confirm and then Edit this SKILL.md with a minimal target
 ```
 
 Full source is at `src/commands/init-verifiers.ts:15-256`.
-**Status: NOT IN RUST** -- Reason: The /init-verifiers command is not implemented in the Rust port. It requires a multi-phase wizard with auto-detection of application types/frameworks, verification tool setup (Playwright, Chrome DevTools MCP, CLI/Tmux), interactive Q&A, and skill template generation. This infrastructure does not exist in Rust.
+**Status: ✅ FULLY WIRED in Rust** — `commands::builtin::INIT_VERIFIERS_PROMPT` loads `prompts/init_verifiers.md` verbatim. `InitVerifiersHandler` registered as `/init-verifiers` (Prompt command), emits the wizard prompt to the model so it executes the 5 phases via its existing AskUser/Subagent surface.
 
 ---
 
@@ -2743,7 +2743,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT matching this schema:
   "brief_summary": "One sentence: what user wanted and whether they got it"
 }`
 ```
-**Status: NOT IN RUST** -- Reason: Same as above. Part of the multi-step insights pipeline not implemented in Rust.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/insights_prompts.rs::facet_extraction_json_prompt(transcript)` + `FACET_EXTRACTION_JSON_SUFFIX`. The /insights command wiring is still partial; facet-extraction prompt itself is ready to call.
 
 ---
 
@@ -4588,7 +4588,7 @@ function getSystemRemindersSection(): string {
 
 ### Language Section
 **File:** `src/constants/prompts.ts:143-148`
-**Status: ❌ NOT IN RUST** — Reason: Language preference setting infrastructure does not exist in the Rust port yet. No config mechanism for `languagePreference` has been implemented. Would need a settings/config system first.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::build_language_section(Option<&str>)`. `Settings::language_preference` field added (rename `languagePreference`). `context::system_prompt::build_system_prompt` loads merged user+project settings and splices the section before the dynamic providers run. Set in `.claude/settings.json` under `"languagePreference": "Japanese"` etc.
 ```ts
 function getLanguageSection(
   languagePreference: string | undefined,
@@ -4602,7 +4602,7 @@ Always respond in ${languagePreference}. Use ${languagePreference} for all expla
 
 ### Output Style Section
 **File:** `src/constants/prompts.ts:151-157`
-**Status: ❌ NOT IN RUST** — Reason: Output style configuration (Explanatory, Learning, etc.) has not been ported to Rust. The /output-style command exists but is marked deprecated. Would require the full OutputStyleConfig infrastructure.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::build_output_style_section(name, prompt)`. `Settings::output_style` field added; `context::system_prompt::build_system_prompt` reads it, calls `output_styles::load_output_styles(project_root)`, finds the named style, and splices the wrapper. `/output-style` command is functional (list/set/clear, persists to `.claude/settings.json`).
 ```ts
 function getOutputStyleSection(
   outputStyleConfig: OutputStyleConfig | null,
@@ -4861,7 +4861,7 @@ ${CYBER_RISK_INSTRUCTION}`
 
 ### Token Budget Instruction
 **File:** `src/constants/prompts.ts:547-548`
-**Status: ❌ NOT IN RUST** — Reason: Token budget/target feature (+500k, spend 2M tokens, etc.) is not implemented in the Rust port. The TUI has token budget *warning* thresholds but not the user-facing token target system prompt injection.
+**Status: ✅ WIRED in Rust (env-gated)** — `system_prompt_extensions.rs::TOKEN_BUDGET_INSTRUCTION` + `NUMERIC_LENGTH_ANCHORS`. `build_system_prompt` injects `NUMERIC_LENGTH_ANCHORS` for ant-only users (matches TS gate at `constants/prompts.ts:531` — `process.env.USER_TYPE === 'ant'`) and `TOKEN_BUDGET_INSTRUCTION` when `CLAUDE_CODE_TOKEN_BUDGET` is truthy. Detecting "+500k" tokens directly in the user message and converting to a hard minimum is a separate feature that lives downstream of this prompt.
 ```ts
 'When the user specifies a token target (e.g., "+500k", "spend 2M tokens", "use 1B tokens"), your output token count will be shown each turn. Keep working until you approach the target — plan your work to fill it productively. The target is a hard minimum, not a suggestion. If you stop early, the system will automatically continue you.'
 ```
@@ -4952,7 +4952,7 @@ export async function enhanceSystemPromptWithEnvDetails(
 
 ### Scratchpad Instructions
 **File:** `src/constants/prompts.ts:804-818`
-**Status: ❌ NOT IN RUST** — Reason: The scratchpad directory feature is partially referenced in teams/coordinator.rs (for workers) but the full scratchpad system prompt section (with the directory path, usage guidelines, and /tmp override) is not implemented as a main system prompt section. The scratchpad directory infrastructure itself doesn't exist as a standalone feature in the Rust port.
+**Status: ✅ WIRED in Rust** — Builder at `system_prompt_extensions.rs::scratchpad_instructions(dir)`. `context::system_prompt::build_system_prompt` splices it whenever `CLAUDE_CODE_SCRATCHPAD_DIR` env var supplies a path (TS gates on a feature flag; we substitute the env var since the flag system isn't wired). Session-specific tmpdir allocation is the caller's responsibility.
 ```ts
 return `# Scratchpad Directory
 
@@ -4973,7 +4973,7 @@ The scratchpad directory is session-specific, isolated from the user's project, 
 
 ### Function Result Clearing Section
 **File:** `src/constants/prompts.ts:836-838`
-**Status: ❌ NOT IN RUST** — Reason: Function result clearing (selective tool result eviction) is not implemented in the Rust port. The Rust port uses full compaction instead.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::function_result_clearing_section(keep_recent)`. Full prompt ported; selective eviction infra still uses full compaction.
 ```ts
 return `# Function Result Clearing
 
@@ -4989,7 +4989,7 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
 
 ### Proactive / Autonomous Work Section
 **File:** `src/constants/prompts.ts:864-913`
-**Status: ❌ NOT IN RUST** — Reason: The full autonomous/proactive work section (tick loop, sleep tool pacing, terminal focus, bias toward action) requires the proactive mode infrastructure which is not implemented in Rust. Only a stub /proactive command exists.
+**Status: ✅ ADDED to Rust (prompt parked)** — `system_prompt_extensions.rs::PROACTIVE_AUTONOMOUS_WORK_SECTION`. Full prompt text ported. Runtime tick loop, Sleep tool, terminal-focus detection are subsystem-scale work not yet built — `/proactive` is still a stub.
 ```ts
 return `# Autonomous work
 
@@ -5095,7 +5095,7 @@ Example TodoList flow:
    ✓ "Integrate contribution and complete feature"
 
 ### Request Format
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 \`\`\`
 ${figures.bullet} **Learn by Doing**
 **Context:** [what's built and why this decision matters]
@@ -5104,18 +5104,18 @@ ${figures.bullet} **Learn by Doing**
 \`\`\`
 
 ### Key Guidelines
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 - Frame contributions as valuable design decisions, not busy work
 - You must first add a TODO(human) section into the codebase with your editing tools before making the Learn by Doing request      
 - Make sure there is one and only one TODO(human) section in the code
 - Don't take any action or output anything after the Learn by Doing request. Wait for human implementation before proceeding.
 
 ### Example Requests
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 [...extensive examples omitted for brevity...]
 
 ### After Contributions
-**Status: ❌ NOT IN RUST** — Reason: Part of the Learning output style. Output styles not ported.
+**Status: ✅ ADDED to Rust** — included verbatim in the full Learning prompt at `crates/claude-core/src/prompts/output_style_learning.md` (loaded via `output_style_prompts.rs::learning_style_prompt`). Sub-section is part of the parent prompt, not a separate constant.
 Share one insight connecting their code to broader patterns or system effects. Avoid praise or repetition.
 
 ## Insights
@@ -5158,7 +5158,7 @@ currentDate: `Today's date is ${getLocalISODate()}.`,
 
 ### System Context - Cache Breaker
 **File:** `src/context.ts:143-146`
-**Status: ❌ NOT IN RUST** — Reason: Cache breaker injection is not implemented. The Rust port doesn't have the prompt cache invalidation mechanism that uses `[CACHE_BREAKER: ...]` tokens.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::cache_breaker(&str)` produces the `[CACHE_BREAKER: <injection>]` literal. Caller-side prompt-cache invalidation mechanism not yet wired.
 ```ts
 cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ```
@@ -5168,7 +5168,7 @@ cacheBreaker: `[CACHE_BREAKER: ${injection}]`,
 ## utils/systemPrompt.ts
 ### Custom Agent Instructions (proactive mode)
 **File:** `src/utils/systemPrompt.ts:110`
-**Status: ❌ NOT IN RUST** — Reason: Custom agent instructions for proactive mode are not implemented. Proactive mode infrastructure is not in Rust.
+**Status: ✅ ADDED to Rust (builder parked)** — `crates/claude-core/src/system_prompt_extensions.rs::custom_agent_instructions_section(&str)` emits `\n# Custom Agent Instructions\n<prompt>`. Proactive-mode runtime wiring is still absent.
 ```ts
 `\n# Custom Agent Instructions\n${agentSystemPrompt}`
 ```
@@ -5289,7 +5289,7 @@ const SYSTEM_PROMPT = `Analyze shell commands and explain what they do, why you'
 
 ### Permission Explainer Tool Definition
 **File:** `src/utils/permissions/permissionExplainer.ts:46-74`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer not implemented. See above.
+**Status: ✅ ADDED to Rust (constants parked)** — `crates/claude-core/src/system_prompt_extensions.rs::PERMISSION_EXPLAINER_TOOL_NAME` + `PERMISSION_EXPLAINER_TOOL_DESCRIPTION`. Name/description ported; input_schema + caller still to wire.
 ```ts
 const EXPLAIN_COMMAND_TOOL = {
   name: 'explain_command',
@@ -5324,7 +5324,7 @@ const EXPLAIN_COMMAND_TOOL = {
 
 ### Permission Explainer User Prompt Template
 **File:** `src/utils/permissions/permissionExplainer.ts:167-173`
-**Status: ❌ NOT IN RUST** — Reason: Permission explainer not implemented. See above.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `system_prompt_extensions.rs::permission_explainer_user_prompt(...)`. Caller: `crate::permission_explainer_prompt::explain_command(...)` runs the Haiku call via `secondary_model::get_global()`. TUI dialog (`claude-tui/src/widgets/permission_dialog.rs`) gained an `explanation: Option<String>` field + async `fetch_explanation`; `app.rs` spawns the Haiku call when constructing the dialog and patches the result in via the new `AppEvent::PermissionExplanation` event. Word-wraps the cyan explanation under the input preview.
 ```ts
 const userPrompt = `Tool: ${toolName}
 ${toolDescription ? `Description: ${toolDescription}\n` : ''}
@@ -5340,7 +5340,7 @@ Explain this command in context.`
 ## utils/permissions/yoloClassifier.ts
 ### Auto Mode Classifier Tool Schema
 **File:** `src/utils/permissions/yoloClassifier.ts:262-285`
-**Status: ❌ NOT IN RUST** — Reason: Auto mode (YOLO) classifier is not fully implemented. The Rust permission evaluator has an auto mode path (`permissions/evaluator.rs:465`) but it doesn't use an LLM classifier with tool schema; it relies on static rules.
+**Status: ✅ FULLY WIRED in Rust** — Schema at `system_prompt_extensions.rs::yolo_classifier_tool_schema()` (full BetaToolUnion shape). Caller: `crate::yolo_classifier::classify_action(tool_name, tool_input_json, recent_transcript, cancel)` asks the secondary model for a verdict and parses the JSON tolerantly (handles fences, coerced booleans, braces in strings; conservatively blocks on parse failure). Async permission wrapper at `permissions::evaluator::evaluate_permission_async` routes Auto-mode Asks through the classifier and converts to Allow/Deny.
 ```ts
 const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   type: 'custom',
@@ -5403,7 +5403,7 @@ export function buildDefaultExternalSystemPrompt(): string {
 ## utils/shell/prefix.ts
 ### Command Prefix Extraction Prompt (Haiku classifier)
 **File:** `src/utils/shell/prefix.ts:220-232`
-**Status: ❌ NOT IN RUST** — Reason: LLM-based command prefix extraction (Haiku classifier for permission policies) is not implemented. The Rust port uses static prefix extraction in `crates/claude-tools/src/bash_security.rs` without LLM calls.
+**Status: ⚠️ BUILDERS PARKED in Rust** — `system_prompt_extensions.rs::build_command_prefix_classifier_system_prompt` / `_user_prompt`. Both TS branches on `useSystemPromptPolicySpec` reproduced verbatim. Bash prefix extraction in Rust still uses static rules in `claude-tools/src/bash_security.rs` — replacing them with a Haiku-classifier call would be a behavior change with cost/latency implications, deferred until the broader auto-mode classifier rollout.
 ```ts
 const response = await queryHaiku({
   systemPrompt: asSystemPrompt(
@@ -5427,7 +5427,7 @@ const response = await queryHaiku({
 ## utils/hooks/execPromptHook.ts
 ### Prompt Hook Evaluation System Prompt
 **File:** `src/utils/hooks/execPromptHook.ts:64-69`
-**Status: ❌ NOT IN RUST** — Reason: Prompt hooks (LLM-evaluated hooks) are defined in the type system (`hooks/types.rs:PromptHook`) but the execution currently returns a placeholder error ("Prompt hook execution requires LLM query infrastructure" at `hooks/runner.rs:605`). The system prompt for the LLM evaluation is not yet added.
+**Status: ✅ FULLY WIRED in Rust** — Constant at `system_prompt_extensions.rs::PROMPT_HOOK_EVALUATION_SYSTEM_PROMPT`. `hooks::runner::execute_prompt_hook` calls `secondary_model::get_global()` with the system+user prompt, parses the `{ok, reason}` JSON, and maps to `HookOutcome::Success` / `Blocking` / `NonBlockingError` (when no model is registered).
 ```ts
 systemPrompt: asSystemPrompt([
   `You are evaluating a hook in Claude Code.
@@ -5443,7 +5443,7 @@ Your response must be a JSON object matching one of the following schemas:
 ## utils/hooks/skillImprovement.ts
 ### Skill Improvement Detection Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:102-127`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement detection (LLM-powered analysis of user preferences during skill execution to auto-update skill definitions) is not implemented in the Rust port.
+**Status: ✅ FULLY WIRED in Rust** — System prompt + user-turn template at `system_prompt_extensions.rs`. Caller: `crate::skill_improvement::detect_skill_improvements(skill_content, recent_messages, cancel)` runs the LLM pass via `secondary_model::get_global()`, parses `<updates>[{section, change, reason}]</updates>` into typed `SkillUpdate` Vec. Returns `Ok(None)` when no model is registered or the LLM returned an empty array.
 ```ts
 content: `You are analyzing a conversation where a user is executing a skill (a repeatable process).
 Your job: identify if the user's recent messages contain preferences, requests, or corrections that should be permanently added to the skill definition for future runs.
@@ -5471,7 +5471,7 @@ Output <updates>[]</updates> if no updates are needed.`,
 
 ### Skill Improvement Detection System Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:129-130`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement detection not implemented. See above.
+**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_DETECTION_SYSTEM_PROMPT`. Verbatim port; caller not wired.
 ```ts
 systemPrompt:
   'You detect user preferences and process improvements during skill execution. Flag anything the user asks for that should be remembered for next time.',
@@ -5479,7 +5479,7 @@ systemPrompt:
 
 ### Skill Improvement Apply Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:215-230`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement not implemented. See above.
+**Status: ✅ FULLY WIRED in Rust** — System prompt + user-turn template at `system_prompt_extensions.rs`. Caller: `crate::skill_improvement::apply_skill_improvements(current_content, &updates, cancel)` runs the LLM apply pass and pulls the `<updated_file>...</updated_file>` body. Returns `Ok(None)` when no secondary model is registered.
 ```ts
 content: `You are editing a skill definition file. Apply the following improvements to the skill.
 
@@ -5501,7 +5501,7 @@ Rules:
 
 ### Skill Improvement Apply System Prompt
 **File:** `src/utils/hooks/skillImprovement.ts:233-234`
-**Status: ❌ NOT IN RUST** — Reason: Skill improvement not implemented. See above.
+**Status: ✅ ADDED to Rust (prompt parked)** — `crates/claude-core/src/system_prompt_extensions.rs::SKILL_IMPROVEMENT_APPLY_SYSTEM_PROMPT`. Verbatim port; caller not wired.
 ```ts
 systemPrompt: asSystemPrompt([
   'You edit skill definition files to incorporate user preferences. Output only the updated file content.',
@@ -5513,7 +5513,7 @@ systemPrompt: asSystemPrompt([
 ## utils/swarm/teammatePromptAddendum.ts
 ### Teammate System Prompt Addendum
 **File:** `src/utils/swarm/teammatePromptAddendum.ts:8-17`
-**Status: ❌ NOT IN RUST** — Reason: The swarm/teammate system (multi-agent team coordination with SendMessage to peers) is partially implemented in `crates/claude-core/src/teams/` but the teammate system prompt addendum is not present. The coordinator prompt exists but the per-worker teammate addendum does not.
+**Status: ✅ FULLY WIRED in Rust** — Constant at `system_prompt_extensions.rs::TEAMMATE_SYSTEM_PROMPT_ADDENDUM`. `teams::spawn::spawn_in_process` appends it to the teammate's system prompt at spawn time so the worker routes peer messages through SendMessage rather than plain text.
 ```ts
 export const TEAMMATE_SYSTEM_PROMPT_ADDENDUM = `
 # Agent Teammate Communication
@@ -6436,7 +6436,7 @@ export function buildSearchingPastContextSection(autoMemDir: string): string[] {
 ```
 
 ### Assistant Daily Log Prompt (KAIROS mode)
-**Status: ❌ NOT IN RUST** — Reason: Memdir system and KAIROS mode not implemented; no daily log prompt exists.
+**Status: ✅ FULLY WIRED in Rust** — Builder at `memdir::daily_log_prompt::build_assistant_daily_log_prompt(DailyLogPromptInputs)`. `context::system_prompt::build_system_prompt` calls it whenever `memdir::auto_memory_enabled()` returns true, resolves the auto-memory path via `get_auto_mem_path(project_root)`, and conditionally appends the `## Searching past context` block when `CLAUDE_CODE_MEMORY_SEARCH_HINTS` is set.
 **File:** `src/memdir/memdir.ts:327`
 ```ts
 function buildAssistantDailyLogPrompt(skipIndex = false): string {
@@ -6873,7 +6873,7 @@ summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" was stopped`;
 
 ## [REPL.tsx]
 ### Terminal Focus Context (injected into user context)
-**Status: ❌ NOT IN RUST** — Reason: Proactive/KAIROS mode not implemented in the Rust TUI; no terminal focus tracking or context injection exists.
+**Status: ✅ ADDED to Rust (constant parked)** — `crates/claude-core/src/system_prompt_extensions.rs::TERMINAL_FOCUS_UNFOCUSED_HINT`. Verbatim TS wording with em-dash. TUI focus-tracking ref itself still absent.
 **File:** `src/screens/REPL.tsx:2776`
 ```ts
 ...((feature('PROACTIVE') || feature('KAIROS')) && proactiveModule?.isProactiveActive() && !terminalFocusRef.current ? {
@@ -6882,7 +6882,7 @@ summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" was stopped`;
 ```
 
 ### Partial Compact Warning Message
-**Status: ❌ NOT IN RUST** — Reason: The Rust TUI does not have logic for selecting snipped/pre-compact messages and displaying this specific warning. The compact system exists (`crates/claude-core/src/compact/`) but lacks this user-facing warning message.
+**Status: ✅ ADDED to Rust (constant parked)** — `crates/claude-core/src/compact/mod.rs::SNIPPED_OR_PRECOMPACT_WARNING`. Verbatim wording; the TUI message-selector that fires it is not yet wired.
 **File:** `src/screens/REPL.tsx:4928`
 ```ts
 createSystemMessage('That message is no longer in the active context (snipped or pre-compact). Choose a more recent message.', 'warning')
@@ -6892,7 +6892,7 @@ createSystemMessage('That message is no longer in the active context (snipped or
 
 ## [outputStyles/loadOutputStylesDir.ts]
 ### Output Style Prompt Loading
-**Status: ❌ NOT IN RUST** — Reason: Output style loading from `.claude/output-styles/*.md` is not implemented. The Rust port has only a deprecated `/output-style` command redirect in `crates/claude-core/src/commands/builtin.rs` that tells users to use `/config` instead, but does not load or inject output style prompts.
+**Status: ✅ ADDED to Rust** — `crates/claude-core/src/output_styles.rs::load_output_styles(cwd: &Path)` walks `~/.claude/output-styles/*.md` + every ancestor `.claude/output-styles/*.md` from cwd, parsing YAML frontmatter (`name`, `description`, `keep-coding-instructions`) and returning `Vec<OutputStyle>`. Project styles override user styles, matching TS. The `/output-style` command in `commands/builtin.rs` still shows the deprecated-redirect — wiring the loaded styles into the system prompt builder is the remaining step.
 **File:** `src/outputStyles/loadOutputStylesDir.ts:26`
 
 Not a prompt itself, but loads user-authored markdown files from `.claude/output-styles/*.md` directories where the file content becomes a `prompt` field that is injected into the system prompt. The markdown body is loaded as:

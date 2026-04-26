@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,6 +15,14 @@ pub struct Cli {
     /// Initial prompt (non-interactive mode)
     pub prompt: Option<String>,
 
+    /// Print response and exit (TS-compatible alias for non-interactive mode)
+    #[arg(short = 'p', long = "print")]
+    pub print: bool,
+
+    /// Output format for non-interactive mode
+    #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
+    pub output_format: OutputFormat,
+
     /// Model to use
     #[arg(short, long)]
     pub model: Option<String>,
@@ -26,6 +35,14 @@ pub struct Cli {
     #[arg(long)]
     pub dangerously_skip_permissions: bool,
 
+    /// Permission mode to use for the session
+    #[arg(long = "permission-mode")]
+    pub permission_mode: Option<String>,
+
+    /// Specify available tools ("default", "", or comma/space-separated tool names)
+    #[arg(long = "tools", num_args = 1.., value_delimiter = ',')]
+    pub tools: Vec<String>,
+
     /// Working directory
     #[arg(short = 'C', long = "cd")]
     pub working_dir: Option<PathBuf>,
@@ -33,6 +50,14 @@ pub struct Cli {
     /// Resume session by ID
     #[arg(long)]
     pub resume: Option<String>,
+
+    /// Use a specific session ID
+    #[arg(long = "session-id")]
+    pub session_id: Option<String>,
+
+    /// Disable session persistence (accepted for TS CLI parity; non-interactive Rust mode does not persist sessions)
+    #[arg(long = "no-session-persistence")]
+    pub no_session_persistence: bool,
 
     /// Max conversation turns (non-interactive)
     #[arg(long)]
@@ -44,6 +69,13 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<SubCommand>,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    StreamJson,
 }
 
 #[derive(clap::Subcommand)]
@@ -72,12 +104,18 @@ pub enum SubCommand {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Connect your local environment for remote-control sessions via claude.ai/code
+    #[command(alias = "rc", aliases = ["remote", "sync", "bridge"])]
+    RemoteControl {
+        /// Optional session name
+        name: Option<String>,
+    },
 }
 
 /// Resolve short model names to full API model IDs.
 fn normalize_model_name(name: &str) -> String {
     match name {
-        "opus" => "claude-opus-4-6".into(),
+        "opus" => "claude-opus-4-7".into(),
         "sonnet" => "claude-sonnet-4-6".into(),
         "haiku" => "claude-haiku-4-5".into(),
         other => other.into(),
@@ -101,14 +139,666 @@ fn resolve_max_output_tokens(
     claude_core::api::client::get_max_output_tokens_for_model(model)
 }
 
+fn is_env_defined_falsy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(false)
+}
+
+fn normalize_name_for_mcp(name: &str) -> String {
+    let mut normalized: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if name.starts_with("claude.ai ") {
+        let mut collapsed = String::with_capacity(normalized.len());
+        let mut previous_underscore = false;
+        for ch in normalized.chars() {
+            if ch == '_' {
+                if !previous_underscore {
+                    collapsed.push(ch);
+                }
+                previous_underscore = true;
+            } else {
+                collapsed.push(ch);
+                previous_underscore = false;
+            }
+        }
+        normalized = collapsed.trim_matches('_').to_string();
+    }
+
+    normalized
+}
+
+fn mcp_server_signature(config: &claude_core::mcp::types::ScopedMcpServerConfig) -> Option<String> {
+    use claude_core::mcp::types::McpServerConfig;
+
+    match &config.config {
+        McpServerConfig::Stdio(stdio) => {
+            let mut command = Vec::with_capacity(1 + stdio.args.len());
+            command.push(stdio.command.clone());
+            command.extend(stdio.args.clone());
+            serde_json::to_string(&command)
+                .ok()
+                .map(|value| format!("stdio:{}", value))
+        }
+        McpServerConfig::Sse(sse) | McpServerConfig::SseIde(sse) => {
+            Some(format!("url:{}", unwrap_ccr_proxy_url(&sse.url)))
+        }
+        McpServerConfig::Http(http) => Some(format!("url:{}", unwrap_ccr_proxy_url(&http.url))),
+        McpServerConfig::Ws(ws) | McpServerConfig::WsIde(ws) => {
+            Some(format!("url:{}", unwrap_ccr_proxy_url(&ws.url)))
+        }
+    }
+}
+
+fn unwrap_ccr_proxy_url(url: &str) -> String {
+    const MARKERS: [&str; 2] = ["/v2/session_ingress/shttp/mcp/", "/v2/ccr-sessions/"];
+    if !MARKERS.iter().any(|marker| url.contains(marker)) {
+        return url.to_string();
+    }
+
+    let Some((_, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == "mcp_url" {
+            return value.replace("%3A", ":").replace("%2F", "/");
+        }
+    }
+    url.to_string()
+}
+
+fn split_tool_args(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split_whitespace())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn filter_registry_by_cli_tools(registry: &mut claude_tools::ToolRegistry, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+
+    let requested = split_tool_args(values);
+    if requested.iter().any(|value| value == "default") {
+        return;
+    }
+
+    if requested.is_empty() {
+        for name in registry
+            .all()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>()
+        {
+            registry.remove(&name);
+        }
+        return;
+    }
+
+    let keep = requested
+        .into_iter()
+        .filter_map(|name| registry.get(&name).map(|tool| tool.name().to_string()))
+        .collect::<std::collections::HashSet<_>>();
+
+    for name in registry
+        .all()
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>()
+    {
+        if !keep.contains(&name) {
+            registry.remove(&name);
+        }
+    }
+}
+
+fn merge_json_objects(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) else {
+        *base = overlay;
+        return;
+    };
+    for (key, value) in overlay_obj {
+        match (base_obj.get_mut(key), value) {
+            (Some(existing), serde_json::Value::Object(_)) if existing.is_object() => {
+                merge_json_objects(existing, value.clone());
+            }
+            _ => {
+                base_obj.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value {
+    let mut merged = serde_json::json!({});
+    let mut paths = Vec::new();
+    if let Ok(claude_dir) = claude_core::config::paths::claude_dir() {
+        paths.push(claude_dir.join("settings.json"));
+        paths.push(claude_dir.join("settings.local.json"));
+    }
+    paths.push(project_root.join(".claude").join("settings.json"));
+    paths.push(project_root.join(".claude").join("settings.local.json"));
+
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        merge_json_objects(&mut merged, value);
+    }
+    merged
+}
+
+fn sort_skills_for_prompt_parity(skills: &mut [claude_core::plugins::types::Skill]) {
+    const BUILTIN_PREFIX: &[&str] = &[
+        "update-config",
+        "keybindings-help",
+        "simplify",
+        "fewer-permission-prompts",
+        "loop",
+        "schedule",
+        "claude-api",
+        "code-review-remediation",
+    ];
+    const HOOKIFY_COMMANDS: &[&str] = &[
+        "hookify:help",
+        "hookify:list",
+        "hookify:configure",
+        "hookify:hookify",
+    ];
+    const DEPRECATED_SUPERPOWER_COMMANDS: &[&str] = &[
+        "superpowers:execute-plan",
+        "superpowers:write-plan",
+        "superpowers:brainstorm",
+    ];
+    const MIDDLE_STABLE: &[&str] = &[
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "hookify:writing-rules",
+    ];
+    const BUILTIN_SUFFIX: &[&str] = &["init", "review", "security-review"];
+
+    let original_positions: std::collections::HashMap<String, usize> = skills
+        .iter()
+        .enumerate()
+        .map(|(index, skill)| (skill.name.clone(), index))
+        .collect();
+
+    let key = |name: &str| {
+        let original = *original_positions.get(name).unwrap_or(&usize::MAX);
+        if let Some(index) = BUILTIN_PREFIX.iter().position(|skill| *skill == name) {
+            return (0usize, index);
+        }
+        if HOOKIFY_COMMANDS.contains(&name) {
+            return (1usize, original);
+        }
+        if let Some(index) = DEPRECATED_SUPERPOWER_COMMANDS
+            .iter()
+            .position(|skill| *skill == name)
+        {
+            return (2usize, index);
+        }
+        if let Some(index) = MIDDLE_STABLE.iter().position(|skill| *skill == name) {
+            return (3usize, index);
+        }
+        if let Some(index) = ts_skill_order(name) {
+            return (4usize, index);
+        }
+        if let Some(index) = BUILTIN_SUFFIX.iter().position(|skill| *skill == name) {
+            return (6usize, index);
+        }
+        (5usize, original)
+    };
+
+    skills.sort_by(|a, b| {
+        key(&a.name)
+            .cmp(&key(&b.name))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn hugging_face_mcp_instruction() -> String {
+    let username = claude_core::config::global::load_global_config()
+        .ok()
+        .and_then(|config| config.oauth_account)
+        .map(|account| account.email_address)
+        .and_then(|email| email.split('@').next().map(|local| local.to_string()))
+        .map(|local| {
+            let mut chars = local.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut out = first.to_uppercase().collect::<String>();
+                    out.push_str(chars.as_str());
+                    out
+                }
+                None => local,
+            }
+        });
+
+    let mut instruction = "## claude.ai Hugging Face\nYou have tools for using the Hugging Face Hub. arXiv paper id's are often used as references between datasets, models and papers. There are over 100 tags in use, common tags include 'Text Generation', 'Transformers', 'Image Classification' and so on.".to_string();
+    if let Some(username) = username {
+        instruction.push_str(&format!(
+            "\nHugging Face tools are being used by authenticated user '{username}'"
+        ));
+    }
+    instruction
+}
+
+fn enabled_plugin_roots(settings: &serde_json::Value) -> Vec<(String, String, std::path::PathBuf)> {
+    let Some(enabled) = settings.get("enabledPlugins").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let Ok(claude_dir) = claude_core::config::paths::claude_dir() else {
+        return Vec::new();
+    };
+
+    let mut roots = Vec::new();
+    for (plugin_id, value) in enabled {
+        if value.as_bool() != Some(true) {
+            continue;
+        }
+        let Some((name, source)) = plugin_id.split_once('@') else {
+            continue;
+        };
+        let cache_root = claude_dir
+            .join("plugins")
+            .join("cache")
+            .join(source)
+            .join(name);
+        let Ok(entries) = std::fs::read_dir(cache_root) else {
+            continue;
+        };
+        let mut versions: Vec<_> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        versions.sort();
+        if let Some(root) = versions.pop() {
+            roots.push((name.to_string(), source.to_string(), root));
+        }
+    }
+    roots.sort_by(|a, b| a.0.cmp(&b.0));
+    roots
+}
+
+fn replace_plugin_root(value: &mut serde_json::Value, root: &std::path::Path) {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = text.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string());
+            if cfg!(unix) && text.contains(".cmd") && !text.trim_start().starts_with("bash ") {
+                *text = format!("bash {}", text);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                replace_plugin_root(item, root);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                replace_plugin_root(item, root);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value) {
+    for (_, _, root) in enabled_plugin_roots(settings) {
+        let hooks_path = root.join("hooks").join("hooks.json");
+        let Ok(text) = std::fs::read_to_string(hooks_path) else {
+            continue;
+        };
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        replace_plugin_root(&mut value, &root);
+        merge_json_objects(settings, value);
+    }
+}
+
+fn load_enabled_plugin_mcp_servers(
+    settings: &serde_json::Value,
+) -> std::collections::HashMap<String, claude_core::config::settings::McpServerSettingsEntry> {
+    let mut servers = std::collections::HashMap::new();
+    for (plugin_name, _, root) in enabled_plugin_roots(settings) {
+        let mcp_path = root.join(".mcp.json");
+        let Ok(text) = std::fs::read_to_string(mcp_path) else {
+            continue;
+        };
+        let Ok(entries) = serde_json::from_str::<
+            std::collections::HashMap<
+                String,
+                claude_core::config::settings::McpServerSettingsEntry,
+            >,
+        >(&text) else {
+            continue;
+        };
+        for (server_name, entry) in entries {
+            servers.insert(format!("plugin:{}:{}", plugin_name, server_name), entry);
+        }
+    }
+    servers
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeAiMcpServersResponse {
+    data: Vec<ClaudeAiMcpServer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeAiMcpServer {
+    #[serde(rename = "id")]
+    _id: String,
+    display_name: String,
+    url: String,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeAiMcpDiscovery {
+    configs: std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TsToolContract {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    input_schema: Option<serde_json::Value>,
+}
+
+async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
+    use claude_core::mcp::types::{
+        ConfigScope, McpHttpServerConfig, McpServerConfig, ScopedMcpServerConfig,
+    };
+
+    if is_env_defined_falsy("ENABLE_CLAUDEAI_MCP_SERVERS") {
+        tracing::debug!("[claudeai-mcp] disabled by ENABLE_CLAUDEAI_MCP_SERVERS");
+        return ClaudeAiMcpDiscovery::default();
+    }
+
+    let Ok(Some(tokens)) = claude_core::auth::storage::load_tokens().await else {
+        tracing::debug!("[claudeai-mcp] no Claude.ai OAuth token");
+        return ClaudeAiMcpDiscovery::default();
+    };
+    if tokens.access_token.is_empty() {
+        tracing::debug!("[claudeai-mcp] empty Claude.ai OAuth token");
+        return ClaudeAiMcpDiscovery::default();
+    }
+    if !tokens
+        .scopes
+        .iter()
+        .any(|scope| scope == "user:mcp_servers")
+    {
+        tracing::debug!(
+            scopes = ?tokens.scopes,
+            "[claudeai-mcp] missing user:mcp_servers scope"
+        );
+        return ClaudeAiMcpDiscovery::default();
+    }
+
+    let url =
+        claude_core::auth::login::proxy_url("https://api.anthropic.com/v1/mcp_servers?limit=1000");
+    let response = claude_core::auth::login::debug_http_client()
+        .get(url)
+        .header("Authorization", format!("Bearer {}", tokens.access_token))
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "mcp-servers-2025-12-04")
+        .header("anthropic-version", "2023-06-01")
+        .timeout(std::time::Duration::from_millis(5_000))
+        .send()
+        .await;
+
+    let Ok(response) = response else {
+        tracing::debug!("[claudeai-mcp] fetch failed");
+        return ClaudeAiMcpDiscovery::default();
+    };
+    let Ok(payload) = response.json::<ClaudeAiMcpServersResponse>().await else {
+        tracing::debug!("[claudeai-mcp] failed to decode response");
+        return ClaudeAiMcpDiscovery::default();
+    };
+
+    let mut discovery = ClaudeAiMcpDiscovery::default();
+    let mut used_normalized_names = std::collections::HashSet::new();
+    for server in payload.data {
+        let base_name = format!("claude.ai {}", server.display_name);
+        let mut final_name = base_name.clone();
+        let mut final_normalized = normalize_name_for_mcp(&final_name);
+        let mut count = 1;
+        while used_normalized_names.contains(&final_normalized) {
+            count += 1;
+            final_name = format!("{} ({})", base_name, count);
+            final_normalized = normalize_name_for_mcp(&final_name);
+        }
+        used_normalized_names.insert(final_normalized);
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", tokens.access_token),
+        );
+        discovery.configs.insert(
+            final_name,
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Http(McpHttpServerConfig {
+                    url: server.url,
+                    headers: Some(headers),
+                }),
+                scope: ConfigScope::ClaudeAi,
+            },
+        );
+    }
+
+    tracing::debug!(
+        count = discovery.configs.len(),
+        "[claudeai-mcp] fetched servers"
+    );
+    discovery
+}
+
+fn mcp_contract_shadow_tools(
+    server_names: impl IntoIterator<Item = String>,
+) -> Vec<claude_core::mcp::manager::McpToolInfo> {
+    let Ok(contracts) = serde_json::from_str::<Vec<TsToolContract>>(include_str!(
+        "../../claude-tools/src/ts_tool_contracts_2_1_119.json"
+    )) else {
+        return Vec::new();
+    };
+
+    let server_by_normalized = server_names
+        .into_iter()
+        .map(|name| (normalize_name_for_mcp(&name), name))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    contracts
+        .into_iter()
+        .filter_map(|contract| {
+            let tool_name = contract.name.clone();
+            let rest = tool_name.strip_prefix("mcp__")?;
+            let (normalized_server, original_name) = rest.split_once("__")?;
+            let server_name = server_by_normalized.get(normalized_server)?;
+            Some(claude_core::mcp::manager::McpToolInfo {
+                name: contract.name,
+                original_name: original_name.to_string(),
+                server_name: server_name.clone(),
+                description: Some(contract.description),
+                input_schema: contract.input_schema,
+            })
+        })
+        .collect()
+}
+
+fn dedup_claude_ai_mcp_servers(
+    claude_ai_servers: std::collections::HashMap<
+        String,
+        claude_core::mcp::types::ScopedMcpServerConfig,
+    >,
+    manual_servers: &std::collections::HashMap<
+        String,
+        claude_core::mcp::types::ScopedMcpServerConfig,
+    >,
+) -> std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig> {
+    let manual_sigs = manual_servers
+        .iter()
+        .filter_map(|(name, config)| mcp_server_signature(config).map(|sig| (sig, name.clone())))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    claude_ai_servers
+        .into_iter()
+        .filter_map(|(name, config)| {
+            if let Some(sig) = mcp_server_signature(&config) {
+                if let Some(duplicate_of) = manual_sigs.get(&sig) {
+                    tracing::debug!(
+                        server = %name,
+                        duplicate_of = %duplicate_of,
+                        "suppressing duplicate claude.ai MCP connector"
+                    );
+                    return None;
+                }
+            }
+            Some((name, config))
+        })
+        .collect()
+}
+
+fn ts_skill_order(name: &str) -> Option<usize> {
+    const ORDER: &[&str] = &[
+        "superpowers:execute-plan",
+        "superpowers:write-plan",
+        "superpowers:brainstorm",
+        "superpowers:receiving-code-review",
+        "superpowers:finishing-a-development-branch",
+        "superpowers:code-review-remediation",
+        "superpowers:requesting-code-review",
+        "superpowers:subagent-driven-development",
+        "superpowers:test-driven-development",
+        "superpowers:writing-plans",
+        "superpowers:brainstorming",
+        "superpowers:systematic-debugging",
+        "superpowers:using-git-worktrees",
+        "superpowers:verification-before-completion",
+        "superpowers:executing-plans",
+        "superpowers:dispatching-parallel-agents",
+        "superpowers:writing-skills",
+        "superpowers:using-superpowers",
+    ];
+    ORDER.iter().position(|known| *known == name)
+}
+
+fn emit_stream_json(value: serde_json::Value) {
+    println!(
+        "{}",
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+    );
+}
+
+fn stream_event_to_json(ev: &claude_core::types::events::StreamEvent) -> serde_json::Value {
+    use claude_core::types::events::{StreamEvent, ToolProgressData};
+    use serde_json::json;
+
+    match ev {
+        StreamEvent::RequestStart { request_id } => {
+            json!({"type": "request_start", "request_id": request_id})
+        }
+        StreamEvent::AssistantMessage(message) => {
+            json!({"type": "assistant_message", "message": format!("{:?}", message)})
+        }
+        StreamEvent::ToolStart {
+            tool_use_id,
+            name,
+            input,
+        } => json!({
+            "type": "tool_start",
+            "tool_use_id": tool_use_id,
+            "name": name,
+            "input": input,
+        }),
+        StreamEvent::ToolProgress {
+            tool_use_id,
+            progress,
+        } => {
+            let progress = match progress {
+                ToolProgressData::BashProgress { stdout, stderr } => {
+                    json!({"kind": "bash", "stdout": stdout, "stderr": stderr})
+                }
+                ToolProgressData::ReadProgress { bytes_read } => {
+                    json!({"kind": "read", "bytes_read": bytes_read})
+                }
+                ToolProgressData::WebSearchProgress { results_found } => {
+                    json!({"kind": "web_search", "results_found": results_found})
+                }
+            };
+            json!({"type": "tool_progress", "tool_use_id": tool_use_id, "progress": progress})
+        }
+        StreamEvent::ToolResult {
+            tool_use_id,
+            result,
+        } => json!({
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "result": result.data,
+            "is_error": result.is_error,
+        }),
+        StreamEvent::ThinkingDelta { text } => json!({"type": "thinking_delta", "text": text}),
+        StreamEvent::TextDelta { text } => json!({"type": "text_delta", "text": text}),
+        StreamEvent::Compacted { summary } => json!({"type": "compacted", "summary": summary}),
+        StreamEvent::UsageUpdate(usage) => json!({
+            "type": "usage",
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+            "cache_read_input_tokens": usage.cache_read_input_tokens,
+        }),
+        StreamEvent::Done { stop_reason } => {
+            json!({"type": "done", "stop_reason": format!("{:?}", stop_reason)})
+        }
+        StreamEvent::Error(error) => json!({"type": "error", "error": format!("{:?}", error)}),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let mut prompt_arg = cli.prompt.clone();
+    if cli.print && prompt_arg.is_none() {
+        use std::io::Read;
+        let mut stdin = String::new();
+        std::io::stdin().read_to_string(&mut stdin)?;
+        let stdin = stdin.trim_end().to_string();
+        if !stdin.is_empty() {
+            prompt_arg = Some(stdin);
+        }
+    }
 
     // Set working directory if specified
     if let Some(dir) = &cli.working_dir {
         std::env::set_current_dir(dir)?;
     }
+    let is_interactive_session = prompt_arg.is_none();
 
     // Initialize tracing
     tracing_subscriber::fmt()
@@ -170,6 +860,22 @@ async fn main() -> Result<()> {
             server.start().await?;
             return Ok(());
         }
+        Some(SubCommand::RemoteControl { name }) => {
+            let name_suffix = name
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|value| format!(" for `{value}`"))
+                .unwrap_or_default();
+            eprintln!(
+                "Remote Control{name_suffix} is not fully ported in claude-rs yet.\n\n\
+                 The original TS path starts a Claude.ai bridge runtime here: \
+                 entitlement/policy checks, environment registration, session creation, \
+                 session-ingress WebSocket forwarding, and inbound prompt queueing.\n\n\
+                 Current Rust support is limited to the local IDE bridge server via \
+                 `claude-rs server --port <N>` and the in-TUI `/remote-control` status command."
+            );
+            std::process::exit(1);
+        }
         None => {}
     }
 
@@ -215,9 +921,15 @@ async fn main() -> Result<()> {
         Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
         Err(_) => claude_core::config::settings::Settings::default(),
     };
+    let mut raw_settings = load_raw_settings_value(&project_root);
+    merge_enabled_plugin_hooks(&mut raw_settings);
 
     // Build tool registry
-    let mut tools = claude_tools::build_default_registry();
+    let mut tools =
+        claude_tools::build_default_registry_with_options(claude_tools::RegistryOptions {
+            is_non_interactive_session: prompt_arg.is_some(),
+        });
+    filter_registry_by_cli_tools(&mut tools, &cli.tools);
 
     // Register bundled skills (simplify, stuck, remember, …).
     // Each skill's registrar applies its own TS-parity gate
@@ -230,57 +942,127 @@ async fn main() -> Result<()> {
     // --- MCP server wiring ---
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
-    if !settings.mcp_servers.is_empty() {
+    let mut mcp_server_settings = settings.mcp_servers.clone();
+    mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&raw_settings));
+    let mut configs = std::collections::HashMap::new();
+    let mut plugin_mcp_server_names = Vec::new();
+    for (name, entry) in &mcp_server_settings {
+        let env = if entry.env.is_empty() {
+            None
+        } else {
+            Some(entry.env.clone())
+        };
+        let scoped = claude_core::mcp::types::ScopedMcpServerConfig {
+            config: claude_core::mcp::types::McpServerConfig::Stdio(
+                claude_core::mcp::types::McpStdioServerConfig {
+                    command: entry.command.clone(),
+                    args: entry.args.clone(),
+                    env,
+                },
+            ),
+            scope: claude_core::mcp::types::ConfigScope::User,
+        };
+        if name.starts_with("plugin:") {
+            plugin_mcp_server_names.push(name.clone());
+        }
+        configs.insert(name.clone(), scoped);
+    }
+    let claude_ai_discovery = fetch_claude_ai_mcp_configs_if_eligible().await;
+    let claude_ai_configs = dedup_claude_ai_mcp_servers(claude_ai_discovery.configs, &configs);
+    let claude_ai_server_names = claude_ai_configs.keys().cloned().collect::<Vec<_>>();
+    configs.extend(claude_ai_configs);
+    let mut claude_ai_shadow_tools = mcp_contract_shadow_tools(claude_ai_server_names);
+    claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(plugin_mcp_server_names));
+    if !configs.is_empty() {
         tracing::info!(
-            count = settings.mcp_servers.len(),
+            count = configs.len(),
             "Connecting to configured MCP servers"
         );
-        let mut configs = std::collections::HashMap::new();
-        for (name, entry) in &settings.mcp_servers {
-            let env = if entry.env.is_empty() {
-                None
-            } else {
-                Some(entry.env.clone())
-            };
-            let scoped = claude_core::mcp::types::ScopedMcpServerConfig {
-                config: claude_core::mcp::types::McpServerConfig::Stdio(
-                    claude_core::mcp::types::McpStdioServerConfig {
-                        command: entry.command.clone(),
-                        args: entry.args.clone(),
-                        env,
-                    },
-                ),
-                scope: claude_core::mcp::types::ConfigScope::User,
-            };
-            configs.insert(name.clone(), scoped);
-        }
-        let mgr = mcp_manager.read().await;
-        let connections = mgr.connect_all(configs).await;
-        drop(mgr);
 
-        // Report connection results
-        for conn in &connections {
-            match &conn.status {
-                claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
-                    tracing::info!(server = %conn.name, "MCP server connected");
+        if is_interactive_session {
+            let manager = mcp_manager.clone();
+            tokio::spawn(async move {
+                let mgr = manager.read().await;
+                let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+                drop(mgr);
+                for conn in &connections {
+                    match &conn.status {
+                        claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                            tracing::info!(server = %conn.name, "MCP server connected");
+                        }
+                        claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
+                            tracing::warn!(
+                                server = %conn.name,
+                                error = ?error,
+                                "MCP server failed to connect"
+                            );
+                        }
+                        _ => {}
+                    }
                 }
-                claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
-                    tracing::warn!(
-                        server = %conn.name,
-                        error = ?error,
-                        "MCP server failed to connect"
-                    );
+            });
+        } else {
+            let mgr = mcp_manager.read().await;
+            let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+            drop(mgr);
+
+            // Report connection results
+            for conn in &connections {
+                match &conn.status {
+                    claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                        tracing::info!(server = %conn.name, "MCP server connected");
+                    }
+                    claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
+                        tracing::warn!(
+                            server = %conn.name,
+                            error = ?error,
+                            "MCP server failed to connect"
+                        );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
-        // Register MCP tools into the tool registry
+        if !claude_ai_shadow_tools.is_empty() {
+            let mgr = mcp_manager.read().await;
+            mgr.add_tool_definitions(claude_ai_shadow_tools).await;
+        }
+
+        // Register immediately available MCP/shadow tools into the registry.
         claude_tools::register_mcp_tools(&mut tools, mcp_manager.clone()).await;
     }
+    filter_registry_by_cli_tools(&mut tools, &cli.tools);
+    claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
 
     // --- Skill discovery ---
-    let skills = claude_core::plugins::skill::discover_skills(&project_root);
+    let discovered_skills = claude_core::plugins::skill::discover_skills(&project_root);
+    let mut skills = Vec::new();
+    {
+        let mut seen = std::collections::HashSet::new();
+        for skill in claude_tools::skill_tool::list_skills() {
+            if !seen.insert(skill.name.clone()) {
+                continue;
+            }
+            skills.push(claude_core::plugins::types::Skill {
+                name: skill.name,
+                description: skill.description,
+                content: skill.content,
+                source: claude_core::plugins::types::SkillSource::Builtin,
+                argument_hint: None,
+                when_to_use: None,
+                allowed_tools: Vec::new(),
+                user_invocable: true,
+                disable_model_invocation: false,
+            });
+        }
+        for skill in discovered_skills {
+            if seen.insert(skill.name.clone()) {
+                skills.push(skill);
+            }
+        }
+    }
+    sort_skills_for_prompt_parity(&mut skills);
     if !skills.is_empty() {
         tracing::info!(count = skills.len(), "Discovered skills");
     }
@@ -337,7 +1119,10 @@ async fn main() -> Result<()> {
     };
     let api_config = claude_core::api::client::ApiConfig {
         max_tokens: resolve_max_output_tokens(&model, &settings),
-        session_id: claude_core::api::client::get_session_id().clone(),
+        session_id: cli
+            .session_id
+            .clone()
+            .unwrap_or_else(|| claude_core::api::client::get_session_id().clone()),
         account_uuid,
         model: model.clone(),
         ..Default::default()
@@ -351,6 +1136,7 @@ async fn main() -> Result<()> {
             auth.clone(),
             api_config.base_url.clone(),
             api_config.session_id.clone(),
+            model.clone(),
         ));
         claude_core::secondary_model::set_global(haiku);
     }
@@ -359,21 +1145,22 @@ async fn main() -> Result<()> {
     // user-configured hooks. We serialise the typed Settings to a JSON Value
     // so HookRunner::from_settings can pick the "hooks" subtree out of it.
     // If the user has no hooks configured the runner is a no-op.
-    {
+    let hook_runner = {
         let cwd = std::env::current_dir()
             .ok()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         let session_id = api_config.session_id.clone();
-        let settings_value = serde_json::to_value(settings).unwrap_or(serde_json::Value::Null);
+        let settings_value = raw_settings.clone();
         let runner = std::sync::Arc::new(claude_core::hooks::HookRunner::from_settings(
             &settings_value,
             cwd,
             session_id,
             String::new(),
         ));
-        claude_core::hooks::set_global_runner(runner);
-    }
+        claude_core::hooks::set_global_runner(runner.clone());
+        runner
+    };
 
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth);
 
@@ -390,7 +1177,6 @@ async fn main() -> Result<()> {
         tool_defs,
         cancel.clone(),
     );
-
     if let Some(max) = cli.max_turns {
         query_engine.set_max_turns(max);
     }
@@ -437,25 +1223,58 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Append skill descriptions to the system prompt so the model knows about them
-    if !skills.is_empty() {
-        let mut skills_text = String::from("\n# Available Skills\n\n");
-        skills_text.push_str("The following skills are available for use with the Skill tool:\n\n");
-        for skill in &skills {
-            skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
-            if let Some(ref hint) = skill.when_to_use {
-                skills_text.push_str(&format!(" (use when: {})", hint));
-            }
-            skills_text.push('\n');
+    if is_interactive_session {
+        let hook_runner = hook_runner.clone();
+        let resume = cli.resume.is_some();
+        tokio::spawn(async move {
+            let _ = hook_runner
+                .run_hooks(
+                    &claude_core::hooks::types::HookEvent::SessionStart,
+                    serde_json::json!({
+                        "source": if resume { "resume" } else { "startup" },
+                    }),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        });
+    } else {
+        let session_start = hook_runner
+            .run_hooks(
+                &claude_core::hooks::types::HookEvent::SessionStart,
+                serde_json::json!({
+                    "source": if cli.resume.is_some() { "resume" } else { "startup" },
+                }),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
+        for context in session_start.additional_contexts {
+            query_engine.append_user_context_block(format!(
+                "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
+                context
+            ));
         }
-        query_engine.append_system_prompt(skills_text);
     }
 
-    // Append MCP server instructions to the system prompt
+    // Add MCP server instructions as request-time user context, matching TS.
     {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
         let mut instructions_parts: Vec<String> = Vec::new();
+        let has_hugging_face_tools = tools.all().iter().any(|tool| {
+            let name = tool.name();
+            name.starts_with("mcp__claude_ai_Hugging_Face__")
+                && !name.ends_with("__authenticate")
+                && !name.ends_with("__complete_authentication")
+        });
+        if has_hugging_face_tools {
+            instructions_parts.push(hugging_face_mcp_instruction());
+        }
         for conn in &connections {
             if let claude_core::mcp::types::McpConnectionStatus::Connected {
                 instructions: Some(ref instr),
@@ -466,11 +1285,33 @@ async fn main() -> Result<()> {
             }
         }
         if !instructions_parts.is_empty() {
-            query_engine.append_system_prompt(format!(
-                "\n# MCP Server Instructions\n\n{}",
+            query_engine.append_user_context_block(format!(
+                "<system-reminder>\n# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n{}\n</system-reminder>",
                 instructions_parts.join("\n\n")
             ));
         }
+    }
+
+    // Add skill descriptions as request-time user context, matching TS.
+    if !skills.is_empty() {
+        let mut skills_text = String::from(
+            "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n",
+        );
+        for skill in &skills {
+            skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
+            if let Some(ref hint) = skill.when_to_use {
+                skills_text.push_str(&format!(" (use when: {})", hint));
+            }
+            skills_text.push('\n');
+        }
+        skills_text.push_str("</system-reminder>\n");
+        query_engine.append_user_context_block(skills_text);
+    }
+
+    if let Some(context) =
+        claude_core::context::system_prompt::build_project_user_context_block(&project_root)
+    {
+        query_engine.append_user_context_block(context);
     }
 
     // Append --append-system-prompt text (M2: was parsed but never applied)
@@ -484,6 +1325,8 @@ async fn main() -> Result<()> {
     // propagate the parent's permission mode.
     let permission_mode = if cli.dangerously_skip_permissions {
         claude_core::permissions::types::PermissionMode::BypassPermissions
+    } else if let Some(mode_str) = &cli.permission_mode {
+        claude_core::permissions::types::PermissionMode::from_string(mode_str)
     } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
         claude_core::permissions::types::PermissionMode::from_string(&mode_str)
     } else {
@@ -491,7 +1334,7 @@ async fn main() -> Result<()> {
     };
 
     // Handle non-interactive prompt mode
-    if let Some(prompt) = cli.prompt {
+    if let Some(prompt) = prompt_arg {
         // If using OAuth proxy, delegate to real claude binary
         use claude_core::permissions::evaluator::{evaluate_permission, SimpleToolPermissions};
         use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
@@ -528,27 +1371,48 @@ async fn main() -> Result<()> {
         query_engine.add_user_message(&effective_prompt);
 
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
+        let mut final_text = String::new();
         loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
+            let output_format = cli.output_format.clone();
 
             // Spawn a task to print streamed text to stdout
             let print_handle = tokio::spawn(async move {
+                let mut text = String::new();
                 while let Some(ev) = stream_rx.recv().await {
-                    match ev {
-                        StreamEvent::TextDelta { text } => {
-                            print!("{}", text);
+                    match &output_format {
+                        OutputFormat::Text => match ev {
+                            StreamEvent::TextDelta { text } => {
+                                print!("{}", text);
+                                use std::io::Write;
+                                let _ = std::io::stdout().flush();
+                            }
+                            StreamEvent::Done { .. } => {
+                                println!();
+                            }
+                            _ => {}
+                        },
+                        OutputFormat::Json => {
+                            if let StreamEvent::TextDelta { text: delta } = ev {
+                                text.push_str(&delta);
+                            }
                         }
-                        StreamEvent::Done { .. } => {
-                            println!();
+                        OutputFormat::StreamJson => {
+                            if let StreamEvent::TextDelta { text: delta } = &ev {
+                                text.push_str(delta);
+                            }
+                            emit_stream_json(stream_event_to_json(&ev));
                         }
-                        _ => {}
                     }
                 }
+                text
             });
 
             let result = query_engine.run_turn(&stream_tx).await?;
             drop(stream_tx);
-            let _ = print_handle.await;
+            if let Ok(text) = print_handle.await {
+                final_text.push_str(&text);
+            }
 
             match result {
                 TurnResult::Done(_) => {
@@ -651,11 +1515,32 @@ async fn main() -> Result<()> {
                             }
                         };
 
+                        if cli.output_format == OutputFormat::StreamJson {
+                            emit_stream_json(serde_json::json!({
+                                "type": "tool_result",
+                                "tool_use_id": tool_info.id,
+                                "name": tool_info.name,
+                                "result": result_text,
+                                "is_error": is_error,
+                            }));
+                        }
                         query_engine.add_tool_result(&tool_info.id, &result_text, is_error);
                     }
                     // Continue the loop to call run_turn again with the tool results
                 }
             }
+        }
+
+        if cli.output_format == OutputFormat::Json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": false,
+                    "result": final_text,
+                }))?
+            );
         }
 
         // Gracefully disconnect MCP servers

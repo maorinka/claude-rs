@@ -1,4 +1,5 @@
 use claude_tools::build_default_registry;
+use claude_tools::registry::ToolExecutor;
 
 #[test]
 fn test_agent_tool_schema_has_team_name() {
@@ -133,10 +134,7 @@ fn test_agent_tool_full_prompt_content() {
 
 #[test]
 fn test_team_create_tool_schema() {
-    let reg = build_default_registry();
-    let tool = reg
-        .get("TeamCreate")
-        .expect("TeamCreate should be registered");
+    let tool = claude_tools::team_tools::TeamCreateTool;
     let schema = tool.input_schema();
 
     assert_eq!(schema["type"], "object");
@@ -149,10 +147,7 @@ fn test_team_create_tool_schema() {
 
 #[test]
 fn test_team_delete_tool_schema() {
-    let reg = build_default_registry();
-    let tool = reg
-        .get("TeamDelete")
-        .expect("TeamDelete should be registered");
+    let tool = claude_tools::team_tools::TeamDeleteTool;
     let schema = tool.input_schema();
 
     assert_eq!(schema["type"], "object");

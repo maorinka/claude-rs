@@ -383,9 +383,12 @@ pub fn evaluate_permission(
     // Step 2: Mode-based overrides
     // ---------------------------------------------------------------
 
-    // 2a. BypassPermissions mode or plan mode with bypass available
+    // 2a. BypassPermissions mode or plan mode with active auto mode.
+    // Mirrors TS: plan mode bypasses only when auto mode is active, not merely
+    // when bypassPermissions mode is feature-available.
     let should_bypass = context.mode == PermissionMode::BypassPermissions
-        || (context.mode == PermissionMode::Plan && context.is_bypass_permissions_mode_available);
+        || (context.mode == PermissionMode::Plan
+            && context.is_auto_mode_available.unwrap_or(false));
 
     if should_bypass {
         let updated_input = get_updated_input_or_fallback(&tool_permission_result, input);
@@ -700,6 +703,77 @@ pub fn sync_permission_rules_from_disk(
     apply_permission_rules_to_context(context, rules)
 }
 
+/// Async variant of [`evaluate_permission`] that runs the YOLO classifier
+/// for `PermissionMode::Auto`. The synchronous evaluator returns Ask when
+/// it's in Auto mode and a classifier-approvable rule fires; this wrapper
+/// hands that Ask to [`crate::yolo_classifier::classify_action`] and
+/// converts the verdict to Allow/Deny when the classifier is registered.
+///
+/// Falls back to the sync result unchanged when:
+/// - the sync result is not Ask (no classifier needed)
+/// - the mode is not Auto
+/// - no secondary model is registered (classifier returns None)
+/// - the classifier itself errors (callers should treat the Ask as the
+///   safest fallback)
+pub async fn evaluate_permission_async<T: ToolPermissions>(
+    tool: &T,
+    input: &Value,
+    context: &ToolPermissionContext,
+    recent_transcript: &str,
+) -> PermissionDecision {
+    use crate::yolo_classifier::classify_action;
+    use tokio_util::sync::CancellationToken;
+
+    let sync = evaluate_permission(tool, input, context);
+    if context.mode != PermissionMode::Auto {
+        return sync;
+    }
+    let PermissionDecision::Ask(ref ask) = sync else {
+        return sync;
+    };
+    // Honor the safety-check immunity already enforced by the sync layer.
+    if let Some(PermissionDecisionReason::SafetyCheck {
+        classifier_approvable: false,
+        ..
+    }) = &ask.decision_reason
+    {
+        return sync;
+    }
+
+    let input_json = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+    let verdict = match classify_action(
+        tool.name(),
+        &input_json,
+        recent_transcript,
+        CancellationToken::new(),
+    )
+    .await
+    {
+        Ok(Some(v)) => v,
+        // No classifier registered or call failed → leave the Ask in place.
+        _ => return sync,
+    };
+
+    if verdict.should_block {
+        PermissionDecision::deny(
+            verdict.reason.clone(),
+            PermissionDecisionReason::AsyncAgent {
+                reason: format!("YOLO classifier blocked: {}", verdict.reason),
+            },
+        )
+    } else {
+        PermissionDecision::Allow(PermissionAllowDecision {
+            updated_input: None,
+            user_modified: None,
+            decision_reason: Some(PermissionDecisionReason::AsyncAgent {
+                reason: format!("YOLO classifier allowed: {}", verdict.reason),
+            }),
+            tool_use_id: None,
+            accept_feedback: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,6 +816,43 @@ mod tests {
 
     fn empty_ctx() -> ToolPermissionContext {
         ToolPermissionContext::default()
+    }
+
+    #[tokio::test]
+    async fn async_evaluator_falls_through_when_no_classifier_registered() {
+        // Auto mode + Ask sync verdict + no secondary model registered →
+        // returns the Ask unchanged (callers fall back to interactive
+        // approval). This guards against the wrapper accidentally
+        // erroring out in the no-LLM path.
+        let mut ctx = empty_ctx();
+        ctx.mode = PermissionMode::Auto;
+        let tool = TestTool::new("Read", true);
+        let decision = evaluate_permission_async(
+            &tool,
+            &serde_json::json!({}),
+            &ctx,
+            "user: hi\nassistant: hello",
+        )
+        .await;
+        assert!(
+            decision.is_ask(),
+            "expected Ask passthrough, got {:?}",
+            decision
+        );
+    }
+
+    #[tokio::test]
+    async fn async_evaluator_passes_through_non_auto_mode() {
+        // Default mode → wrapper is a thin proxy over the sync evaluator.
+        let ctx = empty_ctx();
+        let tool = TestTool::new("Read", true);
+        let sync_decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
+        let async_decision =
+            evaluate_permission_async(&tool, &serde_json::json!({}), &ctx, "").await;
+        assert_eq!(
+            std::mem::discriminant(&sync_decision),
+            std::mem::discriminant(&async_decision)
+        );
     }
 
     #[test]
@@ -834,10 +945,25 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_mode_with_bypass_allows() {
+    fn test_plan_mode_with_bypass_available_still_asks() {
         let mut ctx = empty_ctx();
         ctx.mode = PermissionMode::Plan;
         ctx.is_bypass_permissions_mode_available = true;
+        ctx.is_auto_mode_available = Some(false);
+        // Reset plan mode checker to not block
+        register_plan_mode_checker(|_, _| false);
+
+        let tool = TestTool::new("Bash", false);
+        let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
+        assert!(decision.is_ask());
+    }
+
+    #[test]
+    fn test_plan_mode_with_auto_mode_allows() {
+        let mut ctx = empty_ctx();
+        ctx.mode = PermissionMode::Plan;
+        ctx.is_bypass_permissions_mode_available = false;
+        ctx.is_auto_mode_available = Some(true);
         // Reset plan mode checker to not block
         register_plan_mode_checker(|_, _| false);
 

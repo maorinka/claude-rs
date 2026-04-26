@@ -3,6 +3,7 @@ use std::process::Command as ProcessCommand;
 use anyhow::Result;
 
 use super::registry::{Command, CommandContext, CommandHandler, CommandRegistry, CommandResult};
+use crate::config::settings::Settings;
 
 // ---------------------------------------------------------------------------
 // Action-type command handlers
@@ -921,6 +922,33 @@ Usage notes:
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 ```";
 
+/// Verbatim port of TS `NEW_INIT_PROMPT` (src/commands/init.ts:28-224).
+///
+/// The multi-phase init wizard text. The Rust port uses the simpler
+/// [`INIT_PROMPT`] (OLD_INIT_PROMPT) today because several subsystems
+/// this prompt depends on are not yet wired — subagent spawning from
+/// commands, AskUserQuestion integration from commands, skills
+/// creation flow, and the `update-config` skill reference. Parking
+/// the text verbatim keeps it identical to TS so the dispatch flip
+/// is a one-line change once those land.
+pub const NEW_INIT_PROMPT: &str = include_str!("../prompts/new_init.md");
+
+/// Verbatim port of TS `/init-verifiers` prompt
+/// (src/commands/init-verifiers.ts:15-256). The 5-phase verifier-skill
+/// creation wizard.
+pub const INIT_VERIFIERS_PROMPT: &str = include_str!("../prompts/init_verifiers.md");
+
+/// `/init-verifiers` — emits the 5-phase verifier-skill creation wizard
+/// prompt as a user-side message so the model executes it. Subagent
+/// spawning, AskUserQuestion, Playwright/MCP integration etc. are
+/// expected to be available to the model; we just ship the prompt.
+pub struct InitVerifiersHandler;
+impl CommandHandler for InitVerifiersHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Message(INIT_VERIFIERS_PROMPT.to_string()))
+    }
+}
+
 impl CommandHandler for InitHandler {
     fn execute(&self, _args: &str, ctx: &CommandContext) -> Result<CommandResult> {
         // Ensure .claude/ directory exists
@@ -935,8 +963,19 @@ impl CommandHandler for InitHandler {
             let _ = std::fs::write(&settings_file, "{}");
         }
 
-        // Return the init prompt so the model can analyze the codebase
-        Ok(CommandResult::Message(INIT_PROMPT.to_string()))
+        // Pick OLD vs NEW init prompt the same way TS does:
+        //   USER_TYPE === 'ant' OR CLAUDE_CODE_NEW_INIT truthy → NEW_INIT_PROMPT
+        //   otherwise → OLD INIT_PROMPT.
+        // (TS reference: src/commands/init.ts:247-250)
+        let prompt = if crate::user_type::is_ant()
+            || crate::errors_util::is_env_truthy("CLAUDE_CODE_NEW_INIT")
+        {
+            NEW_INIT_PROMPT
+        } else {
+            INIT_PROMPT
+        };
+
+        Ok(CommandResult::Message(prompt.to_string()))
     }
 }
 
@@ -2019,16 +2058,91 @@ impl CommandHandler for SandboxHandler {
     }
 }
 
-/// /output-style — Deprecated, redirects to /config
+/// /output-style — Set, clear, or list output styles. Reads styles from
+/// `~/.claude/output-styles/*.md` and `<project>/.claude/output-styles/*.md`
+/// via [`crate::output_styles::load_output_styles`], persists the selection
+/// to `<project>/.claude/settings.json` under the `outputStyle` key.
+///
+/// Args:
+/// - empty            → list available styles + show the current one
+/// - `<name>`         → set the active style
+/// - `clear` / `none` → unset the active style
 pub struct OutputStyleHandler;
 impl CommandHandler for OutputStyleHandler {
-    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
-        Ok(CommandResult::Action(
-            "/output-style has been deprecated. Use /config to change your output style, \
-             or set it in your settings file. Changes take effect on the next session."
-                .to_string(),
-        ))
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let styles = crate::output_styles::load_output_styles(&ctx.working_directory);
+        let settings_path = ctx.working_directory.join(".claude").join("settings.json");
+
+        let arg = args.trim();
+        if arg.is_empty() {
+            // List styles + show current
+            let mut s: Settings = if settings_path.exists() {
+                Settings::load_from_file(&settings_path)
+            } else {
+                Settings::default()
+            };
+            // Reload from disk so the displayed value reflects external edits.
+            s = if settings_path.exists() {
+                Settings::load_from_file(&settings_path)
+            } else {
+                s
+            };
+            let current = s.output_style.as_deref().unwrap_or("(none)");
+            let mut out = format!("Active output style: {current}\n\nAvailable styles:\n");
+            if styles.is_empty() {
+                out.push_str(
+                    "  (none — drop a markdown file in `.claude/output-styles/<name>.md`)\n",
+                );
+            } else {
+                for style in &styles {
+                    out.push_str(&format!("  - {} — {}\n", style.name, style.description));
+                }
+                out.push_str(
+                    "\nUsage: `/output-style <name>` to set, `/output-style clear` to unset.\n",
+                );
+            }
+            return Ok(CommandResult::Action(out));
+        }
+
+        if arg.eq_ignore_ascii_case("clear") || arg.eq_ignore_ascii_case("none") {
+            return persist_output_style(&settings_path, None)
+                .map(|_| CommandResult::Action("Output style cleared.".to_string()));
+        }
+
+        // Set: validate the name exists.
+        if !styles.iter().any(|s| s.name == arg) {
+            let names: Vec<&str> = styles.iter().map(|s| s.name.as_str()).collect();
+            let suggestion = if names.is_empty() {
+                "no styles installed".to_string()
+            } else {
+                format!("available: {}", names.join(", "))
+            };
+            return Ok(CommandResult::Action(format!(
+                "No output style named `{arg}` ({suggestion})"
+            )));
+        }
+        persist_output_style(&settings_path, Some(arg))
+            .map(|_| CommandResult::Action(format!("Output style set to `{arg}`.")))
     }
+}
+
+/// Read settings.json (or default), set/clear `outputStyle`, write back.
+/// Atomic-ish: writes to a tmp file then renames.
+fn persist_output_style(settings_path: &std::path::Path, style: Option<&str>) -> Result<()> {
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let mut s = if settings_path.exists() {
+        Settings::load_from_file(settings_path)
+    } else {
+        Settings::default()
+    };
+    s.output_style = style.map(|s| s.to_string());
+    let json = serde_json::to_string_pretty(&s)?;
+    let tmp = settings_path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, settings_path)?;
+    Ok(())
 }
 
 /// /commit-push-pr — Git commit + push + create PR in one step (Prompt command)
@@ -2522,6 +2636,60 @@ impl CommandHandler for RemoteSetupHandler {
     }
 }
 
+/// /remote-control — Claude.ai Remote Control.
+///
+/// TS wires this command to `useReplBridge`, which registers an environment,
+/// creates a session, opens session-ingress, and injects inbound web/mobile
+/// prompts into the REPL. The Rust port only has IDE bridge helpers today, so
+/// keep the command visible but make the missing runtime explicit.
+pub struct RemoteControlHandler;
+impl CommandHandler for RemoteControlHandler {
+    fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandResult> {
+        let name = args.trim();
+
+        if let Some(shared) = &ctx.shared {
+            if let Ok(mut state) = shared.lock() {
+                if state.remote_control_enabled {
+                    state.remote_control_enabled = false;
+                    state.remote_control_initial_name = None;
+                    state.remote_control_session_url = None;
+                    return Ok(CommandResult::Action(
+                        "Remote Control disconnected.\n\n\
+                         Note: the Rust port still needs the Claude.ai bridge runtime; \
+                         this cleared the local session request."
+                            .to_string(),
+                    ));
+                }
+
+                state.remote_control_enabled = true;
+                state.remote_control_initial_name = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                };
+            }
+        }
+
+        let display_name = if name.is_empty() {
+            String::new()
+        } else {
+            format!("\nRequested session name: {name}")
+        };
+
+        Ok(CommandResult::Action(format!(
+            "Remote Control requested.{display_name}\n\n\
+             The Rust port does not yet include the Claude.ai session-ingress \
+             bridge runtime, so it cannot show a claude.ai/code session URL yet.\n\n\
+             Still needed for full TS parity:\n\
+             - environment registration and entitlement/policy checks\n\
+             - remote session creation and reconnect/continue support\n\
+             - session-ingress WebSocket forwarding\n\
+             - inbound web/mobile message queue injection\n\
+             - connected/disconnect dialog and footer status"
+        )))
+    }
+}
+
 /// /passes — Issues / PRs awaiting reply from the user. Since the real TS
 /// version depends on GitHub-webhook + subscription state we don't have in
 /// Rust yet, this ships as a prompt handler that asks the model to summarise
@@ -2670,6 +2838,12 @@ pub fn build_default_commands() -> CommandRegistry {
         "Initialize Claude Code in project",
         Prompt,
         InitHandler
+    );
+    register!(
+        "init-verifiers",
+        "Create verifier skill(s) for automated verification of code changes",
+        Prompt,
+        InitVerifiersHandler
     );
     register!("stats", "Show usage statistics", Action, StatsHandler);
     register!("env", "Show environment variables", Action, EnvHandler);
@@ -2894,6 +3068,18 @@ pub fn build_default_commands() -> CommandRegistry {
         RemoteSetupHandler
     );
     register!(
+        "remote-control",
+        "Connect this terminal for remote-control sessions",
+        Action,
+        RemoteControlHandler
+    );
+    register!(
+        "rc",
+        "Alias for /remote-control",
+        Action,
+        RemoteControlHandler
+    );
+    register!(
         "passes",
         "Summarise GitHub items waiting on the user",
         Prompt,
@@ -2908,6 +3094,7 @@ pub fn build_default_commands() -> CommandRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn test_ctx() -> CommandContext {
         CommandContext {
@@ -3802,17 +3989,62 @@ mod tests {
     }
 
     #[test]
-    fn test_output_style_deprecated() {
+    fn test_output_style_lists_when_no_args() {
+        // No styles installed → handler should still respond, not error.
         let handler = OutputStyleHandler;
         let ctx = test_ctx();
         let result = handler.execute("", &ctx).unwrap();
         match result {
             CommandResult::Action(text) => {
-                assert!(text.contains("deprecated"));
-                assert!(text.contains("/config"));
+                assert!(text.contains("Active output style"));
+                assert!(text.contains("Available styles:"));
             }
             other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
         }
+    }
+
+    #[test]
+    fn test_output_style_unknown_name() {
+        let handler = OutputStyleHandler;
+        let ctx = test_ctx();
+        let result = handler.execute("nonsuch-style", &ctx).unwrap();
+        match result {
+            CommandResult::Action(text) => {
+                assert!(text.contains("No output style named"));
+                assert!(text.contains("nonsuch-style"));
+            }
+            other => panic!("expected Action, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_output_style_set_and_clear_round_trip() {
+        // Use a temp project with one fake style and verify the handler
+        // sets + clears it through settings.json.
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(claude_dir.join("output-styles")).unwrap();
+        std::fs::write(
+            claude_dir.join("output-styles").join("terse.md"),
+            "---\ndescription: Short\n---\n\nBe brief.\n",
+        )
+        .unwrap();
+
+        let ctx = CommandContext {
+            working_directory: tmp.path().to_path_buf(),
+            ..test_ctx()
+        };
+        let handler = OutputStyleHandler;
+
+        // Set
+        handler.execute("terse", &ctx).unwrap();
+        let settings = Settings::load_from_file(&claude_dir.join("settings.json"));
+        assert_eq!(settings.output_style.as_deref(), Some("terse"));
+
+        // Clear
+        handler.execute("clear", &ctx).unwrap();
+        let settings = Settings::load_from_file(&claude_dir.join("settings.json"));
+        assert!(settings.output_style.is_none());
     }
 
     #[test]
@@ -4184,6 +4416,57 @@ mod tests {
     }
 
     #[test]
+    fn test_remote_control_reports_missing_runtime_and_sets_state() {
+        let shared = Arc::new(Mutex::new(
+            super::super::registry::SharedCommandState::default(),
+        ));
+        let ctx = CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp/test-project"),
+            model: "claude-sonnet-4-20250514".to_string(),
+            shared: Some(shared.clone()),
+        };
+
+        let r = RemoteControlHandler.execute("demo", &ctx).unwrap();
+        match r {
+            CommandResult::Action(t) => {
+                assert!(t.contains("Remote Control requested"));
+                assert!(t.contains("session-ingress"));
+            }
+            _ => panic!("expected Action"),
+        }
+
+        let state = shared.lock().unwrap();
+        assert!(state.remote_control_enabled);
+        assert_eq!(state.remote_control_initial_name.as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn test_remote_control_second_call_disconnects() {
+        let shared = Arc::new(Mutex::new(super::super::registry::SharedCommandState {
+            remote_control_enabled: true,
+            remote_control_initial_name: Some("demo".to_string()),
+            remote_control_session_url: Some("https://claude.ai/code/session_test".to_string()),
+            ..super::super::registry::SharedCommandState::default()
+        }));
+        let ctx = CommandContext {
+            working_directory: std::path::PathBuf::from("/tmp/test-project"),
+            model: "claude-sonnet-4-20250514".to_string(),
+            shared: Some(shared.clone()),
+        };
+
+        let r = RemoteControlHandler.execute("", &ctx).unwrap();
+        match r {
+            CommandResult::Action(t) => assert!(t.contains("disconnected")),
+            _ => panic!("expected Action"),
+        }
+
+        let state = shared.lock().unwrap();
+        assert!(!state.remote_control_enabled);
+        assert!(state.remote_control_initial_name.is_none());
+        assert!(state.remote_control_session_url.is_none());
+    }
+
+    #[test]
     fn test_passes_returns_prompt() {
         let r = PassesHandler.execute("", &test_ctx()).unwrap();
         match r {
@@ -4217,5 +4500,31 @@ mod tests {
             }
             _ => panic!("expected Action"),
         }
+    }
+
+    #[test]
+    fn new_init_prompt_has_all_eight_phases() {
+        for phase in [
+            "## Phase 1: Ask what to set up",
+            "## Phase 2: Explore the codebase",
+            "## Phase 3: Fill in the gaps",
+            "## Phase 4: Write CLAUDE.md",
+            "## Phase 5: Write CLAUDE.local.md",
+            "## Phase 6: Suggest and create skills",
+            "## Phase 7: Suggest additional optimizations",
+            "## Phase 8: Summary and next steps",
+        ] {
+            assert!(
+                NEW_INIT_PROMPT.contains(phase),
+                "NEW_INIT_PROMPT missing phase header: {phase}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_verifiers_prompt_has_core_structure() {
+        assert!(INIT_VERIFIERS_PROMPT.contains("## Goal"));
+        assert!(INIT_VERIFIERS_PROMPT.contains("verifier skill"));
+        assert!(INIT_VERIFIERS_PROMPT.contains("TodoWrite tool"));
     }
 }

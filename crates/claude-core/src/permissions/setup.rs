@@ -734,7 +734,10 @@ pub fn initialize_tool_permission_context(
         is_bypass_permissions_mode_available: is_bypass_available,
         stripped_dangerous_rules: None,
         should_avoid_permission_prompts: false,
-        is_auto_mode_available: None,
+        // Auto-mode classifier state is not wired yet; default to inactive.
+        // Plan mode must not bypass permissions just because bypass mode is
+        // feature-available.
+        is_auto_mode_available: Some(false),
         pre_plan_mode: None,
         working_directory,
     };

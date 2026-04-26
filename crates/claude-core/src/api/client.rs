@@ -1,10 +1,12 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
+use rand::RngCore;
 use reqwest::Response;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::auth::login::{debug_http_client, proxy_url};
+use crate::auth::resolve::resolve_stored_oauth_token;
 use crate::types::content::ContentBlock;
 use crate::types::events::StreamEvent;
 
@@ -24,6 +26,13 @@ fn normalize_model_for_api(model: &str) -> String {
 /// Mirrors TS `has1mContext()`: `/\[1m\]/i.test(model)`
 fn has_1m_context(model: &str) -> bool {
     model.contains("[1m]") || model.contains("[1M]")
+}
+
+fn oauth_billing_header() -> String {
+    let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
+    format!(
+        "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch={cch:05x};"
+    )
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -121,8 +130,6 @@ impl Default for ApiConfig {
     }
 }
 
-const CAPPED_DEFAULT_MAX_TOKENS: u64 = 8_192;
-
 static PROCESS_SESSION_ID: Lazy<String> = Lazy::new(|| uuid::Uuid::new_v4().to_string());
 
 pub fn get_session_id() -> &'static String {
@@ -141,7 +148,13 @@ pub fn minimal_transport_enabled() -> bool {
 
 pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
-    let default_tokens = if lower.contains("opus-4-1") || lower.contains("opus-4") {
+    if lower.contains("opus-4-7")
+        || lower.contains("opus-4-6")
+        || lower.contains("sonnet-4-6")
+        || lower.contains("haiku-4-5")
+    {
+        64_000
+    } else if lower.contains("opus-4-1") || lower.contains("opus-4") {
         32_000
     } else if lower.contains("claude-3-opus") {
         4_096
@@ -153,31 +166,6 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
         8_192
     } else {
         32_000
-    };
-
-    // Match TS slot-reservation cap: normal requests default to 8k unless the
-    // model's native default is lower.
-    std::cmp::min(default_tokens, CAPPED_DEFAULT_MAX_TOKENS)
-}
-
-/// Map model ID to marketing name (matches TS getPublicModelDisplayName).
-fn model_marketing_name(model: &str) -> &str {
-    if model.contains("opus-4-6") {
-        "Opus 4.6"
-    } else if model.contains("opus-4-5") {
-        "Opus 4.5"
-    } else if model.contains("opus-4-1") {
-        "Opus 4.1"
-    } else if model.contains("sonnet-4-6") {
-        "Sonnet 4.6"
-    } else if model.contains("sonnet-4-5") {
-        "Sonnet 4.5"
-    } else if model.contains("haiku-4-5") {
-        "Haiku 4.5"
-    } else if model.contains("claude-3-7-sonnet") {
-        "Sonnet 3.7"
-    } else {
-        model
     }
 }
 
@@ -222,6 +210,11 @@ pub fn build_request_body(
         "messages": messages,
     });
 
+    // Prompt caching: mark the last user-turn boundary in conversation
+    // messages. Matches TS addCacheControlBreakpoints on messages — the
+    // cache covers system + tools + conversation up to the marked turn.
+    add_message_cache_markers(&mut body);
+
     // Thinking configuration.
     // Haiku does not support adaptive thinking — only send for Sonnet/Opus.
     let supports_thinking = !config.model.contains("haiku");
@@ -245,6 +238,9 @@ pub fn build_request_body(
     if let Some(thinking) = thinking_obj {
         body["thinking"] = thinking;
     }
+    if supports_thinking && api_model.contains("opus") {
+        body["output_config"] = json!({ "effort": "max" });
+    }
 
     // Optional speed hint.
     if let Some(speed) = &config.speed {
@@ -263,24 +259,18 @@ pub fn build_request_body(
     // rejected with 429. If it is not the first block (e.g. model identity
     // is prepended before it), the server won't find it and you get 429s.
     //
-    // Order: [attribution (OAuth only)] -> [model identity] -> [user system blocks]
-    if !system.is_empty() {
+    // Order: [attribution (OAuth only)] -> [user system blocks]
+    if !system.is_empty() || is_oauth {
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
-                    .to_string(),
+                text: oauth_billing_header(),
             });
         }
-        let marketing = model_marketing_name(&config.model);
-        full_system.push(ContentBlock::Text {
-            text: format!(
-                "You are powered by the model named {}. The exact model ID is {}.",
-                marketing, config.model
-            ),
-        });
         full_system.extend_from_slice(system);
         body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
+
+        add_system_cache_markers(&mut body, is_oauth);
     }
 
     // Tools (only include if non-empty).
@@ -291,13 +281,12 @@ pub fn build_request_body(
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
     // containing device_id, account_uuid, and session_id.
     let device_id = get_or_create_device_id();
-    let user_id_obj = json!({
-        "device_id": device_id,
-        "account_uuid": config.account_uuid,
-        "session_id": config.session_id,
-    });
+    let mut user_id_obj = extra_metadata();
+    user_id_obj.insert("device_id".into(), json!(device_id));
+    user_id_obj.insert("account_uuid".into(), json!(config.account_uuid));
+    user_id_obj.insert("session_id".into(), json!(config.session_id));
     body["metadata"] = json!({
-        "user_id": user_id_obj.to_string(),
+        "user_id": Value::Object(user_id_obj).to_string(),
     });
 
     // context_management: mirrors TS getAPIContextManagement().
@@ -319,6 +308,78 @@ pub fn build_request_body(
     }
 
     body
+}
+
+/// Build a request body with raw tool schema values.
+///
+/// This is used for Anthropic server-side tools such as `web_search_20250305`,
+/// whose schema shape is not the normal client tool `{name, description,
+/// input_schema}` form.
+pub fn build_request_body_with_raw_tools(
+    config: &ApiConfig,
+    messages: &[Value],
+    system: &[ContentBlock],
+    tools: &[Value],
+    is_oauth: bool,
+) -> Value {
+    let mut body = build_request_body(config, messages, system, &[], is_oauth);
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools.to_vec());
+    }
+    body
+}
+
+/// Apply cache_control breakpoints to cacheable system prompt blocks.
+///
+/// TS leaves the OAuth billing attribution block unmarked and marks the
+/// following system blocks, using a 1h ephemeral cache.
+fn add_system_cache_markers(body: &mut Value, is_oauth: bool) {
+    let Some(system) = body["system"].as_array_mut() else {
+        return;
+    };
+    let start = usize::from(is_oauth);
+    for block in system.iter_mut().skip(start) {
+        block["cache_control"] = cache_control_json();
+    }
+}
+
+/// Apply cache_control breakpoints to conversation messages in the request body.
+/// Marks the last non-thinking content block of the last message so the prompt
+/// cache covers the stable prefix (system + tools + conversation).
+///
+/// Matches TS `addCacheBreakpoints` marker placement: exactly one message-level
+/// marker at `messages.length - 1`, skipping thinking/redacted_thinking blocks.
+fn add_message_cache_markers(body: &mut Value) {
+    let Some(messages) = body["messages"].as_array_mut() else {
+        return;
+    };
+    let Some(msg) = messages.last_mut() else {
+        return;
+    };
+    let Some(content) = msg["content"].as_array_mut() else {
+        return;
+    };
+    for block in content.iter_mut().rev() {
+        let btype = block["type"].as_str().unwrap_or("");
+        if btype != "thinking" && btype != "redacted_thinking" {
+            block["cache_control"] = cache_control_json();
+            return;
+        }
+    }
+}
+
+fn cache_control_json() -> Value {
+    let ttl = std::env::var("CLAUDE_RS_CACHE_TTL").unwrap_or_else(|_| "1h".to_string());
+    let mut value = json!({"type": "ephemeral", "ttl": ttl});
+    if value["ttl"].as_str() == Some("") {
+        value.as_object_mut().unwrap().remove("ttl");
+    }
+    if let Ok(scope) = std::env::var("CLAUDE_RS_CACHE_SCOPE") {
+        if !scope.is_empty() {
+            value["scope"] = json!(scope);
+        }
+    }
+    value
 }
 
 fn build_minimal_request_body(
@@ -343,41 +404,57 @@ fn build_minimal_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
-                    .to_string(),
+                text: oauth_billing_header(),
             });
         }
         full_system.extend_from_slice(system);
         body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
+
+        add_system_cache_markers(&mut body, is_oauth);
     }
 
     if !tools.is_empty() {
         body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
     }
 
+    add_message_cache_markers(&mut body);
+
     body
 }
 
 /// Get or create a persistent device ID (matches TS `getOrCreateUserID()`).
 fn get_or_create_device_id() -> String {
-    let config_dir = std::env::var("HOME")
-        .map(|h| format!("{}/.claude", h))
-        .unwrap_or_else(|_| "/tmp/.claude".to_string());
-    let id_path = format!("{}/device_id", config_dir);
-
-    // Try to read existing ID
-    if let Ok(id) = std::fs::read_to_string(&id_path) {
-        let id = id.trim().to_string();
-        if !id.is_empty() {
-            return id;
+    if let Ok(config) = crate::config::global::load_global_config() {
+        if let Some(user_id) = config.user_id {
+            if !user_id.is_empty() {
+                return user_id;
+            }
         }
     }
 
-    // Generate and persist a new one
-    let id = uuid::Uuid::new_v4().to_string();
-    let _ = std::fs::create_dir_all(&config_dir);
-    let _ = std::fs::write(&id_path, &id);
+    let id = generate_user_id();
+    let saved_id = id.clone();
+    let _ = crate::config::global::save_global_config(|mut config| {
+        config.user_id = Some(saved_id);
+        config
+    });
     id
+}
+
+fn generate_user_id() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+fn extra_metadata() -> serde_json::Map<String, Value> {
+    let Ok(raw) = std::env::var("CLAUDE_CODE_EXTRA_METADATA") else {
+        return serde_json::Map::new();
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -417,6 +494,23 @@ impl ApiClient {
             .await
     }
 
+    /// POST a streaming request with raw tool schema values.
+    pub async fn stream_request_with_raw_tools(
+        &self,
+        messages: &[Value],
+        system: &[ContentBlock],
+        tools: &[Value],
+    ) -> Result<Response> {
+        let body = build_request_body_with_raw_tools(
+            &self.config,
+            messages,
+            system,
+            tools,
+            self.auth.is_oauth(),
+        );
+        self.send_streaming_body(body).await
+    }
+
     /// POST a streaming request with optional event feedback.
     pub async fn stream_request_with_events(
         &self,
@@ -425,8 +519,12 @@ impl ApiClient {
         tools: &[ToolDefinition],
         _event_tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<Response> {
-        let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools, self.auth.is_oauth());
+        self.send_streaming_body(body).await
+    }
+
+    async fn send_streaming_body(&self, body: Value) -> Result<Response> {
+        let url = format!("{}/v1/messages", self.config.base_url);
         let minimal_transport = minimal_transport_enabled();
 
         // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
@@ -437,7 +535,8 @@ impl ApiClient {
             }
         }
 
-        let (header_name, header_value) = self.auth.to_header();
+        let auth = self.current_request_auth().await?;
+        let (header_name, header_value) = auth.to_header();
 
         let mut request = self
             .http
@@ -447,7 +546,7 @@ impl ApiClient {
             .header(header_name, header_value);
 
         if minimal_transport {
-            if self.auth.is_oauth() {
+            if auth.is_oauth() {
                 request = request.header("anthropic-beta", "oauth-2025-04-20");
             }
         } else {
@@ -466,7 +565,7 @@ impl ApiClient {
                 "context-management-2025-06-27",
                 "prompt-caching-scope-2026-01-05",
             ];
-            if self.auth.is_oauth() {
+            if auth.is_oauth() {
                 betas.push("oauth-2025-04-20");
             }
             if has_1m_context(&self.config.model) {
@@ -501,6 +600,21 @@ impl ApiClient {
             &err_body[..err_body.len().min(500)]
         );
     }
+
+    async fn current_request_auth(&self) -> Result<AuthMethod> {
+        match &self.auth {
+            AuthMethod::ApiKey(_) => Ok(self.auth.clone()),
+            AuthMethod::OAuthToken(_) => {
+                let token = resolve_stored_oauth_token(false)
+                    .await?
+                    .unwrap_or_else(|| match &self.auth {
+                        AuthMethod::OAuthToken(token) => token.clone(),
+                        AuthMethod::ApiKey(_) => unreachable!(),
+                    });
+                Ok(AuthMethod::OAuthToken(token))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -511,11 +625,19 @@ mod tests {
     /// Serialize tests that touch environment variables to avoid races.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn clear_cache_env() {
+        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        std::env::remove_var("CLAUDE_RS_CACHE_TTL");
+        std::env::remove_var("CLAUDE_RS_CACHE_SCOPE");
+    }
+
     #[test]
-    fn max_output_tokens_match_ts_slot_reservation_cap() {
-        assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 8_192);
-        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-6"), 8_192);
-        assert_eq!(get_max_output_tokens_for_model("claude-haiku-4-5"), 8_192);
+    fn max_output_tokens_match_current_ts_defaults() {
+        assert_eq!(get_max_output_tokens_for_model("claude-sonnet-4-6"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-7"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-6"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-haiku-4-5"), 64_000);
+        assert_eq!(get_max_output_tokens_for_model("claude-opus-4-1"), 32_000);
         assert_eq!(
             get_max_output_tokens_for_model("claude-3-opus-20240229"),
             4_096
@@ -525,6 +647,7 @@ mod tests {
     #[test]
     fn request_metadata_uses_stable_session_and_account_uuid() {
         let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("CLAUDE_CODE_EXTRA_METADATA");
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 8_192,
@@ -540,8 +663,41 @@ mod tests {
     }
 
     #[test]
+    fn request_metadata_merges_extra_metadata() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(
+            "CLAUDE_CODE_EXTRA_METADATA",
+            r#"{"source":"test","device_id":"ignored"}"#,
+        );
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            session_id: "session-123".into(),
+            account_uuid: "account-456".into(),
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[], false);
+        let user_id = body["metadata"]["user_id"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(user_id).unwrap();
+        assert_eq!(parsed["source"], "test");
+        assert_eq!(parsed["session_id"], "session-123");
+        assert_eq!(parsed["account_uuid"], "account-456");
+        assert_ne!(parsed["device_id"], "ignored");
+        std::env::remove_var("CLAUDE_CODE_EXTRA_METADATA");
+    }
+
+    #[test]
+    fn generated_user_id_matches_ts_shape() {
+        let id = generate_user_id();
+        assert_eq!(id.len(), 64);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(id.chars().all(|c| !c.is_ascii_uppercase()));
+    }
+
+    #[test]
     fn minimal_transport_body_strips_metadata_and_context_management() {
         let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
         std::env::set_var("CLAUDE_RS_MINIMAL_TRANSPORT", "1");
         let config = ApiConfig {
             model: "claude-sonnet-4-6".into(),
@@ -552,6 +708,248 @@ mod tests {
         assert!(body.get("metadata").is_none());
         assert!(body.get("context_management").is_none());
         assert!(body.get("thinking").is_none());
-        std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
+        clear_cache_env();
+    }
+
+    #[test]
+    fn cache_markers_on_system_prompt() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let system = vec![
+            ContentBlock::Text {
+                text: "block 1".into(),
+            },
+            ContentBlock::Text {
+                text: "block 2".into(),
+            },
+        ];
+        let body = build_request_body(&config, &[], &system, &[], false);
+        let sys = body["system"].as_array().unwrap();
+        assert_eq!(
+            sys[0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"}),
+            "first cacheable system block must have cache_control"
+        );
+        assert_eq!(
+            sys.last().unwrap()["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"}),
+            "last system block must have cache_control"
+        );
+    }
+
+    #[test]
+    fn cache_markers_not_added_to_tool_definitions() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            ToolDefinition {
+                name: "Read".into(),
+                description: "Read a file".into(),
+                input_schema: json!({"type": "object"}),
+            },
+            ToolDefinition {
+                name: "Write".into(),
+                description: "Write a file".into(),
+                input_schema: json!({"type": "object"}),
+            },
+        ];
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        let tools_arr = body["tools"].as_array().unwrap();
+        let last = tools_arr.last().unwrap();
+        assert!(
+            last.get("cache_control").is_none(),
+            "tool definitions should not have cache_control"
+        );
+    }
+
+    #[test]
+    fn raw_tool_request_preserves_server_tool_schema() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let raw_tools = vec![json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 8
+        })];
+        let body = build_request_body_with_raw_tools(&config, &[], &[], &raw_tools, false);
+        assert_eq!(body["tools"][0]["type"], "web_search_20250305");
+        assert_eq!(body["tools"][0]["name"], "web_search");
+        assert_eq!(body["tools"][0]["max_uses"], 8);
+        assert!(
+            body["tools"][0].get("cache_control").is_none(),
+            "raw tool definitions should not have cache_control"
+        );
+        assert!(body["tools"][0].get("input_schema").is_none());
+    }
+
+    #[test]
+    fn cache_markers_on_last_message() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let messages = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "hello"}]}),
+            json!({"role": "assistant", "content": [{"type": "text", "text": "hi"}]}),
+            json!({"role": "user", "content": [{"type": "text", "text": "world"}]}),
+        ];
+        let body = build_request_body(&config, &messages, &[], &[], false);
+        let msgs = body["messages"].as_array().unwrap();
+        // Last message (index 2) should have cache_control on its content block
+        let last_user = &msgs[2];
+        let content = last_user["content"].as_array().unwrap();
+        assert_eq!(
+            content[0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"}),
+            "last message content block must have cache_control"
+        );
+        // First user message should NOT have it
+        let first_user = &msgs[0];
+        let first_content = first_user["content"].as_array().unwrap();
+        assert!(
+            first_content[0].get("cache_control").is_none(),
+            "first user message should not have cache_control"
+        );
+    }
+
+    #[test]
+    fn cache_markers_use_last_message_even_when_assistant() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let messages = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "hello"}]}),
+            json!({"role": "assistant", "content": [{"type": "text", "text": "hi"}]}),
+        ];
+        let body = build_request_body(&config, &messages, &[], &[], false);
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(msgs[0]["content"][0].get("cache_control").is_none());
+        assert_eq!(
+            msgs[1]["content"][0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+    }
+
+    #[test]
+    fn cache_control_env_can_set_ttl_and_scope() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        std::env::set_var("CLAUDE_RS_CACHE_TTL", "1h");
+        std::env::set_var("CLAUDE_RS_CACHE_SCOPE", "global");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})];
+        let body = build_request_body(&config, &messages, &[], &[], false);
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h", "scope": "global"})
+        );
+        clear_cache_env();
+    }
+
+    #[test]
+    fn cache_markers_skip_thinking_blocks() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let messages = vec![json!({"role": "user", "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "thinking", "thinking": "hmm", "signature": "sig"}
+        ]})];
+        let body = build_request_body(&config, &messages, &[], &[], false);
+        let msgs = body["messages"].as_array().unwrap();
+        let content = msgs[0]["content"].as_array().unwrap();
+        // cache_control should be on the text block, not the thinking block
+        assert_eq!(
+            content[0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+        assert!(content[1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn minimal_transport_also_gets_cache_markers() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        std::env::set_var("CLAUDE_RS_MINIMAL_TRANSPORT", "1");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let system = vec![ContentBlock::Text { text: "sys".into() }];
+        let tools = vec![ToolDefinition {
+            name: "T".into(),
+            description: "d".into(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})];
+        let body = build_request_body(&config, &messages, &system, &tools, false);
+        let sys = body["system"].as_array().unwrap();
+        assert_eq!(
+            sys.last().unwrap()["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+        let tools_arr = body["tools"].as_array().unwrap();
+        assert!(
+            tools_arr.last().unwrap().get("cache_control").is_none(),
+            "tool definitions should not have cache_control"
+        );
+        clear_cache_env();
+    }
+
+    #[test]
+    fn oauth_request_includes_billing_attribution_without_user_system_prompt() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+
+        let body = build_request_body(&config, &[], &[], &[], true);
+        let system = body["system"].as_array().unwrap();
+
+        assert!(
+            system[0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("x-anthropic-billing-header:"),
+            "OAuth billing attribution must be the first system block"
+        );
+        assert!(
+            system.last().unwrap().get("cache_control").is_none(),
+            "billing-only system prompt should not have cache_control"
+        );
     }
 }

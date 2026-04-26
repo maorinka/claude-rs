@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 struct MockTool;
+struct OtherTool;
 
 #[async_trait]
 impl ToolExecutor for MockTool {
@@ -27,6 +28,28 @@ impl ToolExecutor for MockTool {
     ) -> anyhow::Result<ToolResultData> {
         Ok(ToolResultData {
             data: json!({"echo": input}),
+            is_error: false,
+        })
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for OtherTool {
+    fn name(&self) -> &str {
+        "OtherTool"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn call(
+        &self,
+        _input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> anyhow::Result<ToolResultData> {
+        Ok(ToolResultData {
+            data: json!("ok"),
             is_error: false,
         })
     }
@@ -58,4 +81,33 @@ fn test_all_returns_registered_tools() {
     let mut reg = ToolRegistry::new();
     reg.register(Arc::new(MockTool));
     assert_eq!(reg.all().len(), 1);
+}
+
+#[test]
+fn test_all_preserves_registration_order() {
+    let mut reg = ToolRegistry::new();
+    reg.register(Arc::new(MockTool));
+    reg.register(Arc::new(OtherTool));
+
+    let names: Vec<String> = reg
+        .all()
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    assert_eq!(names, vec!["MockTool", "OtherTool"]);
+}
+
+#[test]
+fn test_remove_updates_registration_order() {
+    let mut reg = ToolRegistry::new();
+    reg.register(Arc::new(MockTool));
+    reg.register(Arc::new(OtherTool));
+
+    assert!(reg.remove("MockTool").is_some());
+    let names: Vec<String> = reg
+        .all()
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    assert_eq!(names, vec!["OtherTool"]);
 }

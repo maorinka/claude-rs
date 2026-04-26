@@ -6,6 +6,7 @@ use crate::api::accumulator::ContentBlockAccumulator;
 use crate::api::client::ApiClient;
 use crate::api::sse::{self, SseEvent};
 use crate::types::content::ContentBlock;
+use crate::types::usage::Usage;
 
 /// Token estimation: extract actual text content and divide by ~4 chars per token.
 ///
@@ -27,6 +28,18 @@ pub fn estimate_tokens(messages: &[Value]) -> u64 {
 
     // ~4 chars per token (default ratio in the TS code)
     total_chars / 4
+}
+
+/// Calculate total context tokens from API usage.
+///
+/// Mirrors TS `getTokenCountFromUsage`: input + cache creation + cache read
+/// + output. This is the authoritative context size at the last API response
+/// and avoids rescanning old history on every following turn.
+pub fn token_count_from_usage(usage: &Usage) -> u64 {
+    usage.input_tokens
+        + usage.cache_creation_input_tokens.unwrap_or(0)
+        + usage.cache_read_input_tokens.unwrap_or(0)
+        + usage.output_tokens
 }
 
 /// Estimate token count for a message's content field.
@@ -111,6 +124,11 @@ const MAX_OUTPUT_TOKENS_FOR_SUMMARY: u64 = 20_000;
 /// Check if compaction is needed based on estimated token count.
 pub fn should_compact(messages: &[Value], context_window: u64) -> bool {
     let estimated = estimate_tokens(messages);
+    should_compact_estimated(estimated, context_window)
+}
+
+/// Check if compaction is needed for a precomputed token estimate.
+pub fn should_compact_estimated(estimated: u64, context_window: u64) -> bool {
     let threshold =
         context_window.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS + MAX_OUTPUT_TOKENS_FOR_SUMMARY);
     estimated >= threshold

@@ -15,7 +15,7 @@ fn make_ctx() -> ToolUseContext {
 }
 
 async fn search(query: &str) -> claude_core::types::events::ToolResultData {
-    let tool = ToolSearchTool;
+    let tool = ToolSearchTool::default();
     tool.call(
         &json!({ "query": query }),
         &make_ctx(),
@@ -58,7 +58,7 @@ async fn test_search_file_finds_read_write() {
 
 #[tokio::test]
 async fn test_search_max_results_respected() {
-    let tool = ToolSearchTool;
+    let tool = ToolSearchTool::default();
     // "a" is likely to match many tools
     let result = tool
         .call(
@@ -92,7 +92,7 @@ async fn test_search_no_results_for_gibberish() {
 
 #[tokio::test]
 async fn test_search_missing_query() {
-    let tool = ToolSearchTool;
+    let tool = ToolSearchTool::default();
     let result = tool
         .call(&json!({}), &make_ctx(), CancellationToken::new(), None)
         .await
@@ -102,10 +102,54 @@ async fn test_search_missing_query() {
 
 #[test]
 fn test_tool_search_is_read_only_and_concurrency_safe() {
-    let tool = ToolSearchTool;
+    let tool = ToolSearchTool::default();
     let input = json!({ "query": "bash" });
     assert!(tool.is_read_only(&input));
     assert!(tool.is_concurrency_safe(&input));
+}
+
+#[tokio::test]
+async fn test_select_query_matches_exact_names() {
+    let tool = ToolSearchTool::new(vec![
+        ("CustomOne".to_string(), "First dynamic tool".to_string()),
+        ("CustomTwo".to_string(), "Second dynamic tool".to_string()),
+    ]);
+    let result = tool
+        .call(
+            &json!({ "query": "select:customtwo" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(!result.is_error);
+    let tools = result.data["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "CustomTwo");
+}
+
+#[tokio::test]
+async fn test_search_uses_dynamic_snapshot_and_camel_case() {
+    let tool = ToolSearchTool::new(vec![(
+        "CustomMcpFetcher".to_string(),
+        "Fetches resources from a runtime server".to_string(),
+    )]);
+    let result = tool
+        .call(
+            &json!({ "query": "mcp fetcher" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(!result.is_error);
+    let tools = result.data["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "CustomMcpFetcher");
 }
 
 #[tokio::test]

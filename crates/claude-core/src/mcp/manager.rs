@@ -658,6 +658,17 @@ impl McpManager {
         self.tool_definitions.read().await.clone()
     }
 
+    /// Add model-visible MCP tool definitions for servers whose tool
+    /// surface is known before a live transport is available.
+    pub async fn add_tool_definitions(&self, tools: Vec<McpToolInfo>) {
+        let mut existing = self.tool_definitions.write().await;
+        for tool in tools {
+            if !existing.iter().any(|known| known.name == tool.name) {
+                existing.push(tool);
+            }
+        }
+    }
+
     /// Get all server connection statuses.
     pub async fn connections(&self) -> Vec<McpServerConnection> {
         self.connections.read().await.values().cloned().collect()

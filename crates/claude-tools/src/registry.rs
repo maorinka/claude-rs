@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use claude_core::types::events::{ToolProgressData, ToolResultData};
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -214,6 +215,7 @@ pub trait ToolExecutor: Send + Sync {
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn ToolExecutor>>,
     aliases: HashMap<String, String>,
+    order: Vec<String>,
 }
 
 impl ToolRegistry {
@@ -221,15 +223,33 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
             aliases: HashMap::new(),
+            order: Vec::new(),
         }
     }
 
     pub fn register(&mut self, tool: Arc<dyn ToolExecutor>) {
         let name = tool.name().to_string();
+        if !self.tools.contains_key(&name) {
+            self.order.push(name.clone());
+        }
         for alias in tool.aliases() {
             self.aliases.insert(alias.to_string(), name.clone());
         }
         self.tools.insert(name, tool);
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<Arc<dyn ToolExecutor>> {
+        let canonical = self
+            .aliases
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string());
+        let removed = self.tools.remove(&canonical);
+        if removed.is_some() {
+            self.aliases.retain(|_, target| target != &canonical);
+            self.order.retain(|name| name != &canonical);
+        }
+        removed
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn ToolExecutor>> {
@@ -240,26 +260,90 @@ impl ToolRegistry {
     }
 
     pub fn all(&self) -> Vec<Arc<dyn ToolExecutor>> {
-        self.tools.values().cloned().collect()
+        self.order
+            .iter()
+            .filter_map(|name| self.tools.get(name).cloned())
+            .collect()
     }
 
     pub fn schemas(&self) -> Vec<Value> {
-        self.tools
-            .values()
+        self.all()
+            .into_iter()
             .map(|t| serde_json::json!({"name": t.name(), "input_schema": t.input_schema()}))
             .collect()
     }
 
     pub fn tool_definitions(&self) -> Vec<claude_core::api::client::ToolDefinition> {
-        self.tools
-            .values()
-            .map(|t| claude_core::api::client::ToolDefinition {
-                name: t.name().to_string(),
-                description: t.description(),
-                input_schema: t.input_schema(),
+        self.all()
+            .into_iter()
+            .map(|t| {
+                let mut definition = claude_core::api::client::ToolDefinition {
+                    name: t.name().to_string(),
+                    description: t.description(),
+                    input_schema: normalize_local_tool_schema(t.name(), t.input_schema()),
+                };
+                apply_ts_tool_contract(&mut definition);
+                definition
             })
             .collect()
     }
+}
+
+static TS_TOOL_CONTRACTS: Lazy<HashMap<String, (String, Value)>> = Lazy::new(|| {
+    let raw: Value = serde_json::from_str(include_str!("ts_tool_contracts_2_1_119.json"))
+        .expect("embedded TS tool contracts must be valid JSON");
+    let mut contracts = HashMap::new();
+    for tool in raw
+        .as_array()
+        .expect("embedded TS tool contracts must be an array")
+    {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .expect("embedded TS tool contract must have a name");
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("embedded TS tool contract must have a description");
+        let input_schema = tool
+            .get("input_schema")
+            .expect("embedded TS tool contract must have an input_schema")
+            .clone();
+        contracts.insert(name.to_string(), (description.to_string(), input_schema));
+    }
+    contracts
+});
+
+fn apply_ts_tool_contract(definition: &mut claude_core::api::client::ToolDefinition) {
+    if let Some((description, input_schema)) = TS_TOOL_CONTRACTS.get(definition.name.as_str()) {
+        definition.description = description.clone();
+        definition.input_schema = input_schema.clone();
+    }
+}
+
+fn normalize_local_tool_schema(tool_name: &str, mut schema: Value) -> Value {
+    if tool_name.starts_with("mcp__") {
+        return schema;
+    }
+
+    let Some(obj) = schema.as_object_mut() else {
+        return schema;
+    };
+
+    obj.entry("$schema".to_string()).or_insert_with(|| {
+        Value::String("https://json-schema.org/draft/2020-12/schema".to_string())
+    });
+    obj.entry("additionalProperties".to_string())
+        .or_insert(Value::Bool(false));
+    if obj
+        .get("required")
+        .and_then(|v| v.as_array())
+        .is_some_and(|v| v.is_empty())
+    {
+        obj.remove("required");
+    }
+
+    schema
 }
 
 impl Default for ToolRegistry {

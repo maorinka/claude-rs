@@ -1,0 +1,2643 @@
+[
+  {
+    "description": "Launch a new agent to handle complex, multi-step tasks. Each agent type has specific capabilities and tools available to it.\n\nAvailable agent types and the tools they have access to:\n- Explore: Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)\n- hookify:conversation-analyzer: Use this agent when analyzing conversation transcripts to find behaviors worth preventing with hooks. Examples: <example>Context: User is running /hookify command without arguments\\nuser: \"/hookify\"\\nassistant: \"I'll analyze the conversation to find behaviors you want to prevent\"\\n<commentary>The /hookify command without arguments triggers conversation analysis to find unwanted behaviors.</commentary></example><example>Context: User wants to create hooks from recent frustrations\\nuser: \"Can you look back at this conversation and help me create hooks for the mistakes you made?\"\\nassistant: \"I'll use the conversation-analyzer agent to identify the issues and suggest hooks.\"\\n<commentary>User explicitly asks to analyze conversation for mistakes that should be prevented.</commentary></example> (Tools: [\"Read\", \"Grep\"])\n- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)\n- superpowers:code-reviewer: Use this agent when a major project step has been completed and needs to be reviewed against the original plan and coding standards. Examples: <example>Context: The user is creating a code-review agent that should be called after a logical chunk of code is written. user: \"I've finished implementing the user authentication system as outlined in step 3 of our plan\" assistant: \"Great work! Now let me use the code-reviewer agent to review the implementation against our plan and coding standards\" <commentary>Since a major project step has been completed, use the code-reviewer agent to validate the work against the plan and identify any issues.</commentary></example> <example>Context: User has completed a significant feature implementation. user: \"The API endpoints for the task management system are now complete - that covers step 2 from our architecture document\" assistant: \"Excellent! Let me have the code-reviewer agent examine this implementation to ensure it aligns with our plan and follows best practices\" <commentary>A numbered step from the planning document has been completed, so the code-reviewer agent should review the work.</commentary></example> (Tools: All tools)\n\nWhen using the Agent tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.\n\n## When not to use\n\nIf the target is already known, use the direct tool: Read for a known path, the Grep tool for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that match an available agent type.\n\n## Usage notes\n\n- Always include a short description summarizing what the agent will do\n- When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently\n- When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result.\n- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.\n- You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.\n- **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.\n- To continue a previously spawned agent, use SendMessage with the agent's ID or name as the `to` field — that resumes it with full context. A new Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.\n- Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent\n- If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first.\n- If the user specifies that they want you to run agents \"in parallel\", you MUST send a single message with multiple Agent tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.\n- With `isolation: \"worktree\"`, the worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.\n\n## Writing the prompt\n\nBrief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.\n- Explain what you're trying to accomplish and why.\n- Describe what you've already learned or ruled out.\n- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.\n- If you need a short response, say so (\"report in under 200 words\").\n- Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.\n\nTerse command-style prompts produce shallow, generic work.\n\n**Never delegate understanding.** Don't write \"based on your findings, fix the bug\" or \"based on the research, implement it.\" Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.\n\nExample usage:\n\n<example>\nuser: \"What's left on this branch before we can ship?\"\nassistant: <thinking>A survey question across git state, tests, and config. I'll delegate it and ask for a short report so the raw command output stays out of my context.</thinking>\nAgent({\n  description: \"Branch ship-readiness audit\",\n  prompt: \"Audit what's left before this branch can ship. Check: uncommitted changes, commits ahead of main, whether tests exist, whether the GrowthBook gate is wired up, whether CI-relevant files changed. Report a punch list — done vs. missing. Under 200 words.\"\n})\n<commentary>\nThe prompt is self-contained: it states the goal, lists what to check, and caps the response length. The agent's report comes back as the tool result; relay the findings to the user.\n</commentary>\n</example>\n\n<example>\nuser: \"Can you get a second opinion on whether this migration is safe?\"\nassistant: <thinking>I'll ask the code-reviewer agent — it won't see my analysis, so it can give an independent read.</thinking>\nAgent({\n  description: \"Independent migration review\",\n  subagent_type: \"code-reviewer\",\n  prompt: \"Review migration 0042_user_schema.sql for safety. Context: we're adding a NOT NULL column to a 50M-row table. Existing rows get a backfill default. I want a second opinion on whether the backfill approach is safe under concurrent writes — I've checked locking behavior but want independent verification. Report: is this safe, and if not, what specifically breaks?\"\n})\n<commentary>\nThe agent starts with no context from this conversation, so the prompt briefs it: what to assess, the relevant background, and what form the answer should take.\n</commentary>\n</example>\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "description": "A short (3-5 word) description of the task",
+          "type": "string"
+        },
+        "isolation": {
+          "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo.",
+          "enum": [
+            "worktree"
+          ],
+          "type": "string"
+        },
+        "model": {
+          "description": "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent.",
+          "enum": [
+            "sonnet",
+            "opus",
+            "haiku"
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "description": "The task for the agent to perform",
+          "type": "string"
+        },
+        "run_in_background": {
+          "description": "Set to true to run this agent in the background. You will be notified when it completes.",
+          "type": "boolean"
+        },
+        "subagent_type": {
+          "description": "The type of specialized agent to use for this task",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "name": "Agent"
+  },
+  {
+    "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- Users will always be able to select \"Other\" to provide custom text input\n- Use multiSelect: true to allow multiple answers to be selected for a question\n- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label\n\nPlan mode note: In plan mode, use this tool to clarify requirements or choose between approaches BEFORE finalizing your plan. Do NOT use this tool to ask \"Is my plan ready?\" or \"Should I proceed?\" - use ExitPlanMode for plan approval. IMPORTANT: Do not reference \"the plan\" in your questions (e.g., \"Do you have feedback about the plan?\", \"Does the plan look good?\") because the user cannot see the plan in the UI until you call ExitPlanMode. If you need plan approval, use ExitPlanMode instead.\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "notes": {
+                "description": "Free-text notes the user added to their selection.",
+                "type": "string"
+              },
+              "preview": {
+                "description": "The preview content of the selected option, if the question used previews.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Optional per-question annotations from the user (e.g., notes on preview selections). Keyed by question text.",
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "answers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "User answers collected by the permission component",
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "metadata": {
+          "additionalProperties": false,
+          "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
+          "properties": {
+            "source": {
+              "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "questions": {
+          "description": "Questions to ask the user (1-4 questions)",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "header": {
+                "description": "Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".",
+                "type": "string"
+              },
+              "multiSelect": {
+                "default": false,
+                "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.",
+                "type": "boolean"
+              },
+              "options": {
+                "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "description": "Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.",
+                      "type": "string"
+                    },
+                    "label": {
+                      "description": "The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.",
+                      "type": "string"
+                    },
+                    "preview": {
+                      "description": "Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "description"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 4,
+                "minItems": 2,
+                "type": "array"
+              },
+              "question": {
+                "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"",
+                "type": "string"
+              }
+            },
+            "required": [
+              "question",
+              "header",
+              "options",
+              "multiSelect"
+            ],
+            "type": "object"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "questions"
+      ],
+      "type": "object"
+    },
+    "name": "AskUserQuestion"
+  },
+  {
+    "description": "Executes a given bash command and returns its output.\n\nThe working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).\n\nIMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool as this will provide a much better experience for the user:\n\n - File search: Use Glob (NOT find or ls)\n - Content search: Use Grep (NOT grep or rg)\n - Read files: Use Read (NOT cat/head/tail)\n - Edit files: Use Edit (NOT sed/awk)\n - Write files: Use Write (NOT echo >/cat <<EOF)\n - Communication: Output text directly (NOT echo/printf)\nWhile the Bash tool can do similar things, it’s better to use the built-in tools as they provide a better user experience and make it easier to review tool calls and give permission.\n\n# Instructions\n - If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.\n - Always quote file paths that contain spaces with double quotes in your command (e.g., cd \"path with spaces/file.txt\")\n - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it. In particular, never prepend `cd <current-directory>` to a `git` command — `git` already operates on the current working tree, and the compound triggers a permission prompt.\n - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By default, your command will timeout after 120000ms (2 minutes).\n - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You do not need to use '&' at the end of the command when using this parameter.\n - When issuing multiple commands:\n  - If the commands are independent and can run in parallel, make multiple Bash tool calls in a single message. Example: if you need to run \"git status\" and \"git diff\", send a single message with two Bash tool calls in parallel.\n  - If the commands depend on each other and must run sequentially, use a single Bash call with '&&' to chain them together.\n  - Use ';' only when you need to run commands sequentially but don't care if earlier commands fail.\n  - DO NOT use newlines to separate commands (newlines are ok in quoted strings).\n - For git commands:\n  - Prefer to create a new commit rather than amending an existing commit.\n  - Before running destructive operations (e.g., git reset --hard, git push --force, git checkout --), consider whether there is a safer alternative that achieves the same goal. Only use destructive operations when they are truly the best approach.\n  - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, investigate and fix the underlying issue.\n - Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n\n\n# Committing changes with git\n\nOnly create commits when requested by the user. If unclear, ask first. When the user asks you to create a new git commit, follow these steps carefully:\n\nYou can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance. The numbered steps below indicate which commands should be batched in parallel.\n\nGit Safety Protocol:\n- NEVER update the git config\n- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions. Taking unauthorized destructive actions is unhelpful and can result in lost work, so it's best to ONLY run these commands when given direct instructions \n- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it\n- NEVER run force push to main/master, warn the user if they request it\n- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit\n- When staging files, prefer adding specific files by name rather than using \"git add -A\" or \"git add .\", which can accidentally include sensitive files (.env, credentials) or large binaries\n- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are being too proactive\n\n1. Run the following bash commands in parallel, each using the Bash tool:\n  - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as it can cause memory issues on large repos.\n  - Run a git diff command to see both staged and unstaged changes that will be committed.\n  - Run a git log command to see recent commit messages, so that you can follow this repository's commit message style.\n2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:\n  - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. \"add\" means a wholly new feature, \"update\" means an enhancement to an existing feature, \"fix\" means a bug fix, etc.).\n  - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files\n  - Draft a concise (1-2 sentences) commit message that focuses on the \"why\" rather than the \"what\"\n  - Ensure it accurately reflects the changes and their purpose\n3. Run the following commands in parallel:\n   - Add relevant untracked files to the staging area.\n   - Create the commit with a message ending with:\n   Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>\n   - Run git status after the commit completes to verify success.\n   Note: git status depends on the commit completing, so run it sequentially after the commit.\n4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit\n\nImportant notes:\n- NEVER run additional commands to read or explore code, besides git bash commands\n- NEVER use the TodoWrite or Agent tools\n- DO NOT push to the remote repository unless the user explicitly asks you to do so\n- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.\n- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a valid option for git rebase.\n- If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit\n- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:\n<example>\ngit commit -m \"$(cat <<'EOF'\n   Commit message here.\n\n   Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>\n   EOF\n   )\"\n</example>\n\n# Creating pull requests\nUse the gh command via the Bash tool for ALL GitHub-related tasks including working with issues, pull requests, checks, and releases. If given a Github URL use the gh command to get the information needed.\n\nIMPORTANT: When the user asks you to create a pull request, follow these steps carefully:\n\n1. Run the following bash commands in parallel using the Bash tool, in order to understand the current state of the branch since it diverged from the main branch:\n   - Run a git status command to see all untracked files (never use -uall flag)\n   - Run a git diff command to see both staged and unstaged changes that will be committed\n   - Check if the current branch tracks a remote branch and is up to date with the remote, so you know if you need to push to the remote\n   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit history for the current branch (from the time it diverged from the base branch)\n2. Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request!!!), and draft a pull request title and summary:\n   - Keep the PR title short (under 70 characters)\n   - Use the description/body for details, not the title\n3. Run the following commands in parallel:\n   - Create new branch if needed\n   - Push to remote with -u flag if needed\n   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to ensure correct formatting.\n<example>\ngh pr create --title \"the pr title\" --body \"$(cat <<'EOF'\n## Summary\n<1-3 bullet points>\n\n## Test plan\n[Bulleted markdown checklist of TODOs for testing the pull request...]\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nEOF\n)\"\n</example>\n\nImportant:\n- DO NOT use the TodoWrite or Agent tools\n- Return the PR URL when you're done, so the user can see it\n\n# Other common operations\n- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "The command to execute",
+          "type": "string"
+        },
+        "dangerouslyDisableSandbox": {
+          "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls → \"List files in current directory\"\n- git status → \"Show working tree status\"\n- npm install → \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; → \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main → \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' → \"Fetch JSON from URL and extract data array elements\"",
+          "type": "string"
+        },
+        "run_in_background": {
+          "description": "Set to true to run this command in the background. Use Read to read the output later.",
+          "type": "boolean"
+        },
+        "timeout": {
+          "description": "Optional timeout in milliseconds (max 600000)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "Bash"
+  },
+  {
+    "description": "Schedule a prompt to be enqueued at a future time. Use for both recurring schedules and one-shot reminders.\n\nUses standard 5-field cron in the user's local timezone: minute hour day-of-month month day-of-week. \"0 9 * * *\" means 9am local — no timezone conversion needed.\n\n## One-shot tasks (recurring: false)\n\nFor \"remind me at X\" or \"at <time>, do Y\" requests — fire once then auto-delete.\nPin minute/hour/day-of-month/month to specific values:\n  \"remind me at 2:30pm today to check the deploy\" → cron: \"30 14 <today_dom> <today_month> *\", recurring: false\n  \"tomorrow morning, run the smoke test\" → cron: \"57 8 <tomorrow_dom> <tomorrow_month> *\", recurring: false\n\n## Recurring jobs (recurring: true, the default)\n\nFor \"every N minutes\" / \"every hour\" / \"weekdays at 9am\" requests:\n  \"*/5 * * * *\" (every 5 min), \"0 * * * *\" (hourly), \"0 9 * * 1-5\" (weekdays at 9am local)\n\n## Avoid the :00 and :30 minute marks when the task allows it\n\nEvery user who asks for \"9am\" gets `0 9`, and every user who asks for \"hourly\" gets `0 *` — which means requests from across the planet land on the API at the same instant. When the user's request is approximate, pick a minute that is NOT 0 or 30:\n  \"every morning around 9\" → \"57 8 * * *\" or \"3 9 * * *\" (not \"0 9 * * *\")\n  \"hourly\" → \"7 * * * *\" (not \"0 * * * *\")\n  \"in an hour or so, remind me to...\" → pick whatever minute you land on, don't round\n\nOnly use minute 0 or 30 when the user names that exact time and clearly means it (\"at 9:00 sharp\", \"at half past\", coordinating with a meeting). When in doubt, nudge a few minutes early or late — the user will not notice, and the fleet will.\n\n## Session-only\n\nJobs live only in this Claude session — nothing is written to disk, and the job is gone when Claude exits.\n\n## Runtime behavior\n\nJobs only fire while the REPL is idle (not mid-query). The scheduler adds a small deterministic jitter on top of whatever you pick: recurring tasks fire up to 10% of their period late (max 15 min); one-shot tasks landing on :00 or :30 fire up to 90 s early. Picking an off-minute is still the bigger lever.\n\nRecurring tasks auto-expire after 7 days — they fire one final time, then are deleted. This bounds session lifetime. Tell the user about the 7-day limit when scheduling recurring jobs.\n\nReturns a job ID you can pass to CronDelete.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cron": {
+          "description": "Standard 5-field cron expression in local time: \"M H DoM Mon DoW\" (e.g. \"*/5 * * * *\" = every 5 minutes, \"30 14 28 2 *\" = Feb 28 at 2:30pm local once).",
+          "type": "string"
+        },
+        "durable": {
+          "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false (default) = in-memory only, dies when this Claude session ends. Use true only when the user asks the task to survive across sessions.",
+          "type": "boolean"
+        },
+        "prompt": {
+          "description": "The prompt to enqueue at each fire time.",
+          "type": "string"
+        },
+        "recurring": {
+          "description": "true (default) = fire on every cron match until deleted or auto-expired after 7 days. false = fire once at the next match, then auto-delete. Use false for \"remind me at X\" one-shot requests with pinned minute/hour/dom/month.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cron",
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "name": "CronCreate"
+  },
+  {
+    "description": "Cancel a cron job previously scheduled with CronCreate. Removes it from the in-memory session store.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Job ID returned by CronCreate.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "name": "CronDelete"
+  },
+  {
+    "description": "List all cron jobs scheduled via CronCreate in this session.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "CronList"
+  },
+  {
+    "description": "Performs exact string replacements in files.\n\nUsage:\n- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.\n- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "description": "The absolute path to the file to modify",
+          "type": "string"
+        },
+        "new_string": {
+          "description": "The text to replace it with (must be different from old_string)",
+          "type": "string"
+        },
+        "old_string": {
+          "description": "The text to replace",
+          "type": "string"
+        },
+        "replace_all": {
+          "default": false,
+          "description": "Replace all occurrences of old_string (default false)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ],
+      "type": "object"
+    },
+    "name": "Edit"
+  },
+  {
+    "description": "Use this tool proactively when you're about to start a non-trivial implementation task. Getting user sign-off on your approach before writing code prevents wasted effort and ensures alignment. This tool transitions you into plan mode where you can explore the codebase and design an implementation approach for user approval.\n\n## When to Use This Tool\n\n**Prefer using EnterPlanMode** for implementation tasks unless they're simple. Use it when ANY of these conditions apply:\n\n1. **New Feature Implementation**: Adding meaningful new functionality\n   - Example: \"Add a logout button\" - where should it go? What should happen on click?\n   - Example: \"Add form validation\" - what rules? What error messages?\n\n2. **Multiple Valid Approaches**: The task can be solved in several different ways\n   - Example: \"Add caching to the API\" - could use Redis, in-memory, file-based, etc.\n   - Example: \"Improve performance\" - many optimization strategies possible\n\n3. **Code Modifications**: Changes that affect existing behavior or structure\n   - Example: \"Update the login flow\" - what exactly should change?\n   - Example: \"Refactor this component\" - what's the target architecture?\n\n4. **Architectural Decisions**: The task requires choosing between patterns or technologies\n   - Example: \"Add real-time updates\" - WebSockets vs SSE vs polling\n   - Example: \"Implement state management\" - Redux vs Context vs custom solution\n\n5. **Multi-File Changes**: The task will likely touch more than 2-3 files\n   - Example: \"Refactor the authentication system\"\n   - Example: \"Add a new API endpoint with tests\"\n\n6. **Unclear Requirements**: You need to explore before understanding the full scope\n   - Example: \"Make the app faster\" - need to profile and identify bottlenecks\n   - Example: \"Fix the bug in checkout\" - need to investigate root cause\n\n7. **User Preferences Matter**: The implementation could reasonably go multiple ways\n   - If you would use AskUserQuestion to clarify the approach, use EnterPlanMode instead\n   - Plan mode lets you explore first, then present options with context\n\n## When NOT to Use This Tool\n\nOnly skip EnterPlanMode for simple tasks:\n- Single-line or few-line fixes (typos, obvious bugs, small tweaks)\n- Adding a single function with clear requirements\n- Tasks where the user has given very specific, detailed instructions\n- Pure research/exploration tasks (use the Agent tool with explore agent instead)\n\n## What Happens in Plan Mode\n\nIn plan mode, you'll:\n1. Thoroughly explore the codebase using Glob, Grep, and Read tools\n2. Understand existing patterns and architecture\n3. Design an implementation approach\n4. Present your plan to the user for approval\n5. Use AskUserQuestion if you need to clarify approaches\n6. Exit plan mode with ExitPlanMode when ready to implement\n\n## Examples\n\n### GOOD - Use EnterPlanMode:\nUser: \"Add user authentication to the app\"\n- Requires architectural decisions (session vs JWT, where to store tokens, middleware structure)\n\nUser: \"Optimize the database queries\"\n- Multiple approaches possible, need to profile first, significant impact\n\nUser: \"Implement dark mode\"\n- Architectural decision on theme system, affects many components\n\nUser: \"Add a delete button to the user profile\"\n- Seems simple but involves: where to place it, confirmation dialog, API call, error handling, state updates\n\nUser: \"Update the error handling in the API\"\n- Affects multiple files, user should approve the approach\n\n### BAD - Don't use EnterPlanMode:\nUser: \"Fix the typo in the README\"\n- Straightforward, no planning needed\n\nUser: \"Add a console.log to debug this function\"\n- Simple, obvious implementation\n\nUser: \"What files handle routing?\"\n- Research task, not implementation planning\n\n## Important Notes\n\n- This tool REQUIRES user approval - they must consent to entering plan mode\n- If unsure whether to use it, err on the side of planning - it's better to get alignment upfront than to redo work\n- Users appreciate being consulted before significant changes are made to their codebase\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "EnterPlanMode"
+  },
+  {
+    "description": "Use this tool ONLY when explicitly instructed to work in a worktree — either by the user directly, or by project instructions (CLAUDE.md / memory). This tool creates an isolated git worktree and switches the current session into it.\n\n## When to Use\n\n- The user explicitly says \"worktree\" (e.g., \"start a worktree\", \"work in a worktree\", \"create a worktree\", \"use a worktree\")\n- CLAUDE.md or memory instructions direct you to work in a worktree for the current task\n\n## When NOT to Use\n\n- The user asks to create a branch, switch branches, or work on a different branch — use git commands instead\n- The user asks to fix a bug or work on a feature — use normal git workflow unless worktrees are explicitly requested by the user or project instructions\n- Never use this tool unless \"worktree\" is explicitly mentioned by the user or in CLAUDE.md / memory instructions\n\n## Requirements\n\n- Must be in a git repository, OR have WorktreeCreate/WorktreeRemove hooks configured in settings.json\n- Must not already be in a worktree\n\n## Behavior\n\n- In a git repository: creates a new git worktree inside `.claude/worktrees/` with a new branch based on HEAD\n- Outside a git repository: delegates to WorktreeCreate/WorktreeRemove hooks for VCS-agnostic isolation\n- Switches the session's working directory to the new worktree\n- Use ExitWorktree to leave the worktree mid-session (keep or remove). On session exit, if still in the worktree, the user will be prompted to keep or remove it\n\n## Entering an existing worktree\n\nPass `path` instead of `name` to switch the session into a worktree that already exists (e.g., one you just created with `git worktree add`). The path must appear in `git worktree list` for the current repository — paths that are not registered worktrees of this repo are rejected. ExitWorktree will not remove a worktree entered this way; use `action: \"keep\"` to return to the original directory.\n\n## Parameters\n\n- `name` (optional): A name for a new worktree. If neither `name` nor `path` is provided, a random name is generated.\n- `path` (optional): Path to an existing worktree of the current repository to enter instead of creating one. Mutually exclusive with `name`.\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Optional name for a new worktree. Each \"/\"-separated segment may contain only letters, digits, dots, underscores, and dashes; max 64 chars total. A random name is generated if not provided. Mutually exclusive with `path`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path to an existing worktree of the current repository to switch into instead of creating a new one. Must appear in `git worktree list` for the current repo. Mutually exclusive with `name`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "EnterWorktree"
+  },
+  {
+    "description": "Use this tool when you are in plan mode and have finished writing your plan to the plan file and are ready for user approval.\n\n## How This Tool Works\n- You should have already written your plan to the plan file specified in the plan mode system message\n- This tool does NOT take the plan content as a parameter - it will read the plan from the file you wrote\n- This tool simply signals that you're done planning and ready for the user to review and approve\n- The user will see the contents of your plan file when they review it\n\n## When to Use This Tool\nIMPORTANT: Only use this tool when the task requires planning the implementation steps of a task that requires writing code. For research tasks where you're gathering information, searching files, reading files or in general trying to understand the codebase - do NOT use this tool.\n\n## Before Using This Tool\nEnsure your plan is complete and unambiguous:\n- If you have unresolved questions about requirements or approach, use AskUserQuestion first (in earlier phases)\n- Once your plan is finalized, use THIS tool to request approval\n\n**Important:** Do NOT use AskUserQuestion to ask \"Is this plan okay?\" or \"Should I proceed?\" - that's exactly what THIS tool does. ExitPlanMode inherently requests user approval of your plan.\n\n## Examples\n\n1. Initial task: \"Search for and understand the implementation of vim mode in the codebase\" - Do not use the exit plan mode tool because you are not planning the implementation steps of a task.\n2. Initial task: \"Help me implement yank mode for vim\" - Use the exit plan mode tool after you have finished planning the implementation steps of the task.\n3. Initial task: \"Add a new feature to handle user authentication\" - If unsure about auth method (OAuth, JWT, etc.), use AskUserQuestion first, then use exit plan mode tool after clarifying the approach.\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": {},
+      "properties": {
+        "allowedPrompts": {
+          "description": "Prompt-based permissions needed to implement the plan. These describe categories of actions rather than specific commands.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "prompt": {
+                "description": "Semantic description of the action, e.g. \"run tests\", \"install dependencies\"",
+                "type": "string"
+              },
+              "tool": {
+                "description": "The tool this prompt applies to",
+                "enum": [
+                  "Bash"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool",
+              "prompt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": "ExitPlanMode"
+  },
+  {
+    "description": "Exit a worktree session created by EnterWorktree and return the session to the original working directory.\n\n## Scope\n\nThis tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:\n- Worktrees you created manually with `git worktree add`\n- Worktrees from a previous session (even if created by EnterWorktree then)\n- The directory you're in if EnterWorktree was never called\n\nIf called outside an EnterWorktree session, the tool is a **no-op**: it reports that no worktree session is active and takes no action. Filesystem state is unchanged.\n\n## When to Use\n\n- The user explicitly asks to \"exit the worktree\", \"leave the worktree\", \"go back\", or otherwise end the worktree session\n- Do NOT call this proactively — only when the user asks\n\n## Parameters\n\n- `action` (required): `\"keep\"` or `\"remove\"`\n  - `\"keep\"` — leave the worktree directory and branch intact on disk. Use this if the user wants to come back to the work later, or if there are changes to preserve.\n  - `\"remove\"` — delete the worktree directory and its branch. Use this for a clean exit when the work is done or abandoned.\n- `discard_changes` (optional, default false): only meaningful with `action: \"remove\"`. If the worktree has uncommitted files or commits not on the original branch, the tool will REFUSE to remove it unless this is set to `true`. If the tool returns an error listing changes, confirm with the user before re-invoking with `discard_changes: true`.\n\n## Behavior\n\n- Restores the session's working directory to where it was before EnterWorktree\n- Clears CWD-dependent caches (system prompt sections, memory files, plans directory) so the session state reflects the original directory\n- If a tmux session was attached to the worktree: killed on `remove`, left running on `keep` (its name is returned so the user can reattach)\n- Once exited, EnterWorktree can be called again to create a fresh worktree\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "\"keep\" leaves the worktree and branch on disk; \"remove\" deletes both.",
+          "enum": [
+            "keep",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "discard_changes": {
+          "description": "Required true when action is \"remove\" and the worktree has uncommitted files or unmerged commits. The tool will refuse and list them otherwise.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "ExitWorktree"
+  },
+  {
+    "description": "- Fast file pattern matching tool that works with any codebase size\n- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"\n- Returns matching file paths sorted by modification time\n- Use this tool when you need to find files by name patterns\n- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided.",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "The glob pattern to match files against",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "name": "Glob"
+  },
+  {
+    "description": "A powerful search tool built on ripgrep\n\n  Usage:\n  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash command. The Grep tool has been optimized for correct permissions and access.\n  - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n  - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type parameter (e.g., \"js\", \"py\", \"rust\")\n  - Output modes: \"content\" shows matching lines, \"files_with_matches\" shows only file paths (default), \"count\" shows match counts\n  - Use Agent tool for open-ended searches requiring multiple rounds\n  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)\n  - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "-A": {
+          "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise.",
+          "type": "number"
+        },
+        "-B": {
+          "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise.",
+          "type": "number"
+        },
+        "-C": {
+          "description": "Alias for context.",
+          "type": "number"
+        },
+        "-i": {
+          "description": "Case insensitive search (rg -i)",
+          "type": "boolean"
+        },
+        "-n": {
+          "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to true.",
+          "type": "boolean"
+        },
+        "context": {
+          "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise.",
+          "type": "number"
+        },
+        "glob": {
+          "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob",
+          "type": "string"
+        },
+        "head_limit": {
+          "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context).",
+          "type": "number"
+        },
+        "multiline": {
+          "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false.",
+          "type": "boolean"
+        },
+        "offset": {
+          "description": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0.",
+          "type": "number"
+        },
+        "output_mode": {
+          "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\".",
+          "enum": [
+            "content",
+            "files_with_matches",
+            "count"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "File or directory to search in (rg PATH). Defaults to current working directory.",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "The regular expression pattern to search for in file contents",
+          "type": "string"
+        },
+        "type": {
+          "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "name": "Grep"
+  },
+  {
+    "description": "Interact with Language Server Protocol (LSP) servers to get code intelligence features.\n\nSupported operations:\n- goToDefinition: Find where a symbol is defined\n- findReferences: Find all references to a symbol\n- hover: Get hover information (documentation, type info) for a symbol\n- documentSymbol: Get all symbols (functions, classes, variables) in a document\n- workspaceSymbol: Search for symbols across the entire workspace\n- goToImplementation: Find implementations of an interface or abstract method\n- prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)\n- incomingCalls: Find all functions/methods that call the function at a position\n- outgoingCalls: Find all functions/methods called by the function at a position\n\nAll operations require:\n- filePath: The file to operate on\n- line: The line number (1-based, as shown in editors)\n- character: The character offset (1-based, as shown in editors)\n\nNote: LSP servers must be configured for the file type. If no server is available, an error will be returned.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "character": {
+          "description": "The character offset (1-based, as shown in editors)",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "filePath": {
+          "description": "The absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "The line number (1-based, as shown in editors)",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "operation": {
+          "description": "The LSP operation to perform",
+          "enum": [
+            "goToDefinition",
+            "findReferences",
+            "hover",
+            "documentSymbol",
+            "workspaceSymbol",
+            "goToImplementation",
+            "prepareCallHierarchy",
+            "incomingCalls",
+            "outgoingCalls"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "filePath",
+        "line",
+        "character"
+      ],
+      "type": "object"
+    },
+    "name": "LSP"
+  },
+  {
+    "description": "Start a background monitor that streams events from a long-running script. Each stdout line is an event — you keep working and notifications arrive in the chat. Events arrive on their own schedule and are not replies from the user, even if one lands while you're waiting for the user to answer a question.\n\nPick by how many notifications you need:\n- **One** (\"tell me when the server is ready / the build finishes\") → use **Bash with `run_in_background`** and a command that exits when the condition is true, e.g. `until grep -q \"Ready in\" dev.log; do sleep 0.5; done`. You get a single completion notification when it exits.\n- **One per occurrence, indefinitely** (\"tell me every time an ERROR line appears\") → Monitor with an unbounded command (`tail -f`, `inotifywait -m`, `while true`).\n- **One per occurrence, until a known end** (\"emit each CI step result, stop when the run completes\") → Monitor with a command that emits lines and then exits.\n\nYour script's stdout is the event stream. Each line becomes a notification. Exit ends the watch.\n\n  # Each matching log line is an event\n  tail -f /var/log/app.log | grep --line-buffered \"ERROR\"\n\n  # Each file change is an event\n  inotifywait -m --format '%e %f' /watched/dir\n\n  # Poll GitHub for new PR comments and emit one line per new comment\n  last=$(date -u +%Y-%m-%dT%H:%M:%SZ)\n  while true; do\n    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)\n    gh api \"repos/owner/repo/issues/123/comments?since=$last\" --jq '.[] | \"\\(.user.login): \\(.body)\"'\n    last=$now; sleep 30\n  done\n\n  # Node script that emits events as they arrive (e.g. WebSocket listener)\n  node watch-for-events.js\n\n  # Per-occurrence with a natural end: emit each CI check as it lands, exit when the run completes\n  prev=\"\"\n  while true; do\n    s=$(gh pr checks 123 --json name,bucket)\n    cur=$(jq -r '.[] | select(.bucket!=\"pending\") | \"\\(.name): \\(.bucket)\"' <<<\"$s\" | sort)\n    comm -13 <(echo \"$prev\") <(echo \"$cur\")\n    prev=$cur\n    jq -e 'all(.bucket!=\"pending\")' <<<\"$s\" >/dev/null && break\n    sleep 30\n  done\n\n**Don't use an unbounded command for a single notification.** `tail -f`, `inotifywait -m`, and `while true` never exit on their own, so the monitor stays armed until timeout even after the event has fired. For \"tell me when X is ready,\" use Bash `run_in_background` with an `until` loop instead (one notification, ends in seconds). Note that `tail -f log | grep -m 1 ...` does *not* fix this: if the log goes quiet after the match, `tail` never receives SIGPIPE and the pipeline hangs anyway.\n\n**Script quality:**\n- Always use `grep --line-buffered` in pipes — without it, pipe buffering delays events by minutes.\n- In poll loops, handle transient failures (`curl ... || true`) — one failed request shouldn't kill the monitor.\n- Poll intervals: 30s+ for remote APIs (rate limits), 0.5-1s for local checks.\n- Write a specific `description` — it appears in every notification (\"errors in deploy.log\" not \"watching logs\").\n- Only stdout is the event stream. Stderr goes to the output file (readable via Read) but does not trigger notifications — for a command you run directly (e.g. `python train.py 2>&1 | grep --line-buffered ...`), merge stderr with `2>&1` so its failures reach your filter. (No effect on `tail -f` of an existing log — that file only contains what its writer redirected.)\n\n**Coverage — silence is not success.** When watching a job or process for an outcome, your filter must match every terminal state, not just the happy path. A monitor that greps only for the success marker stays silent through a crashloop, a hung process, or an unexpected exit — and silence looks identical to \"still running.\" Before arming, ask: *if this process crashed right now, would my filter emit anything?* If not, widen it.\n\n  # Wrong — silent on crash, hang, or any non-success exit\n  tail -f run.log | grep --line-buffered \"elapsed_steps=\"\n\n  # Right — one alternation covering progress + the failure signatures you'd act on\n  tail -f run.log | grep -E --line-buffered \"elapsed_steps=|Traceback|Error|FAILED|assert|Killed|OOM\"\n\nFor poll loops checking job state, emit on every terminal status (`succeeded|failed|cancelled|timeout`), not just success. If you cannot confidently enumerate the failure signatures, broaden the grep alternation rather than narrow it — some extra noise is better than missing a crashloop.\n\n**Output volume**: Every stdout line is a conversation message, so the filter should be selective — but selective means \"the lines you'd act on,\" not \"only good news.\" Never pipe raw logs; use `grep --line-buffered`, `awk`, or a wrapper that emits exactly the success and failure signals you care about. Monitors that produce too many events are automatically stopped; restart with a tighter filter if this happens.\n\nStdout lines within 200ms are batched into a single notification, so multiline output from a single event groups naturally.\n\nThe script runs in the same shell environment as Bash. Exit ends the watch (exit code is reported). Timeout → killed. Set `persistent: true` for session-length watches (PR monitoring, log tails) — the monitor runs until you call TaskStop or the session ends. Use TaskStop to cancel early.\n\nWhen an event lands that the user would want to act on now — an error appeared, the status they were waiting on flipped — send a PushNotification. Not every event is worth a push; the ones that change what they'd do next are.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "Shell command or script. Each stdout line is an event; exit ends the watch.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Short human-readable description of what you are monitoring (shown in notifications).",
+          "type": "string"
+        },
+        "persistent": {
+          "default": false,
+          "description": "Run for the lifetime of the session (no timeout). Use for session-length watches like PR monitoring or log tails. Stop with TaskStop.",
+          "type": "boolean"
+        },
+        "timeout_ms": {
+          "default": 300000,
+          "description": "Kill the monitor after this deadline. Default 300000ms, max 3600000ms. Ignored when persistent is true.",
+          "minimum": 1000,
+          "type": "number"
+        }
+      },
+      "required": [
+        "description",
+        "timeout_ms",
+        "persistent",
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "Monitor"
+  },
+  {
+    "description": "Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source. Jupyter notebooks are interactive documents that combine code, text, and visualizations, commonly used for data analysis and scientific computing. The notebook_path parameter must be an absolute path, not a relative path. The cell_number is 0-indexed. Use edit_mode=insert to add a new cell at the index specified by cell_number. Use edit_mode=delete to delete the cell at the index specified by cell_number.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cell_id": {
+          "description": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified.",
+          "type": "string"
+        },
+        "cell_type": {
+          "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required.",
+          "enum": [
+            "code",
+            "markdown"
+          ],
+          "type": "string"
+        },
+        "edit_mode": {
+          "description": "The type of edit to make (replace, insert, delete). Defaults to replace.",
+          "enum": [
+            "replace",
+            "insert",
+            "delete"
+          ],
+          "type": "string"
+        },
+        "new_source": {
+          "description": "The new source for the cell",
+          "type": "string"
+        },
+        "notebook_path": {
+          "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "notebook_path",
+        "new_source"
+      ],
+      "type": "object"
+    },
+    "name": "NotebookEdit"
+  },
+  {
+    "description": "This tool sends a desktop notification in the user's terminal. If Remote Control is connected, it also pushes to their phone. Either way, it pulls their attention from whatever they're doing — a meeting, another task, dinner — to this session. That's the cost. The benefit is they learn something now that they'd want to know now: a long task finished while they were away, a build is ready, you've hit something that needs their decision before you can continue.\n\nBecause a notification they didn't need is annoying in a way that accumulates, err toward not sending one. Don't notify for routine progress, or to announce you've answered something they asked seconds ago and are clearly still watching, or when a quick task completes. Notify when there's a real chance they've walked away and there's something worth coming back for — or when they've explicitly asked you to notify them.\n\nKeep the message under 200 characters, one line, no markdown. Lead with what they'd act on — \"build failed: 2 auth tests\" tells them more than \"task done\" and more than a status dump.\n\nIf the result says the push wasn't sent, that's expected — no action needed.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "description": "The notification body. Keep it under 200 characters; mobile OSes truncate.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "const": "proactive",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "status"
+      ],
+      "type": "object"
+    },
+    "name": "PushNotification"
+  },
+  {
+    "description": "Reads a file from the local filesystem. You can access any file directly by using this tool.\nAssume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.\n\nUsage:\n- The file_path parameter must be an absolute path, not a relative path\n- By default, it reads up to 2000 lines starting from the beginning of the file\n- When you already know which part of the file you need, only read that part. This can be important for larger files.\n- Results are returned using cat -n format, with line numbers starting at 1\n- This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Claude Code is a multimodal LLM.\n- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.\n- This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.\n- This tool can only read files, not directories. To list files in a directory, use the registered shell tool.\n- You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.\n- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.\n- Do NOT re-read a file you just edited to verify — Edit/Write would have errored if the change failed, and the harness tracks file state for you.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "description": "The absolute path to the file to read",
+          "type": "string"
+        },
+        "limit": {
+          "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "The line number to start reading from. Only provide if the file is too large to read at once",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pages": {
+          "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    },
+    "name": "Read"
+  },
+  {
+    "description": "Call the claude.ai remote-trigger API. Use this instead of curl — the OAuth token is added automatically in-process and never exposed.\n\nActions:\n- list: GET /v1/code/triggers\n- get: GET /v1/code/triggers/{trigger_id}\n- create: POST /v1/code/triggers (requires body)\n- update: POST /v1/code/triggers/{trigger_id} (requires body, partial update)\n- run: POST /v1/code/triggers/{trigger_id}/run (optional body)\n\nThe response is the raw JSON from the API.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "get",
+            "create",
+            "update",
+            "run"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "additionalProperties": {},
+          "description": "Required for create and update; optional for run",
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "trigger_id": {
+          "description": "Required for get, update, and run",
+          "pattern": "^[\\w-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "RemoteTrigger"
+  },
+  {
+    "description": "Schedule when to resume work in /loop dynamic mode — the user invoked /loop without an interval, asking you to self-pace iterations of a specific task.\n\nPass the same /loop prompt back via `prompt` each turn so the next firing repeats the task. For an autonomous /loop (no user prompt), pass the literal sentinel `<<autonomous-loop-dynamic>>` as `prompt` instead — the runtime resolves it back to the autonomous-loop instructions at fire time. (There is a similar `<<autonomous-loop>>` sentinel for CronCreate-based autonomous loops; do not confuse the two — ScheduleWakeup always uses the `-dynamic` variant.) Omit the call to end the loop.\n\n## Picking delaySeconds\n\nThe Anthropic prompt cache has a 5-minute TTL. Sleeping past 300 seconds means the next wake-up reads your full conversation context uncached — slower and more expensive. So the natural breakpoints:\n\n- **Under 5 minutes (60s–270s)**: cache stays warm. Right for active work — checking a build, polling for state that's about to change, watching a process you just started.\n- **5 minutes to 1 hour (300s–3600s)**: pay the cache miss. Right when there's no point checking sooner — waiting on something that takes minutes to change, or genuinely idle.\n\n**Don't pick 300s.** It's the worst-of-both: you pay the cache miss without amortizing it. If you're tempted to \"wait 5 minutes,\" either drop to 270s (stay in cache) or commit to 1200s+ (one cache miss buys a much longer wait). Don't think in round-number minutes — think in cache windows.\n\nFor idle ticks with no specific signal to watch, default to **1200s–1800s** (20–30 min). The loop checks back, you don't burn cache 12× per hour for nothing, and the user can always interrupt if they need you sooner.\n\nThink about what you're actually waiting for, not just \"how long should I sleep.\" If you kicked off an 8-minute build, sleeping 60s burns the cache 8 times before it finishes — sleep ~270s twice instead.\n\nThe runtime clamps to [60, 3600], so you don't need to clamp yourself.\n\n## The reason field\n\nOne short sentence on what you chose and why. Goes to telemetry and is shown back to the user. \"checking long bun build\" beats \"waiting.\" The user reads this to understand what you're doing without having to predict your cadence in advance — make it specific.\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "delaySeconds": {
+          "description": "Seconds from now to wake up. Clamped to [60, 3600] by the runtime.",
+          "type": "number"
+        },
+        "prompt": {
+          "description": "The /loop input to fire on wake-up. Pass the same /loop input verbatim each turn so the next firing re-enters the skill and continues the loop. For autonomous /loop (no user prompt), pass the literal sentinel `<<autonomous-loop-dynamic>>` instead (the dynamic-pacing variant, not the CronCreate-mode `<<autonomous-loop>>`).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "One short sentence explaining the chosen delay. Goes to telemetry and is shown to the user. Be specific.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "delaySeconds",
+        "reason",
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "name": "ScheduleWakeup"
+  },
+  {
+    "description": "Execute a skill within the main conversation\n\nWhen users ask you to perform tasks, check if any of the available skills match. Skills provide specialized capabilities and domain knowledge.\n\nWhen users reference a \"slash command\" or \"/<something>\", they are referring to a skill. Use this tool to invoke it.\n\nHow to invoke:\n- Set `skill` to the exact name of an available skill (no leading slash). For plugin-namespaced skills use the fully qualified `plugin:skill` form.\n- Set `args` to pass optional arguments.\n\nImportant:\n- Available skills are listed in system-reminder messages in the conversation\n- Only invoke a skill that appears in that list, or one the user explicitly typed as `/<name>` in their message. Never guess or invent a skill name from training data; otherwise do not call this tool\n- When a skill matches the user's request, this is a BLOCKING REQUIREMENT: invoke the relevant Skill tool BEFORE generating any other response about the task\n- NEVER mention a skill without actually calling this tool\n- Do not invoke a skill that is already running\n- Do not use this tool for built-in CLI commands (like /help, /clear, etc.)\n- If you see a <command-name> tag in the current conversation turn, the skill has ALREADY been loaded - follow the instructions directly instead of calling this tool again\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "description": "Optional arguments for the skill",
+          "type": "string"
+        },
+        "skill": {
+          "description": "The name of a skill from the available-skills list. Do not guess names.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill"
+      ],
+      "type": "object"
+    },
+    "name": "Skill"
+  },
+  {
+    "description": "DEPRECATED: Background tasks return their output file path in the tool result, and you receive a <task-notification> with the same path when the task completes.\n- For bash tasks: prefer using the Read tool on that output file path — it contains stdout/stderr.\n- For local_agent tasks: use the Agent tool result directly. Do NOT Read the .output file — it is a symlink to the full sub-agent conversation transcript (JSONL) and will overflow your context window.\n- For remote_agent tasks: prefer using the Read tool on the output file path — it contains the streamed remote session output (same as bash).\n\n- Retrieves output from a running or completed task (background shell, agent, or remote session)\n- Takes a task_id parameter identifying the task\n- Returns the task output along with status information\n- Use block=true (default) to wait for task completion\n- Use block=false for non-blocking check of current status\n- Task IDs can be found using the /tasks command\n- Works with all task types: background shells, async agents, and remote sessions",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "default": true,
+          "description": "Whether to wait for completion",
+          "type": "boolean"
+        },
+        "task_id": {
+          "description": "The task ID to get output from",
+          "type": "string"
+        },
+        "timeout": {
+          "default": 30000,
+          "description": "Max wait time in ms",
+          "maximum": 600000,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "task_id",
+        "block",
+        "timeout"
+      ],
+      "type": "object"
+    },
+    "name": "TaskOutput"
+  },
+  {
+    "description": "\n- Stops a running background task by its ID\n- Takes a task_id parameter identifying the task to stop\n- Returns a success or failure status\n- Use this tool when you need to terminate a long-running task\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "shell_id": {
+          "description": "Deprecated: use task_id instead",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "The ID of the background task to stop",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "TaskStop"
+  },
+  {
+    "description": "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\nIt also helps the user understand the progress of the task and overall progress of their requests.\n\n## When to Use This Tool\nUse this tool proactively in these scenarios:\n\n1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions\n2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations\n3. User explicitly requests todo list - When the user directly asks you to use the todo list\n4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)\n5. After receiving new instructions - Immediately capture user requirements as todos\n6. When you start working on a task - Mark it as in_progress BEFORE beginning work. Ideally you should only have one todo as in_progress at a time\n7. After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation\n\n## When NOT to Use This Tool\n\nSkip using this tool when:\n1. There is only a single, straightforward task\n2. The task is trivial and tracking it provides no organizational benefit\n3. The task can be completed in less than 3 trivial steps\n4. The task is purely conversational or informational\n\nNOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.\n\n## Examples of When to Use the Todo List\n\n<example>\nUser: I want to add a dark mode toggle to the application settings. Make sure you run the tests and build when you're done!\nAssistant: *Creates todo list with the following items:*\n1. Creating dark mode toggle component in Settings page\n2. Adding dark mode state management (context/store)\n3. Implementing CSS-in-JS styles for dark theme\n4. Updating existing components to support theme switching\n5. Running tests and build process, addressing any failures or errors that occur\n*Begins working on the first task*\n\n<reasoning>\nThe assistant used the todo list because:\n1. Adding dark mode is a multi-step feature requiring UI, state management, and styling changes\n2. The user explicitly requested tests and build be run afterward\n3. The assistant inferred that tests and build need to pass by adding \"Ensure tests and build succeed\" as the final task\n</reasoning>\n</example>\n\n<example>\nUser: Help me rename the function getCwd to getCurrentWorkingDirectory across my project\nAssistant: *Uses grep or search tools to locate all instances of getCwd in the codebase*\nI've found 15 instances of 'getCwd' across 8 different files.\n*Creates todo list with specific items for each file that needs updating*\n\n<reasoning>\nThe assistant used the todo list because:\n1. First, the assistant searched to understand the scope of the task\n2. Upon finding multiple occurrences across different files, it determined this was a complex task with multiple steps\n3. The todo list helps ensure every instance is tracked and updated systematically\n4. This approach prevents missing any occurrences and maintains code consistency\n</reasoning>\n</example>\n\n\n<example>\nUser: I need to implement these features for my e-commerce site: user registration, product catalog, shopping cart, and checkout flow.\nAssistant: *Creates a todo list breaking down each feature into specific tasks based on the project architecture*\nLet's start with user registration. This will involve creating database models, API endpoints, and frontend forms that integrate with your existing authentication system.\n\n<reasoning>\nThe assistant used the todo list because:\n1. The user provided multiple complex features to implement in a comma separated list\n2. The todo list helps organize these large features into manageable tasks\n3. This approach allows for tracking progress across the entire implementation\n</reasoning>\n</example>\n\n<example>\nUser: Can you help optimize my React application? It's rendering slowly and has performance issues.\nAssistant: *Reviews component structure, render patterns, state management, and data fetching*\nAfter analyzing your codebase, I've identified several performance issues.\n*Creates todo list with items like: 1) Implementing memoization for expensive calculations in ProductList, 2) Adding virtualization for long lists in Dashboard, 3) Optimizing image loading in Gallery component, 4) Fixing state update loops in ShoppingCart, 5) Reviewing bundle size and implementing code splitting*\nLet's start by implementing memoization for the expensive calculations in your ProductList component.\n\n<reasoning>\nThe assistant used the todo list because:\n1. First, the assistant examined the codebase to identify specific performance issues\n2. Based on this analysis, it identified multiple optimization opportunities\n3. Performance optimization is a non-trivial task requiring multiple steps\n4. The todo list helps methodically track improvements across different components\n5. This systematic approach ensures all performance bottlenecks are addressed\n</reasoning>\n</example>\n\n## Examples of When NOT to Use the Todo List\n\n<example>\nUser: How do I print 'Hello World' in Python?\nAssistant: In Python, you can print \"Hello World\" with this simple code:\n\npython\nprint(\"Hello World\")\n\nThis will output the text \"Hello World\" to the console when executed.\n\n<reasoning>\nThe assistant did not use the todo list because this is a single, trivial task that can be completed in one step. There's no need to track multiple tasks or steps for such a straightforward request.\n</reasoning>\n</example>\n\n<example>\nUser: What does the git status command do?\nAssistant: The git status command shows the current state of your working directory and staging area. It displays which changes have been staged, which haven't, and which files aren't being tracked by Git. This is a fundamental command for understanding the current state of your repository before making commits.\n\n<reasoning>\nThe assistant did not use the todo list because this is an informational request with no actual coding task to complete. The user is simply asking for an explanation, not for the assistant to perform multiple steps or tasks.\n</reasoning>\n</example>\n\n<example>\nUser: Can you add a comment to the calculateTotal function to explain what it does?\nAssistant: Sure, let me add a comment to the calculateTotal function to explain what it does.\n* Uses the Edit tool to add a comment to the calculateTotal function *\n\n<reasoning>\nThe assistant did not use the todo list because this is a single, straightforward task confined to one location in the code. Adding a comment doesn't require tracking multiple steps or systematic organization.\n</reasoning>\n</example>\n\n<example>\nUser: Run npm install for me and tell me what happens.\nAssistant: I'll run the npm install command for you.\n\n*Executes: npm install*\n\nThe command completed successfully. Here's the output:\n[Output of npm install command]\n\nAll dependencies have been installed according to your package.json file.\n\n<reasoning>\nThe assistant did not use the todo list because this is a single command execution with immediate results. There are no multiple steps to track or organize, making the todo list unnecessary for this straightforward task.\n</reasoning>\n</example>\n\n## Task States and Management\n\n1. **Task States**: Use these states to track progress:\n   - pending: Task not yet started\n   - in_progress: Currently working on (limit to ONE task at a time)\n   - completed: Task finished successfully\n\n   **IMPORTANT**: Task descriptions must have two forms:\n   - content: The imperative form describing what needs to be done (e.g., \"Run tests\", \"Build the project\")\n   - activeForm: The present continuous form shown during execution (e.g., \"Running tests\", \"Building the project\")\n\n2. **Task Management**:\n   - Update task status in real-time as you work\n   - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)\n   - Exactly ONE task must be in_progress at any time (not less, not more)\n   - Complete current tasks before starting new ones\n   - Remove tasks that are no longer relevant from the list entirely\n\n3. **Task Completion Requirements**:\n   - ONLY mark a task as completed when you have FULLY accomplished it\n   - If you encounter errors, blockers, or cannot finish, keep the task as in_progress\n   - When blocked, create a new task describing what needs to be resolved\n   - Never mark a task as completed if:\n     - Tests are failing\n     - Implementation is partial\n     - You encountered unresolved errors\n     - You couldn't find necessary files or dependencies\n\n4. **Task Breakdown**:\n   - Create specific, actionable items\n   - Break complex tasks into smaller, manageable steps\n   - Use clear, descriptive task names\n   - Always provide both forms:\n     - content: \"Fix authentication bug\"\n     - activeForm: \"Fixing authentication bug\"\n\nWhen in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "todos": {
+          "description": "The updated todo list",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "activeForm": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "content": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "status",
+              "activeForm"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "todos"
+      ],
+      "type": "object"
+    },
+    "name": "TodoWrite"
+  },
+  {
+    "description": "IMPORTANT: WebFetch WILL FAIL for authenticated or private URLs. Before using this tool, check if the URL points to an authenticated service (e.g. Google Docs, Confluence, Jira, GitHub). If so, look for a specialized MCP tool that provides authenticated access.\n\n- Fetches content from a specified URL and processes it using an AI model\n- Takes a URL and a prompt as input\n- Fetches the URL content, converts HTML to markdown\n- Processes the content with the prompt using a small, fast model\n- Returns the model's response about the content\n- Use this tool when you need to retrieve and analyze web content\n\nUsage notes:\n  - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.\n  - The URL must be a fully-formed valid URL\n  - HTTP URLs will be automatically upgraded to HTTPS\n  - The prompt should describe what information you want to extract from the page\n  - This tool is read-only and does not modify any files\n  - Results may be summarized if the content is very large\n  - Includes a self-cleaning 15-minute cache for faster responses when repeatedly accessing the same URL\n  - When a URL redirects to a different host, the tool will inform you and provide the redirect URL in a special format. You should then make a new WebFetch request with the redirect URL to fetch the content.\n  - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr view, gh issue view, gh api).\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "description": "The prompt to run on the fetched content",
+          "type": "string"
+        },
+        "url": {
+          "description": "The URL to fetch content from",
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "name": "WebFetch"
+  },
+  {
+    "description": "\n- Allows Claude to search the web and use the results to inform responses\n- Provides up-to-date information for current events and recent data\n- Returns search result information formatted as search result blocks, including links as markdown hyperlinks\n- Use this tool for accessing information beyond Claude's knowledge cutoff\n- Searches are performed automatically within a single API call\n\nCRITICAL REQUIREMENT - You MUST follow this:\n  - After answering the user's question, you MUST include a \"Sources:\" section at the end of your response\n  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)\n  - This is MANDATORY - never skip including sources in your response\n  - Example format:\n\n    [Your answer here]\n\n    Sources:\n    - [Source Title 1](https://example.com/1)\n    - [Source Title 2](https://example.com/2)\n\nUsage notes:\n  - Domain filtering is supported to include or block specific websites\n  - Web search is only available in the US\n\nIMPORTANT - Use the correct year in search queries:\n  - The current month is April 2026. You MUST use this year when searching for recent information, documentation, or current events.\n  - Example: If the user asks for \"latest React docs\", search for \"React documentation\" with the current year, NOT last year\n",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "description": "Only include search results from these domains",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocked_domains": {
+          "description": "Never include search results from these domains",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "query": {
+          "description": "The search query to use",
+          "minLength": 2,
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "WebSearch"
+  },
+  {
+    "description": "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there is one at the provided path.\n- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.\n- Prefer the Edit tool for modifying existing files — it only sends the diff. Only use this tool to create new files or for complete rewrites.\n- NEVER create documentation files (*.md) or README files unless explicitly requested by the User.\n- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "description": "The content to write to the file",
+          "type": "string"
+        },
+        "file_path": {
+          "description": "The absolute path to the file to write (must be absolute, not relative)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "Write"
+  },
+  {
+    "description": "The `claude.ai Cloudflare Developer Platform` MCP server (claudeai-proxy at https://bindings.mcp.cloudflare.com/mcp) is installed but requires authentication. Call this tool to start the OAuth flow — you'll receive an authorization URL to share with the user. Once the user completes authorization in their browser, the server's real tools will become available automatically.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Cloudflare_Developer_Platform__authenticate"
+  },
+  {
+    "description": "Complete an in-progress OAuth flow for the `claude.ai Cloudflare Developer Platform` MCP server by submitting the callback URL. Call `mcp__claude_ai_Cloudflare_Developer_Platform__authenticate` first to start the flow and get the authorization URL. After the user authorizes in their browser, the browser is redirected to a `http://localhost:<port>/callback?code=...&state=...` URL — on remote sessions that page fails to load, but the URL in the address bar is still valid. Pass that full URL here as `callback_url`.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "callback_url": {
+          "description": "The full callback URL from the browser address bar after authorizing, e.g. http://localhost:<port>/callback?code=...&state=...",
+          "type": "string"
+        }
+      },
+      "required": [
+        "callback_url"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Cloudflare_Developer_Platform__complete_authentication"
+  },
+  {
+    "description": "Creates a new draft email in the authenticated user's Gmail account.\n\nThis tool takes recipient addresses, a subject, and body content as inputs. It returns the ID of the created Gmail draft.\n",
+    "input_schema": {
+      "description": "Request message for CreateDraft RPC.",
+      "properties": {
+        "bcc": {
+          "description": "Optional. The blind carbon copy recipients of the email draft. Each string MUST be a valid email address (e.g., \"user@example.com\"). The \"Name \" format is NOT supported by this tool.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": {
+          "description": "Optional. The main body content of the email draft. If html_body is also provided, this field is treated as the plain-text alternative.",
+          "type": "string"
+        },
+        "cc": {
+          "description": "Optional. The carbon copy recipients of the email draft. Each string MUST be a valid email address (e.g., \"user@example.com\"). The \"Name \" format is NOT supported by this tool.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "htmlBody": {
+          "description": "The HTML content of the email draft. If provided, this will be used as the rich-text version of the email.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "Optional. The subject line of the email. Defaults to empty if not provided.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Required. The primary recipients of the email draft. Each string MUST be a valid email address (e.g., \"user@example.com\"). The \"Name \" format is NOT supported by this tool.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__create_draft"
+  },
+  {
+    "description": "Creates a new label in the authenticated user's Gmail account.\\n",
+    "input_schema": {
+      "description": "Request message for CreateLabel RPC.",
+      "properties": {
+        "displayName": {
+          "description": "Required. The display name of the label to create.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__create_label"
+  },
+  {
+    "description": "Retrieves a specific email thread from the authenticated user's Gmail account, including a list of its messages.\n",
+    "input_schema": {
+      "description": "Request message for GetThread RPC.",
+      "properties": {
+        "messageFormat": {
+          "description": "Optional. Specifies the format of the messages returned within the thread. Defaults to FULL_CONTENT.",
+          "enum": [
+            "MESSAGE_FORMAT_UNSPECIFIED",
+            "MINIMAL",
+            "FULL_CONTENT"
+          ],
+          "type": "string",
+          "x-google-enum-descriptions": [
+            "Defaults to FULL_CONTENT.",
+            "Returns message snippets and key headers (Subject, From, To, Cc, Date).",
+            "Returns all information in \"MINIMAL\" plus the full body content of each message."
+          ]
+        },
+        "threadId": {
+          "description": "Required. The unique identifier of the thread to fetch.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__get_thread"
+  },
+  {
+    "description": "Adds one or more labels to a specific message in the authenticated user's Gmail account.\\n To find the message ID, use tools like `search_threads` or `get_thread`. If unsure of a user label's ID, use the `list_labels` tool first to discover available labels and their IDs.\\n",
+    "input_schema": {
+      "description": "Request message for LabelMessage RPC.",
+      "properties": {
+        "labelIds": {
+          "description": "Required. The IDs of the labels to add.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "messageId": {
+          "description": "Required. The ID of the message to add the labels to.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__label_message"
+  },
+  {
+    "description": "Adds labels to an entire thread in the authenticated user's Gmail account. This operation affects all messages currently in the thread and any future messages added to it.\n\nIf unsure of the thread ID, use the `search_threads` tool first.\n\nIf unsure of a user label's ID, use the `list_labels` tool first to discover available labels and their IDs.\n",
+    "input_schema": {
+      "description": "Request message for LabelThread RPC.",
+      "properties": {
+        "labelIds": {
+          "description": "Required. The unique identifiers of the labels to add. Can be a system label ID (e.g., 'INBOX', 'TRASH', 'SPAM', 'STARRED', 'UNREAD') or a user-defined label ID.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "description": "Required. The unique identifier of the thread to add labels to.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__label_thread"
+  },
+  {
+    "description": "Lists draft emails from the authenticated user's Gmail account.\n\nThis tool can filter drafts based on a query string and supports pagination. It returns a list of drafts, including their IDs and subjects.\n",
+    "input_schema": {
+      "description": "Request message for ListDrafts RPC.",
+      "properties": {
+        "pageSize": {
+          "description": "Optional. The maximum number of drafts to return. If unspecified, defaults to 20. The maximum allowed value is 50.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "Optional. A token received from a previous list_drafts call to retrieve the next page of results. Leave empty to fetch the first page.",
+          "type": "string"
+        },
+        "query": {
+          "description": "Optional. A query string to filter the drafts, using the same format as the Gmail search bar. If omitted, all drafts (excluding spam and trash by default) are listed. Key Operators: from: - Messages from a specific sender. to: - Messages sent to a specific recipient. subject: - Messages with specific words in the subject. - Messages containing specific words in the body or subject. is:unread - Unread messages. is:starred - Starred messages. has:attachment - Messages with attachments. after:YYYY/MM/DD - Messages sent after a date. before:YYYY/MM/DD - Messages sent before a date. newer_than: - Messages newer than a duration (e.g., 7d for 7 days). AND / OR - Combine terms (must be uppercase). -\"\" - Exclude messages containing these words. \"\" - Search for an exact phrase. Examples: \"subject:OneMCP Update\" \"from:gduser1@workspacesamples.dev\" \"to:gduser2@workspacesamples.dev AND newer_than:7d\" \"project proposal has:attachment\" \"is:unread\"",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__list_drafts"
+  },
+  {
+    "description": "Lists all user-defined labels available in the authenticated user's Gmail account. Use this tool to discover the `id` of a user label before calling `label_thread`, `unlabel_thread`, `label_message`, or `unlabel_message`. System labels are not returned by this tool but can be used with their well-known IDs: 'INBOX', 'TRASH', 'SPAM', 'STARRED', 'UNREAD', 'IMPORTANT', 'CHAT', 'DRAFT', 'SENT'.\\n",
+    "input_schema": {
+      "description": "Request message for ListLabels RPC.",
+      "properties": {
+        "pageSize": {
+          "description": "Optional. The maximum number of labels to return.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "Optional. Page token to retrieve a specific page of results in the list.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__list_labels"
+  },
+  {
+    "description": "Lists email threads from the authenticated user's Gmail account.\n\nThis tool can filter threads based on a query string and supports pagination. It returns a list of threads, including their IDs and related messages. Each related message contains details like a snippet of the message body, the subject, the sender, the recipients etc. Note that the full message bodies are not returned by this tool; use the 'get_thread' tool with a thread ID to fetch the full message body if needed.\n",
+    "input_schema": {
+      "description": "Request message for SearchThreads RPC.",
+      "properties": {
+        "includeTrash": {
+          "description": "Optional. Include drafts from TRASH in the results. Defaults to false.",
+          "type": "boolean"
+        },
+        "pageSize": {
+          "description": "Optional. The maximum number of threads to return. If unspecified, defaults to 20. The maximum allowed value is 50.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "Optional. Page token to retrieve a specific page of results in the list. Leave empty to fetch the first page.",
+          "type": "string"
+        },
+        "query": {
+          "description": "Optional. A query string to filter the threads, using the same format as the Gmail search bar. If omitted, all threads (excluding spam and trash by default) are listed. Key Operators: from: - Messages from a specific sender. to: - Messages sent to a specific recipient. subject: - Messages with specific words in the subject. - Messages containing specific words in the body or subject. is:unread - Unread messages. is:starred - Starred messages. has:attachment - Messages with attachments. after:YYYY/MM/DD - Messages sent after a date. before:YYYY/MM/DD - Messages sent before a date. newer_than: - Messages newer than a duration (e.g., 7d for 7 days). AND / OR - Combine terms (must be uppercase). -\"\" - Exclude messages containing these words. \"\" - Search for an exact phrase. Examples: \"subject:OneMCP Update\" \"from:gduser1@workspacesamples.dev\" \"to:gduser2@workspacesamples.dev AND newer_than:7d\" \"project proposal has:attachment\" \"is:unread\"",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__search_threads"
+  },
+  {
+    "description": "Removes one or more labels from a specific message in the authenticated user's Gmail account.\\n To find the message ID, use tools like `search_threads` or `get_thread`. If unsure of a user label's ID, use the `list_labels` tool first to discover available labels and their IDs.\\n",
+    "input_schema": {
+      "description": "Request message for UnlabelMessage RPC.",
+      "properties": {
+        "labelIds": {
+          "description": "Required. The IDs of the labels to remove.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "messageId": {
+          "description": "Required. The ID of the message to remove the labels from.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__unlabel_message"
+  },
+  {
+    "description": "Removes labels from an entire thread in the authenticated user's Gmail account. If unsure of the thread ID, use the `search_threads` tool first. If unsure of a user label's ID, use the `list_labels` tool first.",
+    "input_schema": {
+      "description": "Request message for UnlabelThread RPC.",
+      "properties": {
+        "labelIds": {
+          "description": "Required. The unique identifiers of the labels to remove.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "description": "Required. The unique identifier of the thread to remove labels from.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Gmail__unlabel_thread"
+  },
+  {
+    "description": "Creates a calendar event.\n\nUse this tool for queries like:\n- Create an event on my calendar for tomorrow at 2pm called 'Meeting with Jane'.\n- Schedule a meeting with john.doe@google.com next Monday from 10am to 11am.\n\nExample:\n    create_event(\n        summary='Meeting with Jane',\n        start_time='2024-09-17T14:00:00',\n        end_time='2024-09-17T15:00:00'\n    )\n    # Creates an event on the primary calendar for September 17, 2024 from 2pm to 3pm called 'Meeting with Jane'.\n",
+    "input_schema": {
+      "description": "Request message for CreateEvent.",
+      "properties": {
+        "addGoogleMeetUrl": {
+          "description": "Optional. Allows to create a Google Meet url for the event. Optional. By default, no Google Meet url is created. No Google Meet url is created if Meet is disabled for the user, but the event creation will succeed.",
+          "type": "boolean"
+        },
+        "allDay": {
+          "description": "Optional. Whether the event is an all-day event. Optional. The default is False. If true, the start and end time must be set to midnight UTC.",
+          "type": "boolean"
+        },
+        "attendeeEmails": {
+          "description": "Optional. The additional attendees of the event, as email addresses.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "calendarId": {
+          "description": "Optional. The calendar ID to create the event on. Optional. The default is the user's primary calendar.",
+          "type": "string"
+        },
+        "colorId": {
+          "description": "Optional. The color of the event. Optional. This is an ID referring to an entry in the calendar's color palette. Event color ID (string '1'-'11'): 1=Lavender, 2=Sage, 3=Grape, 4=Flamingo, 5=Banana, 6=Tangerine, 7=Peacock, 8=Graphite, 9=Blueberry, 10=Basil, 11=Tomato.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Optional. Description of the event. Can contain HTML. Optional.",
+          "type": "string"
+        },
+        "endTime": {
+          "description": "Required. The end time of the event formatted as per ISO 8601.",
+          "type": "string"
+        },
+        "location": {
+          "description": "Optional. Geographic location of the event as free-form text. Optional.",
+          "type": "string"
+        },
+        "notificationLevel": {
+          "description": "Optional. Which email notification should be sent for this event update. Optional. Possible values are: * \"NONE\" - No email notifications are sent (default). * \"EXTERNAL_ONLY\" - Only external (non-Calendar) attendees receive email notifications. * \"ALL\" - All event attendees receive email notifications.",
+          "enum": [
+            "NOTIFICATION_LEVEL_UNSPECIFIED",
+            "NONE",
+            "EXTERNAL_ONLY",
+            "ALL"
+          ],
+          "type": "string",
+          "x-google-enum-descriptions": [
+            "Default value. Will be treated as NONE.",
+            "No email notifications are sent.",
+            "Only external (non-Calendar) attendees receive email notifications.",
+            "All event attendees receive email notifications."
+          ]
+        },
+        "recurrenceData": {
+          "description": "Optional. The recurrence data of the event as `RRULE`, `RDATE` or `EXDATE` as per RFC 5545. Optional. Use this field to create a recurring event.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "startTime": {
+          "description": "Required. The start time of the event formatted as per ISO 8601.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Required. Title of the event.",
+          "type": "string"
+        },
+        "timeZone": {
+          "description": "Required. Time zone of the event (formatted as an IANA Time Zone Database name, e.g. \"Europe/Zurich\").",
+          "type": "string"
+        },
+        "visibility": {
+          "description": "Optional. Visibility of the event. Optional. Possible values are: * \"default\" - Uses the default visibility for events on the calendar. This is the default value. * \"public\" - The event is public and event details are visible to all readers of the calendar. * \"private\" - The event is private and only event attendees may view event details.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "startTime",
+        "endTime",
+        "timeZone"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__create_event"
+  },
+  {
+    "description": "Deletes a calendar event.\n\nUse this tool for queries like:\n\n - Delete the event with id event123 on my calendar.\n\nTo cancel or decline an event, use the respond_to_event tool instead.\n\nExample:\n\n    delete_event(\n        event_id='event123'\n    )\n    # Deletes the event with id 'event123' on the user's primary calendar.\n",
+    "input_schema": {
+      "description": "Request message for DeleteEvent.",
+      "properties": {
+        "calendarId": {
+          "description": "Optional. The calendar ID of the event to delete. Optional. The default is the user's primary calendar.",
+          "type": "string"
+        },
+        "eventId": {
+          "description": "Required. The ID of the event to delete.",
+          "type": "string"
+        },
+        "notificationLevel": {
+          "description": "Optional. Which email notification should be sent for this event update. Optional. Possible values are: * \"NONE\" - No email notifications are sent (default). * \"EXTERNAL_ONLY\" - Only external (non-Calendar) attendees receive email notifications. * \"ALL\" - All event attendees receive email notifications.",
+          "enum": [
+            "NOTIFICATION_LEVEL_UNSPECIFIED",
+            "NONE",
+            "EXTERNAL_ONLY",
+            "ALL"
+          ],
+          "type": "string",
+          "x-google-enum-descriptions": [
+            "Default value. Will be treated as NONE.",
+            "No email notifications are sent.",
+            "Only external (non-Calendar) attendees receive email notifications.",
+            "All event attendees receive email notifications."
+          ]
+        }
+      },
+      "required": [
+        "eventId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__delete_event"
+  },
+  {
+    "description": "Returns a single event from a given calendar.\n\nUse this tool for queries like:\n\n - Get details for the team meeting.\n - Show me the event with id event123 on my calendar.\n\nExample:\n\n    get_event(\n        event_id='event123'\n    )\n    # Returns the event details for the event with id `event123` on the user's primary calendar.\n",
+    "input_schema": {
+      "properties": {
+        "calendarId": {
+          "description": "Optional. The calendar ID to get the event from. Optional. The default is the user's primary calendar.",
+          "type": "string"
+        },
+        "eventId": {
+          "description": "Required. The ID of the event to get.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__get_event"
+  },
+  {
+    "description": "Returns the calendars on the user's calendar list.\n\nUse this tool for queries like:\n\n - What are all my calendars?\n\nExample:\n\n    list_calendars()\n    # Returns all calendars the authenticated user has access to.\n",
+    "input_schema": {
+      "properties": {
+        "pageSize": {
+          "description": "Optional. Maximum number of entries returned on one result page. By default the value is 100 entries. The page size can never be larger than 250 entries. Optional.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "Optional. Token specifying which result page to return. Optional.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__list_calendars"
+  },
+  {
+    "description": "Lists calendar events in a given calendar satisfying the given conditions.\n\nKey Features:\n\n - Any Calendar ID, which can be user's primary calendar or others.\n - Keyword matching.\n - Time range filtering.\n - Retrieves ALL events matching the time and keyword constraints.\n\nUse search_events tool instead if:\n\n - You need to find the (top K) most relevant events rather than all events satisfying the constraints.\n - You need semantic search capabilities.\n - You are searching only the user's primary calendar for specific information.\n\nUse this tool for queries like:\n\n - What's on my calendar tomorrow?\n - What's on my calendar for July 14th 2025?\n - What are my meetings next week?\n - Do I have any conflicts this afternoon?\n\nExample:\n\n    list_events(\n        start_time='2024-09-17T06:00:00',\n        end_time='2024-09-17T12:00:00',\n        page_size=10\n    )\n    # Returns up to 10 calendar events between 6:00 AM and 12:00 PM on September 17, 2024 from the user's primary calendar.\n",
+    "input_schema": {
+      "properties": {
+        "calendarId": {
+          "description": "Optional. The calendar ID to list events from. Optional. The default is the user's primary calendar.",
+          "type": "string"
+        },
+        "endTime": {
+          "description": "Optional. Upper bound (exclusive) for an event's start time. Optional. Only events starting strictly before this time are returned (i.e., the end of the time window to search). If specified, must be greater than or equal to `start_time`. Must be an ISO 8601 timestamp. For example, 2026-06-03T10:00:00-07:00, 2026-06-03T10:00:00Z, or 2026-06-03T10:00:00. Milliseconds may be provided but are ignored.",
+          "type": "string"
+        },
+        "eventTypeFilter": {
+          "description": "Optional. The event types to return. Optional. Possible values are: * \"default\" - Regular events (default). * \"outOfOffice\" - Out of office events. * \"focusTime\" - Focus time events. * \"workingLocation\" - Working location events. * \"birthday\" - Birthday events. * \"fromGmail\" - Events from Gmail. If empty, only the following event types are returned: \"default\", \"outOfOffice\", \"focusTime\", \"fromGmail\"",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fullText": {
+          "description": "Optional. Free-form search query to search across title, description, location and attendees. Optional.",
+          "type": "string"
+        },
+        "orderBy": {
+          "description": "Optional. The order in which events should be returned. Optional. Possible values are: * \"default\" - Unspecified, but deterministic ordering (default). * \"startTime\" - Order by start time ascending. * \"startTimeDesc\" - Order by start time descending. * \"lastModified\" - Order by last modification time ascending.",
+          "type": "string"
+        },
+        "pageSize": {
+          "description": "Optional. Maximum number of events returned on one result page. The number of events in the resulting page may be less than this value, or none at all, even if there are more events matching the query. Incomplete pages can be detected by a non-empty `next_page_token` field in the response. By default the value is 250 events. The page size can never be larger than 2500 events. Optional.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "Optional. Token specifying which result page to return. Optional.",
+          "type": "string"
+        },
+        "startTime": {
+          "description": "Optional. Lower bound (exclusive) for an event's end time. Optional. Only events ending strictly after this time are returned (i.e., the start of the time window to search). Defaults to the current time if neither `start_time` nor `end_time` is provided. If specified, must be less than or equal to `end_time`. Must be an ISO 8601 timestamp. For example, 2026-06-03T10:00:00-07:00, 2026-06-03T10:00:00Z, or 2026-06-03T10:00:00. Milliseconds may be provided but are ignored.",
+          "type": "string"
+        },
+        "timeZone": {
+          "description": "Optional. Time zone used in the response and to resolve timezone-less dates in the request (formatted as an IANA Time Zone Database name, e.g. \"Europe/Zurich\"). Optional. The default is the time zone of the calendar.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__list_events"
+  },
+  {
+    "description": "Responds to an event.\n\nUse this tool for queries like:\n\n - Accept the event with id event123 on my calendar.\n - Decline the meeting with Jane.\n - Cancel my next meeting.\n - Tentatively accept the planing meeting.\n\nExample:\n\n    respond_to_event(\n        event_id='event123',\n        response_status='accepted'\n    )\n    # Responds with status 'accepted' to the event with id 'event123' on the user's primary calendar.\n",
+    "input_schema": {
+      "description": "Request message for RespondToEvent.",
+      "properties": {
+        "calendarId": {
+          "description": "Optional. The calendar ID of the event to respond to. Optional. The default is the user's primary calendar.",
+          "type": "string"
+        },
+        "eventId": {
+          "description": "Required. The ID of the event to respond to.",
+          "type": "string"
+        },
+        "notificationLevel": {
+          "description": "Optional. Which email notification should be sent for this event update. Optional. Possible values are: * \"NONE\" - No email notifications are sent (default). * \"EXTERNAL_ONLY\" - Only external (non-Calendar) attendees receive email notifications. * \"ALL\" - All event attendees receive email notifications.",
+          "enum": [
+            "NOTIFICATION_LEVEL_UNSPECIFIED",
+            "NONE",
+            "EXTERNAL_ONLY",
+            "ALL"
+          ],
+          "type": "string",
+          "x-google-enum-descriptions": [
+            "Default value. Will be treated as NONE.",
+            "No email notifications are sent.",
+            "Only external (non-Calendar) attendees receive email notifications.",
+            "All event attendees receive email notifications."
+          ]
+        },
+        "responseComment": {
+          "description": "Optional. The user's comment attached to the response. Optional.",
+          "type": "string"
+        },
+        "responseStatus": {
+          "description": "Required. The new user's response status of the event. Possible values are: * \"declined\" - The attendee has declined the invitation. * \"tentative\" - The attendee has tentatively accepted the invitation. * \"accepted\" - The attendee has accepted the invitation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId",
+        "responseStatus"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__respond_to_event"
+  },
+  {
+    "description": "Suggests time periods across one or more calendars. To access the primary calendar, add 'primary' in the attendee_emails field.\n\nUse this tool for queries like:\n\n - When are all of us free for a meeting?\n - Find a 30 minute slot where we are both available.\n - Check if jane.doe@google.com is free on Monday morning.\n\nExample:\n\n    suggest_time(\n        attendee_emails=['joedoe@gmail.com', 'janedoe@gmail.com'],\n        start_time='2024-09-10T00:00:00',\n        end_time='2024-09-17T00:00:00',\n        duration_minutes=60,\n        preferences={\n            'start_hour': '09:00',\n            'end_hour': '17:00',\n            'exclude_weekends': True\n        }\n    )\n    # Returns up to 5 suggested time slots where both users are available for at least one hour between 9:00 AM and 5:00 PM on weekdays from September 10 through September 16, 2024.\n",
+    "input_schema": {
+      "$defs": {
+        "Preferences": {
+          "description": "Preferences for the suggested time slots.",
+          "properties": {
+            "endHour": {
+              "description": "The preferred end hour of day (e.g., \"17:00\").",
+              "type": "string"
+            },
+            "excludeWeekends": {
+              "description": "Whether to exclude weekends.",
+              "type": "boolean"
+            },
+            "pageSize": {
+              "description": "Maximum number of time slots to return. Default is 5.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "startHour": {
+              "description": "The preferred start hour of day (e.g., \"09:00\").",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "description": "Request message for SuggestTime.",
+      "properties": {
+        "attendeeEmails": {
+          "description": "Required. The attendee emails to find free time for.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "durationMinutes": {
+          "description": "Optional. Minimum duration of a free time slot in minutes. Optional. The default is 30 minutes.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "endTime": {
+          "description": "Required. The end of the interval for the query formatted as per ISO 8601.",
+          "type": "string"
+        },
+        "preferences": {
+          "$ref": "#/$defs/Preferences",
+          "description": "The preferences to find suggested time for."
+        },
+        "startTime": {
+          "description": "Required. The start of the interval for the query formatted as per ISO 8601.",
+          "type": "string"
+        },
+        "timeZone": {
+          "description": "Optional. Time zone used for the time values. This field accepts IANA Time Zone database names, e.g., \"America/Los_Angeles\". Optional. The default is the time zone of the user's primary calendar.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attendeeEmails",
+        "startTime",
+        "endTime"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__suggest_time"
+  },
+  {
+    "description": "Updates a calendar event.\n\nUse this tool for queries like:\n\n - Update the event 'Meeting with Jane' to be one hour later.\n - Add john.doe@google.com to the meeting tomorrow.\n\nExample:\n\n    update_event(\n        event_id='event123',\n        summary='Meeting with Jane and John'\n    )\n    # Updates the summary of event with id 'event123' on the primary calendar to 'Meeting with Jane and John'.\n",
+    "input_schema": {
+      "description": "Request message for UpdateEvent.",
+      "properties": {
+        "addGoogleMeetUrl": {
+          "description": "Optional. Allows to create or update a Google Meet url for the event. Optional. By default, no Google Meet url is created or updated. No Google Meet url is created or updated if Meet is disabled for the user, but the event update will succeed.",
+          "type": "boolean"
+        },
+        "addedAttendeeEmails": {
+          "description": "Optional. The additional attendees of the event, as email addresses. Optional.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "calendarId": {
+          "description": "Optional. The calendar ID of the event to update. Optional. The default is the user's primary calendar.",
+          "type": "string"
+        },
+        "colorId": {
+          "description": "Optional. New color ID of the event. Optional. Will not be updated if not set. Event color ID (string '1'-'11'): 1=Lavender, 2=Sage, 3=Grape, 4=Flamingo, 5=Banana, 6=Tangerine, 7=Peacock, 8=Graphite, 9=Blueberry, 10=Basil, 11=Tomato.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Optional. The new description of the event. Optional. Will not be updated if not set.",
+          "type": "string"
+        },
+        "endTime": {
+          "description": "Optional. The new end time of the event formatted as per ISO 8601. Optional. Will not be updated if not set.",
+          "type": "string"
+        },
+        "eventId": {
+          "description": "Required. The ID of the event to update.",
+          "type": "string"
+        },
+        "location": {
+          "description": "Optional. The new location of the event. Optional. Will not be updated if not set.",
+          "type": "string"
+        },
+        "notificationLevel": {
+          "description": "Optional. Which email notification should be sent for this event update. Optional. Possible values are: * \"NONE\" - No email notifications are sent (default). * \"EXTERNAL_ONLY\" - Only external (non-Calendar) attendees receive email notifications. * \"ALL\" - All event attendees receive email notifications.",
+          "enum": [
+            "NOTIFICATION_LEVEL_UNSPECIFIED",
+            "NONE",
+            "EXTERNAL_ONLY",
+            "ALL"
+          ],
+          "type": "string",
+          "x-google-enum-descriptions": [
+            "Default value. Will be treated as NONE.",
+            "No email notifications are sent.",
+            "Only external (non-Calendar) attendees receive email notifications.",
+            "All event attendees receive email notifications."
+          ]
+        },
+        "removedAttendeeEmails": {
+          "description": "Optional. The attendees of the event to remove, as email addresses. Optional.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "startTime": {
+          "description": "Optional. The new start time of the event formatted as per ISO 8601. Optional. Will not be updated if not set.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Optional. The new title of the event. Optional. Will not be updated if not set.",
+          "type": "string"
+        },
+        "visibility": {
+          "description": "Optional. New visibility of the event. Optional. Possible values are: * \"default\" - Uses the default visibility for events on the calendar. This is the default value. * \"public\" - The event is public and event details are visible to all readers of the calendar. * \"private\" - The event is private and only event attendees may view event details.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Calendar__update_event"
+  },
+  {
+    "description": "Call this tool to create or upload a File to Google Drive.\nIf uploading a file, the content needs to be base64 encoded into the `content` field regardless of the mimetype of the file being uploaded.\nReturns a single File object upon successful creation.The following Google Drive first-party mime types can be created without providing content: - `application/vnd.google-apps.document` - `application/vnd.google-apps.spreadsheet` - `application/vnd.google-apps.presentation`By default, the following conversions will be made for the following mime types: - `text/plain` to `application/vnd.google-apps.document` - `text/csv` to `application/vnd.google-apps.spreadsheet`To disable conversions for first-party mime types, set `disable_conversion_to_google_type` to true.Folders can be created by setting the mime type to `application/vnd.google-apps.folder`.\n",
+    "input_schema": {
+      "description": "Request to upload a file.",
+      "properties": {
+        "content": {
+          "description": "The content of the file encoded as base64. The content field should always be base64 encoded regardless of the mime type of the file.",
+          "type": "string"
+        },
+        "disableConversionToGoogleType": {
+          "description": "If true, the file will not be converted to a Google type. Has no effect for mime types that do not have a Google equivalent.",
+          "type": "boolean"
+        },
+        "mimeType": {
+          "description": "The mime type of the file to upload.",
+          "type": "string"
+        },
+        "parentId": {
+          "description": "The parent id of the file.",
+          "type": "string"
+        },
+        "title": {
+          "description": "The title of the file.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__create_file"
+  },
+  {
+    "description": "Call this tool to download the content of a Drive file as raw binary data (bytes).\nIf the file is a Google Drive first-party mime type, the `exportMimeType` field is required and will determine the format of the downloaded file.If the file is not found, try using other tools like `search_files` to find the file the user is requesting.If the user wants a natural language representation of their Drive content, use the `read_file_content` tool (`read_file_content` should be smaller and easier to parse).\n",
+    "input_schema": {
+      "description": "Defines a request to download a file's content.",
+      "properties": {
+        "exportMimeType": {
+          "description": "Optional. For Google native files, the MIME type to export the file to, ignored otherwise. Defaults to text if not specified.",
+          "type": "string"
+        },
+        "fileId": {
+          "description": "Required. The ID of the file to retrieve.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__download_file_content"
+  },
+  {
+    "description": "Call this tool to find general metadata about a user's Drive file.\nIf the file is not found, try using other tools like `search_files` to find the file the user is requesting.\n",
+    "input_schema": {
+      "description": "Request to get the file.",
+      "properties": {
+        "excludeContentSnippets": {
+          "description": "If true, the content snippet will be excluded from the response.",
+          "type": "boolean"
+        },
+        "fileId": {
+          "description": "Required. The ID of the file to retrieve.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__get_file_metadata"
+  },
+  {
+    "description": "Call this tool to list the permissions of a Drive File.\n",
+    "input_schema": {
+      "description": "Request to get file permissions.",
+      "properties": {
+        "fileId": {
+          "description": "Required. The ID of the file to get permissions for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__get_file_permissions"
+  },
+  {
+    "description": "Call this tool to find recent files for a user specified a sort order. Default sort order is `recency`.\nSupported sort orders are: - `recency`: The most recent timestamp from the file's date-time fields. - `lastModified`: The last time the file was modified by anyone. - `lastModifiedByMe`: The last time the file was modified by the user.The default page size is 10. Utilize `next_page_token` to paginate through the results.\n",
+    "input_schema": {
+      "description": "Request to list files.",
+      "properties": {
+        "excludeContentSnippets": {
+          "description": "If true, the content snippet will be excluded from the response.",
+          "type": "boolean"
+        },
+        "orderBy": {
+          "description": "The sort order for the files.",
+          "type": "string"
+        },
+        "pageSize": {
+          "description": "The maximum number of files to return.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "The page token to use for pagination.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__list_recent_files"
+  },
+  {
+    "description": "Call this tool to fetch a natural language representation of a Drive file.\nThe file content may be incomplete for very large files. The text representation will change\nover time, so don't make assumptions about the particular format of the text returned by\nthis tool.\nSupported Mime Types: - `application/vnd.google-apps.document` - `application/vnd.google-apps.presentation` - `application/vnd.google-apps.spreadsheet` - `application/pdf` - `application/msword` - `application/vnd.openxmlformats-officedocument.wordprocessingml.document` - `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` - `application/vnd.openxmlformats-officedocument.presentationml.presentation` - `application/vnd.oasis.opendocument.spreadsheet` - `application/vnd.oasis.opendocument.presentation` - `application/x-vnd.oasis.opendocument.text` - `image/png` - `image/jpeg` - `image/jpg`If the file is not found, try using other tools like `search_files` to find the file the user is requesting using keywords.\n",
+    "input_schema": {
+      "description": "Request to read file content.",
+      "properties": {
+        "fileId": {
+          "description": "Required. The ID of the file to retrieve.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__read_file_content"
+  },
+  {
+    "description": "Call this tool to search for Drive files given a structured query.\n The `query` field requires the use of query search operators.\n  A query string contains the following three parts: `query_term operator values` where:  - `query_term` is the query term or field to search upon.  - `operator` specifies the condition for the query term.  - `values` are the specific values to use to filter your search results.  ## Query Terms  The following table lists valid query terms with their descriptions:  | Query Term       | Valid operators                 | Usage                                                                                                                                                                  |\n  | ---------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |\n  | `title`          | `contains`, `=`, `!=`           | Title of the file. Surround with single quotes (`'`). Escape single quotes in queries with `\\'`, such as `'Valentine\\'s Day'`.                                         |\n  | `fullText`       | `contains`                      | Whether the `title` or text in the file's content matches. Surround with single quotes (`'`). Escape single quotes in queries with `\\'`, such as `'Valentine\\'s Day'`. |\n  | `mimeType`       | `contains`, `=`, `!=`           | MIME type of the file. Surround with single quotes (`'`). Escape single quotes in queries with `\\'`, such as `'Valentine\\'s Day'`.                                     |\n  | `modifiedTime`   | `<=`, `<`, `=`, `!=`, `>`, `>=` | Date of the last file modification. RFC 3339 format, default time zone is UTC, such as `2012-06-04T12:00:00-08:00`. Fields of type `date` are not comparable.           |\n  | `viewedByMeTime` | `<=`, `<`, `=`, `!=`, `>`, `>=` | Date that the user last viewed a file. RFC 3339 format, default time zone is UTC, such as `2012-06-04T12:00:00-08:00`. Fields of type `date… [truncated]",
+    "input_schema": {
+      "description": "Request to search files.",
+      "properties": {
+        "excludeContentSnippets": {
+          "description": "If true, the content snippet will be excluded from the response.",
+          "type": "boolean"
+        },
+        "pageSize": {
+          "description": "The maximum number of files to return in each page.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "pageToken": {
+          "description": "The page token to use for pagination.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The search query.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Google_Drive__search_files"
+  },
+  {
+    "description": "Perform Tasks with Hugging Face Spaces. Use \"discover\" to view available Tasks. Examples are Image Generation/Editing, Background Removal, Text to Speech, OCR and many more. Call with no arguments for full usage instructions.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "description": "Operation to perform.",
+          "enum": [
+            "discover",
+            "view_parameters",
+            "invoke"
+          ],
+          "type": "string"
+        },
+        "parameters": {
+          "description": "JSON object string of parameters. Only used for \"invoke\" operation.",
+          "type": "string"
+        },
+        "space_name": {
+          "description": "Space ID (format: \"username/space-name\"). Required for \"view_parameters\" and \"invoke\" operations.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__dynamic_space"
+  },
+  {
+    "description": "Fetch a document from the Hugging Face or Gradio documentation library. For large documents, use offset to get subsequent chunks.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "doc_url": {
+          "description": "Documentation URL (Hugging Face or Gradio)",
+          "maxLength": 200,
+          "type": "string"
+        },
+        "offset": {
+          "description": "Token offset for large documents (use the offset from truncation message)",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "doc_url"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__hf_doc_fetch"
+  },
+  {
+    "description": "Search and Discover Hugging Face Product and Library documentation. Send an empty query to discover structure and navigation instructions. Knowledge up-to-date as at 18 April 2026. Combine with the Product filter to focus results.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "description": "Filter by Product. Supply when known for focused results",
+          "type": "string"
+        },
+        "query": {
+          "description": "Start with an empty query for structure, endpoint discovery and navigation tips. Use semantic queries for targetted searches.",
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__hf_doc_search"
+  },
+  {
+    "description": "Read-only Hugging Face Hub navigator for discovery, lookup, filtering, ranking, counts, field-constrained extraction, and relationship questions across users, orgs, models, datasets, spaces, collections, discussions, daily papers, recent activity, followers/following, likes, and likers. Good for structured raw outputs and compact results. Generated helper calls can explicitly bound limit, scan_limit, max_pages, and ranking_window for brevity or broader coverage, and the tool can also be asked about its supported helpers, canonical fields, defaults, and coverage behavior.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__hf_hub_query"
+  },
+  {
+    "description": "Hugging Face tools are being used by authenticated user 'Maorinka'",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__hf_whoami"
+  },
+  {
+    "description": "Get details for one or more Hugging Face repos (model, dataset, or space). Auto-detects type unless specified.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "repo_ids": {
+          "description": "Repo IDs for (models|dataset/space) - usually in author/name format (e.g. openai/gpt-oss-120b)",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "type": "array"
+        },
+        "repo_type": {
+          "description": "Specify lookup type; otherwise auto-detects",
+          "enum": [
+            "model",
+            "dataset",
+            "space"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo_ids"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__hub_repo_details"
+  },
+  {
+    "description": "Search Hugging Face repositories with a shared query interface. You can target models, datasets, spaces, or aggregate across multiple repo types in one call. Use space_search for semantic-first discovery of Spaces. Include links to repositories in your response.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "description": "Organization or user namespace to filter by (e.g. 'google', 'meta-llama', 'huggingface').",
+          "type": "string"
+        },
+        "filters": {
+          "description": "Optional hub filter tags. Applied to each selected repo type (e.g. [\"text-generation\"], [\"language:en\"], [\"mcp-server\"]).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": 20,
+          "description": "Maximum number of results to return per selected repo type",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "number"
+        },
+        "query": {
+          "description": "Search term. Leave blank and specify sort + limit to browse trending or recent repositories.",
+          "type": "string"
+        },
+        "repo_types": {
+          "default": [
+            "model",
+            "dataset"
+          ],
+          "description": "Repository types to search. Defaults to [\"model\", \"dataset\"]. space uses keyword search via /api/spaces.",
+          "items": {
+            "enum": [
+              "model",
+              "dataset",
+              "space"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "type": "array"
+        },
+        "sort": {
+          "description": "Sort order (descending): trendingScore, downloads, likes, createdAt, lastModified",
+          "enum": [
+            "trendingScore",
+            "downloads",
+            "likes",
+            "createdAt",
+            "lastModified"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__hub_repo_search"
+  },
+  {
+    "description": "Find Machine Learning research papers on the Hugging Face hub. Include 'Link to paper' When presenting the results. Consider whether tabulating results matches user intent.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "concise_only": {
+          "default": false,
+          "description": "Return a 2 sentence summary of the abstract. Use for broad search terms which may return a lot of results. Check with User if unsure.",
+          "type": "boolean"
+        },
+        "query": {
+          "description": "Semantic Search query",
+          "maxLength": 200,
+          "minLength": 3,
+          "type": "string"
+        },
+        "results_limit": {
+          "default": 12,
+          "description": "Number of results to return",
+          "type": "number"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__paper_search"
+  },
+  {
+    "description": "Find Hugging Face Spaces using semantic search. IMPORTANT Only MCP Servers can be used with the dynamic_space toolInclude links to the Space when presenting the results.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 10,
+          "description": "Number of results to return",
+          "type": "number"
+        },
+        "mcp": {
+          "default": false,
+          "description": "Only return MCP Server enabled Spaces",
+          "type": "boolean"
+        },
+        "query": {
+          "description": "Semantic Search Query",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__claude_ai_Hugging_Face__space_search"
+  },
+  {
+    "description": "Retrieves and queries up-to-date documentation and code examples from Context7 for any programming library or framework.\n\nYou must call 'Resolve Context7 Library ID' tool first to obtain the exact Context7-compatible library ID required to use this tool, UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.\n\nWorkflow: call first without researchMode. If that doesn't answer the question, retry with researchMode: true. Do not call each tool more than 3 times per question",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "libraryId": {
+          "description": "Exact Context7-compatible library ID (e.g., '/mongodb/docs', '/vercel/next.js', '/supabase/supabase', '/vercel/next.js/v14.3.0-canary.87') retrieved from 'resolve-library-id' or directly from user query in the format '/org/project' or '/org/project/version'.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The question or task you need help with. Be specific and include relevant details. Good: 'How to set up authentication with JWT in Express.js' or 'React useEffect cleanup function examples'. Bad: 'auth' or 'hooks'. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.",
+          "type": "string"
+        },
+        "researchMode": {
+          "description": "Retry the query with deep research: spins up sandboxed agents that read the actual source repos and runs a live web search, then synthesizes a fresh answer. Set true on retry if you weren't satisfied with the first answer and want a more thorough one. Requires an API key — you can get one free at https://context7.com.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "libraryId",
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_context7_context7__query-docs"
+  },
+  {
+    "description": "Resolves a package/product name to a Context7-compatible library ID and returns matching libraries.\n\nYou MUST call this function before 'Query Documentation' tool to obtain a valid Context7-compatible library ID UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.\n\nEach result includes:\n- Library ID: Context7-compatible identifier (format: /org/project)\n- Name: Library or package name\n- Description: Short summary\n- Code Snippets: Number of available code examples\n- Source Reputation: Authority indicator (High, Medium, Low, or Unknown)\n- Benchmark Score: Quality indicator (100 is the highest score)\n- Versions: List of versions if available. Use one of those versions if the user provides a version in their query. The format of the version is /org/project/version.\n\nFor best results, select libraries based on name match, source reputation, snippet coverage, benchmark score, and relevance to your use case.\n\nSelection Process:\n1. Analyze the query to understand what library/package the user is looking for\n2. Return the most relevant match based on:\n- Name similarity to the query (exact matches prioritized)\n- Description relevance to the query's intent\n- Documentation coverage (prioritize libraries with higher Code Snippet counts)\n- Source reputation (consider libraries with High or Medium reputation more authoritative)\n- Benchmark Score: Quality indicator (100 is the highest score)\n\nResponse Format:\n- Return the selected library ID in a clearly marked section\n- Provide a brief explanation for why this library was chosen\n- If multiple good matches exist, acknowledge this but proceed with the most relevant one\n- If no good matches exist, clearly state this and suggest query refinements\n\nFor ambiguous queries, request clarification before proceeding with a best-guess match.\n\nIMPORTANT: Do not call this tool more than 3 times per question. If you cannot find what you need after 3 calls, use the best result you have.",
+    "input_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "libraryName": {
+          "description": "Library name to search for and retrieve a Context7-compatible library ID. Use the official library name with proper punctuation — e.g., 'Next.js' instead of 'nextjs', 'Customer.io' instead of 'customerio', 'Three.js' instead of 'threejs'.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The question or task you need help with. This is used to rank library results by relevance to what the user is trying to accomplish. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "libraryName"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_context7_context7__resolve-library-id"
+  },
+  {
+    "description": "Perform click on a web page",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "button": {
+          "description": "Button to click, defaults to left",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "type": "string"
+        },
+        "doubleClick": {
+          "description": "Whether to perform a double click instead of a single click",
+          "type": "boolean"
+        },
+        "element": {
+          "description": "Human-readable element description used to obtain permission to interact with the element",
+          "type": "string"
+        },
+        "modifiers": {
+          "description": "Modifier keys to press",
+          "items": {
+            "enum": [
+              "Alt",
+              "Control",
+              "ControlOrMeta",
+              "Meta",
+              "Shift"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ref": {
+          "description": "Exact target element reference from the page snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_click"
+  },
+  {
+    "description": "Close the page",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_close"
+  },
+  {
+    "description": "Returns all console messages",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "description": "Return all console messages since the beginning of the session, not just since the last navigation. Defaults to false.",
+          "type": "boolean"
+        },
+        "filename": {
+          "description": "Filename to save the console messages to. If not provided, messages are returned as text.",
+          "type": "string"
+        },
+        "level": {
+          "default": "info",
+          "description": "Level of the console messages to return. Each level includes the messages of more severe levels. Defaults to \"info\".",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "debug"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_console_messages"
+  },
+  {
+    "description": "Perform drag and drop between two elements",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "endElement": {
+          "description": "Human-readable target element description used to obtain the permission to interact with the element",
+          "type": "string"
+        },
+        "endRef": {
+          "description": "Exact target element reference from the page snapshot",
+          "type": "string"
+        },
+        "startElement": {
+          "description": "Human-readable source element description used to obtain the permission to interact with the element",
+          "type": "string"
+        },
+        "startRef": {
+          "description": "Exact source element reference from the page snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "startElement",
+        "startRef",
+        "endElement",
+        "endRef"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_drag"
+  },
+  {
+    "description": "Evaluate JavaScript expression on page or element",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "element": {
+          "description": "Human-readable element description used to obtain permission to interact with the element",
+          "type": "string"
+        },
+        "filename": {
+          "description": "Filename to save the result to. If not provided, result is returned as text.",
+          "type": "string"
+        },
+        "function": {
+          "description": "() => { /* code */ } or (element) => { /* code */ } when element is provided",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Exact target element reference from the page snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "function"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_evaluate"
+  },
+  {
+    "description": "Upload one or multiple files",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "description": "The absolute paths to the files to upload. Can be single file or multiple files. If omitted, file chooser is cancelled.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_file_upload"
+  },
+  {
+    "description": "Fill multiple form fields",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "description": "Fields to fill in",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Human-readable field name",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Exact target field reference from the page snapshot",
+                "type": "string"
+              },
+              "selector": {
+                "description": "CSS or role selector for the field element, when \"ref\" is not available. Either \"selector\" or \"ref\" is required.",
+                "type": "string"
+              },
+              "type": {
+                "description": "Type of the field",
+                "enum": [
+                  "textbox",
+                  "checkbox",
+                  "radio",
+                  "combobox",
+                  "slider"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "Value to fill in the field. If the field is a checkbox, the value should be `true` or `false`. If the field is a combobox, the value should be the text of the option.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "ref",
+              "value"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_fill_form"
+  },
+  {
+    "description": "Handle a dialog",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "accept": {
+          "description": "Whether to accept the dialog.",
+          "type": "boolean"
+        },
+        "promptText": {
+          "description": "The text of the prompt in case of a prompt dialog.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accept"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_handle_dialog"
+  },
+  {
+    "description": "Hover over element on page",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "element": {
+          "description": "Human-readable element description used to obtain permission to interact with the element",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Exact target element reference from the page snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_hover"
+  },
+  {
+    "description": "Navigate to a URL",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "The URL to navigate to",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_navigate"
+  },
+  {
+    "description": "Go back to the previous page in the history",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_navigate_back"
+  },
+  {
+    "description": "Returns all network requests since loading the page",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "description": "Filename to save the network requests to. If not provided, requests are returned as text.",
+          "type": "string"
+        },
+        "filter": {
+          "description": "Only return requests whose URL matches this regexp (e.g. \"/api/.*user\").",
+          "type": "string"
+        },
+        "requestBody": {
+          "default": false,
+          "description": "Whether to include request body. Defaults to false.",
+          "type": "boolean"
+        },
+        "requestHeaders": {
+          "default": false,
+          "description": "Whether to include request headers. Defaults to false.",
+          "type": "boolean"
+        },
+        "static": {
+          "default": false,
+          "description": "Whether to include successful static resources like images, fonts, scripts, etc. Defaults to false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "static",
+        "requestBody",
+        "requestHeaders"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_network_requests"
+  },
+  {
+    "description": "Press a key on the keyboard",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "description": "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_press_key"
+  },
+  {
+    "description": "Resize the browser window",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "description": "Height of the browser window",
+          "type": "number"
+        },
+        "width": {
+          "description": "Width of the browser window",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_resize"
+  },
+  {
+    "description": "Run Playwright code snippet",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "description": "A JavaScript function containing Playwright code to execute. It will be invoked with a single argument, page, which you can use for any page interaction. For example: `async (page) => { await page.getByRole('button', { name: 'Submit' }).click(); return await page.title(); }`",
+          "type": "string"
+        },
+        "filename": {
+          "description": "Load code from the specified file. If both code and filename are provided, code will be ignored.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_run_code"
+  },
+  {
+    "description": "Select an option in a dropdown",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "element": {
+          "description": "Human-readable element description used to obtain permission to interact with the element",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Exact target element reference from the page snapshot",
+          "type": "string"
+        },
+        "values": {
+          "description": "Array of values to select in the dropdown. This can be a single value or multiple values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "ref",
+        "values"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_select_option"
+  },
+  {
+    "description": "Capture accessibility snapshot of the current page, this is better than screenshot",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "description": "Limit the depth of the snapshot tree",
+          "type": "number"
+        },
+        "filename": {
+          "description": "Save snapshot to markdown file instead of returning it in the response.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_snapshot"
+  },
+  {
+    "description": "List, create, close, or select a browser tab.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Operation to perform",
+          "enum": [
+            "list",
+            "new",
+            "close",
+            "select"
+          ],
+          "type": "string"
+        },
+        "index": {
+          "description": "Tab index, used for close/select. If omitted for close, current tab is closed.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_tabs"
+  },
+  {
+    "description": "Take a screenshot of the current page. You can't perform actions based on the screenshot, use browser_snapshot for actions.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "element": {
+          "description": "Human-readable element description used to obtain permission to screenshot the element. If not provided, the screenshot will be taken of viewport. If element is provided, ref must be provided too.",
+          "type": "string"
+        },
+        "filename": {
+          "description": "File name to save the screenshot to. Defaults to `page-{timestamp}.{png|jpeg}` if not specified. Prefer relative file names to stay within the output directory.",
+          "type": "string"
+        },
+        "fullPage": {
+          "description": "When true, takes a screenshot of the full scrollable page, instead of the currently visible viewport. Cannot be used with element screenshots.",
+          "type": "boolean"
+        },
+        "ref": {
+          "description": "Exact target element reference from the page snapshot. If not provided, the screenshot will be taken of viewport. If ref is provided, element must be provided too.",
+          "type": "string"
+        },
+        "type": {
+          "default": "png",
+          "description": "Image format for the screenshot. Default is png.",
+          "enum": [
+            "png",
+            "jpeg"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_take_screenshot"
+  },
+  {
+    "description": "Type text into editable element",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "element": {
+          "description": "Human-readable element description used to obtain permission to interact with the element",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Exact target element reference from the page snapshot",
+          "type": "string"
+        },
+        "slowly": {
+          "description": "Whether to type one character at a time. Useful for triggering key handlers in the page. By default entire text is filled in at once.",
+          "type": "boolean"
+        },
+        "submit": {
+          "description": "Whether to submit entered text (press Enter after)",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "Text to type into the element",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_type"
+  },
+  {
+    "description": "Wait for text to appear or disappear or a specified time to pass",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "description": "The text to wait for",
+          "type": "string"
+        },
+        "textGone": {
+          "description": "The text to wait for to disappear",
+          "type": "string"
+        },
+        "time": {
+          "description": "The time to wait in seconds",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "name": "mcp__plugin_playwright_playwright__browser_wait_for"
+  }
+]

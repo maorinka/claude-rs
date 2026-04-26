@@ -6,22 +6,33 @@ use tokio_util::sync::CancellationToken;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
-/// Static list of all known tool names and their descriptions.
-/// This is kept in sync with `build_default_registry`.
-const ALL_TOOLS: &[(&str, &str)] = &[
+pub fn is_tool_search_enabled_optimistic() -> bool {
+    if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") {
+        return false;
+    }
+    !claude_core::errors_util::is_env_definitely_falsy("ENABLE_TOOL_SEARCH")
+}
+
+/// Fallback list used by direct tests or embedders that construct the tool
+/// without a registry snapshot.
+const FALLBACK_TOOLS: &[(&str, &str)] = &[
     ("Bash", "Execute a bash command in a shell"),
     ("Read", "Read the contents of a file"),
     ("Write", "Write content to a file"),
     ("Edit", "Edit a specific portion of a file"),
     ("Grep", "Search for patterns in files using ripgrep"),
     ("Glob", "Find files matching a glob pattern"),
+    ("WebSearch", "Search the web for current information"),
     ("Config", "Get, set, or list Claude configuration settings"),
     (
         "EnterPlanMode",
         "Switch to plan mode for describing actions before executing",
     ),
     ("ExitPlanMode", "Return to normal mode after planning"),
-    ("AskUser", "Ask the user a question and receive an answer"),
+    (
+        "AskUserQuestion",
+        "Ask the user a question and receive an answer",
+    ),
     ("Brief", "Toggle brief mode for more concise output"),
     ("SendMessage", "Send a message to another agent or channel"),
     ("MCP", "Call a tool on a connected MCP server"),
@@ -32,7 +43,27 @@ const ALL_TOOLS: &[(&str, &str)] = &[
     ),
 ];
 
-pub struct ToolSearchTool;
+#[derive(Clone, Debug)]
+pub struct ToolSearchTool {
+    tools: Vec<(String, String)>,
+}
+
+impl ToolSearchTool {
+    pub fn new(tools: Vec<(String, String)>) -> Self {
+        Self { tools }
+    }
+}
+
+impl Default for ToolSearchTool {
+    fn default() -> Self {
+        Self {
+            tools: FALLBACK_TOOLS
+                .iter()
+                .map(|(name, desc)| ((*name).to_string(), (*desc).to_string()))
+                .collect(),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolExecutor for ToolSearchTool {
@@ -84,7 +115,7 @@ Query forms:
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
         let query = match input["query"].as_str() {
-            Some(q) => q.to_lowercase(),
+            Some(q) => q.trim(),
             None => {
                 return Ok(ToolResultData {
                     data: json!({ "error": "missing required field: query" }),
@@ -94,11 +125,42 @@ Query forms:
         };
 
         let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
+        let query_lower = query.to_lowercase();
 
-        let matched: Vec<Value> = ALL_TOOLS
+        if let Some(names) = query_lower.strip_prefix("select:") {
+            let selected: Vec<&str> = names
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect();
+            let matched: Vec<Value> = self
+                .tools
+                .iter()
+                .filter(|(name, _)| {
+                    selected
+                        .iter()
+                        .any(|selected_name| selected_name.eq_ignore_ascii_case(name))
+                })
+                .take(max_results)
+                .map(|(name, desc)| json!({ "name": name, "description": desc }))
+                .collect();
+
+            return Ok(ToolResultData {
+                data: json!({ "tools": matched }),
+                is_error: false,
+            });
+        }
+
+        let (required_name_terms, query_terms) = split_query_terms(&query_lower);
+
+        let matched: Vec<Value> = self
+            .tools
             .iter()
             .filter(|(name, desc)| {
-                name.to_lowercase().contains(&query) || desc.to_lowercase().contains(&query)
+                let haystack = searchable_text(name, desc);
+                required_name_terms.iter().all(|term| {
+                    name.to_lowercase().contains(term) || camel_to_words(name).contains(term)
+                }) && query_terms.iter().all(|term| haystack.contains(term))
             })
             .take(max_results)
             .map(|(name, desc)| json!({ "name": name, "description": desc }))
@@ -109,4 +171,57 @@ Query forms:
             is_error: false,
         })
     }
+}
+
+pub fn register_tool_search_snapshot(registry: &mut crate::registry::ToolRegistry) {
+    if !is_tool_search_enabled_optimistic() {
+        return;
+    }
+
+    let tools = registry
+        .all()
+        .iter()
+        .map(|tool| (tool.name().to_string(), tool.description()))
+        .collect();
+    registry.register(std::sync::Arc::new(ToolSearchTool::new(tools)));
+}
+
+fn split_query_terms(query: &str) -> (Vec<String>, Vec<String>) {
+    query
+        .split_whitespace()
+        .fold((Vec::new(), Vec::new()), |mut acc, term| {
+            if let Some(required) = term.strip_prefix('+') {
+                if !required.is_empty() {
+                    acc.0.push(required.to_string());
+                }
+            } else if !term.is_empty() {
+                acc.1.push(term.to_string());
+            }
+            acc
+        })
+}
+
+fn searchable_text(name: &str, description: &str) -> String {
+    format!(
+        "{} {} {}",
+        name.to_lowercase(),
+        camel_to_words(name),
+        description.to_lowercase()
+    )
+}
+
+fn camel_to_words(name: &str) -> String {
+    let mut words = String::with_capacity(name.len() + 4);
+    for (index, ch) in name.chars().enumerate() {
+        if index > 0 && ch.is_uppercase() {
+            words.push(' ');
+        } else if ch == '_' || ch == '-' {
+            words.push(' ');
+            continue;
+        }
+        for lower in ch.to_lowercase() {
+            words.push(lower);
+        }
+    }
+    words
 }
