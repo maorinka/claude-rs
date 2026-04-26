@@ -27,6 +27,13 @@ fn has_1m_context(model: &str) -> bool {
     model.contains("[1m]") || model.contains("[1M]")
 }
 
+fn oauth_billing_header() -> String {
+    let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
+    format!(
+        "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch={cch:05x};"
+    )
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Authentication method for the Anthropic API.
@@ -253,8 +260,7 @@ pub fn build_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch=5e31b;"
-                    .to_string(),
+                text: oauth_billing_header(),
             });
         }
         full_system.extend_from_slice(system);
@@ -394,8 +400,7 @@ fn build_minimal_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch=5e31b;"
-                    .to_string(),
+                text: oauth_billing_header(),
             });
         }
         full_system.extend_from_slice(system);

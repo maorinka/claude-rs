@@ -228,7 +228,7 @@ fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value 
 }
 
 fn sort_skills_for_prompt_parity(skills: &mut [claude_core::plugins::types::Skill]) {
-    const ORDER: &[&str] = &[
+    const BUILTIN_PREFIX: &[&str] = &[
         "update-config",
         "keybindings-help",
         "simplify",
@@ -237,45 +237,61 @@ fn sort_skills_for_prompt_parity(skills: &mut [claude_core::plugins::types::Skil
         "schedule",
         "claude-api",
         "code-review-remediation",
-        "hookify:hookify",
+    ];
+    const HOOKIFY_COMMANDS: &[&str] = &[
         "hookify:help",
         "hookify:list",
         "hookify:configure",
+        "hookify:hookify",
+    ];
+    const DEPRECATED_SUPERPOWER_COMMANDS: &[&str] = &[
         "superpowers:execute-plan",
         "superpowers:write-plan",
         "superpowers:brainstorm",
+    ];
+    const MIDDLE_STABLE: &[&str] = &[
         "code-review:code-review",
         "frontend-design:frontend-design",
         "hookify:writing-rules",
-        "superpowers:finishing-a-development-branch",
-        "superpowers:brainstorming",
-        "superpowers:requesting-code-review",
-        "superpowers:verification-before-completion",
-        "superpowers:subagent-driven-development",
-        "superpowers:writing-plans",
-        "superpowers:code-review-remediation",
-        "superpowers:writing-skills",
-        "superpowers:executing-plans",
-        "superpowers:dispatching-parallel-agents",
-        "superpowers:receiving-code-review",
-        "superpowers:using-git-worktrees",
-        "superpowers:systematic-debugging",
-        "superpowers:using-superpowers",
-        "superpowers:test-driven-development",
-        "init",
-        "review",
-        "security-review",
     ];
+    const BUILTIN_SUFFIX: &[&str] = &["init", "review", "security-review"];
+
+    let original_positions: std::collections::HashMap<String, usize> = skills
+        .iter()
+        .enumerate()
+        .map(|(index, skill)| (skill.name.clone(), index))
+        .collect();
+
+    let key = |name: &str| {
+        let original = *original_positions.get(name).unwrap_or(&usize::MAX);
+        if let Some(index) = BUILTIN_PREFIX.iter().position(|skill| *skill == name) {
+            return (0usize, index);
+        }
+        if HOOKIFY_COMMANDS.contains(&name) {
+            return (1usize, original);
+        }
+        if let Some(index) = DEPRECATED_SUPERPOWER_COMMANDS
+            .iter()
+            .position(|skill| *skill == name)
+        {
+            return (2usize, index);
+        }
+        if let Some(index) = MIDDLE_STABLE.iter().position(|skill| *skill == name) {
+            return (3usize, index);
+        }
+        if name.starts_with("superpowers:") {
+            return (4usize, original);
+        }
+        if let Some(index) = BUILTIN_SUFFIX.iter().position(|skill| *skill == name) {
+            return (6usize, index);
+        }
+        (5usize, original)
+    };
+
     skills.sort_by(|a, b| {
-        let ai = ORDER
-            .iter()
-            .position(|name| *name == a.name)
-            .unwrap_or(ORDER.len());
-        let bi = ORDER
-            .iter()
-            .position(|name| *name == b.name)
-            .unwrap_or(ORDER.len());
-        ai.cmp(&bi).then_with(|| a.name.cmp(&b.name))
+        key(&a.name)
+            .cmp(&key(&b.name))
+            .then_with(|| a.name.cmp(&b.name))
     });
 }
 
