@@ -137,6 +137,13 @@ class CaptureProxy(BaseHTTPRequestHandler):
         capture_path = self.capture_request(client_tag, body_json)
         self.relay_request(raw_body, capture_path)
 
+    def do_GET(self) -> None:
+        client_tag = self.headers.get("x-client-tag") or self.headers.get("x-context-client")
+        if not client_tag:
+            client_tag = "RS" if self.path.startswith("/api/") else "TS"
+        capture_path = self.capture_request(client_tag, {"_method": "GET"})
+        self.relay_request(b"", capture_path)
+
     def capture_request(self, client_tag: str, body_json: Any) -> pathlib.Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -198,21 +205,40 @@ class CaptureProxy(BaseHTTPRequestHandler):
         try:
             conn.request(self.command, path, body=raw_body, headers=headers)
             resp = conn.getresponse()
+            response_headers = resp.getheaders()
+            content_type = next(
+                (value for key, value in response_headers if key.lower() == "content-type"),
+                "",
+            )
+            is_event_stream = "text/event-stream" in content_type.lower()
+
             self.send_response(resp.status, resp.reason)
-            for key, value in resp.getheaders():
+            for key, value in response_headers:
                 if key.lower() in {"connection", "transfer-encoding", "content-length"}:
                     continue
                 self.send_header(key, value)
+            self.send_header("Connection", "close")
+            if not is_event_stream:
+                response_body = resp.read()
+                self.send_header("Content-Length", str(len(response_body)))
             self.end_headers()
-            response_body = bytearray()
-            while True:
-                chunk = resp.read(64 * 1024)
-                if not chunk:
-                    break
-                response_body.extend(chunk)
-                self.wfile.write(chunk)
+            self.close_connection = True
+
+            if is_event_stream:
+                response_body = bytearray()
+                while True:
+                    chunk = resp.readline()
+                    if not chunk:
+                        break
+                    response_body.extend(chunk)
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                response_bytes = bytes(response_body)
+            else:
+                self.wfile.write(response_body)
                 self.wfile.flush()
-            self.capture_response(capture_path, resp.status, bytes(response_body))
+                response_bytes = response_body
+            self.capture_response(capture_path, resp.status, response_bytes)
         except Exception as exc:
             self.send_error(502, f"proxy relay failed: {exc}")
         finally:

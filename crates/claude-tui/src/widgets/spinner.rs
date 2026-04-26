@@ -143,6 +143,9 @@ pub struct SpinnerState {
     pub queued_count: usize,
     verb_index: usize,
     last_verb_change: Instant,
+    last_output_tokens_seen: u64,
+    last_progress_time: Instant,
+    stalled_intensity: f64,
 }
 
 impl Default for SpinnerState {
@@ -169,6 +172,9 @@ impl SpinnerState {
             queued_count: 0,
             verb_index,
             last_verb_change: Instant::now(),
+            last_output_tokens_seen: 0,
+            last_progress_time: Instant::now(),
+            stalled_intensity: 0.0,
         }
     }
 
@@ -176,6 +182,9 @@ impl SpinnerState {
         self.mode = mode;
         self.start_time = Instant::now();
         self.last_verb_change = Instant::now();
+        self.last_progress_time = Instant::now();
+        self.last_output_tokens_seen = 0;
+        self.stalled_intensity = 0.0;
         self.input_tokens = 0;
         self.output_tokens = 0;
         self.active = true;
@@ -197,6 +206,28 @@ impl SpinnerState {
         if self.active {
             let frames = spinner_frames();
             self.frame = (self.frame + 1) % frames.len();
+
+            if self.output_tokens > self.last_output_tokens_seen {
+                self.last_output_tokens_seen = self.output_tokens;
+                self.last_progress_time = Instant::now();
+                self.stalled_intensity = 0.0;
+            } else if self.output_tokens > 0 {
+                let since_progress = self.last_progress_time.elapsed().as_millis() as f64;
+                let target = if since_progress > 3_000.0 {
+                    ((since_progress - 3_000.0) / 2_000.0).min(1.0)
+                } else {
+                    0.0
+                };
+                let diff = target - self.stalled_intensity;
+                if diff.abs() < 0.01 {
+                    self.stalled_intensity = target;
+                } else {
+                    self.stalled_intensity += diff * 0.1;
+                }
+            } else {
+                self.last_progress_time = Instant::now();
+                self.stalled_intensity = 0.0;
+            }
 
             // Rotate verb every ~3 seconds (matching TS behavior)
             if self.last_verb_change.elapsed().as_secs() >= 3 {
@@ -262,27 +293,110 @@ fn format_io_tokens(input: u64, output: u64) -> Option<String> {
     }
 }
 
+fn interpolate_rgb(from: (u8, u8, u8), to: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    let channel = |a: u8, b: u8| -> u8 { (a as f64 + (b as f64 - a as f64) * t).round() as u8 };
+    (
+        channel(from.0, to.0),
+        channel(from.1, to.1),
+        channel(from.2, to.2),
+    )
+}
+
+fn rgb_color(rgb: (u8, u8, u8)) -> Color {
+    Color::Rgb(rgb.0, rgb.1, rgb.2)
+}
+
+fn interpolate_color(from: (u8, u8, u8), to: (u8, u8, u8), t: f64) -> Color {
+    let rgb = interpolate_rgb(from, to, t);
+    Color::Rgb(rgb.0, rgb.1, rgb.2)
+}
+
+fn glimmer_spans(
+    text: &str,
+    elapsed_ms: u128,
+    base: (u8, u8, u8),
+    shimmer: (u8, u8, u8),
+) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let width = chars.len();
+    if width == 0 {
+        return Vec::new();
+    }
+    let cycle = (width + 20) as f64;
+    let cycle_position = (elapsed_ms as f64 / 50.0) % cycle;
+    let glimmer_index = cycle_position - 10.0;
+    chars
+        .into_iter()
+        .enumerate()
+        .map(|(idx, ch)| {
+            let col_pos = idx as f64;
+            let shimmer_start = glimmer_index - 1.0;
+            let shimmer_end = glimmer_index + 1.0;
+            let color = if col_pos + 1.0 <= shimmer_start || col_pos > shimmer_end {
+                rgb_color(base)
+            } else {
+                rgb_color(shimmer)
+            };
+            let style = Style::default().fg(color);
+            Span::styled(ch.to_string(), style)
+        })
+        .collect()
+}
+
+fn flash_opacity(start_time: Instant) -> f64 {
+    let elapsed = start_time.elapsed().as_millis() as f64;
+    ((elapsed / 1000.0 * std::f64::consts::PI).sin() + 1.0) / 2.0
+}
+
 impl Widget for &SpinnerState {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if !self.active || area.height == 0 {
             return;
         }
+        let elapsed_ms = self.start_time.elapsed().as_millis();
         let frames = spinner_frames();
-        let frame_char = frames[self.frame % frames.len()];
+        let glyph_frame = ((elapsed_ms / 120) as usize) % frames.len();
+        let frame_char = frames[glyph_frame];
         let elapsed = self.elapsed_str();
 
-        // The original renders this as a subtle activity line; tool rows carry
-        // the stronger accent color.
         let verb = self.current_verb();
-        let activity_color = Color::DarkGray;
+        let activity_rgb = interpolate_rgb((215, 119, 87), (171, 43, 63), self.stalled_intensity);
+        let shimmer_rgb = interpolate_rgb((235, 159, 127), (171, 43, 63), self.stalled_intensity);
+        let activity_color = rgb_color(activity_rgb);
 
-        let mut spans = vec![
-            Span::styled(
-                format!("{} ", frame_char),
+        let mut spans = vec![Span::styled(
+            format!("{} ", frame_char),
+            Style::default().fg(activity_color),
+        )];
+        if self.stalled_intensity > 0.0 {
+            spans.push(Span::styled(
+                format!("{}…", verb),
                 Style::default().fg(activity_color),
-            ),
-            Span::styled(format!("{}…", verb), Style::default().fg(activity_color)),
-        ];
+            ));
+        } else if matches!(self.mode, SpinnerMode::Tool { .. }) {
+            let tool_color = interpolate_color(
+                (215, 119, 87),
+                (235, 159, 127),
+                flash_opacity(self.start_time),
+            );
+            spans.push(Span::styled(
+                format!("{}…", verb),
+                Style::default().fg(tool_color),
+            ));
+        } else {
+            let shimmer_elapsed_ms = if matches!(self.mode, SpinnerMode::Thinking) {
+                self.last_verb_change.elapsed().as_millis()
+            } else {
+                elapsed_ms
+            };
+            spans.extend(glimmer_spans(
+                &format!("{}…", verb),
+                shimmer_elapsed_ms,
+                activity_rgb,
+                shimmer_rgb,
+            ));
+        }
 
         // Duration and token info in parentheses, dim
         let mut info_parts = vec![elapsed];

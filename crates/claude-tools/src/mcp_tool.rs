@@ -62,6 +62,10 @@ impl ToolExecutor for McpTool {
         self.input_schema.clone()
     }
 
+    fn description(&self) -> String {
+        self.description.clone()
+    }
+
     async fn call(
         &self,
         input: &Value,

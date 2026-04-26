@@ -253,6 +253,7 @@ dependencies = [
  "claude-core",
  "claude-tools",
  "claude-tui",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

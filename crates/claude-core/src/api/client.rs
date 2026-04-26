@@ -238,6 +238,9 @@ pub fn build_request_body(
     if let Some(thinking) = thinking_obj {
         body["thinking"] = thinking;
     }
+    if supports_thinking && api_model.contains("opus") {
+        body["output_config"] = json!({ "effort": "max" });
+    }
 
     // Optional speed hint.
     if let Some(speed) = &config.speed {

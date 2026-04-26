@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 
 #[derive(Parser)]
@@ -137,6 +137,89 @@ fn resolve_max_output_tokens(
     }
 
     claude_core::api::client::get_max_output_tokens_for_model(model)
+}
+
+fn is_env_defined_falsy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(false)
+}
+
+fn normalize_name_for_mcp(name: &str) -> String {
+    let mut normalized: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if name.starts_with("claude.ai ") {
+        let mut collapsed = String::with_capacity(normalized.len());
+        let mut previous_underscore = false;
+        for ch in normalized.chars() {
+            if ch == '_' {
+                if !previous_underscore {
+                    collapsed.push(ch);
+                }
+                previous_underscore = true;
+            } else {
+                collapsed.push(ch);
+                previous_underscore = false;
+            }
+        }
+        normalized = collapsed.trim_matches('_').to_string();
+    }
+
+    normalized
+}
+
+fn mcp_server_signature(config: &claude_core::mcp::types::ScopedMcpServerConfig) -> Option<String> {
+    use claude_core::mcp::types::McpServerConfig;
+
+    match &config.config {
+        McpServerConfig::Stdio(stdio) => {
+            let mut command = Vec::with_capacity(1 + stdio.args.len());
+            command.push(stdio.command.clone());
+            command.extend(stdio.args.clone());
+            serde_json::to_string(&command)
+                .ok()
+                .map(|value| format!("stdio:{}", value))
+        }
+        McpServerConfig::Sse(sse) | McpServerConfig::SseIde(sse) => {
+            Some(format!("url:{}", unwrap_ccr_proxy_url(&sse.url)))
+        }
+        McpServerConfig::Http(http) => Some(format!("url:{}", unwrap_ccr_proxy_url(&http.url))),
+        McpServerConfig::Ws(ws) | McpServerConfig::WsIde(ws) => {
+            Some(format!("url:{}", unwrap_ccr_proxy_url(&ws.url)))
+        }
+    }
+}
+
+fn unwrap_ccr_proxy_url(url: &str) -> String {
+    const MARKERS: [&str; 2] = ["/v2/session_ingress/shttp/mcp/", "/v2/ccr-sessions/"];
+    if !MARKERS.iter().any(|marker| url.contains(marker)) {
+        return url.to_string();
+    }
+
+    let Some((_, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == "mcp_url" {
+            return value.replace("%3A", ":").replace("%2F", "/");
+        }
+    }
+    url.to_string()
 }
 
 fn split_tool_args(values: &[String]) -> Vec<String> {
@@ -280,8 +363,8 @@ fn sort_skills_for_prompt_parity(skills: &mut [claude_core::plugins::types::Skil
         if let Some(index) = MIDDLE_STABLE.iter().position(|skill| *skill == name) {
             return (3usize, index);
         }
-        if name.starts_with("superpowers:") {
-            return (4usize, original);
+        if let Some(index) = ts_skill_order(name) {
+            return (4usize, index);
         }
         if let Some(index) = BUILTIN_SUFFIX.iter().position(|skill| *skill == name) {
             return (6usize, index);
@@ -421,120 +504,278 @@ fn load_enabled_plugin_mcp_servers(
     servers
 }
 
-async fn load_claude_ai_connector_mcp_servers(
-    auth: &claude_core::api::client::AuthMethod,
-) -> std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig> {
-    let token = match auth {
-        claude_core::api::client::AuthMethod::OAuthToken(token) => token.clone(),
-        claude_core::api::client::AuthMethod::ApiKey(_) => {
-            return std::collections::HashMap::new();
-        }
+#[derive(Debug, Deserialize)]
+struct ClaudeAiMcpServersResponse {
+    data: Vec<ClaudeAiMcpServer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeAiMcpServer {
+    #[serde(rename = "id")]
+    _id: String,
+    display_name: String,
+    url: String,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeAiMcpDiscovery {
+    configs: std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig>,
+    auth_only_servers: Vec<ClaudeAiAuthOnlyServer>,
+}
+
+#[derive(Debug)]
+struct ClaudeAiAuthOnlyServer {
+    name: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TsToolContract {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    input_schema: Option<serde_json::Value>,
+}
+
+async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
+    use claude_core::mcp::types::{
+        ConfigScope, McpHttpServerConfig, McpServerConfig, ScopedMcpServerConfig,
     };
 
-    let mut headers = std::collections::HashMap::new();
-    headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+    if is_env_defined_falsy("ENABLE_CLAUDEAI_MCP_SERVERS") {
+        tracing::debug!("[claudeai-mcp] disabled by ENABLE_CLAUDEAI_MCP_SERVERS");
+        return ClaudeAiMcpDiscovery::default();
+    }
 
-    let connectors = [
-        (
-            "claude.ai Google Drive",
-            "https://drivemcp.googleapis.com/mcp/v1",
-        ),
-        ("claude.ai Gmail", "https://gmailmcp.googleapis.com/mcp/v1"),
-        (
-            "claude.ai Google Calendar",
-            "https://calendarmcp.googleapis.com/mcp/v1",
-        ),
-    ];
+    let Ok(Some(tokens)) = claude_core::auth::storage::load_tokens().await else {
+        tracing::debug!("[claudeai-mcp] no Claude.ai OAuth token");
+        return ClaudeAiMcpDiscovery::default();
+    };
+    if tokens.access_token.is_empty() {
+        tracing::debug!("[claudeai-mcp] empty Claude.ai OAuth token");
+        return ClaudeAiMcpDiscovery::default();
+    }
+    if !tokens
+        .scopes
+        .iter()
+        .any(|scope| scope == "user:mcp_servers")
+    {
+        tracing::debug!(
+            scopes = ?tokens.scopes,
+            "[claudeai-mcp] missing user:mcp_servers scope"
+        );
+        return ClaudeAiMcpDiscovery::default();
+    }
 
-    connectors
+    let url =
+        claude_core::auth::login::proxy_url("https://api.anthropic.com/v1/mcp_servers?limit=1000");
+    let response = claude_core::auth::login::debug_http_client()
+        .get(url)
+        .header("Authorization", format!("Bearer {}", tokens.access_token))
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "mcp-servers-2025-12-04")
+        .header("anthropic-version", "2023-06-01")
+        .timeout(std::time::Duration::from_millis(5_000))
+        .send()
+        .await;
+
+    let Ok(response) = response else {
+        tracing::debug!("[claudeai-mcp] fetch failed");
+        return ClaudeAiMcpDiscovery::default();
+    };
+    let Ok(payload) = response.json::<ClaudeAiMcpServersResponse>().await else {
+        tracing::debug!("[claudeai-mcp] failed to decode response");
+        return ClaudeAiMcpDiscovery::default();
+    };
+
+    let mut discovery = ClaudeAiMcpDiscovery::default();
+    let mut used_normalized_names = std::collections::HashSet::new();
+    for server in payload.data {
+        let base_name = format!("claude.ai {}", server.display_name);
+        let mut final_name = base_name.clone();
+        let mut final_normalized = normalize_name_for_mcp(&final_name);
+        let mut count = 1;
+        while used_normalized_names.contains(&final_normalized) {
+            count += 1;
+            final_name = format!("{} ({})", base_name, count);
+            final_normalized = normalize_name_for_mcp(&final_name);
+        }
+        used_normalized_names.insert(final_normalized);
+
+        // TS routes Claude.ai-hosted MCP servers through claudeai-proxy.
+        // Login-only URLs are surfaced as auth shim tools until the OAuth
+        // flow completes, even if the raw upstream MCP endpoint would list
+        // tools without that proxy state.
+        if server.url.contains("login") {
+            discovery.auth_only_servers.push(ClaudeAiAuthOnlyServer {
+                name: final_name,
+                url: server.url,
+            });
+            continue;
+        }
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", tokens.access_token),
+        );
+        discovery.configs.insert(
+            final_name,
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Http(McpHttpServerConfig {
+                    url: server.url,
+                    headers: Some(headers),
+                }),
+                scope: ConfigScope::ClaudeAi,
+            },
+        );
+    }
+
+    tracing::debug!(
+        count = discovery.configs.len(),
+        auth_only = discovery.auth_only_servers.len(),
+        "[claudeai-mcp] fetched servers"
+    );
+    discovery
+}
+
+fn mcp_contract_shadow_tools(
+    server_names: impl IntoIterator<Item = String>,
+) -> Vec<claude_core::mcp::manager::McpToolInfo> {
+    let Ok(contracts) = serde_json::from_str::<Vec<TsToolContract>>(include_str!(
+        "../../claude-tools/src/ts_tool_contracts_2_1_119.json"
+    )) else {
+        return Vec::new();
+    };
+
+    let server_by_normalized = server_names
         .into_iter()
-        .map(|(name, url)| {
-            (
-                name.to_string(),
-                claude_core::mcp::types::ScopedMcpServerConfig {
-                    config: claude_core::mcp::types::McpServerConfig::Http(
-                        claude_core::mcp::types::McpHttpServerConfig {
-                            url: url.to_string(),
-                            headers: Some(headers.clone()),
-                        },
-                    ),
-                    scope: claude_core::mcp::types::ConfigScope::ClaudeAi,
-                },
-            )
+        .map(|name| (normalize_name_for_mcp(&name), name))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    contracts
+        .into_iter()
+        .filter_map(|contract| {
+            let tool_name = contract.name.clone();
+            let rest = tool_name.strip_prefix("mcp__")?;
+            let (normalized_server, original_name) = rest.split_once("__")?;
+            let server_name = server_by_normalized.get(normalized_server)?;
+            Some(claude_core::mcp::manager::McpToolInfo {
+                name: contract.name,
+                original_name: original_name.to_string(),
+                server_name: server_name.clone(),
+                description: Some(contract.description),
+                input_schema: contract.input_schema,
+            })
         })
         .collect()
 }
 
-fn claude_ai_connector_shadow_tools() -> Vec<claude_core::mcp::manager::McpToolInfo> {
-    use claude_core::mcp::manager::McpToolInfo;
-    use serde_json::json;
-
-    let object_schema = json!({"type": "object", "properties": {}});
-    let cloudflare_callback_schema = json!({
-        "type": "object",
+fn claude_ai_auth_shadow_tools(
+    servers: &[ClaudeAiAuthOnlyServer],
+) -> Vec<claude_core::mcp::manager::McpToolInfo> {
+    let empty_schema = serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+    });
+    let callback_schema = serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
             "callback_url": {
-                "type": "string",
-                "description": "OAuth callback URL copied from the browser after authorization"
+                "description": "The full callback URL from the browser address bar after authorizing, e.g. http://localhost:<port>/callback?code=...&state=...",
+                "type": "string"
             }
         },
-        "required": ["callback_url"]
+        "required": ["callback_url"],
+        "type": "object"
     });
 
-    let mut tools = vec![
-        McpToolInfo {
-            name: "mcp__claude_ai_Cloudflare_Developer_Platform__authenticate".to_string(),
+    let mut tools = Vec::new();
+    for server in servers {
+        let normalized_server = normalize_name_for_mcp(&server.name);
+        tools.push(claude_core::mcp::manager::McpToolInfo {
+            name: format!("mcp__{}__authenticate", normalized_server),
             original_name: "authenticate".to_string(),
-            server_name: "claude.ai Cloudflare Developer Platform".to_string(),
-            description: Some(
-                "Start OAuth authentication for the claude.ai Cloudflare Developer Platform MCP server."
-                    .to_string(),
-            ),
-            input_schema: Some(object_schema.clone()),
-        },
-        McpToolInfo {
-            name: "mcp__claude_ai_Cloudflare_Developer_Platform__complete_authentication"
-                .to_string(),
+            server_name: server.name.clone(),
+            description: Some(format!(
+                "The `{}` MCP server (claudeai-proxy at {}) is installed but requires authentication. Call this tool to start the OAuth flow — you'll receive an authorization URL to share with the user. Once the user completes authorization in their browser, the server's real tools will become available automatically.",
+                server.name, server.url
+            )),
+            input_schema: Some(empty_schema.clone()),
+        });
+        tools.push(claude_core::mcp::manager::McpToolInfo {
+            name: format!("mcp__{}__complete_authentication", normalized_server),
             original_name: "complete_authentication".to_string(),
-            server_name: "claude.ai Cloudflare Developer Platform".to_string(),
-            description: Some(
-                "Complete an in-progress OAuth flow for the claude.ai Cloudflare Developer Platform MCP server by submitting the callback URL."
-                    .to_string(),
-            ),
-            input_schema: Some(cloudflare_callback_schema),
-        },
-    ];
-
-    for (tool_name, description) in [
-        (
-            "dynamic_space",
-            "Interact with a Hugging Face Space dynamically.",
-        ),
-        ("hf_doc_fetch", "Fetch Hugging Face documentation."),
-        ("hf_doc_search", "Search Hugging Face documentation."),
-        ("hf_hub_query", "Query the Hugging Face Hub."),
-        (
-            "hf_whoami",
-            "Return the authenticated Hugging Face account.",
-        ),
-        (
-            "hub_repo_details",
-            "Fetch Hugging Face Hub repository details.",
-        ),
-        ("hub_repo_search", "Search Hugging Face Hub repositories."),
-        ("paper_search", "Search Hugging Face papers."),
-        ("space_search", "Search Hugging Face Spaces."),
-    ] {
-        tools.push(McpToolInfo {
-            name: format!("mcp__claude_ai_Hugging_Face__{}", tool_name),
-            original_name: tool_name.to_string(),
-            server_name: "claude.ai Hugging Face".to_string(),
-            description: Some(description.to_string()),
-            input_schema: Some(object_schema.clone()),
+            server_name: server.name.clone(),
+            description: Some(format!(
+                "Complete an in-progress OAuth flow for the `{}` MCP server by submitting the callback URL. Call `mcp__{}__authenticate` first to start the flow and get the authorization URL. After the user authorizes in their browser, the browser is redirected to a `http://localhost:<port>/callback?code=...&state=...` URL — on remote sessions that page fails to load, but the URL in the address bar is still valid. Pass that full URL here as `callback_url`.",
+                server.name, normalized_server
+            )),
+            input_schema: Some(callback_schema.clone()),
         });
     }
-
     tools
+}
+
+fn dedup_claude_ai_mcp_servers(
+    claude_ai_servers: std::collections::HashMap<
+        String,
+        claude_core::mcp::types::ScopedMcpServerConfig,
+    >,
+    manual_servers: &std::collections::HashMap<
+        String,
+        claude_core::mcp::types::ScopedMcpServerConfig,
+    >,
+) -> std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig> {
+    let manual_sigs = manual_servers
+        .iter()
+        .filter_map(|(name, config)| mcp_server_signature(config).map(|sig| (sig, name.clone())))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    claude_ai_servers
+        .into_iter()
+        .filter_map(|(name, config)| {
+            if let Some(sig) = mcp_server_signature(&config) {
+                if let Some(duplicate_of) = manual_sigs.get(&sig) {
+                    tracing::debug!(
+                        server = %name,
+                        duplicate_of = %duplicate_of,
+                        "suppressing duplicate claude.ai MCP connector"
+                    );
+                    return None;
+                }
+            }
+            Some((name, config))
+        })
+        .collect()
+}
+
+fn ts_skill_order(name: &str) -> Option<usize> {
+    const ORDER: &[&str] = &[
+        "superpowers:execute-plan",
+        "superpowers:write-plan",
+        "superpowers:brainstorm",
+        "superpowers:using-git-worktrees",
+        "superpowers:executing-plans",
+        "superpowers:writing-plans",
+        "superpowers:writing-skills",
+        "superpowers:test-driven-development",
+        "superpowers:subagent-driven-development",
+        "superpowers:requesting-code-review",
+        "superpowers:verification-before-completion",
+        "superpowers:receiving-code-review",
+        "superpowers:finishing-a-development-branch",
+        "superpowers:code-review-remediation",
+        "superpowers:brainstorming",
+        "superpowers:systematic-debugging",
+        "superpowers:using-superpowers",
+        "superpowers:dispatching-parallel-agents",
+    ];
+    ORDER.iter().position(|known| *known == name)
 }
 
 fn emit_stream_json(value: serde_json::Value) {
@@ -772,73 +1013,95 @@ async fn main() -> Result<()> {
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
     let mut mcp_server_settings = settings.mcp_servers.clone();
     mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&raw_settings));
-    let claude_ai_connector_mcp_servers = load_claude_ai_connector_mcp_servers(&auth).await;
-    if !mcp_server_settings.is_empty() || !claude_ai_connector_mcp_servers.is_empty() {
+    let mut configs = std::collections::HashMap::new();
+    let mut plugin_mcp_server_names = Vec::new();
+    for (name, entry) in &mcp_server_settings {
+        let env = if entry.env.is_empty() {
+            None
+        } else {
+            Some(entry.env.clone())
+        };
+        let scoped = claude_core::mcp::types::ScopedMcpServerConfig {
+            config: claude_core::mcp::types::McpServerConfig::Stdio(
+                claude_core::mcp::types::McpStdioServerConfig {
+                    command: entry.command.clone(),
+                    args: entry.args.clone(),
+                    env,
+                },
+            ),
+            scope: claude_core::mcp::types::ConfigScope::User,
+        };
+        if name.starts_with("plugin:") {
+            plugin_mcp_server_names.push(name.clone());
+        }
+        configs.insert(name.clone(), scoped);
+    }
+    let claude_ai_discovery = fetch_claude_ai_mcp_configs_if_eligible().await;
+    let claude_ai_configs = dedup_claude_ai_mcp_servers(claude_ai_discovery.configs, &configs);
+    let claude_ai_server_names = claude_ai_configs.keys().cloned().collect::<Vec<_>>();
+    configs.extend(claude_ai_configs);
+    let mut claude_ai_shadow_tools = mcp_contract_shadow_tools(claude_ai_server_names);
+    claude_ai_shadow_tools.extend(claude_ai_auth_shadow_tools(
+        &claude_ai_discovery.auth_only_servers,
+    ));
+    claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(plugin_mcp_server_names));
+    if !configs.is_empty() {
         tracing::info!(
-            count = mcp_server_settings.len() + claude_ai_connector_mcp_servers.len(),
+            count = configs.len(),
             "Connecting to configured MCP servers"
         );
-        let mut configs = std::collections::HashMap::new();
-        for (name, entry) in &mcp_server_settings {
-            let env = if entry.env.is_empty() {
-                None
-            } else {
-                Some(entry.env.clone())
-            };
-            let scoped = claude_core::mcp::types::ScopedMcpServerConfig {
-                config: claude_core::mcp::types::McpServerConfig::Stdio(
-                    claude_core::mcp::types::McpStdioServerConfig {
-                        command: entry.command.clone(),
-                        args: entry.args.clone(),
-                        env,
-                    },
-                ),
-                scope: claude_core::mcp::types::ConfigScope::User,
-            };
-            configs.insert(name.clone(), scoped);
-        }
-        configs.extend(claude_ai_connector_mcp_servers);
-        let mgr = mcp_manager.read().await;
-        let connect_all = mgr.connect_all_respecting_auth_cache(configs);
-        let connections = if is_interactive_session {
-            match tokio::time::timeout(Duration::from_secs(2), connect_all).await {
-                Ok(connections) => connections,
-                Err(_) => {
-                    tracing::warn!(
-                        "Timed out connecting MCP servers during interactive startup; continuing without blocking TUI startup"
-                    );
-                    Vec::new()
+
+        if is_interactive_session {
+            let manager = mcp_manager.clone();
+            tokio::spawn(async move {
+                let mgr = manager.read().await;
+                let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+                drop(mgr);
+                for conn in &connections {
+                    match &conn.status {
+                        claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                            tracing::info!(server = %conn.name, "MCP server connected");
+                        }
+                        claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
+                            tracing::warn!(
+                                server = %conn.name,
+                                error = ?error,
+                                "MCP server failed to connect"
+                            );
+                        }
+                        _ => {}
+                    }
                 }
-            }
+            });
         } else {
-            connect_all.await
-        };
-        drop(mgr);
+            let mgr = mcp_manager.read().await;
+            let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+            drop(mgr);
 
-        // Report connection results
-        for conn in &connections {
-            match &conn.status {
-                claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
-                    tracing::info!(server = %conn.name, "MCP server connected");
+            // Report connection results
+            for conn in &connections {
+                match &conn.status {
+                    claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                        tracing::info!(server = %conn.name, "MCP server connected");
+                    }
+                    claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
+                        tracing::warn!(
+                            server = %conn.name,
+                            error = ?error,
+                            "MCP server failed to connect"
+                        );
+                    }
+                    _ => {}
                 }
-                claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
-                    tracing::warn!(
-                        server = %conn.name,
-                        error = ?error,
-                        "MCP server failed to connect"
-                    );
-                }
-                _ => {}
             }
         }
 
-        {
+        if !claude_ai_shadow_tools.is_empty() {
             let mgr = mcp_manager.read().await;
-            mgr.add_tool_definitions(claude_ai_connector_shadow_tools())
-                .await;
+            mgr.add_tool_definitions(claude_ai_shadow_tools).await;
         }
 
-        // Register MCP tools into the tool registry
+        // Register immediately available MCP/shadow tools into the registry.
         claude_tools::register_mcp_tools(&mut tools, mcp_manager.clone()).await;
     }
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
@@ -1032,34 +1295,42 @@ async fn main() -> Result<()> {
         }
     }
 
-    let session_start_hooks = hook_runner.run_hooks(
-        &claude_core::hooks::types::HookEvent::SessionStart,
-        serde_json::json!({
-            "source": if cli.resume.is_some() { "resume" } else { "startup" },
-        }),
-        None,
-        None,
-        None,
-        None,
-    );
-    let session_start = if is_interactive_session {
-        match tokio::time::timeout(Duration::from_secs(2), session_start_hooks).await {
-            Ok(result) => result,
-            Err(_) => {
-                tracing::warn!(
-                    "Timed out running SessionStart hooks during interactive startup; continuing without blocking TUI startup"
-                );
-                claude_core::hooks::types::AggregatedHookResult::default()
-            }
-        }
+    if is_interactive_session {
+        let hook_runner = hook_runner.clone();
+        let resume = cli.resume.is_some();
+        tokio::spawn(async move {
+            let _ = hook_runner
+                .run_hooks(
+                    &claude_core::hooks::types::HookEvent::SessionStart,
+                    serde_json::json!({
+                        "source": if resume { "resume" } else { "startup" },
+                    }),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        });
     } else {
-        session_start_hooks.await
-    };
-    for context in session_start.additional_contexts {
-        query_engine.append_user_context_block(format!(
-            "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
-            context
-        ));
+        let session_start = hook_runner
+            .run_hooks(
+                &claude_core::hooks::types::HookEvent::SessionStart,
+                serde_json::json!({
+                    "source": if cli.resume.is_some() { "resume" } else { "startup" },
+                }),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
+        for context in session_start.additional_contexts {
+            query_engine.append_user_context_block(format!(
+                "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
+                context
+            ));
+        }
     }
 
     // Add MCP server instructions as request-time user context, matching TS.
@@ -1067,10 +1338,12 @@ async fn main() -> Result<()> {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
         let mut instructions_parts: Vec<String> = Vec::new();
-        let has_hugging_face_tools = tools
-            .all()
-            .iter()
-            .any(|tool| tool.name().starts_with("mcp__claude_ai_Hugging_Face__"));
+        let has_hugging_face_tools = tools.all().iter().any(|tool| {
+            let name = tool.name();
+            name.starts_with("mcp__claude_ai_Hugging_Face__")
+                && !name.ends_with("__authenticate")
+                && !name.ends_with("__complete_authentication")
+        });
         if has_hugging_face_tools {
             instructions_parts.push(hugging_face_mcp_instruction());
         }
