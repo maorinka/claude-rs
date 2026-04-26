@@ -73,13 +73,12 @@ pub fn get_auto_mem_entrypoint(cwd: &Path) -> PathBuf {
 }
 
 /// Sanitize a filesystem path into something safe as a directory name.
-/// Mirrors the gist of TS `sanitizePath()`: replace separators with `-`
-/// and drop a leading separator. Preserves alphanumeric + `-_`.
+/// Mirrors TS `sanitizePath()`: replace separators with `-` while preserving
+/// the leading dash produced by an absolute path like `/Users/alice/repo`.
 fn sanitize_path(p: &Path) -> PathBuf {
     let s = p.display().to_string();
-    let trimmed = s.trim_start_matches('/');
-    let mut out = String::with_capacity(trimmed.len());
-    for ch in trimmed.chars() {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
         if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
             out.push(ch);
         } else {
@@ -100,7 +99,7 @@ fn sanitize_path(p: &Path) -> PathBuf {
             prev_dash = false;
         }
     }
-    PathBuf::from(collapsed.trim_matches('-'))
+    PathBuf::from(collapsed.trim_end_matches('-'))
 }
 
 #[cfg(test)]
@@ -125,7 +124,7 @@ mod tests {
     #[test]
     fn path_sanitized() {
         let p = sanitize_path(Path::new("/Users/alice/work/claude-rs"));
-        assert_eq!(p, PathBuf::from("Users-alice-work-claude-rs"));
+        assert_eq!(p, PathBuf::from("-Users-alice-work-claude-rs"));
     }
 
     #[test]
