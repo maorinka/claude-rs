@@ -469,8 +469,7 @@ impl QueryEngine {
         let mut stop_reason = StopReason::EndTurn;
         let mut assistant_content: Vec<serde_json::Value> = Vec::new();
         let mut response_usage: Option<Usage> = None;
-
-        loop {
+        'stream: loop {
             // Issue 27: apply idle timeout to each chunk read.
             let maybe_chunk = match tokio::time::timeout(idle_timeout, byte_stream.next()).await {
                 Ok(maybe) => maybe,
@@ -670,6 +669,7 @@ impl QueryEngine {
                                             ))
                                             .await;
                                     }
+                                    break 'stream;
                                 }
                                 SseEvent::MessageStart { message } => {
                                     response_usage = Some(message.usage.clone());
@@ -690,6 +690,9 @@ impl QueryEngine {
                                         "Streaming API error received mid-stream: {}",
                                         error
                                     ));
+                                }
+                                SseEvent::MessageStop => {
+                                    break 'stream;
                                 }
                                 _ => {}
                             },

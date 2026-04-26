@@ -1499,8 +1499,12 @@ impl McpClient {
             let _ = child.wait();
         }
 
-        // Wait for the reader task to finish
+        // Transport cleanup above has already closed the writer and, for
+        // stdio, terminated/reaped the child process. Reader tasks can still
+        // sit in blocking reads or long-lived remote streams, so abort them
+        // explicitly instead of making CLI shutdown wait on transport details.
         if let Some(handle) = self.reader_handle.take() {
+            handle.abort();
             let _ = handle.await;
         }
 
