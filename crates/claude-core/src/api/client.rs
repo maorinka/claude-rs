@@ -253,7 +253,7 @@ pub fn build_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
+                text: "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch=6981a;"
                     .to_string(),
             });
         }
@@ -394,7 +394,7 @@ fn build_minimal_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: "x-anthropic-billing-header: cc_version=1.0.33.claude-rs; cc_entrypoint=cli;"
+                text: "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch=6981a;"
                     .to_string(),
             });
         }

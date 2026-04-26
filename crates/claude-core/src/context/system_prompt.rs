@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -53,7 +55,10 @@ pub async fn build_system_prompt(
     // Claude Code prompt as the next block. Dynamic project context is sent as
     // user-visible system-reminder blocks, not as system prompt blocks.
     parts.push(AGENT_SDK_PREFIX.to_string());
-    parts.push(base_system_prompt());
+    parts.push(super::ts_static_prompt::build_ts_static_system_prompt(
+        project_root,
+        model,
+    ));
     let _ = model; // retained for API compatibility with callers
 
     // Settings-driven sections (language preference, output style)
