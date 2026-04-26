@@ -278,10 +278,35 @@ impl ToolRegistry {
             .map(|t| claude_core::api::client::ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description(),
-                input_schema: t.input_schema(),
+                input_schema: normalize_local_tool_schema(t.name(), t.input_schema()),
             })
             .collect()
     }
+}
+
+fn normalize_local_tool_schema(tool_name: &str, mut schema: Value) -> Value {
+    if tool_name.starts_with("mcp__") {
+        return schema;
+    }
+
+    let Some(obj) = schema.as_object_mut() else {
+        return schema;
+    };
+
+    obj.entry("$schema".to_string()).or_insert_with(|| {
+        Value::String("https://json-schema.org/draft/2020-12/schema".to_string())
+    });
+    obj.entry("additionalProperties".to_string())
+        .or_insert(Value::Bool(false));
+    if obj
+        .get("required")
+        .and_then(|v| v.as_array())
+        .is_some_and(|v| v.is_empty())
+    {
+        obj.remove("required");
+    }
+
+    schema
 }
 
 impl Default for ToolRegistry {
