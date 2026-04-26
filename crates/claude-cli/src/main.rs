@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 #[derive(Parser)]
@@ -421,10 +422,13 @@ fn load_enabled_plugin_mcp_servers(
 }
 
 async fn load_claude_ai_connector_mcp_servers(
+    auth: &claude_core::api::client::AuthMethod,
 ) -> std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig> {
-    let Ok(Some(token)) = claude_core::auth::resolve::resolve_stored_oauth_token(false).await
-    else {
-        return std::collections::HashMap::new();
+    let token = match auth {
+        claude_core::api::client::AuthMethod::OAuthToken(token) => token.clone(),
+        claude_core::api::client::AuthMethod::ApiKey(_) => {
+            return std::collections::HashMap::new();
+        }
     };
 
     let mut headers = std::collections::HashMap::new();
@@ -622,6 +626,7 @@ async fn main() -> Result<()> {
     if let Some(dir) = &cli.working_dir {
         std::env::set_current_dir(dir)?;
     }
+    let is_interactive_session = prompt_arg.is_none();
 
     // Initialize tracing
     tracing_subscriber::fmt()
@@ -767,7 +772,7 @@ async fn main() -> Result<()> {
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
     let mut mcp_server_settings = settings.mcp_servers.clone();
     mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&raw_settings));
-    let claude_ai_connector_mcp_servers = load_claude_ai_connector_mcp_servers().await;
+    let claude_ai_connector_mcp_servers = load_claude_ai_connector_mcp_servers(&auth).await;
     if !mcp_server_settings.is_empty() || !claude_ai_connector_mcp_servers.is_empty() {
         tracing::info!(
             count = mcp_server_settings.len() + claude_ai_connector_mcp_servers.len(),
@@ -794,7 +799,20 @@ async fn main() -> Result<()> {
         }
         configs.extend(claude_ai_connector_mcp_servers);
         let mgr = mcp_manager.read().await;
-        let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+        let connect_all = mgr.connect_all_respecting_auth_cache(configs);
+        let connections = if is_interactive_session {
+            match tokio::time::timeout(Duration::from_secs(2), connect_all).await {
+                Ok(connections) => connections,
+                Err(_) => {
+                    tracing::warn!(
+                        "Timed out connecting MCP servers during interactive startup; continuing without blocking TUI startup"
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            connect_all.await
+        };
         drop(mgr);
 
         // Report connection results
@@ -1014,18 +1032,29 @@ async fn main() -> Result<()> {
         }
     }
 
-    let session_start = hook_runner
-        .run_hooks(
-            &claude_core::hooks::types::HookEvent::SessionStart,
-            serde_json::json!({
-                "source": if cli.resume.is_some() { "resume" } else { "startup" },
-            }),
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
+    let session_start_hooks = hook_runner.run_hooks(
+        &claude_core::hooks::types::HookEvent::SessionStart,
+        serde_json::json!({
+            "source": if cli.resume.is_some() { "resume" } else { "startup" },
+        }),
+        None,
+        None,
+        None,
+        None,
+    );
+    let session_start = if is_interactive_session {
+        match tokio::time::timeout(Duration::from_secs(2), session_start_hooks).await {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::warn!(
+                    "Timed out running SessionStart hooks during interactive startup; continuing without blocking TUI startup"
+                );
+                claude_core::hooks::types::AggregatedHookResult::default()
+            }
+        }
+    } else {
+        session_start_hooks.await
+    };
     for context in session_start.additional_contexts {
         query_engine.append_user_context_block(format!(
             "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",

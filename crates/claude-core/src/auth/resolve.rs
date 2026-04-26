@@ -10,6 +10,7 @@ const CCR_OAUTH_TOKEN_PATH: &str = "/home/claude/.claude/remote/.oauth_token";
 const CCR_API_KEY_PATH: &str = "/home/claude/.claude/remote/.api_key";
 const REFRESH_LOCK_RETRIES: usize = 5;
 const DEFAULT_API_KEY_HELPER_TTL_MS: u64 = 5 * 60 * 1000;
+const REFRESH_LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
 
 static API_KEY_HELPER_CACHE: Lazy<Mutex<Option<ApiKeyHelperCacheEntry>>> =
     Lazy::new(|| Mutex::new(None));
@@ -336,6 +337,14 @@ async fn acquire_refresh_lock(path: &Path) -> Result<RefreshLock> {
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if refresh_lock_is_stale(path).await {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "Removing stale OAuth refresh lock"
+                    );
+                    let _ = tokio::fs::remove_file(path).await;
+                    continue;
+                }
                 if attempt == REFRESH_LOCK_RETRIES {
                     anyhow::bail!("timed out waiting for OAuth refresh lock");
                 }
@@ -348,6 +357,19 @@ async fn acquire_refresh_lock(path: &Path) -> Result<RefreshLock> {
     }
 
     anyhow::bail!("timed out waiting for OAuth refresh lock")
+}
+
+async fn refresh_lock_is_stale(path: &Path) -> bool {
+    let Ok(metadata) = tokio::fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified
+        .elapsed()
+        .map(|age| age >= REFRESH_LOCK_STALE_AFTER)
+        .unwrap_or(false)
 }
 
 fn read_credential_from_fd_or_file(env_var: &str, fallback_path: &str) -> Result<Option<String>> {
