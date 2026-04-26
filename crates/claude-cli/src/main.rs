@@ -520,13 +520,6 @@ struct ClaudeAiMcpServer {
 #[derive(Debug, Default)]
 struct ClaudeAiMcpDiscovery {
     configs: std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig>,
-    auth_only_servers: Vec<ClaudeAiAuthOnlyServer>,
-}
-
-#[derive(Debug)]
-struct ClaudeAiAuthOnlyServer {
-    name: String,
-    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -603,18 +596,6 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
         }
         used_normalized_names.insert(final_normalized);
 
-        // TS routes Claude.ai-hosted MCP servers through claudeai-proxy.
-        // Login-only URLs are surfaced as auth shim tools until the OAuth
-        // flow completes, even if the raw upstream MCP endpoint would list
-        // tools without that proxy state.
-        if server.url.contains("login") {
-            discovery.auth_only_servers.push(ClaudeAiAuthOnlyServer {
-                name: final_name,
-                url: server.url,
-            });
-            continue;
-        }
-
         let mut headers = std::collections::HashMap::new();
         headers.insert(
             "Authorization".to_string(),
@@ -634,7 +615,6 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
 
     tracing::debug!(
         count = discovery.configs.len(),
-        auth_only = discovery.auth_only_servers.len(),
         "[claudeai-mcp] fetched servers"
     );
     discovery
@@ -670,55 +650,6 @@ fn mcp_contract_shadow_tools(
             })
         })
         .collect()
-}
-
-fn claude_ai_auth_shadow_tools(
-    servers: &[ClaudeAiAuthOnlyServer],
-) -> Vec<claude_core::mcp::manager::McpToolInfo> {
-    let empty_schema = serde_json::json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-    });
-    let callback_schema = serde_json::json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-            "callback_url": {
-                "description": "The full callback URL from the browser address bar after authorizing, e.g. http://localhost:<port>/callback?code=...&state=...",
-                "type": "string"
-            }
-        },
-        "required": ["callback_url"],
-        "type": "object"
-    });
-
-    let mut tools = Vec::new();
-    for server in servers {
-        let normalized_server = normalize_name_for_mcp(&server.name);
-        tools.push(claude_core::mcp::manager::McpToolInfo {
-            name: format!("mcp__{}__authenticate", normalized_server),
-            original_name: "authenticate".to_string(),
-            server_name: server.name.clone(),
-            description: Some(format!(
-                "The `{}` MCP server (claudeai-proxy at {}) is installed but requires authentication. Call this tool to start the OAuth flow — you'll receive an authorization URL to share with the user. Once the user completes authorization in their browser, the server's real tools will become available automatically.",
-                server.name, server.url
-            )),
-            input_schema: Some(empty_schema.clone()),
-        });
-        tools.push(claude_core::mcp::manager::McpToolInfo {
-            name: format!("mcp__{}__complete_authentication", normalized_server),
-            original_name: "complete_authentication".to_string(),
-            server_name: server.name.clone(),
-            description: Some(format!(
-                "Complete an in-progress OAuth flow for the `{}` MCP server by submitting the callback URL. Call `mcp__{}__authenticate` first to start the flow and get the authorization URL. After the user authorizes in their browser, the browser is redirected to a `http://localhost:<port>/callback?code=...&state=...` URL — on remote sessions that page fails to load, but the URL in the address bar is still valid. Pass that full URL here as `callback_url`.",
-                server.name, normalized_server
-            )),
-            input_schema: Some(callback_schema.clone()),
-        });
-    }
-    tools
 }
 
 fn dedup_claude_ai_mcp_servers(
@@ -759,21 +690,21 @@ fn ts_skill_order(name: &str) -> Option<usize> {
         "superpowers:execute-plan",
         "superpowers:write-plan",
         "superpowers:brainstorm",
-        "superpowers:using-git-worktrees",
-        "superpowers:executing-plans",
-        "superpowers:writing-plans",
-        "superpowers:writing-skills",
-        "superpowers:test-driven-development",
-        "superpowers:subagent-driven-development",
-        "superpowers:requesting-code-review",
-        "superpowers:verification-before-completion",
         "superpowers:receiving-code-review",
         "superpowers:finishing-a-development-branch",
         "superpowers:code-review-remediation",
+        "superpowers:requesting-code-review",
+        "superpowers:subagent-driven-development",
+        "superpowers:test-driven-development",
+        "superpowers:writing-plans",
         "superpowers:brainstorming",
         "superpowers:systematic-debugging",
-        "superpowers:using-superpowers",
+        "superpowers:using-git-worktrees",
+        "superpowers:verification-before-completion",
+        "superpowers:executing-plans",
         "superpowers:dispatching-parallel-agents",
+        "superpowers:writing-skills",
+        "superpowers:using-superpowers",
     ];
     ORDER.iter().position(|known| *known == name)
 }
@@ -1041,9 +972,6 @@ async fn main() -> Result<()> {
     let claude_ai_server_names = claude_ai_configs.keys().cloned().collect::<Vec<_>>();
     configs.extend(claude_ai_configs);
     let mut claude_ai_shadow_tools = mcp_contract_shadow_tools(claude_ai_server_names);
-    claude_ai_shadow_tools.extend(claude_ai_auth_shadow_tools(
-        &claude_ai_discovery.auth_only_servers,
-    ));
     claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(plugin_mcp_server_names));
     if !configs.is_empty() {
         tracing::info!(
