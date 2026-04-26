@@ -325,6 +325,47 @@ fn load_enabled_plugin_mcp_servers(
     servers
 }
 
+async fn load_claude_ai_connector_mcp_servers(
+) -> std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig> {
+    let Ok(Some(token)) = claude_core::auth::resolve::resolve_stored_oauth_token(false).await
+    else {
+        return std::collections::HashMap::new();
+    };
+
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+
+    let connectors = [
+        (
+            "claude.ai Google Drive",
+            "https://drivemcp.googleapis.com/mcp/v1",
+        ),
+        ("claude.ai Gmail", "https://gmailmcp.googleapis.com/mcp/v1"),
+        (
+            "claude.ai Google Calendar",
+            "https://calendarmcp.googleapis.com/mcp/v1",
+        ),
+    ];
+
+    connectors
+        .into_iter()
+        .map(|(name, url)| {
+            (
+                name.to_string(),
+                claude_core::mcp::types::ScopedMcpServerConfig {
+                    config: claude_core::mcp::types::McpServerConfig::Http(
+                        claude_core::mcp::types::McpHttpServerConfig {
+                            url: url.to_string(),
+                            headers: Some(headers.clone()),
+                        },
+                    ),
+                    scope: claude_core::mcp::types::ConfigScope::ClaudeAi,
+                },
+            )
+        })
+        .collect()
+}
+
 fn emit_stream_json(value: serde_json::Value) {
     println!(
         "{}",
@@ -559,9 +600,10 @@ async fn main() -> Result<()> {
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
     let mut mcp_server_settings = settings.mcp_servers.clone();
     mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&raw_settings));
-    if !mcp_server_settings.is_empty() {
+    let claude_ai_connector_mcp_servers = load_claude_ai_connector_mcp_servers().await;
+    if !mcp_server_settings.is_empty() || !claude_ai_connector_mcp_servers.is_empty() {
         tracing::info!(
-            count = mcp_server_settings.len(),
+            count = mcp_server_settings.len() + claude_ai_connector_mcp_servers.len(),
             "Connecting to configured MCP servers"
         );
         let mut configs = std::collections::HashMap::new();
@@ -583,8 +625,9 @@ async fn main() -> Result<()> {
             };
             configs.insert(name.clone(), scoped);
         }
+        configs.extend(claude_ai_connector_mcp_servers);
         let mgr = mcp_manager.read().await;
-        let connections = mgr.connect_all(configs).await;
+        let connections = mgr.connect_all_respecting_auth_cache(configs).await;
         drop(mgr);
 
         // Report connection results
