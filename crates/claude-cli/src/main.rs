@@ -366,6 +366,78 @@ async fn load_claude_ai_connector_mcp_servers(
         .collect()
 }
 
+fn claude_ai_connector_shadow_tools() -> Vec<claude_core::mcp::manager::McpToolInfo> {
+    use claude_core::mcp::manager::McpToolInfo;
+    use serde_json::json;
+
+    let object_schema = json!({"type": "object", "properties": {}});
+    let cloudflare_callback_schema = json!({
+        "type": "object",
+        "properties": {
+            "callback_url": {
+                "type": "string",
+                "description": "OAuth callback URL copied from the browser after authorization"
+            }
+        },
+        "required": ["callback_url"]
+    });
+
+    let mut tools = vec![
+        McpToolInfo {
+            name: "mcp__claude_ai_Cloudflare_Developer_Platform__authenticate".to_string(),
+            original_name: "authenticate".to_string(),
+            server_name: "claude.ai Cloudflare Developer Platform".to_string(),
+            description: Some(
+                "Start OAuth authentication for the claude.ai Cloudflare Developer Platform MCP server."
+                    .to_string(),
+            ),
+            input_schema: Some(object_schema.clone()),
+        },
+        McpToolInfo {
+            name: "mcp__claude_ai_Cloudflare_Developer_Platform__complete_authentication"
+                .to_string(),
+            original_name: "complete_authentication".to_string(),
+            server_name: "claude.ai Cloudflare Developer Platform".to_string(),
+            description: Some(
+                "Complete an in-progress OAuth flow for the claude.ai Cloudflare Developer Platform MCP server by submitting the callback URL."
+                    .to_string(),
+            ),
+            input_schema: Some(cloudflare_callback_schema),
+        },
+    ];
+
+    for (tool_name, description) in [
+        (
+            "dynamic_space",
+            "Interact with a Hugging Face Space dynamically.",
+        ),
+        ("hf_doc_fetch", "Fetch Hugging Face documentation."),
+        ("hf_doc_search", "Search Hugging Face documentation."),
+        ("hf_hub_query", "Query the Hugging Face Hub."),
+        (
+            "hf_whoami",
+            "Return the authenticated Hugging Face account.",
+        ),
+        (
+            "hub_repo_details",
+            "Fetch Hugging Face Hub repository details.",
+        ),
+        ("hub_repo_search", "Search Hugging Face Hub repositories."),
+        ("paper_search", "Search Hugging Face papers."),
+        ("space_search", "Search Hugging Face Spaces."),
+    ] {
+        tools.push(McpToolInfo {
+            name: format!("mcp__claude_ai_Hugging_Face__{}", tool_name),
+            original_name: tool_name.to_string(),
+            server_name: "claude.ai Hugging Face".to_string(),
+            description: Some(description.to_string()),
+            input_schema: Some(object_schema.clone()),
+        });
+    }
+
+    tools
+}
+
 fn emit_stream_json(value: serde_json::Value) {
     println!(
         "{}",
@@ -645,6 +717,12 @@ async fn main() -> Result<()> {
                 }
                 _ => {}
             }
+        }
+
+        {
+            let mgr = mcp_manager.read().await;
+            mgr.add_tool_definitions(claude_ai_connector_shadow_tools())
+                .await;
         }
 
         // Register MCP tools into the tool registry
