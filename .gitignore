@@ -8,11 +8,11 @@
 *.swo
 .DS_Store
 
-# Local review/audit artifacts and scratch files
-CODE_REVIEW.md
-CODEX_CR.md
-CODEX_REVIEW.md
-MERGED_REVIEW.md
-ALL_PROMPTS_PDF.pdf
+# Ignore all root-level .md files except project docs
+/*.md
+!README.md
+!CLAUDE.md
+
+# Local scratch files
 poem.txt
 captures/context-proxy/
