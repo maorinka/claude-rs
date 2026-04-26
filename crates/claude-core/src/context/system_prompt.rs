@@ -125,7 +125,7 @@ pub fn build_project_user_context_block(project_root: &Path) -> Option<String> {
     if !claude_md_contents.is_empty() {
         body.push_str("\n# claudeMd\n");
         body.push_str(MEMORY_INSTRUCTION_PROMPT);
-        body.push('\n');
+        body.push_str("\n\n");
 
         let mut seen_sources = std::collections::HashSet::new();
         for (source, content) in claude_md_contents {
@@ -141,9 +141,12 @@ pub fn build_project_user_context_block(project_root: &Path) -> Option<String> {
                 "instructions"
             };
             body.push_str(&format!(
-                "\nContents of {} ({}):\n\n{}\n",
-                display_source, label, content
+                "Contents of {} ({}):\n\n{}",
+                display_source,
+                label,
+                content.trim_end()
             ));
+            body.push_str("\n\n");
         }
     }
 
@@ -152,9 +155,22 @@ pub fn build_project_user_context_block(project_root: &Path) -> Option<String> {
         if let Ok(content) = std::fs::read_to_string(&entrypoint) {
             if !content.trim().is_empty() {
                 body.push_str(&format!(
-                    "\nContents of {} (user's auto-memory, persists across conversations):\n\n{}\n",
+                    "Contents of {} (user's auto-memory, persists across conversations):\n\n{}",
                     entrypoint.display(),
-                    content
+                    content.trim_end()
+                ));
+                body.push('\n');
+            }
+        }
+    }
+
+    if let Ok(config) = crate::config::global::load_global_config() {
+        if let Some(account) = config.oauth_account {
+            if !account.email_address.trim().is_empty() {
+                body.push_str("# userEmail\n");
+                body.push_str(&format!(
+                    "The user's email address is {}.\n",
+                    account.email_address.trim()
                 ));
             }
         }
@@ -166,7 +182,7 @@ pub fn build_project_user_context_block(project_root: &Path) -> Option<String> {
         chrono::Local::now().format("%Y-%m-%d")
     ));
     body.push_str(
-        "IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n",
+        "      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n\n",
     );
 
     Some(body)

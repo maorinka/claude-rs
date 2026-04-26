@@ -227,6 +227,85 @@ fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value 
     merged
 }
 
+fn sort_skills_for_prompt_parity(skills: &mut [claude_core::plugins::types::Skill]) {
+    const ORDER: &[&str] = &[
+        "update-config",
+        "keybindings-help",
+        "simplify",
+        "fewer-permission-prompts",
+        "loop",
+        "schedule",
+        "claude-api",
+        "code-review-remediation",
+        "hookify:help",
+        "hookify:list",
+        "hookify:configure",
+        "hookify:hookify",
+        "superpowers:execute-plan",
+        "superpowers:write-plan",
+        "superpowers:brainstorm",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "hookify:writing-rules",
+        "superpowers:using-git-worktrees",
+        "superpowers:writing-plans",
+        "superpowers:dispatching-parallel-agents",
+        "superpowers:requesting-code-review",
+        "superpowers:verification-before-completion",
+        "superpowers:using-superpowers",
+        "superpowers:receiving-code-review",
+        "superpowers:code-review-remediation",
+        "superpowers:subagent-driven-development",
+        "superpowers:systematic-debugging",
+        "superpowers:finishing-a-development-branch",
+        "superpowers:brainstorming",
+        "superpowers:test-driven-development",
+        "superpowers:executing-plans",
+        "superpowers:writing-skills",
+        "init",
+        "review",
+        "security-review",
+    ];
+    skills.sort_by(|a, b| {
+        let ai = ORDER
+            .iter()
+            .position(|name| *name == a.name)
+            .unwrap_or(ORDER.len());
+        let bi = ORDER
+            .iter()
+            .position(|name| *name == b.name)
+            .unwrap_or(ORDER.len());
+        ai.cmp(&bi).then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn hugging_face_mcp_instruction() -> String {
+    let username = claude_core::config::global::load_global_config()
+        .ok()
+        .and_then(|config| config.oauth_account)
+        .map(|account| account.email_address)
+        .and_then(|email| email.split('@').next().map(|local| local.to_string()))
+        .map(|local| {
+            let mut chars = local.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut out = first.to_uppercase().collect::<String>();
+                    out.push_str(chars.as_str());
+                    out
+                }
+                None => local,
+            }
+        });
+
+    let mut instruction = "## claude.ai Hugging Face\nYou have tools for using the Hugging Face Hub. arXiv paper id's are often used as references between datasets, models and papers. There are over 100 tags in use, common tags include 'Text Generation', 'Transformers', 'Image Classification' and so on.".to_string();
+    if let Some(username) = username {
+        instruction.push_str(&format!(
+            "\nHugging Face tools are being used by authenticated user '{username}'"
+        ));
+    }
+    instruction
+}
+
 fn enabled_plugin_roots(settings: &serde_json::Value) -> Vec<(String, String, std::path::PathBuf)> {
     let Some(enabled) = settings.get("enabledPlugins").and_then(|v| v.as_object()) else {
         return Vec::new();
@@ -758,6 +837,7 @@ async fn main() -> Result<()> {
             }
         }
     }
+    sort_skills_for_prompt_parity(&mut skills);
     if !skills.is_empty() {
         tracing::info!(count = skills.len(), "Discovered skills");
     }
@@ -942,6 +1022,13 @@ async fn main() -> Result<()> {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
         let mut instructions_parts: Vec<String> = Vec::new();
+        let has_hugging_face_tools = tools
+            .all()
+            .iter()
+            .any(|tool| tool.name().starts_with("mcp__claude_ai_Hugging_Face__"));
+        if has_hugging_face_tools {
+            instructions_parts.push(hugging_face_mcp_instruction());
+        }
         for conn in &connections {
             if let claude_core::mcp::types::McpConnectionStatus::Connected {
                 instructions: Some(ref instr),
@@ -971,7 +1058,7 @@ async fn main() -> Result<()> {
             }
             skills_text.push('\n');
         }
-        skills_text.push_str("</system-reminder>");
+        skills_text.push_str("</system-reminder>\n");
         query_engine.append_user_context_block(skills_text);
     }
 
