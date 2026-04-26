@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::auth::login::{debug_http_client, proxy_url};
+use crate::auth::resolve::resolve_stored_oauth_token;
 use crate::types::content::ContentBlock;
 use crate::types::events::StreamEvent;
 
@@ -531,7 +532,8 @@ impl ApiClient {
             }
         }
 
-        let (header_name, header_value) = self.auth.to_header();
+        let auth = self.current_request_auth().await?;
+        let (header_name, header_value) = auth.to_header();
 
         let mut request = self
             .http
@@ -541,7 +543,7 @@ impl ApiClient {
             .header(header_name, header_value);
 
         if minimal_transport {
-            if self.auth.is_oauth() {
+            if auth.is_oauth() {
                 request = request.header("anthropic-beta", "oauth-2025-04-20");
             }
         } else {
@@ -560,7 +562,7 @@ impl ApiClient {
                 "context-management-2025-06-27",
                 "prompt-caching-scope-2026-01-05",
             ];
-            if self.auth.is_oauth() {
+            if auth.is_oauth() {
                 betas.push("oauth-2025-04-20");
             }
             if has_1m_context(&self.config.model) {
@@ -594,6 +596,21 @@ impl ApiClient {
             status,
             &err_body[..err_body.len().min(500)]
         );
+    }
+
+    async fn current_request_auth(&self) -> Result<AuthMethod> {
+        match &self.auth {
+            AuthMethod::ApiKey(_) => Ok(self.auth.clone()),
+            AuthMethod::OAuthToken(_) => {
+                let token = resolve_stored_oauth_token(false)
+                    .await?
+                    .unwrap_or_else(|| match &self.auth {
+                        AuthMethod::OAuthToken(token) => token.clone(),
+                        AuthMethod::ApiKey(_) => unreachable!(),
+                    });
+                Ok(AuthMethod::OAuthToken(token))
+            }
+        }
     }
 }
 

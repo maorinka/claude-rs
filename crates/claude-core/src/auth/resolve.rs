@@ -75,7 +75,7 @@ pub async fn resolve_auth() -> Result<AuthMethod> {
         return Ok(AuthMethod::OAuthToken(token));
     }
 
-    if let Some(tokens) = resolve_stored_oauth_token(false).await? {
+    if let Some(tokens) = resolve_stored_oauth_token_without_refresh().await? {
         return Ok(AuthMethod::OAuthToken(tokens));
     }
 
@@ -256,6 +256,18 @@ pub async fn handle_oauth_401_error(failed_access_token: &str) -> Result<bool> {
         .as_deref()
         .map(|token| token != failed_access_token)
         .unwrap_or(false))
+}
+
+pub async fn resolve_stored_oauth_token_without_refresh() -> Result<Option<String>> {
+    let Some(tokens) = super::storage::load_tokens().await? else {
+        return Ok(None);
+    };
+
+    if !is_claude_ai_auth(&tokens.scopes) {
+        return Ok(None);
+    }
+
+    Ok(Some(tokens.access_token))
 }
 
 pub async fn resolve_stored_oauth_token(force_refresh: bool) -> Result<Option<String>> {
