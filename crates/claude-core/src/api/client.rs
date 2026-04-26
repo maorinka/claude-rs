@@ -260,27 +260,12 @@ pub fn build_request_body(
         full_system.extend_from_slice(system);
         body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
 
-        // Prompt caching: mark the last system block with cache_control.
-        // Matches TS addCacheControlBreakpoints — the system prompt is the
-        // largest stable prefix and benefits most from caching.
-        if let Some(sys_arr) = body["system"].as_array_mut() {
-            if let Some(last) = sys_arr.last_mut() {
-                last["cache_control"] = cache_control_json();
-            }
-        }
+        add_system_cache_markers(&mut body, is_oauth);
     }
 
     // Tools (only include if non-empty).
     if !tools.is_empty() {
         body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
-
-        // Prompt caching: mark the last tool definition.
-        // Tool schemas are the second-largest stable prefix.
-        if let Some(tools_arr) = body["tools"].as_array_mut() {
-            if let Some(last) = tools_arr.last_mut() {
-                last["cache_control"] = cache_control_json();
-            }
-        }
     }
 
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
@@ -330,13 +315,22 @@ pub fn build_request_body_with_raw_tools(
     let mut body = build_request_body(config, messages, system, &[], is_oauth);
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
-        if let Some(tools_arr) = body["tools"].as_array_mut() {
-            if let Some(last) = tools_arr.last_mut() {
-                last["cache_control"] = cache_control_json();
-            }
-        }
     }
     body
+}
+
+/// Apply cache_control breakpoints to cacheable system prompt blocks.
+///
+/// TS leaves the OAuth billing attribution block unmarked and marks the
+/// following system blocks, using a 1h ephemeral cache.
+fn add_system_cache_markers(body: &mut Value, is_oauth: bool) {
+    let Some(system) = body["system"].as_array_mut() else {
+        return;
+    };
+    let start = usize::from(is_oauth);
+    for block in system.iter_mut().skip(start) {
+        block["cache_control"] = cache_control_json();
+    }
 }
 
 /// Apply cache_control breakpoints to conversation messages in the request body.
@@ -365,11 +359,10 @@ fn add_message_cache_markers(body: &mut Value) {
 }
 
 fn cache_control_json() -> Value {
-    let mut value = json!({"type": "ephemeral"});
-    if let Ok(ttl) = std::env::var("CLAUDE_RS_CACHE_TTL") {
-        if !ttl.is_empty() {
-            value["ttl"] = json!(ttl);
-        }
+    let ttl = std::env::var("CLAUDE_RS_CACHE_TTL").unwrap_or_else(|_| "1h".to_string());
+    let mut value = json!({"type": "ephemeral", "ttl": ttl});
+    if value["ttl"].as_str() == Some("") {
+        value.as_object_mut().unwrap().remove("ttl");
     }
     if let Ok(scope) = std::env::var("CLAUDE_RS_CACHE_SCOPE") {
         if !scope.is_empty() {
@@ -408,21 +401,11 @@ fn build_minimal_request_body(
         full_system.extend_from_slice(system);
         body["system"] = serde_json::to_value(&full_system).unwrap_or(Value::Null);
 
-        if let Some(sys_arr) = body["system"].as_array_mut() {
-            if let Some(last) = sys_arr.last_mut() {
-                last["cache_control"] = cache_control_json();
-            }
-        }
+        add_system_cache_markers(&mut body, is_oauth);
     }
 
     if !tools.is_empty() {
         body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
-
-        if let Some(tools_arr) = body["tools"].as_array_mut() {
-            if let Some(last) = tools_arr.last_mut() {
-                last["cache_control"] = cache_control_json();
-            }
-        }
     }
 
     add_message_cache_markers(&mut body);
@@ -722,22 +705,20 @@ mod tests {
         ];
         let body = build_request_body(&config, &[], &system, &[], false);
         let sys = body["system"].as_array().unwrap();
-        // Last system block should have cache_control
-        let last = sys.last().unwrap();
         assert_eq!(
-            last["cache_control"],
-            json!({"type": "ephemeral"}),
-            "last system block must have cache_control"
+            sys[0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"}),
+            "first cacheable system block must have cache_control"
         );
-        // First user block should NOT have cache_control
-        assert!(
-            sys[0].get("cache_control").is_none(),
-            "first system block should not have cache_control"
+        assert_eq!(
+            sys.last().unwrap()["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"}),
+            "last system block must have cache_control"
         );
     }
 
     #[test]
-    fn cache_markers_on_tool_definitions() {
+    fn cache_markers_not_added_to_tool_definitions() {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_cache_env();
         let config = ApiConfig {
@@ -760,10 +741,9 @@ mod tests {
         let body = build_request_body(&config, &[], &[], &tools, false);
         let tools_arr = body["tools"].as_array().unwrap();
         let last = tools_arr.last().unwrap();
-        assert_eq!(
-            last["cache_control"],
-            json!({"type": "ephemeral"}),
-            "last tool must have cache_control"
+        assert!(
+            last.get("cache_control").is_none(),
+            "tool definitions should not have cache_control"
         );
     }
 
@@ -785,9 +765,9 @@ mod tests {
         assert_eq!(body["tools"][0]["type"], "web_search_20250305");
         assert_eq!(body["tools"][0]["name"], "web_search");
         assert_eq!(body["tools"][0]["max_uses"], 8);
-        assert_eq!(
-            body["tools"][0]["cache_control"],
-            json!({"type": "ephemeral"})
+        assert!(
+            body["tools"][0].get("cache_control").is_none(),
+            "raw tool definitions should not have cache_control"
         );
         assert!(body["tools"][0].get("input_schema").is_none());
     }
@@ -813,7 +793,7 @@ mod tests {
         let content = last_user["content"].as_array().unwrap();
         assert_eq!(
             content[0]["cache_control"],
-            json!({"type": "ephemeral"}),
+            json!({"type": "ephemeral", "ttl": "1h"}),
             "last message content block must have cache_control"
         );
         // First user message should NOT have it
@@ -843,7 +823,7 @@ mod tests {
         assert!(msgs[0]["content"][0].get("cache_control").is_none());
         assert_eq!(
             msgs[1]["content"][0]["cache_control"],
-            json!({"type": "ephemeral"})
+            json!({"type": "ephemeral", "ttl": "1h"})
         );
     }
 
@@ -884,7 +864,10 @@ mod tests {
         let msgs = body["messages"].as_array().unwrap();
         let content = msgs[0]["content"].as_array().unwrap();
         // cache_control should be on the text block, not the thinking block
-        assert_eq!(content[0]["cache_control"], json!({"type": "ephemeral"}));
+        assert_eq!(
+            content[0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
         assert!(content[1].get("cache_control").is_none());
     }
 
@@ -909,12 +892,12 @@ mod tests {
         let sys = body["system"].as_array().unwrap();
         assert_eq!(
             sys.last().unwrap()["cache_control"],
-            json!({"type": "ephemeral"})
+            json!({"type": "ephemeral", "ttl": "1h"})
         );
         let tools_arr = body["tools"].as_array().unwrap();
-        assert_eq!(
-            tools_arr.last().unwrap()["cache_control"],
-            json!({"type": "ephemeral"})
+        assert!(
+            tools_arr.last().unwrap().get("cache_control").is_none(),
+            "tool definitions should not have cache_control"
         );
         clear_cache_env();
     }
@@ -939,9 +922,9 @@ mod tests {
                 .starts_with("x-anthropic-billing-header:"),
             "OAuth billing attribution must be the first system block"
         );
-        assert_eq!(
-            system.last().unwrap()["cache_control"],
-            json!({"type": "ephemeral"})
+        assert!(
+            system.last().unwrap().get("cache_control").is_none(),
+            "billing-only system prompt should not have cache_control"
         );
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use claude_core::types::events::{ToolProgressData, ToolResultData};
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -275,12 +276,48 @@ impl ToolRegistry {
     pub fn tool_definitions(&self) -> Vec<claude_core::api::client::ToolDefinition> {
         self.all()
             .into_iter()
-            .map(|t| claude_core::api::client::ToolDefinition {
-                name: t.name().to_string(),
-                description: t.description(),
-                input_schema: normalize_local_tool_schema(t.name(), t.input_schema()),
+            .map(|t| {
+                let mut definition = claude_core::api::client::ToolDefinition {
+                    name: t.name().to_string(),
+                    description: t.description(),
+                    input_schema: normalize_local_tool_schema(t.name(), t.input_schema()),
+                };
+                apply_ts_tool_contract(&mut definition);
+                definition
             })
             .collect()
+    }
+}
+
+static TS_TOOL_CONTRACTS: Lazy<HashMap<String, (String, Value)>> = Lazy::new(|| {
+    let raw: Value = serde_json::from_str(include_str!("ts_tool_contracts_2_1_119.json"))
+        .expect("embedded TS tool contracts must be valid JSON");
+    let mut contracts = HashMap::new();
+    for tool in raw
+        .as_array()
+        .expect("embedded TS tool contracts must be an array")
+    {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .expect("embedded TS tool contract must have a name");
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("embedded TS tool contract must have a description");
+        let input_schema = tool
+            .get("input_schema")
+            .expect("embedded TS tool contract must have an input_schema")
+            .clone();
+        contracts.insert(name.to_string(), (description.to_string(), input_schema));
+    }
+    contracts
+});
+
+fn apply_ts_tool_contract(definition: &mut claude_core::api::client::ToolDefinition) {
+    if let Some((description, input_schema)) = TS_TOOL_CONTRACTS.get(definition.name.as_str()) {
+        definition.description = description.clone();
+        definition.input_schema = input_schema.clone();
     }
 }
 

@@ -275,7 +275,186 @@ pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
     let source = SkillSource::Directory(project_skills_dir.clone());
     load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut seen_names);
 
+    load_enabled_plugin_skills(project_root, &mut skills, &mut seen_names);
+
     skills
+}
+
+fn load_enabled_plugin_skills(
+    project_root: &Path,
+    skills: &mut Vec<Skill>,
+    seen_names: &mut std::collections::HashSet<String>,
+) {
+    let Ok(claude_home) = claude_dir() else {
+        return;
+    };
+    let mut enabled = enabled_plugins_from_settings(&claude_home.join("settings.json"));
+    enabled.extend(enabled_plugins_from_settings(
+        &project_root.join(".claude").join("settings.json"),
+    ));
+
+    let cache_root = claude_home.join("plugins").join("cache");
+    for enabled_plugin in enabled {
+        let Some((plugin_name, marketplace)) = enabled_plugin.split_once('@') else {
+            continue;
+        };
+        let plugin_root = cache_root.join(marketplace).join(plugin_name);
+        let Some(version_dir) = newest_child_dir(&plugin_root) else {
+            continue;
+        };
+        let source = SkillSource::Plugin(enabled_plugin.clone());
+
+        load_plugin_skill_dirs(
+            plugin_name,
+            &version_dir.join("skills"),
+            &source,
+            skills,
+            seen_names,
+        );
+        load_plugin_command_files(
+            plugin_name,
+            &version_dir.join("commands"),
+            &source,
+            skills,
+            seen_names,
+        );
+    }
+}
+
+fn enabled_plugins_from_settings(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(map) = value.get("enabledPlugins").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut plugins: Vec<String> = map
+        .iter()
+        .filter_map(|(name, enabled)| enabled.as_bool().unwrap_or(false).then(|| name.clone()))
+        .collect();
+    plugins.sort();
+    plugins
+}
+
+fn newest_child_dir(path: &Path) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(path).ok()?;
+    let mut dirs: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    dirs.sort();
+    dirs.pop()
+}
+
+fn load_plugin_skill_dirs(
+    plugin_name: &str,
+    base_dir: &Path,
+    source: &SkillSource,
+    skills: &mut Vec<Skill>,
+    seen_names: &mut std::collections::HashSet<String>,
+) {
+    let entries = match std::fs::read_dir(base_dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_file = path.join("SKILL.md");
+        let content = match std::fs::read_to_string(&skill_file) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        let parsed = parse_skill_file(&content);
+        push_plugin_skill(
+            plugin_name,
+            dir_name.to_string(),
+            parsed,
+            source,
+            skills,
+            seen_names,
+        );
+    }
+}
+
+fn load_plugin_command_files(
+    plugin_name: &str,
+    base_dir: &Path,
+    source: &SkillSource,
+    skills: &mut Vec<Skill>,
+    seen_names: &mut std::collections::HashSet<String>,
+) {
+    let entries = match std::fs::read_dir(base_dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let stem = match path.file_stem().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        let parsed = parse_skill_file(&content);
+        push_plugin_skill(
+            plugin_name,
+            stem.to_string(),
+            parsed,
+            source,
+            skills,
+            seen_names,
+        );
+    }
+}
+
+fn push_plugin_skill(
+    plugin_name: &str,
+    local_name: String,
+    parsed: ParsedSkillFile,
+    source: &SkillSource,
+    skills: &mut Vec<Skill>,
+    seen_names: &mut std::collections::HashSet<String>,
+) {
+    let name = format!("{plugin_name}:{local_name}");
+    if !seen_names.insert(name.clone()) {
+        return;
+    }
+
+    let description = parsed
+        .frontmatter
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Skill: {name}"));
+
+    skills.push(Skill {
+        name,
+        description,
+        content: parsed.content,
+        source: source.clone(),
+        argument_hint: parsed.frontmatter.argument_hint,
+        when_to_use: parsed.frontmatter.when_to_use,
+        allowed_tools: parsed.frontmatter.allowed_tools,
+        user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
+        disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
+    });
 }
 
 /// Load skill directories from a base path.

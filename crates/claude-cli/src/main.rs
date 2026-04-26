@@ -732,7 +732,32 @@ async fn main() -> Result<()> {
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
 
     // --- Skill discovery ---
-    let skills = claude_core::plugins::skill::discover_skills(&project_root);
+    let discovered_skills = claude_core::plugins::skill::discover_skills(&project_root);
+    let mut skills = Vec::new();
+    {
+        let mut seen = std::collections::HashSet::new();
+        for skill in claude_tools::skill_tool::list_skills() {
+            if !seen.insert(skill.name.clone()) {
+                continue;
+            }
+            skills.push(claude_core::plugins::types::Skill {
+                name: skill.name,
+                description: skill.description,
+                content: skill.content,
+                source: claude_core::plugins::types::SkillSource::Builtin,
+                argument_hint: None,
+                when_to_use: None,
+                allowed_tools: Vec::new(),
+                user_invocable: true,
+                disable_model_invocation: false,
+            });
+        }
+        for skill in discovered_skills {
+            if seen.insert(skill.name.clone()) {
+                skills.push(skill);
+            }
+        }
+    }
     if !skills.is_empty() {
         tracing::info!(count = skills.len(), "Discovered skills");
     }
