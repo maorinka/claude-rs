@@ -82,12 +82,92 @@ fn ensure_plan_file_path() -> PathBuf {
     // Create the plans directory if it doesn't exist
     let _ = std::fs::create_dir_all(&plans_dir);
 
-    // Generate a slug from timestamp
-    let slug = format!("plan-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
-    let path = plans_dir.join(format!("{}.md", slug));
+    let mut path = plans_dir.join(format!("{}.md", generate_word_slug()));
+    for _ in 0..10 {
+        if !path.exists() {
+            break;
+        }
+        path = plans_dir.join(format!("{}.md", generate_word_slug()));
+    }
 
     *guard = Some(path.clone());
     path
+}
+
+fn generate_word_slug() -> String {
+    const ADJECTIVES: &[&str] = &[
+        "abundant",
+        "ancient",
+        "bright",
+        "calm",
+        "cheerful",
+        "clever",
+        "cozy",
+        "curious",
+        "dapper",
+        "dazzling",
+        "deep",
+        "delightful",
+        "eager",
+        "elegant",
+        "enchanted",
+        "fancy",
+        "fluffy",
+        "gentle",
+        "gleaming",
+        "golden",
+    ];
+    const VERBS: &[&str] = &[
+        "blooming",
+        "bouncing",
+        "brewing",
+        "bubbling",
+        "dancing",
+        "drifting",
+        "floating",
+        "flowing",
+        "gliding",
+        "glowing",
+        "humming",
+        "laughing",
+        "leaping",
+        "pouncing",
+        "rolling",
+        "shimmering",
+        "singing",
+        "skipping",
+        "sparkling",
+        "twirling",
+    ];
+    const NOUNS: &[&str] = &[
+        "aurora",
+        "avalanche",
+        "blossom",
+        "breeze",
+        "brook",
+        "bubble",
+        "canyon",
+        "cascade",
+        "cloud",
+        "clover",
+        "comet",
+        "coral",
+        "cosmos",
+        "creek",
+        "crystal",
+        "dewdrop",
+        "ember",
+        "fern",
+        "garden",
+        "harbor",
+    ];
+
+    let bytes = *uuid::Uuid::new_v4().as_bytes();
+    let adjective =
+        ADJECTIVES[u32::from_be_bytes(bytes[0..4].try_into().unwrap()) as usize % ADJECTIVES.len()];
+    let verb = VERBS[u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize % VERBS.len()];
+    let noun = NOUNS[u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize % NOUNS.len()];
+    format!("{adjective}-{verb}-{noun}")
 }
 
 /// Get the current plan file path (if set).
@@ -196,7 +276,6 @@ fn get_full_plan_instructions(plan_file_path: &str) -> String {
 
 ## Plan File Info:
 {plan_file_info}
-
 You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
 
 ## Plan Workflow
@@ -215,11 +294,25 @@ Goal: Gain a comprehensive understanding of the user's request by reading throug
 ### Phase 2: Design
 Goal: Design an implementation approach.
 
-Launch a Plan agent to design the implementation based on the user's intent and your exploration results from Phase 1.
+Launch Plan agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
+
+You can launch up to 3 agent(s) in parallel.
 
 **Guidelines:**
 - **Default**: Launch at least 1 Plan agent for most tasks - it helps validate your understanding and consider alternatives
 - **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes, simple renames)
+- **Multiple agents**: Use up to 3 agents for complex tasks that benefit from different perspectives
+
+Examples of when to use multiple agents:
+- The task touches multiple parts of the codebase
+- It's a large refactor or architectural change
+- There are many edge cases to consider
+- You'd benefit from exploring different approaches
+
+Example perspectives by task type:
+- New feature: simplicity vs performance vs maintainability
+- Bug fix: root cause vs workaround vs prevention
+- Refactoring: minimal change vs clean architecture
 
 In the agent prompt:
 - Provide comprehensive background context from Phase 1 exploration including filenames and code path traces

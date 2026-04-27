@@ -519,6 +519,66 @@ mod tests {
             "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable"
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_plan_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "EnterPlanMode",
+                &serde_json::json!({
+                    "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach."
+                })
+            ),
+            "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.\n\nIn plan mode, you should:\n1. Thoroughly explore the codebase to understand existing patterns\n2. Identify similar features and architectural approaches\n3. Consider multiple approaches and their trade-offs\n4. Use AskUserQuestion if you need to clarify the approach\n5. Design a concrete implementation strategy\n6. When ready, use ExitPlanMode to present your plan for approval\n\nRemember: DO NOT write or edit any files yet. This is a read-only exploration and planning phase."
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "ExitPlanMode",
+                &serde_json::json!({
+                    "plan": "",
+                    "filePath": "/tmp/plan.md",
+                    "hasTaskTool": true,
+                    "planWasEdited": false
+                })
+            ),
+            "User has approved exiting plan mode. You can now proceed."
+        );
+    }
+
+    #[test]
+    fn model_tool_result_matches_ts_web_and_config_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "WebFetch",
+                &serde_json::json!({
+                    "result": "Fetched page summary"
+                })
+            ),
+            "Fetched page summary"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Config",
+                &serde_json::json!({
+                    "action": "get",
+                    "key": "theme",
+                    "value": "dark"
+                })
+            ),
+            "theme = \"dark\""
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Config",
+                &serde_json::json!({
+                    "action": "set",
+                    "key": "theme",
+                    "value": "dark"
+                })
+            ),
+            "Set theme to \"dark\""
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1146,6 +1206,64 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
         return format_bash_tool_result_for_model(data);
     }
 
+    if tool_name == "EnterPlanMode" {
+        let message = data
+            .get("message")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.");
+        let mut content = format!(
+            "{message}\n\nIn plan mode, you should:\n1. Thoroughly explore the codebase to understand existing patterns\n2. Identify similar features and architectural approaches\n3. Consider multiple approaches and their trade-offs\n4. Use AskUserQuestion if you need to clarify the approach\n5. Design a concrete implementation strategy\n6. When ready, use ExitPlanMode to present your plan for approval\n\nRemember: DO NOT write or edit any files yet. This is a read-only exploration and planning phase."
+        );
+        if let Some(instructions) = data.get("instructions").and_then(|value| value.as_str()) {
+            content.push_str("\n\n<system-reminder>\n");
+            content.push_str(instructions);
+            content.push_str("\n</system-reminder>");
+        }
+        return content;
+    }
+
+    if tool_name == "ExitPlanMode" {
+        if data
+            .get("isAgent")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            return "User has approved the plan. There is nothing else needed from you now. Please respond with \"ok\"".to_string();
+        }
+        let plan = data
+            .get("plan")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if plan.trim().is_empty() {
+            return "User has approved exiting plan mode. You can now proceed.".to_string();
+        }
+        let file_path = data
+            .get("filePath")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let team_hint = if data
+            .get("hasTaskTool")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            "\n\nIf this plan can be broken down into multiple independent tasks, consider using the Task tool to create a team and parallelize the work."
+        } else {
+            ""
+        };
+        let plan_label = if data
+            .get("planWasEdited")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            "Approved Plan (edited by user)"
+        } else {
+            "Approved Plan"
+        };
+        return format!(
+            "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\nYour plan has been saved to: {file_path}\nYou can refer back to it if needed during implementation.{team_hint}\n\n## {plan_label}:\n{plan}"
+        );
+    }
+
     if tool_name == "Write" {
         if let (Some(file_path), Some(write_type)) = (
             data.get("filePath").and_then(|value| value.as_str()),
@@ -1193,6 +1311,74 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
             return format!("{base}\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type=\"verification\"). You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict.");
         }
         return base.to_string();
+    }
+
+    if tool_name == "WebFetch" {
+        if let Some(result) = data.get("result").and_then(|value| value.as_str()) {
+            return result.to_string();
+        }
+    }
+
+    if tool_name == "WebSearch" {
+        if let Some(query) = data.get("query").and_then(|value| value.as_str()) {
+            let mut formatted = format!("Web search results for query: \"{query}\"\n\n");
+            if let Some(results) = data.get("results").and_then(|value| value.as_array()) {
+                for result in results {
+                    if result.is_null() {
+                        continue;
+                    }
+                    if let Some(text) = result.as_str() {
+                        formatted.push_str(text);
+                        formatted.push_str("\n\n");
+                    } else if result
+                        .get("content")
+                        .and_then(|value| value.as_array())
+                        .map(|content| !content.is_empty())
+                        .unwrap_or(false)
+                    {
+                        formatted.push_str("Links: ");
+                        formatted.push_str(
+                            &serde_json::to_string(result.get("content").unwrap())
+                                .unwrap_or_else(|_| "[]".to_string()),
+                        );
+                        formatted.push_str("\n\n");
+                    } else {
+                        formatted.push_str("No links found.\n\n");
+                    }
+                }
+            }
+            formatted.push_str(
+                "\nREMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.",
+            );
+            return formatted.trim().to_string();
+        }
+    }
+
+    if tool_name == "Config" {
+        if let Some(error) = data.get("error").and_then(|value| value.as_str()) {
+            return format!("Error: {error}");
+        }
+        let action = data
+            .get("operation")
+            .or_else(|| data.get("action"))
+            .and_then(|value| value.as_str());
+        let setting = data
+            .get("setting")
+            .or_else(|| data.get("key"))
+            .and_then(|value| value.as_str());
+        if let (Some(action), Some(setting)) = (action, setting) {
+            if action == "get" {
+                let value = data.get("value").unwrap_or(&serde_json::Value::Null);
+                return format!("{setting} = {}", json_stringify_for_ts(value));
+            }
+            if action == "set" {
+                let value = data
+                    .get("newValue")
+                    .or_else(|| data.get("value"))
+                    .unwrap_or(&serde_json::Value::Null);
+                return format!("Set {setting} to {}", json_stringify_for_ts(value));
+            }
+        }
     }
 
     if let Some(text) = data.as_str() {
@@ -1323,6 +1509,10 @@ fn format_search_limit_info(data: &serde_json::Value) -> Option<String> {
             format!("limit: {limit}")
         }
     })
+}
+
+fn json_stringify_for_ts(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
 
 fn permission_mode_hook_name(
