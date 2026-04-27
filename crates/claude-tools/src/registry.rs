@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{Datelike, Local};
 use claude_core::types::events::{ToolProgressData, ToolResultData};
 use once_cell::sync::Lazy;
 use serde_json::Value;
@@ -381,9 +382,44 @@ static TS_TOOL_CONTRACTS: Lazy<HashMap<String, (String, Value)>> = Lazy::new(|| 
 
 fn apply_ts_tool_contract(definition: &mut claude_core::api::client::ToolDefinition) {
     if let Some((description, input_schema)) = TS_TOOL_CONTRACTS.get(definition.name.as_str()) {
-        definition.description = description.clone();
+        definition.description = refresh_dynamic_contract_description(description);
         definition.input_schema = input_schema.clone();
     }
+}
+
+fn refresh_dynamic_contract_description(description: &str) -> String {
+    let Some(prefix_idx) = description.find("Knowledge up-to-date as at ") else {
+        return description.to_string();
+    };
+    let date_start = prefix_idx + "Knowledge up-to-date as at ".len();
+    let Some(date_end_offset) = description[date_start..].find('.') else {
+        return description.to_string();
+    };
+    let date_end = date_start + date_end_offset;
+    let mut refreshed = String::with_capacity(description.len() + 8);
+    refreshed.push_str(&description[..date_start]);
+    refreshed.push_str(&current_ts_contract_date());
+    refreshed.push_str(&description[date_end..]);
+    refreshed
+}
+
+fn current_ts_contract_date() -> String {
+    let today = Local::now().date_naive();
+    let month = match today.month() {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
+    };
+    format!("{} {} {}", today.day(), month, today.year())
 }
 
 fn normalize_local_tool_schema(tool_name: &str, mut schema: Value) -> Value {
@@ -409,6 +445,25 @@ fn normalize_local_tool_schema(tool_name: &str, mut schema: Value) -> Value {
     }
 
     schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_contract_description_refreshes_current_date() {
+        let refreshed = refresh_dynamic_contract_description(
+            "Search docs. Knowledge up-to-date as at 18 April 2026. Continue.",
+        );
+        assert_eq!(
+            refreshed,
+            format!(
+                "Search docs. Knowledge up-to-date as at {}. Continue.",
+                current_ts_contract_date()
+            )
+        );
+    }
 }
 
 impl Default for ToolRegistry {

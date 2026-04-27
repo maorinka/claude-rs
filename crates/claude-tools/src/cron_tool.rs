@@ -22,7 +22,9 @@ const MAX_JOBS: usize = 50;
 /// keeps the local-only gate and leaves GrowthBook plumbing for
 /// a later phase.
 pub fn is_kairos_cron_enabled() -> bool {
-    is_env_truthy("AGENT_TRIGGERS") && !is_env_truthy("CLAUDE_CODE_DISABLE_CRON")
+    (is_env_truthy("AGENT_TRIGGERS")
+        || !claude_core::errors_util::is_env_definitely_falsy("AGENT_TRIGGERS"))
+        && !is_env_truthy("CLAUDE_CODE_DISABLE_CRON")
 }
 
 /// Verbatim port of TS ScheduleCronTool/prompt.ts

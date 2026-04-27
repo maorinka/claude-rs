@@ -55,12 +55,16 @@ fn test_default_registry_has_all_phase1_tools() {
     assert!(reg.get("Edit").is_some());
     assert!(reg.get("Grep").is_some());
     assert!(reg.get("Glob").is_some());
-    assert!(reg.get("Brief").is_some());
-    assert!(reg.get("SendMessage").is_some());
-    assert!(
-        reg.get("LSP").is_none(),
-        "LSP is hidden unless ENABLE_LSP_TOOL is truthy"
-    );
+    assert!(reg.get("CronCreate").is_some());
+    assert!(reg.get("CronDelete").is_some());
+    assert!(reg.get("CronList").is_some());
+    assert!(reg.get("LSP").is_some());
+    assert!(reg.get("Monitor").is_some());
+    assert!(reg.get("PushNotification").is_some());
+    assert!(reg.get("RemoteTrigger").is_some());
+    assert!(reg.get("ScheduleWakeup").is_some());
+    assert!(reg.get("Brief").is_none());
+    assert!(reg.get("SendMessage").is_none());
     assert!(
         reg.get("TodoWrite").is_none(),
         "TodoWrite is hidden when interactive Task v2 tools are enabled"
@@ -91,9 +95,8 @@ fn test_default_registry_schemas() {
 }
 
 /// Tools that mirror TS `feature('X')` gates or `USER_TYPE=ant` checks must
-/// NOT be registered when their env var is unset. Catches accidental
-/// un-gating during refactors. Env vars are left unset in the CI test
-/// harness, so this is the default state.
+/// follow the installed TS build defaults. Several bun `feature(...)` gates
+/// are enabled in the reference build even when no shell env var is set.
 #[test]
 fn test_gated_tools_hidden_by_default() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -110,13 +113,8 @@ fn test_gated_tools_hidden_by_default() {
         "UDS_INBOX",
         "WORKFLOW_SCRIPTS",
         "CLAUDE_CODE_VERIFY_PLAN",
-        "AGENT_TRIGGERS",
-        "AGENT_TRIGGERS_REMOTE",
         "KAIROS",
-        "KAIROS_PUSH_NOTIFICATION",
         "KAIROS_GITHUB_WEBHOOKS",
-        "PROACTIVE",
-        "ENABLE_LSP_TOOL",
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
         "CLAUDE_CODE_USE_POWERSHELL_TOOL",
         "USER_TYPE",
@@ -130,7 +128,6 @@ fn test_gated_tools_hidden_by_default() {
 
     let reg = build_default_registry();
     let hidden = [
-        "Monitor",
         "Snip",
         "CtxInspect",
         "TerminalCapture",
@@ -138,22 +135,16 @@ fn test_gated_tools_hidden_by_default() {
         "ListPeers",
         "Workflow",
         "VerifyPlanExecution",
-        "ScheduleCron", // alias — both paths must resolve to None when gate off
-        "CronCreate",   // canonical name (matches TS)
-        "CronDelete",
-        "CronList",
-        "RemoteTrigger",
-        "PushNotification",
         "SendUserFile",
         "SubscribePR",
         "Config",
         "REPL",
         "SuggestBackgroundPR",
-        "LSP",
         "TeamCreate",
         "TeamDelete",
-        "Sleep",
         "PowerShell",
+        "SendMessage",
+        "Brief",
     ];
     for name in &hidden {
         assert!(

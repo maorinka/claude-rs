@@ -71,6 +71,20 @@ pub struct RegistryOptions {
 /// (including unset) is false. Mirrors the behaviour of TS `feature('X')`
 /// + `isEnvTruthy(process.env.X)` in `tools.ts`.
 fn feature_enabled(name: &str) -> bool {
+    if claude_core::errors_util::is_env_definitely_falsy(name) {
+        return false;
+    }
+    if matches!(
+        name,
+        "AGENT_TRIGGERS"
+            | "AGENT_TRIGGERS_REMOTE"
+            | "ENABLE_LSP_TOOL"
+            | "KAIROS_PUSH_NOTIFICATION"
+            | "MONITOR_TOOL"
+            | "PROACTIVE"
+    ) {
+        return true;
+    }
     claude_core::errors_util::is_env_truthy(name)
 }
 
@@ -166,8 +180,9 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     }
     reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
     reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
-    reg.register(Arc::new(send_message::SendMessageTool));
-    reg.register(Arc::new(brief_tool::BriefTool));
+    if is_agent_swarms_enabled() {
+        reg.register(Arc::new(send_message::SendMessageTool));
+    }
 
     if feature_enabled("ENABLE_LSP_TOOL") {
         reg.register(Arc::new(lsp_tool::LSPTool));
