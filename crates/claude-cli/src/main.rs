@@ -665,6 +665,30 @@ mod tests {
             "<retrieval_status>found</retrieval_status>\n\n<task_id>task-1</task_id>\n\n<task_type>background</task_type>\n\n<status>completed</status>\n\n<output>\nhello\n</output>"
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_task_family_mapping() {
+        let task = serde_json::json!({
+            "id": "7",
+            "subject": "Wire task formatting",
+            "description": "Match TS",
+            "status": "pending",
+            "blockedBy": [],
+            "blocks": []
+        });
+        assert_eq!(
+            format_tool_result_for_model("TaskCreate", &task),
+            "Task #7 created successfully: Wire task formatting"
+        );
+        assert_eq!(
+            format_tool_result_for_model("TaskGet", &task),
+            "Task #7: Wire task formatting\nStatus: pending\nDescription: Match TS"
+        );
+        assert_eq!(
+            format_tool_result_for_model("TaskList", &serde_json::json!({"tasks": [task]})),
+            "#7 [pending] Wire task formatting"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1486,6 +1510,105 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
             }
         }
         return parts.join("\n\n");
+    }
+
+    if tool_name == "TaskCreate" {
+        let task = data.get("task").unwrap_or(data);
+        if let (Some(id), Some(subject)) = (
+            task.get("id").and_then(|value| value.as_str()),
+            task.get("subject").and_then(|value| value.as_str()),
+        ) {
+            return format!("Task #{id} created successfully: {subject}");
+        }
+    }
+
+    if tool_name == "TaskGet" {
+        let task = data.get("task").unwrap_or(data);
+        if task.is_null() {
+            return "Task not found".to_string();
+        }
+        if let Some(id) = task.get("id").and_then(|value| value.as_str()) {
+            let subject = task
+                .get("subject")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let status = task
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let description = task
+                .get("description")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let mut lines = vec![
+                format!("Task #{id}: {subject}"),
+                format!("Status: {status}"),
+                format!("Description: {description}"),
+            ];
+            if let Some(blocked_by) = task.get("blockedBy").and_then(|value| value.as_array()) {
+                if !blocked_by.is_empty() {
+                    lines.push(format!(
+                        "Blocked by: {}",
+                        blocked_by
+                            .iter()
+                            .filter_map(|value| value.as_str().map(|id| format!("#{id}")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+            if let Some(blocks) = task.get("blocks").and_then(|value| value.as_array()) {
+                if !blocks.is_empty() {
+                    lines.push(format!(
+                        "Blocks: {}",
+                        blocks
+                            .iter()
+                            .filter_map(|value| value.as_str().map(|id| format!("#{id}")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+            return lines.join("\n");
+        }
+    }
+
+    if tool_name == "TaskList" {
+        if let Some(tasks) = data.get("tasks").and_then(|value| value.as_array()) {
+            if tasks.is_empty() {
+                return "No tasks found".to_string();
+            }
+            return tasks
+                .iter()
+                .filter_map(|task| {
+                    let id = task.get("id").and_then(|value| value.as_str())?;
+                    let status = task.get("status").and_then(|value| value.as_str())?;
+                    let subject = task.get("subject").and_then(|value| value.as_str())?;
+                    let owner = task
+                        .get("owner")
+                        .and_then(|value| value.as_str())
+                        .map(|owner| format!(" ({owner})"))
+                        .unwrap_or_default();
+                    let blocked = task
+                        .get("blockedBy")
+                        .and_then(|value| value.as_array())
+                        .filter(|items| !items.is_empty())
+                        .map(|items| {
+                            format!(
+                                " [blocked by {}]",
+                                items
+                                    .iter()
+                                    .filter_map(|value| value.as_str().map(|id| format!("#{id}")))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })
+                        .unwrap_or_default();
+                    Some(format!("#{id} [{status}] {subject}{owner}{blocked}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
     }
 
     if tool_name == "WebFetch" {
