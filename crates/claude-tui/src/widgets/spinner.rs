@@ -1,3 +1,4 @@
+use claude_core::constants::display::SPINNER_VERBS;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -9,96 +10,6 @@ use std::time::Instant;
 /// On macOS: ['·', '✢', '✳', '✶', '✻', '✽']
 /// The animation plays forward then reverse (bounce).
 const SPINNER_CHARS: &[&str] = &["·", "✢", "✳", "✶", "✻", "✽"];
-
-/// Spinner verbs matching TS constants/spinnerVerbs.ts (204 verbs).
-/// Rotated every ~3 seconds while the model is thinking.
-const SPINNER_VERBS: &[&str] = &[
-    "Thinking",
-    "Reasoning",
-    "Analyzing",
-    "Processing",
-    "Computing",
-    "Evaluating",
-    "Considering",
-    "Pondering",
-    "Reflecting",
-    "Deliberating",
-    "Brewing",
-    "Churning",
-    "Crunching",
-    "Simmering",
-    "Percolating",
-    "Distilling",
-    "Synthesizing",
-    "Cogitating",
-    "Contemplating",
-    "Musing",
-    "Ruminating",
-    "Meditating",
-    "Noodling",
-    "Brainstorming",
-    "Ideating",
-    "Formulating",
-    "Crafting",
-    "Composing",
-    "Architecting",
-    "Engineering",
-    "Constructing",
-    "Building",
-    "Assembling",
-    "Weaving",
-    "Knitting",
-    "Stitching",
-    "Cooking",
-    "Baking",
-    "Sautéing",
-    "Marinating",
-    "Fermenting",
-    "Steeping",
-    "Infusing",
-    "Blending",
-    "Mixing",
-    "Stirring",
-    "Whipping",
-    "Folding",
-    "Kneading",
-    "Proofing",
-    "Calibrating",
-    "Tuning",
-    "Optimizing",
-    "Refining",
-    "Polishing",
-    "Honing",
-    "Sharpening",
-    "Focusing",
-    "Aligning",
-    "Harmonizing",
-    "Orchestrating",
-    "Conducting",
-    "Channeling",
-    "Conjuring",
-    "Summoning",
-    "Invoking",
-    "Manifesting",
-    "Materializing",
-    "Crystallizing",
-    "Decoding",
-    "Parsing",
-    "Compiling",
-    "Interpreting",
-    "Translating",
-    "Mapping",
-    "Charting",
-    "Navigating",
-    "Exploring",
-    "Investigating",
-    "Researching",
-    "Studying",
-    "Examining",
-    "Inspecting",
-    "Scrutinizing",
-    "Surveying",
-];
 
 /// Build the bounce sequence: forward + reverse.
 fn spinner_frames() -> Vec<&'static str> {
@@ -266,15 +177,11 @@ impl SpinnerState {
     }
 
     fn glimmer_speed_ms(&self) -> u128 {
-        if matches!(self.mode, SpinnerMode::Requesting) {
-            50
-        } else {
-            200
-        }
+        50
     }
 
     fn glimmer_left_to_right(&self) -> bool {
-        matches!(self.mode, SpinnerMode::Requesting)
+        true
     }
 
     /// Format elapsed time like the original: "Ns" for <60s, "Nm Ns" for >=60s.
@@ -522,7 +429,14 @@ mod tests {
         assert!(s.glimmer_left_to_right());
 
         s.start(SpinnerMode::Responding);
-        assert_eq!(s.glimmer_speed_ms(), 200);
-        assert!(!s.glimmer_left_to_right());
+        assert_eq!(s.glimmer_speed_ms(), 50);
+        assert!(s.glimmer_left_to_right());
+    }
+
+    #[test]
+    fn spinner_uses_shared_ts_verb_list() {
+        assert!(SPINNER_VERBS.len() > 150);
+        assert!(SPINNER_VERBS.contains(&"Moonwalking"));
+        assert!(SPINNER_VERBS.contains(&"Nebulizing"));
     }
 }
