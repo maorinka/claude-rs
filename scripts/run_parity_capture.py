@@ -181,6 +181,40 @@ def print_report(ts: dict[str, Any], rs: dict[str, Any]) -> None:
     print(f"equal: {'yes' if ts_scrubbed == rs_scrubbed else 'no'}")
 
 
+def stdout_events(text: str) -> list[str]:
+    events = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except Exception:
+            events.append(f"text:{line[:80]}")
+            continue
+        if not isinstance(event, dict):
+            events.append(type(event).__name__)
+            continue
+        parts = [str(event.get("type", "?"))]
+        if event.get("subtype"):
+            parts.append(str(event["subtype"]))
+        if event.get("name"):
+            parts.append(str(event["name"]))
+        if event.get("tool_name"):
+            parts.append(str(event["tool_name"]))
+        events.append("/".join(parts))
+    return events
+
+
+def print_stdout_report(ts_stdout: str, rs_stdout: str) -> None:
+    ts_events = stdout_events(ts_stdout)
+    rs_events = stdout_events(rs_stdout)
+    print("== Stdout ==")
+    print(f"event shape: {'==' if ts_events == rs_events else '!='}")
+    print(f"TS events: {ts_events}")
+    print(f"RS events: {rs_events}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", default="Say hi.")
@@ -188,6 +222,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=pathlib.Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--max-turns", default="1")
+    parser.add_argument("--output-format", choices=["text", "json", "stream-json"], default="text")
     parser.add_argument("--ts-command", default="claude")
     parser.add_argument("--rust-command", default="cargo run -q -p claude-cli --")
     parser.add_argument("--no-clean", action="store_true", help="append to output dir instead of recreating it")
@@ -230,6 +265,8 @@ def main() -> int:
             args.max_turns,
             "--dangerously-skip-permissions",
         ]
+        if args.output_format != "text":
+            ts_cmd.extend(["--output-format", args.output_format])
         rs_cmd = shlex.split(args.rust_command) + [
             "--print",
             args.prompt,
@@ -237,6 +274,8 @@ def main() -> int:
             args.max_turns,
             "--dangerously-skip-permissions",
         ]
+        if args.output_format != "text":
+            rs_cmd.extend(["--output-format", args.output_format])
 
         print(f"running TS: {' '.join(shlex.quote(p) for p in ts_cmd)}")
         ts_result = run(ts_cmd, ts_env, args.timeout)
@@ -264,6 +303,9 @@ def main() -> int:
     rs_capture = load_capture(args.output_dir, "-rs-api-v1-messages")
     print()
     print_report(ts_capture, rs_capture)
+    if args.output_format != "text":
+        print()
+        print_stdout_report(ts_result.stdout, rs_result.stdout)
     print()
     print(f"captures: {args.output_dir}")
     return 0

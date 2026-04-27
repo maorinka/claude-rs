@@ -452,6 +452,16 @@ mod tests {
     }
 
     #[test]
+    fn stream_json_rate_limit_event_matches_sdk_shape() {
+        let event = stream_json_rate_limit_event("session-1");
+        assert_eq!(event["type"], "rate_limit_event");
+        assert_eq!(event["session_id"], "session-1");
+        assert_eq!(event["rate_limit_info"]["status"], "allowed");
+        assert_eq!(event["rate_limit_info"]["isUsingOverage"], false);
+        assert!(event["uuid"].as_str().is_some_and(|uuid| !uuid.is_empty()));
+    }
+
+    #[test]
     fn model_tool_result_matches_ts_write_mapping() {
         assert_eq!(
             format_tool_result_for_model(
@@ -2672,6 +2682,18 @@ fn stream_json_result_event_with_meta(
     })
 }
 
+fn stream_json_rate_limit_event(session_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed",
+            "isUsingOverage": false,
+        },
+        "uuid": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+    })
+}
+
 struct StreamJsonInitMeta<'a> {
     cwd: &'a std::path::Path,
     session_id: &'a str,
@@ -4111,6 +4133,7 @@ async fn main() -> Result<()> {
             } else {
                 claude_core::compact::compactor::default_context_window()
             };
+            emit_stream_json(stream_json_rate_limit_event(&session_id));
             emit_stream_json(stream_json_result_event_with_meta(
                 &final_text,
                 &session_id,
