@@ -201,7 +201,7 @@ impl ToolExecutor for TodoWriteTool {
                     "status": t.status,
                     "activeForm": t.active_form,
                 })).collect::<Vec<_>>(),
-                "message": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress."
+                "verificationNudgeNeeded": false,
             }),
             is_error: false,
         })
@@ -293,11 +293,7 @@ mod tests {
         assert_eq!(new_todos[0]["status"].as_str().unwrap(), "in_progress");
         assert_eq!(new_todos[1]["content"].as_str().unwrap(), "Write tests");
 
-        // Verify message
-        assert!(result.data["message"]
-            .as_str()
-            .unwrap()
-            .contains("modified successfully"));
+        assert_eq!(result.data["verificationNudgeNeeded"], json!(false));
     }
 
     #[tokio::test]

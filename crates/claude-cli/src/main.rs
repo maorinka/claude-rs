@@ -450,6 +450,75 @@ mod tests {
         assert_eq!(denials, vec!["Write".to_string(), "Agent".to_string()]);
         assert!(base_tool_denials_from_cli_tools(&["default".to_string()], &all_tools).is_empty());
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_write_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "Write",
+                &serde_json::json!({
+                    "type": "create",
+                    "filePath": "/tmp/example.txt",
+                    "content": "hello",
+                    "originalFile": null
+                })
+            ),
+            "File created successfully at: /tmp/example.txt"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Write",
+                &serde_json::json!({
+                    "type": "update",
+                    "filePath": "/tmp/example.txt",
+                    "content": "hello",
+                    "originalFile": "old"
+                })
+            ),
+            "The file /tmp/example.txt has been updated successfully."
+        );
+    }
+
+    #[test]
+    fn model_tool_result_matches_ts_edit_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "Edit",
+                &serde_json::json!({
+                    "filePath": "/tmp/example.txt",
+                    "replaceAll": false,
+                    "userModified": false
+                })
+            ),
+            "The file /tmp/example.txt has been updated successfully."
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Edit",
+                &serde_json::json!({
+                    "filePath": "/tmp/example.txt",
+                    "replaceAll": true,
+                    "userModified": false
+                })
+            ),
+            "The file /tmp/example.txt has been updated. All occurrences were successfully replaced."
+        );
+    }
+
+    #[test]
+    fn model_tool_result_matches_ts_todo_write_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "TodoWrite",
+                &serde_json::json!({
+                    "oldTodos": [],
+                    "newTodos": [],
+                    "verificationNudgeNeeded": false
+                })
+            ),
+            "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1075,6 +1144,55 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
 fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {
     if tool_name == "Bash" {
         return format_bash_tool_result_for_model(data);
+    }
+
+    if tool_name == "Write" {
+        if let (Some(file_path), Some(write_type)) = (
+            data.get("filePath").and_then(|value| value.as_str()),
+            data.get("type").and_then(|value| value.as_str()),
+        ) {
+            return match write_type {
+                "create" => format!("File created successfully at: {file_path}"),
+                "update" => format!("The file {file_path} has been updated successfully."),
+                _ => data.to_string(),
+            };
+        }
+    }
+
+    if tool_name == "Edit" {
+        if let Some(file_path) = data.get("filePath").and_then(|value| value.as_str()) {
+            let modified_note = if data
+                .get("userModified")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                ".  The user modified your proposed changes before accepting them. "
+            } else {
+                ""
+            };
+            if data
+                .get("replaceAll")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                return format!(
+                    "The file {file_path} has been updated{modified_note}. All occurrences were successfully replaced."
+                );
+            }
+            return format!("The file {file_path} has been updated successfully{modified_note}.");
+        }
+    }
+
+    if tool_name == "TodoWrite" {
+        let base = "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable";
+        if data
+            .get("verificationNudgeNeeded")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            return format!("{base}\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type=\"verification\"). You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict.");
+        }
+        return base.to_string();
     }
 
     if let Some(text) = data.as_str() {
