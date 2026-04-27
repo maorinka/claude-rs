@@ -312,6 +312,27 @@ Usage:
         false
     }
 
+    fn check_permissions(
+        &self,
+        input: &Value,
+        context: &claude_core::permissions::ToolPermissionContext,
+    ) -> claude_core::permissions::PermissionResult {
+        let Some(file_path) = input["file_path"].as_str() else {
+            return claude_core::permissions::PermissionResult::passthrough("");
+        };
+        match claude_core::permissions::check_write_permission_for_tool(file_path, context) {
+            claude_core::permissions::PermissionDecision::Allow(allow) => {
+                claude_core::permissions::PermissionResult::Allow(allow)
+            }
+            claude_core::permissions::PermissionDecision::Ask(ask) => {
+                claude_core::permissions::PermissionResult::Ask(ask)
+            }
+            claude_core::permissions::PermissionDecision::Deny(deny) => {
+                claude_core::permissions::PermissionResult::Deny(deny)
+            }
+        }
+    }
+
     fn max_result_size_chars(&self) -> usize {
         100_000
     }

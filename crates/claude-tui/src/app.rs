@@ -2113,17 +2113,21 @@ impl App {
                             let perm_ctx = perm_ctx.clone();
                             let candidate_input = candidate_input.clone();
                             async move {
-                                let is_read_only = tools
-                                    .get(&tool_name)
-                                    .map(|t| t.is_read_only(&candidate_input))
-                                    .unwrap_or(false);
-                                let tool_perms =
-                                    claude_core::permissions::evaluator::SimpleToolPermissions::new(
-                                        &tool_name,
-                                        is_read_only,
-                                    );
-                                let decision =
-                                    evaluate_permission(&tool_perms, &candidate_input, &perm_ctx);
+                                let decision = if let Some(tool) = tools.get(&tool_name) {
+                                    let tool_perms =
+                                        claude_tools::registry::ExecutorToolPermissions::new(
+                                            tool,
+                                            candidate_input.clone(),
+                                        );
+                                    evaluate_permission(&tool_perms, &candidate_input, &perm_ctx)
+                                } else {
+                                    let tool_perms =
+                                        claude_core::permissions::evaluator::SimpleToolPermissions::new(
+                                            &tool_name,
+                                            false,
+                                        );
+                                    evaluate_permission(&tool_perms, &candidate_input, &perm_ctx)
+                                };
                                 permission_decision_to_rule_check(&decision)
                             }
                         })
@@ -2170,9 +2174,17 @@ impl App {
                     ),
                 }
             } else {
-                use claude_core::permissions::evaluator::SimpleToolPermissions;
-                let tool_perms = SimpleToolPermissions::new(&tool_name, is_read_only);
-                evaluate_permission(&tool_perms, &tool_input, perm_ctx)
+                if let Some(tool) = tools.get(&tool_name) {
+                    let tool_perms = claude_tools::registry::ExecutorToolPermissions::new(
+                        tool,
+                        tool_input.clone(),
+                    );
+                    evaluate_permission(&tool_perms, &tool_input, perm_ctx)
+                } else {
+                    use claude_core::permissions::evaluator::SimpleToolPermissions;
+                    let tool_perms = SimpleToolPermissions::new(&tool_name, is_read_only);
+                    evaluate_permission(&tool_perms, &tool_input, perm_ctx)
+                }
             };
 
             match decision {

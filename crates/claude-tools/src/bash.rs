@@ -358,6 +358,27 @@ pub fn check_permissions(command: &str) -> PermissionCheckResult {
     }
 }
 
+fn bash_rule_matches(rule_content: &str, command: &str) -> bool {
+    let rule = rule_content.trim();
+    rule == "*"
+        || command == rule
+        || rule
+            .strip_suffix(":*")
+            .is_some_and(|prefix| command.starts_with(prefix))
+}
+
+fn matching_bash_rule(
+    context: &claude_core::permissions::ToolPermissionContext,
+    behavior: &claude_core::permissions::PermissionBehavior,
+    command: &str,
+) -> Option<claude_core::permissions::PermissionRule> {
+    claude_core::permissions::filesystem::get_rule_by_contents_for_tool_name(
+        context, "Bash", behavior,
+    )
+    .into_iter()
+    .find_map(|(content, rule)| bash_rule_matches(&content, command).then_some(rule))
+}
+
 #[async_trait]
 impl ToolExecutor for BashTool {
     fn name(&self) -> &str {
@@ -752,6 +773,105 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             .get("command")
             .and_then(Value::as_str)
             .is_some_and(|command| classify_command(command) == Classification::ReadOnly)
+    }
+
+    fn check_permissions(
+        &self,
+        input: &Value,
+        context: &claude_core::permissions::ToolPermissionContext,
+    ) -> claude_core::permissions::PermissionResult {
+        let Some(command) = input["command"].as_str() else {
+            return claude_core::permissions::PermissionResult::passthrough("");
+        };
+
+        if let Some(rule) = matching_bash_rule(
+            context,
+            &claude_core::permissions::PermissionBehavior::Deny,
+            command,
+        ) {
+            return claude_core::permissions::PermissionResult::Deny(
+                claude_core::permissions::PermissionDenyDecision {
+                    message: format!("Permission to use Bash({}) has been denied.", command),
+                    decision_reason: claude_core::permissions::PermissionDecisionReason::Rule {
+                        rule,
+                    },
+                    tool_use_id: None,
+                },
+            );
+        }
+
+        if let Some(rule) = matching_bash_rule(
+            context,
+            &claude_core::permissions::PermissionBehavior::Ask,
+            command,
+        ) {
+            return claude_core::permissions::PermissionResult::Ask(
+                claude_core::permissions::PermissionAskDecision {
+                    message: claude_core::permissions::create_permission_request_message(
+                        "Bash",
+                        Some(&claude_core::permissions::PermissionDecisionReason::Rule {
+                            rule: rule.clone(),
+                        }),
+                    ),
+                    updated_input: None,
+                    decision_reason: Some(
+                        claude_core::permissions::PermissionDecisionReason::Rule { rule },
+                    ),
+                    suggestions: None,
+                    blocked_path: None,
+                    is_bash_security_check_for_misparsing: None,
+                },
+            );
+        }
+
+        if let Some(rule) = matching_bash_rule(
+            context,
+            &claude_core::permissions::PermissionBehavior::Allow,
+            command,
+        ) {
+            return claude_core::permissions::PermissionResult::Allow(
+                claude_core::permissions::PermissionAllowDecision {
+                    updated_input: Some(input.clone()),
+                    user_modified: None,
+                    decision_reason: Some(
+                        claude_core::permissions::PermissionDecisionReason::Rule { rule },
+                    ),
+                    tool_use_id: None,
+                    accept_feedback: None,
+                },
+            );
+        }
+
+        match check_permissions(command) {
+            PermissionCheckResult::Allow => claude_core::permissions::PermissionResult::Allow(
+                claude_core::permissions::PermissionAllowDecision {
+                    updated_input: Some(input.clone()),
+                    user_modified: None,
+                    decision_reason: Some(
+                        claude_core::permissions::PermissionDecisionReason::Other {
+                            reason: "Bash command is read-only".to_string(),
+                        },
+                    ),
+                    tool_use_id: None,
+                    accept_feedback: None,
+                },
+            ),
+            PermissionCheckResult::Ask(_) | PermissionCheckResult::TooComplex => {
+                claude_core::permissions::PermissionResult::passthrough("")
+            }
+            PermissionCheckResult::Deny(message) => {
+                claude_core::permissions::PermissionResult::Deny(
+                    claude_core::permissions::PermissionDenyDecision {
+                        message,
+                        decision_reason:
+                            claude_core::permissions::PermissionDecisionReason::Other {
+                                reason: "Bash command denied by tool permission check".to_string(),
+                            },
+                        tool_use_id: None,
+                    },
+                )
+            }
+        }
     }
 
     fn max_result_size_chars(&self) -> usize {

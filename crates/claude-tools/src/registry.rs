@@ -203,11 +203,62 @@ pub trait ToolExecutor: Send + Sync {
     fn is_read_only(&self, _input: &Value) -> bool {
         false
     }
+    fn check_permissions(
+        &self,
+        input: &Value,
+        _context: &claude_core::permissions::ToolPermissionContext,
+    ) -> claude_core::permissions::PermissionResult {
+        if self.is_read_only(input) {
+            return claude_core::permissions::PermissionResult::Allow(
+                claude_core::permissions::PermissionAllowDecision {
+                    updated_input: Some(input.clone()),
+                    user_modified: None,
+                    decision_reason: Some(
+                        claude_core::permissions::PermissionDecisionReason::Other {
+                            reason: "Tool invocation is read-only".to_string(),
+                        },
+                    ),
+                    tool_use_id: None,
+                    accept_feedback: None,
+                },
+            );
+        }
+        claude_core::permissions::PermissionResult::passthrough("")
+    }
     fn is_destructive(&self, _input: &Value) -> bool {
         false
     }
     fn max_result_size_chars(&self) -> usize {
         100_000
+    }
+}
+
+pub struct ExecutorToolPermissions {
+    tool: Arc<dyn ToolExecutor>,
+    input: Value,
+}
+
+impl ExecutorToolPermissions {
+    pub fn new(tool: Arc<dyn ToolExecutor>, input: Value) -> Self {
+        Self { tool, input }
+    }
+}
+
+impl claude_core::permissions::ToolPermissions for ExecutorToolPermissions {
+    fn name(&self) -> &str {
+        self.tool.name()
+    }
+
+    fn check_permissions(
+        &self,
+        input: &Value,
+        context: &claude_core::permissions::ToolPermissionContext,
+    ) -> claude_core::permissions::PermissionResult {
+        self.tool.check_permissions(input, context)
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.tool.is_read_only(&self.input)
     }
 }
 
