@@ -2168,6 +2168,7 @@ impl App {
     fn handle_stream_event(&mut self, event: StreamEvent) {
         match event {
             StreamEvent::TextDelta { text } => {
+                self.spinner.set_mode(SpinnerMode::Responding);
                 // Append to current assistant message, or create one
                 if let Some(MessageEntry::Assistant { text: ref mut t }) =
                     self.message_list.messages_mut().last_mut()
@@ -2178,6 +2179,7 @@ impl App {
                 }
             }
             StreamEvent::ThinkingDelta { text } => {
+                self.spinner.set_mode(SpinnerMode::Thinking);
                 if let Some(MessageEntry::Thinking { text: ref mut t }) =
                     self.message_list.messages_mut().last_mut()
                 {
@@ -2197,7 +2199,7 @@ impl App {
                     input_summary: summary,
                     tool_use_id,
                 });
-                self.spinner.start(SpinnerMode::Thinking);
+                self.spinner.set_mode(SpinnerMode::ToolUse);
             }
             StreamEvent::ToolResult {
                 tool_use_id,
@@ -2233,7 +2235,7 @@ impl App {
                 }
             }
             StreamEvent::RequestStart { request_id: _ } => {
-                self.spinner.start(SpinnerMode::Thinking);
+                self.spinner.start(SpinnerMode::Requesting);
                 self.cost_tracker.increment_request_count();
             }
             StreamEvent::Error(err) => {

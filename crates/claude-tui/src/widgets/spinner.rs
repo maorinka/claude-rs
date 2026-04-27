@@ -111,7 +111,11 @@ fn spinner_frames() -> Vec<&'static str> {
 
 #[derive(Clone, Debug)]
 pub enum SpinnerMode {
+    Requesting,
+    Responding,
     Thinking,
+    ToolInput,
+    ToolUse,
     Waiting,
     Loading,
     Processing,
@@ -122,7 +126,11 @@ pub enum SpinnerMode {
 impl SpinnerMode {
     pub fn label(&self) -> &str {
         match self {
+            SpinnerMode::Requesting => "Requesting",
+            SpinnerMode::Responding => "Responding",
             SpinnerMode::Thinking => "Thinking",
+            SpinnerMode::ToolInput => "Tool input",
+            SpinnerMode::ToolUse => "Tool use",
             SpinnerMode::Waiting => "Waiting",
             SpinnerMode::Loading => "Loading",
             SpinnerMode::Processing => "Processing",
@@ -197,6 +205,14 @@ impl SpinnerState {
             % SPINNER_VERBS.len();
     }
 
+    pub fn set_mode(&mut self, mode: SpinnerMode) {
+        if self.active {
+            self.mode = mode;
+        } else {
+            self.start(mode);
+        }
+    }
+
     pub fn stop(&mut self) {
         self.active = false;
         self.mode = SpinnerMode::Stopped;
@@ -240,9 +256,25 @@ impl SpinnerState {
     /// Current verb to display (rotates while active).
     pub fn current_verb(&self) -> &str {
         match &self.mode {
-            SpinnerMode::Thinking => SPINNER_VERBS[self.verb_index % SPINNER_VERBS.len()],
+            SpinnerMode::Requesting
+            | SpinnerMode::Responding
+            | SpinnerMode::Thinking
+            | SpinnerMode::ToolInput
+            | SpinnerMode::ToolUse => SPINNER_VERBS[self.verb_index % SPINNER_VERBS.len()],
             other => other.label(),
         }
+    }
+
+    fn glimmer_speed_ms(&self) -> u128 {
+        if matches!(self.mode, SpinnerMode::Requesting) {
+            50
+        } else {
+            200
+        }
+    }
+
+    fn glimmer_left_to_right(&self) -> bool {
+        matches!(self.mode, SpinnerMode::Requesting)
     }
 
     /// Format elapsed time like the original: "Ns" for <60s, "Nm Ns" for >=60s.
@@ -317,6 +349,7 @@ fn glimmer_spans(
     elapsed_ms: u128,
     base: (u8, u8, u8),
     shimmer: (u8, u8, u8),
+    left_to_right: bool,
 ) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     let width = chars.len();
@@ -324,8 +357,12 @@ fn glimmer_spans(
         return Vec::new();
     }
     let cycle = (width + 20) as f64;
-    let cycle_position = (elapsed_ms as f64 / 50.0) % cycle;
-    let glimmer_index = cycle_position - 10.0;
+    let cycle_position = (elapsed_ms as f64) % cycle;
+    let glimmer_index = if left_to_right {
+        cycle_position - 10.0
+    } else {
+        width as f64 + 10.0 - cycle_position
+    };
     chars
         .into_iter()
         .enumerate()
@@ -385,16 +422,13 @@ impl Widget for &SpinnerState {
                 Style::default().fg(tool_color),
             ));
         } else {
-            let shimmer_elapsed_ms = if matches!(self.mode, SpinnerMode::Thinking) {
-                self.last_verb_change.elapsed().as_millis()
-            } else {
-                elapsed_ms
-            };
+            let shimmer_elapsed_ms = elapsed_ms / self.glimmer_speed_ms();
             spans.extend(glimmer_spans(
                 &format!("{}…", verb),
                 shimmer_elapsed_ms,
                 activity_rgb,
                 shimmer_rgb,
+                self.glimmer_left_to_right(),
             ));
         }
 
@@ -478,5 +512,17 @@ mod tests {
 
         s.stop();
         assert!(!s.active);
+    }
+
+    #[test]
+    fn requesting_uses_fast_left_to_right_glimmer() {
+        let mut s = SpinnerState::new();
+        s.start(SpinnerMode::Requesting);
+        assert_eq!(s.glimmer_speed_ms(), 50);
+        assert!(s.glimmer_left_to_right());
+
+        s.start(SpinnerMode::Responding);
+        assert_eq!(s.glimmer_speed_ms(), 200);
+        assert!(!s.glimmer_left_to_right());
     }
 }
