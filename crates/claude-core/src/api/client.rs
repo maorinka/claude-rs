@@ -31,7 +31,7 @@ fn has_1m_context(model: &str) -> bool {
 fn oauth_billing_header() -> String {
     let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
     format!(
-        "x-anthropic-billing-header: cc_version=2.1.119.261; cc_entrypoint=sdk-cli; cch={cch:05x};"
+        "x-anthropic-billing-header: cc_version=2.1.119.401; cc_entrypoint=sdk-cli; cch={cch:05x};"
     )
 }
 
