@@ -206,6 +206,49 @@ def stdout_events(text: str) -> list[str]:
     return events
 
 
+def stdout_json_events(text: str) -> list[dict[str, Any]]:
+    events = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def first_event(events: list[dict[str, Any]], type_: str, subtype: str | None = None) -> dict[str, Any] | None:
+    for event in events:
+        if event.get("type") != type_:
+            continue
+        if subtype is not None and event.get("subtype") != subtype:
+            continue
+        return event
+    return None
+
+
+def print_array_field_diff(label: str, ts_event: dict[str, Any], rs_event: dict[str, Any]) -> None:
+    ts_values = ts_event.get(label) or []
+    rs_values = rs_event.get(label) or []
+    if not isinstance(ts_values, list) or not isinstance(rs_values, list):
+        print(f"{label}: non-list")
+        return
+    print(f"{label}: count TS {len(ts_values)} / RS {len(rs_values)}, set {'==' if set(map(str, ts_values)) == set(map(str, rs_values)) else '!='}, order {'==' if ts_values == rs_values else '!='}")
+    if ts_values != rs_values:
+        for line in difflib.unified_diff(
+            [str(value) for value in ts_values],
+            [str(value) for value in rs_values],
+            fromfile=f"ts:{label}",
+            tofile=f"rs:{label}",
+            lineterm="",
+        ):
+            print(line)
+
+
 def print_stdout_report(ts_stdout: str, rs_stdout: str) -> None:
     ts_events = stdout_events(ts_stdout)
     rs_events = stdout_events(rs_stdout)
@@ -213,6 +256,13 @@ def print_stdout_report(ts_stdout: str, rs_stdout: str) -> None:
     print(f"event shape: {'==' if ts_events == rs_events else '!='}")
     print(f"TS events: {ts_events}")
     print(f"RS events: {rs_events}")
+    ts_init = first_event(stdout_json_events(ts_stdout), "system", "init")
+    rs_init = first_event(stdout_json_events(rs_stdout), "system", "init")
+    if ts_init and rs_init:
+        print()
+        print("== Stdout system/init ==")
+        for field in ["tools", "slash_commands", "skills", "agents"]:
+            print_array_field_diff(field, ts_init, rs_init)
 
 
 def main() -> int:

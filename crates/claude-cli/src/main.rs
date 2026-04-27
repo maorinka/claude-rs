@@ -3341,6 +3341,16 @@ async fn main() -> Result<()> {
 
     // Get tool definitions for the engine
     let tool_defs = tools.tool_definitions();
+    let stream_json_tool_names: Vec<String> = tool_defs
+        .iter()
+        .map(|tool| {
+            if tool.name == "Agent" {
+                "Task".to_string()
+            } else {
+                tool.name.clone()
+            }
+        })
+        .collect();
 
     // Create query engine
     let mut query_engine = claude_core::query::engine::QueryEngine::new(
@@ -3564,17 +3574,7 @@ async fn main() -> Result<()> {
             emit_stream_json(stream_json_init_event(StreamJsonInitMeta {
                 cwd: &cwd,
                 session_id: &api_session_id,
-                tool_names: tools
-                    .all()
-                    .iter()
-                    .map(|tool| {
-                        if tool.name() == "Agent" {
-                            "Task".to_string()
-                        } else {
-                            tool.name().to_string()
-                        }
-                    })
-                    .collect(),
+                tool_names: stream_json_tool_names.clone(),
                 mcp_servers,
                 model_display: &model_display,
                 permission_mode: &permission_mode,
