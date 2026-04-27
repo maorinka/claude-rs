@@ -249,6 +249,12 @@ def print_array_field_diff(label: str, ts_event: dict[str, Any], rs_event: dict[
             print(line)
 
 
+def scrub_init_scalar(label: str, value: Any) -> Any:
+    if label in {"session_id", "uuid", "cwd"}:
+        return "<dynamic>"
+    return value
+
+
 def print_stdout_report(ts_stdout: str, rs_stdout: str) -> None:
     ts_events = stdout_events(ts_stdout)
     rs_events = stdout_events(rs_stdout)
@@ -261,6 +267,30 @@ def print_stdout_report(ts_stdout: str, rs_stdout: str) -> None:
     if ts_init and rs_init:
         print()
         print("== Stdout system/init ==")
+        ts_keys = sorted(ts_init.keys())
+        rs_keys = sorted(rs_init.keys())
+        print(f"keys: {'==' if ts_keys == rs_keys else '!='}")
+        if ts_keys != rs_keys:
+            print(f"missing in RS: {sorted(set(ts_keys) - set(rs_keys))}")
+            print(f"extra in RS: {sorted(set(rs_keys) - set(ts_keys))}")
+        for field in [
+            "cwd",
+            "session_id",
+            "model",
+            "permissionMode",
+            "apiKeySource",
+            "claude_code_version",
+            "output_style",
+            "analytics_disabled",
+            "fast_mode_state",
+            "memory_paths",
+            "betas",
+        ]:
+            if field not in ts_init and field not in rs_init:
+                continue
+            ts_value = scrub_init_scalar(field, ts_init.get(field))
+            rs_value = scrub_init_scalar(field, rs_init.get(field))
+            print(f"{field}: {'==' if ts_value == rs_value else '!='}")
         for field in ["tools", "slash_commands", "skills", "agents"]:
             print_array_field_diff(field, ts_init, rs_init)
 
@@ -329,6 +359,8 @@ def main() -> int:
 
         print(f"running TS: {' '.join(shlex.quote(p) for p in ts_cmd)}")
         ts_result = run(ts_cmd, ts_env, args.timeout)
+        (args.output_dir / "ts.stdout").write_text(ts_result.stdout, encoding="utf-8")
+        (args.output_dir / "ts.stderr").write_text(ts_result.stderr, encoding="utf-8")
         print(ts_result.stdout.strip())
         if ts_result.returncode != 0:
             print(ts_result.stderr, file=sys.stderr)
@@ -336,6 +368,8 @@ def main() -> int:
 
         print(f"running RS: {' '.join(shlex.quote(p) for p in rs_cmd)}")
         rs_result = run(rs_cmd, rs_env, args.timeout)
+        (args.output_dir / "rs.stdout").write_text(rs_result.stdout, encoding="utf-8")
+        (args.output_dir / "rs.stderr").write_text(rs_result.stderr, encoding="utf-8")
         print(rs_result.stdout.strip())
         if rs_result.returncode != 0:
             print(rs_result.stderr, file=sys.stderr)
