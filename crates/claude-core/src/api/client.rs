@@ -28,6 +28,26 @@ fn has_1m_context(model: &str) -> bool {
     model.contains("[1m]") || model.contains("[1M]")
 }
 
+fn anthropic_beta_header_value(is_oauth: bool, model: &str) -> String {
+    let mut betas = vec![
+        crate::constants::betas::CLAUDE_CODE_20250219,
+        crate::constants::oauth::OAUTH_BETA_HEADER,
+        crate::constants::betas::CONTEXT_1M,
+        crate::constants::betas::INTERLEAVED_THINKING,
+        crate::constants::betas::CONTEXT_MANAGEMENT,
+        crate::constants::betas::PROMPT_CACHING_SCOPE,
+        crate::constants::betas::ADVISOR,
+        crate::constants::betas::EFFORT,
+    ];
+    if !is_oauth {
+        betas.retain(|beta| *beta != crate::constants::oauth::OAUTH_BETA_HEADER);
+    }
+    if !has_1m_context(model) {
+        betas.retain(|beta| *beta != crate::constants::betas::CONTEXT_1M);
+    }
+    betas.join(",")
+}
+
 fn oauth_billing_header() -> String {
     let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
     format!(
@@ -598,20 +618,11 @@ impl ApiClient {
                 .header("x-stainless-runtime", "node")
                 .header("x-stainless-retry-count", "0");
 
-            let mut betas = vec![
-                "claude-code-20250219",
-                "interleaved-thinking-2025-05-14",
-                "context-management-2025-06-27",
-                "prompt-caching-scope-2026-01-05",
-            ];
-            if auth.is_oauth() {
-                betas.push("oauth-2025-04-20");
-            }
-            if has_1m_context(&self.config.model) {
-                betas.push("context-1m-2025-08-07");
-            }
             request = request
-                .header("anthropic-beta", betas.join(","))
+                .header(
+                    "anthropic-beta",
+                    anthropic_beta_header_value(auth.is_oauth(), &self.config.model),
+                )
                 .header("anthropic-dangerous-direct-browser-access", "true")
                 .header("x-app", "cli");
         }
@@ -681,6 +692,33 @@ mod tests {
             get_max_output_tokens_for_model("claude-3-opus-20240229"),
             4_096
         );
+    }
+
+    #[test]
+    fn anthropic_beta_header_matches_ts_oauth_1m_order() {
+        assert_eq!(
+            anthropic_beta_header_value(true, "claude-opus-4-7[1m]"),
+            [
+                crate::constants::betas::CLAUDE_CODE_20250219,
+                crate::constants::oauth::OAUTH_BETA_HEADER,
+                crate::constants::betas::CONTEXT_1M,
+                crate::constants::betas::INTERLEAVED_THINKING,
+                crate::constants::betas::CONTEXT_MANAGEMENT,
+                crate::constants::betas::PROMPT_CACHING_SCOPE,
+                crate::constants::betas::ADVISOR,
+                crate::constants::betas::EFFORT,
+            ]
+            .join(",")
+        );
+    }
+
+    #[test]
+    fn anthropic_beta_header_omits_oauth_and_1m_when_absent() {
+        let header = anthropic_beta_header_value(false, "claude-sonnet-4-6");
+        assert!(!header.contains(crate::constants::oauth::OAUTH_BETA_HEADER));
+        assert!(!header.contains(crate::constants::betas::CONTEXT_1M));
+        assert!(header.contains(crate::constants::betas::ADVISOR));
+        assert!(header.contains(crate::constants::betas::EFFORT));
     }
 
     #[test]
