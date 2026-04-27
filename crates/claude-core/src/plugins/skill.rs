@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 
 use crate::config::paths::claude_dir;
@@ -576,37 +577,12 @@ fn read_plugin_skill_dirs_concurrently(
     entries: Vec<std::path::PathBuf>,
     source: &SkillSource,
 ) -> Vec<Skill> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let plugin_name = plugin_name.to_string();
-    let source = source.clone();
-
-    std::thread::scope(|scope| {
-        for path in entries {
-            if !path.is_dir() {
-                continue;
-            }
-            let tx = tx.clone();
-            let plugin_name = plugin_name.clone();
-            let source = source.clone();
-            scope.spawn(move || {
-                let skill_file = path.join("SKILL.md");
-                let content = match std::fs::read_to_string(&skill_file) {
-                    Ok(content) => content,
-                    Err(_) => return,
-                };
-                let dir_name = match path.file_name().and_then(|n| n.to_str()) {
-                    Some(name) => name.to_string(),
-                    None => return,
-                };
-                let parsed = parse_skill_file(&content);
-                let skill =
-                    plugin_skill_from_parsed(&plugin_name, dir_name, parsed, &source, false);
-                let _ = tx.send(skill);
-            });
-        }
-        drop(tx);
-        rx.into_iter().collect()
-    })
+    let jobs = entries
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .map(PluginReadJob::SkillDir)
+        .collect();
+    read_plugin_jobs_with_node_fs_pool(plugin_name, source, jobs)
 }
 
 fn read_plugin_command_files_concurrently(
@@ -614,35 +590,110 @@ fn read_plugin_command_files_concurrently(
     entries: Vec<std::path::PathBuf>,
     source: &SkillSource,
 ) -> Vec<Skill> {
+    let jobs = entries
+        .into_iter()
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("md"))
+        .map(PluginReadJob::CommandFile)
+        .collect();
+    read_plugin_jobs_with_node_fs_pool(plugin_name, source, jobs)
+}
+
+enum PluginReadJob {
+    SkillDir(std::path::PathBuf),
+    CommandFile(std::path::PathBuf),
+}
+
+fn read_plugin_jobs_with_node_fs_pool(
+    plugin_name: &str,
+    source: &SkillSource,
+    jobs: Vec<PluginReadJob>,
+) -> Vec<Skill> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pending = VecDeque::from(jobs);
     let (tx, rx) = std::sync::mpsc::channel();
     let plugin_name = plugin_name.to_string();
     let source = source.clone();
+    let mut active = 0usize;
+    let mut loaded = Vec::new();
+    let max_active = node_fs_pool_size();
 
-    std::thread::scope(|scope| {
-        for path in entries {
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let tx = tx.clone();
-            let plugin_name = plugin_name.clone();
-            let source = source.clone();
-            scope.spawn(move || {
-                let content = match std::fs::read_to_string(&path) {
-                    Ok(content) => content,
-                    Err(_) => return,
-                };
-                let stem = match path.file_stem().and_then(|n| n.to_str()) {
-                    Some(name) => name.to_string(),
-                    None => return,
-                };
-                let parsed = parse_skill_file(&content);
-                let skill = plugin_skill_from_parsed(&plugin_name, stem, parsed, &source, true);
-                let _ = tx.send(skill);
-            });
+    while active > 0 || !pending.is_empty() {
+        while active < max_active {
+            let Some(job) = pending.pop_front() else {
+                break;
+            };
+            spawn_plugin_read_job(job, plugin_name.clone(), source.clone(), tx.clone());
+            active += 1;
         }
-        drop(tx);
-        rx.into_iter().collect()
-    })
+
+        if active == 0 {
+            break;
+        }
+
+        match rx.recv() {
+            Ok(Some(skill)) => {
+                loaded.push(skill);
+                active -= 1;
+            }
+            Ok(None) => active -= 1,
+            Err(_) => break,
+        }
+    }
+
+    loaded
+}
+
+fn spawn_plugin_read_job(
+    job: PluginReadJob,
+    plugin_name: String,
+    source: SkillSource,
+    tx: std::sync::mpsc::Sender<Option<Skill>>,
+) {
+    std::thread::spawn(move || {
+        let skill = read_plugin_job(job, &plugin_name, &source);
+        let _ = tx.send(skill);
+    });
+}
+
+fn read_plugin_job(job: PluginReadJob, plugin_name: &str, source: &SkillSource) -> Option<Skill> {
+    match job {
+        PluginReadJob::SkillDir(path) => {
+            let skill_file = path.join("SKILL.md");
+            let content = std::fs::read_to_string(&skill_file).ok()?;
+            let dir_name = path.file_name().and_then(|n| n.to_str())?.to_string();
+            let parsed = parse_skill_file(&content);
+            Some(plugin_skill_from_parsed(
+                plugin_name,
+                dir_name,
+                parsed,
+                source,
+                false,
+            ))
+        }
+        PluginReadJob::CommandFile(path) => {
+            let content = std::fs::read_to_string(&path).ok()?;
+            let stem = path.file_stem().and_then(|n| n.to_str())?.to_string();
+            let parsed = parse_skill_file(&content);
+            Some(plugin_skill_from_parsed(
+                plugin_name,
+                stem,
+                parsed,
+                source,
+                true,
+            ))
+        }
+    }
+}
+
+fn node_fs_pool_size() -> usize {
+    std::env::var("UV_THREADPOOL_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(4)
 }
 
 fn plugin_skill_from_parsed(
