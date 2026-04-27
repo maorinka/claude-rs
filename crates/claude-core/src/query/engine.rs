@@ -170,7 +170,7 @@ impl QueryEngine {
         let block = serde_json::json!({
             "type": "tool_result",
             "tool_use_id": tool_use_id,
-            "content": [{"type": "text", "text": content}],
+            "content": content,
             "is_error": is_error,
         });
 
@@ -293,7 +293,7 @@ impl QueryEngine {
                 result_blocks.push(serde_json::json!({
                     "type": "tool_result",
                     "tool_use_id": id,
-                    "content": [{"type": "text", "text": "Tool execution was interrupted or failed silently."}],
+                    "content": "Tool execution was interrupted or failed silently.",
                     "is_error": true,
                 }));
             }

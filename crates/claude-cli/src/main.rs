@@ -1063,9 +1063,11 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
     let stdout = obj.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
     let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
     match (stdout.is_empty(), stderr.is_empty()) {
-        (false, true) => stdout.to_string(),
-        (true, false) => stderr.to_string(),
-        (false, false) => format!("{stdout}\n{stderr}"),
+        (false, true) => stdout.trim_end_matches('\n').to_string(),
+        (true, false) => stderr.trim_end_matches('\n').to_string(),
+        (false, false) => format!("{stdout}\n{stderr}")
+            .trim_end_matches('\n')
+            .to_string(),
         (true, true) => String::new(),
     }
 }

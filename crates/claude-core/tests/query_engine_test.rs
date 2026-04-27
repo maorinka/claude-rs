@@ -51,6 +51,7 @@ fn test_query_engine_add_messages() {
 
     engine.add_tool_result("tu_1", "result data", false);
     assert_eq!(engine.messages().len(), 2);
+    assert_eq!(engine.messages()[1]["content"][0]["content"], "result data");
 }
 
 #[test]
@@ -69,7 +70,9 @@ fn test_query_engine_batches_parallel_tool_results() {
     let content = engine.messages()[1]["content"].as_array().unwrap();
     assert_eq!(content.len(), 2);
     assert_eq!(content[0]["tool_use_id"], "tu_1");
+    assert_eq!(content[0]["content"], "first");
     assert_eq!(content[1]["tool_use_id"], "tu_2");
+    assert_eq!(content[1]["content"], "second");
 }
 
 #[tokio::test]
