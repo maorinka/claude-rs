@@ -75,8 +75,7 @@ impl McpManager {
         results
     }
 
-    /// Connect to many MCP servers with bounded concurrency, and
-    /// skip remote servers whose name is in the needs-auth cache.
+    /// Connect to many MCP servers with bounded concurrency.
     ///
     /// Ports the orchestration shape of TS
     /// `getMcpToolsCommandsAndResources` at
@@ -88,18 +87,13 @@ impl McpManager {
     /// wired yet. This method lands the shape that doesn't need
     /// them:
     ///
-    /// 1. **Auth-cache short-circuit (G2 wiring).** Remote
-    ///    transports (SSE / HTTP) whose `server_name` is present
-    ///    in `mcp_auth_cache` within its 15-min TTL skip the
-    ///    network round-trip and surface as `NeedsAuth`
-    ///    immediately. Matches TS `client.ts:2311-2319`.
-    /// 2. **Local vs remote concurrency split.** Local (stdio)
+    /// 1. **Local vs remote concurrency split.** Local (stdio)
     ///    servers fan out with the lower
     ///    `MCP_SERVER_CONNECTION_BATCH_SIZE` (default 3, honours
     ///    the env override from G1). Remote servers fan out at
     ///    `MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE` (default
     ///    20). Matches TS `client.ts:2264-2271`.
-    /// 3. **Tool-cache refresh at end.** Same best-effort
+    /// 2. **Tool-cache refresh at end.** Same best-effort
     ///    `refresh_tools()` call `connect_all` makes.
     ///
     /// Each server's returned `McpServerConnection` reflects its
@@ -163,29 +157,7 @@ impl McpManager {
         });
         let remote_fut = drive(remote, remote_batch, |name, cfg| {
             let m = self;
-            async move {
-                // Auth-cache short-circuit: cached needs-auth
-                // entries skip the network round-trip. TS
-                // `client.ts:2311-2319`. Stdio doesn't reach
-                // this branch (partitioned into `local_fut`).
-                if super::auth_cache::is_mcp_auth_cached(&name) {
-                    debug!(server = name, "Skipping connection (cached needs-auth)");
-                    let conn = McpServerConnection {
-                        name: name.clone(),
-                        status: McpConnectionStatus::NeedsAuth,
-                        config: cfg.clone(),
-                    };
-                    // Keep manager state consistent with the
-                    // short-circuit — otherwise `connection(name)`
-                    // would return None while callers think the
-                    // server is known.
-                    let mut connections = m.connections.write().await;
-                    connections.insert(name, conn.clone());
-                    conn
-                } else {
-                    m.connect_server(&name, cfg).await
-                }
-            }
+            async move { m.connect_server(&name, cfg).await }
         });
         let (local_results, remote_results) = tokio::join!(local_fut, remote_fut);
 
@@ -315,7 +287,9 @@ impl McpManager {
                         // Failed status. Matches TS's
                         // `handleRemoteAuthFailure` branch at
                         // `client.ts:340-361`.
-                        let conn = if looks_like_auth_failure(&error_msg) {
+                        let conn = if looks_like_auth_failure(&error_msg)
+                            || cached_claude_ai_auth_failure(name, &scoped_config)
+                        {
                             super::auth_failure::handle_remote_auth_failure(
                                 name,
                                 &scoped_config,
@@ -376,7 +350,9 @@ impl McpManager {
                     }
                     Err(e) => {
                         let error_msg = format!("{:#}", e);
-                        let conn = if looks_like_auth_failure(&error_msg) {
+                        let conn = if looks_like_auth_failure(&error_msg)
+                            || cached_claude_ai_auth_failure(name, &scoped_config)
+                        {
                             super::auth_failure::handle_remote_auth_failure(
                                 name,
                                 &scoped_config,
@@ -658,6 +634,51 @@ impl McpManager {
         self.tool_definitions.read().await.clone()
     }
 
+    /// List MCP prompt command names from connected servers in the supplied
+    /// server order. TS exposes MCP prompts as slash commands named
+    /// `mcp__<normalized-server>__<prompt.name>` and intentionally keeps the
+    /// prompt name itself un-normalized.
+    pub async fn prompt_command_names_in_order(&self, order: &[String]) -> Vec<String> {
+        let clients = self.clients.read().await;
+        let mut names = Vec::new();
+        let mut seen_servers = std::collections::HashSet::new();
+
+        for server_name in order {
+            if let Some(client) = clients.get(server_name) {
+                seen_servers.insert(server_name.clone());
+                if let Ok(prompts) = client.list_prompts().await {
+                    let normalized_server = super::client::normalize_mcp_name(server_name);
+                    names.extend(
+                        prompts
+                            .into_iter()
+                            .map(|prompt| format!("mcp__{}__{}", normalized_server, prompt.name)),
+                    );
+                }
+            }
+        }
+
+        let mut remaining = clients
+            .keys()
+            .filter(|server_name| !seen_servers.contains(*server_name))
+            .cloned()
+            .collect::<Vec<_>>();
+        remaining.sort();
+        for server_name in remaining {
+            if let Some(client) = clients.get(&server_name) {
+                if let Ok(prompts) = client.list_prompts().await {
+                    let normalized_server = super::client::normalize_mcp_name(&server_name);
+                    names.extend(
+                        prompts
+                            .into_iter()
+                            .map(|prompt| format!("mcp__{}__{}", normalized_server, prompt.name)),
+                    );
+                }
+            }
+        }
+
+        names
+    }
+
     /// Add model-visible MCP tool definitions for servers whose tool
     /// surface is known before a live transport is available.
     pub async fn add_tool_definitions(&self, tools: Vec<McpToolInfo>) {
@@ -828,6 +849,13 @@ fn looks_like_auth_failure(msg: &str) -> bool {
     msg.contains("HTTP 401") || msg.to_ascii_lowercase().contains("unauthorized")
 }
 
+fn cached_claude_ai_auth_failure(name: &str, scoped_config: &ScopedMcpServerConfig) -> bool {
+    matches!(
+        scoped_config.scope,
+        crate::mcp::types::ConfigScope::ClaudeAi
+    ) && super::auth_cache::is_mcp_auth_cached(name)
+}
+
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)] // test-only env serialization via std::sync::Mutex
 mod tests {
@@ -955,52 +983,6 @@ mod tests {
             .connect_all_respecting_auth_cache(HashMap::new())
             .await;
         assert!(out.is_empty());
-    }
-
-    /// A remote server name that's in the auth cache short-
-    /// circuits to NeedsAuth without hitting the network. Uses
-    /// an unreachable URL so network contact would fail loudly.
-    #[tokio::test]
-    async fn connect_all_respecting_auth_cache_skips_cached_remote() {
-        use crate::mcp::auth_cache::{
-            clear_mcp_auth_cache, set_mcp_auth_cache_entry, shared_test_lock,
-        };
-        let _g = shared_test_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path());
-        clear_mcp_auth_cache();
-        set_mcp_auth_cache_entry("cached-sse");
-
-        let manager = McpManager::new();
-        let mut configs = HashMap::new();
-        configs.insert(
-            "cached-sse".to_string(),
-            ScopedMcpServerConfig {
-                config: McpServerConfig::Sse(McpSseServerConfig {
-                    // Would fail loudly if we actually connected.
-                    url: "https://definitely.invalid/mcp".into(),
-                    headers: None,
-                }),
-                scope: ConfigScope::Project,
-            },
-        );
-
-        let results = manager.connect_all_respecting_auth_cache(configs).await;
-        assert_eq!(results.len(), 1);
-        assert!(
-            matches!(results[0].status, McpConnectionStatus::NeedsAuth),
-            "cached-auth remote must short-circuit to NeedsAuth, got {:?}",
-            results[0].status
-        );
-        // And the manager's connections map reflects it.
-        let stored = manager.connection("cached-sse").await;
-        assert!(matches!(
-            stored.expect("connection recorded").status,
-            McpConnectionStatus::NeedsAuth
-        ));
-
-        clear_mcp_auth_cache();
-        std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
 
     /// Stdio servers ignore the auth-cache check — TS

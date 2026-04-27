@@ -200,6 +200,7 @@ fn test_skill(name: &str, when_to_use: Option<&str>) -> Skill {
         allowed_tools: vec![],
         user_invocable: true,
         disable_model_invocation: false,
+        is_plugin_command: false,
     }
 }
 

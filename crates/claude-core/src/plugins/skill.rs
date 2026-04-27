@@ -528,7 +528,8 @@ fn read_dir_paths(path: &Path) -> Option<Vec<std::path::PathBuf>> {
 }
 
 fn read_plugin_dir_entries(path: &Path) -> Option<Vec<std::path::PathBuf>> {
-    read_dir_paths(path)
+    let entries = std::fs::read_dir(path).ok()?;
+    Some(entries.flatten().map(|entry| entry.path()).collect())
 }
 
 fn newest_child_dir(path: &Path) -> Option<std::path::PathBuf> {
@@ -603,6 +604,7 @@ fn read_plugin_skill_dirs_concurrently(
                     dir_name,
                     parsed,
                     &source,
+                    false,
                 ));
             });
         }
@@ -621,7 +623,7 @@ fn read_plugin_command_files_concurrently(
     let source = source.clone();
 
     std::thread::scope(|scope| {
-        for path in entries {
+        for (index, path) in entries.into_iter().enumerate() {
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
@@ -638,16 +640,14 @@ fn read_plugin_command_files_concurrently(
                     None => return,
                 };
                 let parsed = parse_skill_file(&content);
-                let _ = tx.send(plugin_skill_from_parsed(
-                    &plugin_name,
-                    stem,
-                    parsed,
-                    &source,
-                ));
+                let skill = plugin_skill_from_parsed(&plugin_name, stem, parsed, &source, true);
+                let _ = tx.send((index, skill));
             });
         }
         drop(tx);
-        rx.into_iter().collect()
+        let mut loaded: Vec<_> = rx.into_iter().collect();
+        loaded.sort_by_key(|(index, _)| *index);
+        loaded.into_iter().map(|(_, skill)| skill).collect()
     })
 }
 
@@ -656,6 +656,7 @@ fn plugin_skill_from_parsed(
     local_name: String,
     parsed: ParsedSkillFile,
     source: &SkillSource,
+    is_plugin_command: bool,
 ) -> Skill {
     let name = format!("{plugin_name}:{local_name}");
     let description = parsed
@@ -674,6 +675,7 @@ fn plugin_skill_from_parsed(
         allowed_tools: parsed.frontmatter.allowed_tools,
         user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
         disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
+        is_plugin_command,
     }
 }
 
@@ -748,6 +750,7 @@ fn load_skills_from_dir(
             allowed_tools: parsed.frontmatter.allowed_tools,
             user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
             disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
+            is_plugin_command: false,
         });
     }
 }
@@ -916,6 +919,7 @@ Do the thing.
             allowed_tools: vec![],
             user_invocable: true,
             disable_model_invocation: false,
+            is_plugin_command: false,
         };
 
         assert_eq!(match_skill("/commit", &skill), Some(""));
@@ -936,6 +940,7 @@ Do the thing.
             allowed_tools: vec![],
             user_invocable: true,
             disable_model_invocation: false,
+            is_plugin_command: false,
         };
 
         // Fuzzy match: input contains the word "commit"

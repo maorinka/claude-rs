@@ -276,6 +276,7 @@ impl ToolRegistry {
     pub fn tool_definitions(&self) -> Vec<claude_core::api::client::ToolDefinition> {
         self.all()
             .into_iter()
+            .filter(|t| t.name() != "ToolSearch")
             .map(|t| {
                 let mut definition = claude_core::api::client::ToolDefinition {
                     name: t.name().to_string(),

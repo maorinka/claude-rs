@@ -39,7 +39,8 @@
 //!    auto-memory is off — matches TS `remember.ts:71`.
 
 use crate::skill_tool::{
-    register_skill_full, register_skill_with_arg_header, register_static_command_skill,
+    register_model_only_skill, register_skill_full, register_skill_with_arg_header,
+    register_static_command_skill, register_user_only_skill,
 };
 use claude_core::memdir::auto_memory_enabled;
 use claude_core::user_type;
@@ -56,7 +57,9 @@ const LOOP_USAGE: &str = include_str!("loop_usage.md");
 pub fn register_bundled_skills() {
     register_update_config_skill();
     register_keybindings_help_skill();
+    register_debug_skill();
     register_simplify_skill();
+    register_batch_skill();
     register_fewer_permission_prompts_skill();
     register_stuck_skill();
     register_remember_skill();
@@ -85,10 +88,33 @@ pub fn register_keybindings_help_skill() {
         actions_table: "",
         args: "",
     };
-    register_skill_full(
+    register_model_only_skill(
         "keybindings-help",
         "Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".",
         &claude_core::keybindings_skill_prompt::assemble_keybindings_prompt(&inputs),
+        None,
+        None,
+    );
+}
+
+pub fn register_debug_skill() {
+    let inputs = claude_core::debug_skill_prompt::DebugPromptInputs {
+        was_already_logging: true,
+        debug_log_path: "",
+        log_info: claude_core::debug_skill_prompt::DEBUG_LOG_NO_FILE_YET,
+        issue_description: "",
+        user_settings_path: "",
+        project_settings_path: "",
+        local_settings_path: "",
+    };
+    register_user_only_skill(
+        "debug",
+        if user_type::is_ant() {
+            "Debug your current Claude Code session by reading the session debug log. Includes all event logging"
+        } else {
+            "Enable debug logging for this session and help diagnose issues"
+        },
+        &claude_core::debug_skill_prompt::debug_prompt(&inputs),
         None,
         None,
     );
@@ -103,6 +129,16 @@ pub fn register_simplify_skill() {
         "Review changed code for reuse, quality, and efficiency, then fix any issues found.",
         SIMPLIFY_PROMPT,
         Some("Additional Focus"),
+    );
+}
+
+pub fn register_batch_skill() {
+    register_user_only_skill(
+        "batch",
+        "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
+        &claude_core::batch_skill_prompt::batch_prompt(""),
+        Some("Input"),
+        Some(claude_core::batch_skill_prompt::BATCH_MISSING_INSTRUCTION_MESSAGE),
     );
 }
 
@@ -344,6 +380,31 @@ mod tests {
         );
 
         std::env::remove_var("USER_TYPE");
+        clear_skills();
+    }
+
+    #[test]
+    fn bundled_skills_carry_ts_visibility_flags() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_skills();
+        std::env::remove_var("USER_TYPE");
+
+        register_bundled_skills();
+        let skills = list_skills();
+
+        let keybindings = skills
+            .iter()
+            .find(|s| s.name == "keybindings-help")
+            .unwrap();
+        assert!(!keybindings.user_invocable);
+        assert!(!keybindings.disable_model_invocation);
+
+        for name in ["debug", "batch"] {
+            let skill = skills.iter().find(|s| s.name == name).unwrap();
+            assert!(skill.user_invocable);
+            assert!(skill.disable_model_invocation);
+        }
+
         clear_skills();
     }
 

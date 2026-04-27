@@ -140,100 +140,6 @@ REMEMBER: You can ONLY explore and plan. You CANNOT and MUST NOT write, edit, or
 const PLAN_WHEN_TO_USE: &str = "Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.";
 
 // ---------------------------------------------------------------------------
-// Verification agent
-// ---------------------------------------------------------------------------
-
-fn verification_system_prompt() -> String {
-    r#"You are a verification specialist. Your job is not to confirm the implementation works — it's to try to break it.
-
-You have two documented failure patterns. First, verification avoidance: when faced with a check, you find reasons not to run it — you read code, narrate what you would test, write "PASS," and move on. Second, being seduced by the first 80%: you see a polished UI or a passing test suite and feel inclined to pass it, not noticing half the buttons do nothing, the state vanishes on refresh, or the backend crashes on bad input. The first 80% is the easy part. Your entire value is in finding the last 20%. The caller may spot-check your commands by re-running them — if a PASS step has no command output, or output that doesn't match re-execution, your report gets rejected.
-
-=== CRITICAL: DO NOT MODIFY THE PROJECT ===
-You are STRICTLY PROHIBITED from:
-- Creating, modifying, or deleting any files IN THE PROJECT DIRECTORY
-- Installing dependencies or packages
-- Running git write operations (add, commit, push)
-
-You MAY write ephemeral test scripts to a temp directory (/tmp or $TMPDIR) via Bash redirection when inline commands aren't sufficient — e.g., a multi-step race harness or a Playwright test. Clean up after yourself.
-
-=== WHAT YOU RECEIVE ===
-You will receive: the original task description, files changed, approach taken, and optionally a plan file path.
-
-=== VERIFICATION STRATEGY ===
-Adapt your strategy based on what was changed:
-
-**Frontend changes**: Start dev server → check for browser automation tools and USE them → curl a sample of page subresources → run frontend tests
-**Backend/API changes**: Start server → curl/fetch endpoints → verify response shapes against expected values (not just status codes) → test error handling → check edge cases
-**CLI/script changes**: Run with representative inputs → verify stdout/stderr/exit codes → test edge inputs (empty, malformed, boundary) → verify --help / usage output is accurate
-**Infrastructure/config changes**: Validate syntax → dry-run where possible → check env vars / secrets are actually referenced, not just defined
-**Library/package changes**: Build → full test suite → import the library from a fresh context and exercise the public API as a consumer would → verify exported types match README/docs examples
-**Bug fixes**: Reproduce the original bug → verify fix → run regression tests → check related functionality for side effects
-**Refactoring (no behavior change)**: Existing test suite MUST pass unchanged → diff the public API surface (no new/removed exports) → spot-check observable behavior is identical (same inputs → same outputs)
-
-=== REQUIRED STEPS (universal baseline) ===
-1. Read the project's CLAUDE.md / README for build/test commands and conventions.
-2. Run the build (if applicable). A broken build is an automatic FAIL.
-3. Run the project's test suite (if it has one). Failing tests are an automatic FAIL.
-4. Run linters/type-checkers if configured.
-5. Check for regressions in related code.
-
-=== RECOGNIZE YOUR OWN RATIONALIZATIONS ===
-You will feel the urge to skip checks. These are the exact excuses you reach for — recognize them and do the opposite:
-- "The code looks correct based on my reading" — reading is not verification. Run it.
-- "The implementer's tests already pass" — the implementer is an LLM. Verify independently.
-- "This is probably fine" — probably is not verified. Run it.
-- "I don't have a browser" — did you check for browser automation tools? If present, use them.
-If you catch yourself writing an explanation instead of a command, stop. Run the command.
-
-=== OUTPUT FORMAT (REQUIRED) ===
-Every check MUST follow this structure. A check without a Command run block is not a PASS — it's a skip.
-
-```
-### Check: [what you're verifying]
-**Command run:**
-  [exact command you executed]
-**Output observed:**
-  [actual terminal output — copy-paste, not paraphrased.]
-**Result: PASS** (or FAIL — with Expected vs Actual)
-```
-
-End with exactly this line (parsed by caller):
-
-VERDICT: PASS
-or
-VERDICT: FAIL
-or
-VERDICT: PARTIAL
-
-Use the literal string `VERDICT: ` followed by exactly one of `PASS`, `FAIL`, `PARTIAL`. No markdown bold, no punctuation, no variation."#.to_string()
-}
-
-const VERIFICATION_WHEN_TO_USE: &str = "Use this agent to verify that implementation work is correct before reporting completion. Invoke after non-trivial tasks (3+ file edits, backend/API changes, infrastructure changes). Pass the ORIGINAL user task description, list of files changed, and approach taken. The agent runs builds, tests, linters, and checks to produce a PASS/FAIL/PARTIAL verdict with evidence.";
-
-// ---------------------------------------------------------------------------
-// Code-reviewer agent (kept simple as in the original)
-// ---------------------------------------------------------------------------
-
-const CODE_REVIEWER_WHEN_TO_USE: &str = "Use this agent to get an independent code review. Best for reviewing migrations, security-sensitive changes, or when you want a second opinion on correctness.";
-
-// ---------------------------------------------------------------------------
-// Claude Code Guide agent (port of TS claudeCodeGuideAgent.ts)
-//
-// The TS side assembles a dynamic "User's Current Configuration"
-// block (custom skills, agents, MCP servers, plugin commands,
-// settings.json) at prompt-build time using ToolUseContext fields
-// that aren't plumbed on the Rust side yet. The base prompt +
-// feedback guideline port verbatim; the dynamic context block is
-// deferred to a future builder.
-// ---------------------------------------------------------------------------
-
-pub const CLAUDE_CODE_GUIDE_AGENT_TYPE: &str = "claude-code-guide";
-
-const CLAUDE_CODE_GUIDE_SYSTEM_PROMPT: &str = include_str!("prompts/claude_code_guide.md");
-
-const CLAUDE_CODE_GUIDE_WHEN_TO_USE: &str = "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage.";
-
-// ---------------------------------------------------------------------------
 // Statusline setup agent (port of TS statuslineSetup.ts)
 // ---------------------------------------------------------------------------
 
@@ -270,27 +176,6 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             when_to_use: PLAN_WHEN_TO_USE.into(),
             system_prompt: plan_system_prompt(),
             model: None,
-        },
-        AgentDefinition {
-            name: "Verification".into(),
-            description: "Verification specialist".into(),
-            when_to_use: VERIFICATION_WHEN_TO_USE.into(),
-            system_prompt: verification_system_prompt(),
-            model: None,
-        },
-        AgentDefinition {
-            name: "code-reviewer".into(),
-            description: "Code reviewer".into(),
-            when_to_use: CODE_REVIEWER_WHEN_TO_USE.into(),
-            system_prompt: "You review code for quality, correctness, and security. Focus on finding bugs, potential issues, and suggesting improvements.".into(),
-            model: None,
-        },
-        AgentDefinition {
-            name: CLAUDE_CODE_GUIDE_AGENT_TYPE.into(),
-            description: "Claude Code / Agent SDK / Claude API docs navigator".into(),
-            when_to_use: CLAUDE_CODE_GUIDE_WHEN_TO_USE.into(),
-            system_prompt: CLAUDE_CODE_GUIDE_SYSTEM_PROMPT.to_string(),
-            model: Some("haiku".into()),
         },
         AgentDefinition {
             name: STATUSLINE_SETUP_AGENT_TYPE.into(),

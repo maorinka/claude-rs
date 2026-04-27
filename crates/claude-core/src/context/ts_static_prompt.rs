@@ -336,12 +336,31 @@ fn os_version() -> String {
 }
 
 fn model_display(model: &str) -> (&'static str, String) {
+    let has_1m = model.contains("[1m]") || model.contains("[1M]");
     if model.contains("opus-4-7") || model == "opus" {
-        ("Opus 4.7", "claude-opus-4-7".to_string())
+        if has_1m {
+            ("Opus 4.7 (1M context)", "claude-opus-4-7[1m]".to_string())
+        } else {
+            ("Opus 4.7", "claude-opus-4-7".to_string())
+        }
     } else if model.contains("sonnet-4-6") {
-        ("Sonnet 4.6", "claude-sonnet-4-6".to_string())
+        if has_1m {
+            (
+                "Sonnet 4.6 (1M context)",
+                "claude-sonnet-4-6[1m]".to_string(),
+            )
+        } else {
+            ("Sonnet 4.6", "claude-sonnet-4-6".to_string())
+        }
     } else if model.contains("haiku-4-5") {
-        ("Haiku 4.5", "claude-haiku-4-5-20251001".to_string())
+        if has_1m {
+            (
+                "Haiku 4.5 (1M context)",
+                "claude-haiku-4-5-20251001[1m]".to_string(),
+            )
+        } else {
+            ("Haiku 4.5", "claude-haiku-4-5-20251001".to_string())
+        }
     } else {
         ("Claude", model.to_string())
     }

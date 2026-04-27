@@ -18,8 +18,14 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use claude_core::hooks::{
+    get_global_runner, resolve_hook_permission_decision, run_post_tool_use_failure_hooks,
+    run_post_tool_use_hooks, run_pre_tool_use_hooks, ResolvedPermission,
+};
 use claude_core::permissions::evaluator::evaluate_permission;
-use claude_core::permissions::types::{PermissionDecision, PermissionMode, ToolPermissionContext};
+use claude_core::permissions::types::{
+    PermissionDecision, PermissionDecisionReason, PermissionMode, ToolPermissionContext,
+};
 use claude_core::query::engine::{QueryEngine, ToolUseInfo, TurnResult};
 use claude_core::types::events::{StreamEvent, ToolResultData};
 use claude_tools::{ToolRegistry, ToolUseContext};
@@ -48,6 +54,60 @@ use crate::widgets::theme_picker::{ThemePicker, ThemePickerWidget};
 const TOKEN_WARNING_THRESHOLD: f64 = 0.80; // Yellow warning at 80%
 const TOKEN_CRITICAL_THRESHOLD: f64 = 0.95; // Red warning at 95%
 const DOUBLE_PRESS_TIMEOUT_MS: u64 = 800;
+
+fn permission_mode_hook_name(mode: &PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Default => "default",
+        PermissionMode::AcceptEdits => "acceptEdits",
+        PermissionMode::Auto => "auto",
+        PermissionMode::Plan => "plan",
+        PermissionMode::BypassPermissions => "bypassPermissions",
+        PermissionMode::DontAsk => "dontAsk",
+        PermissionMode::Bubble => "bubble",
+    }
+}
+
+fn merge_hook_updated_input(
+    input: &serde_json::Value,
+    updated: &Option<std::collections::HashMap<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let Some(updated) = updated else {
+        return input.clone();
+    };
+    let mut merged = input.clone();
+    if let Some(obj) = merged.as_object_mut() {
+        for (key, value) in updated {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+    merged
+}
+
+fn permission_decision_to_rule_check(
+    decision: &PermissionDecision,
+) -> claude_core::hooks::RuleCheckResult {
+    match decision {
+        PermissionDecision::Allow(_) => claude_core::hooks::RuleCheckResult::NoMatch,
+        PermissionDecision::Ask(_) => claude_core::hooks::RuleCheckResult::Ask,
+        PermissionDecision::Deny(deny) => {
+            claude_core::hooks::RuleCheckResult::Deny(Some(deny.message.clone()))
+        }
+    }
+}
+
+fn hook_blocking_errors_text(errors: &[claude_core::hooks::HookBlockingError]) -> Option<String> {
+    if errors.is_empty() {
+        None
+    } else {
+        Some(
+            errors
+                .iter()
+                .map(|err| err.blocking_error.clone())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RewindRestoreOption {
@@ -133,6 +193,7 @@ pub enum AppEvent {
 /// these non-blocking sends so the event loop never awaits the engine.
 enum EngineCommand {
     AddUserMessage(String),
+    AddUserContext(String),
     AddToolResult {
         id: String,
         content: String,
@@ -640,6 +701,9 @@ impl App {
                     match cmd {
                         EngineCommand::AddUserMessage(text) => {
                             engine.add_user_message(&text);
+                        }
+                        EngineCommand::AddUserContext(text) => {
+                            engine.append_user_context_block(text);
                         }
                         EngineCommand::AddToolResult {
                             id,
@@ -1499,12 +1563,14 @@ impl App {
                             // Check next tool or continue turn
                             if pending_tool_index < pending_tools.len() {
                                 self.check_next_tool_permission(
-                                    &pending_tools,
+                                    &mut pending_tools,
                                     &mut pending_tool_index,
                                     &perm_ctx,
                                     &tools,
+                                    &engine_tx,
                                     &tx,
-                                );
+                                )
+                                .await;
                             } else {
                                 // All tools done — fire ContinueTurn to re-enter the engine
                                 let tx2 = tx.clone();
@@ -1644,22 +1710,99 @@ impl App {
                                 .await;
                         });
                     } else {
-                        let (result_text, display_text, is_error) = match &result {
-                            Ok(data) => {
-                                let raw = data
-                                    .data
-                                    .as_str()
-                                    .unwrap_or(&data.data.to_string())
-                                    .to_string();
-                                let display =
-                                    format_tool_result_display(&info.name, &data.data, &raw);
-                                (raw, display, data.is_error)
+                        let (mut result_text, mut display_text, mut is_error, mut result_json) =
+                            match &result {
+                                Ok(data) => {
+                                    let raw = data
+                                        .data
+                                        .as_str()
+                                        .unwrap_or(&data.data.to_string())
+                                        .to_string();
+                                    let display =
+                                        format_tool_result_display(&info.name, &data.data, &raw);
+                                    (raw, display, data.is_error, data.data.clone())
+                                }
+                                Err(e) => {
+                                    let msg = format!("Error: {}", e);
+                                    (
+                                        msg.clone(),
+                                        msg.clone(),
+                                        true,
+                                        serde_json::json!({"error": msg}),
+                                    )
+                                }
+                            };
+                        if let Some(runner) = get_global_runner() {
+                            if is_error {
+                                let failure = run_post_tool_use_failure_hooks(
+                                    &runner,
+                                    &info.name,
+                                    &info.id,
+                                    &info.input,
+                                    &result_text,
+                                    None,
+                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                                for context in &failure.additional_contexts {
+                                    let _ = engine_tx
+                                        .send(EngineCommand::AddUserContext(context.clone()))
+                                        .await;
+                                }
+                                if let Some(message) =
+                                    hook_blocking_errors_text(&failure.blocking_errors)
+                                {
+                                    result_text = message.clone();
+                                    display_text = message;
+                                    is_error = true;
+                                }
+                            } else {
+                                let post = run_post_tool_use_hooks(
+                                    &runner,
+                                    &info.name,
+                                    &info.id,
+                                    &info.input,
+                                    &result_json,
+                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                                for context in &post.additional_contexts {
+                                    let _ = engine_tx
+                                        .send(EngineCommand::AddUserContext(context.clone()))
+                                        .await;
+                                }
+                                if let Some(updated) = post.updated_mcp_tool_output {
+                                    result_json = updated;
+                                    result_text = result_json
+                                        .as_str()
+                                        .unwrap_or(&result_json.to_string())
+                                        .to_string();
+                                    display_text = format_tool_result_display(
+                                        &info.name,
+                                        &result_json,
+                                        &result_text,
+                                    );
+                                }
+                                if let Some(message) =
+                                    hook_blocking_errors_text(&post.blocking_errors)
+                                {
+                                    result_text = message.clone();
+                                    display_text = message;
+                                    is_error = true;
+                                } else if post.prevent_continuation {
+                                    let message = post.stop_reason.unwrap_or_else(|| {
+                                        "PostToolUse hook stopped continuation".to_string()
+                                    });
+                                    result_text = message.clone();
+                                    display_text = message;
+                                    is_error = true;
+                                }
                             }
-                            Err(e) => {
-                                let msg = format!("Error: {}", e);
-                                (msg.clone(), msg, true)
-                            }
-                        };
+                        }
                         let _ = engine_tx
                             .send(EngineCommand::AddToolResult {
                                 id: info.id.clone(),
@@ -1678,12 +1821,14 @@ impl App {
                         pending_tool_index = tool_idx + 1;
                         if pending_tool_index < pending_tools.len() {
                             self.check_next_tool_permission(
-                                &pending_tools,
+                                &mut pending_tools,
                                 &mut pending_tool_index,
                                 &perm_ctx,
                                 &tools,
+                                &engine_tx,
                                 &tx,
-                            );
+                            )
+                            .await;
                         } else {
                             let tx2 = tx.clone();
                             tokio::spawn(async move {
@@ -1716,12 +1861,14 @@ impl App {
                             pending_tool_index = 0;
                             self.spinner.stop();
                             self.check_next_tool_permission(
-                                &pending_tools,
+                                &mut pending_tools,
                                 &mut pending_tool_index,
                                 &perm_ctx,
                                 &tools,
+                                &engine_tx,
                                 &tx,
-                            );
+                            )
+                            .await;
                         }
                         Ok(TurnResult::ContinueRecovery) => {
                             self.message_list.push(MessageEntry::System {
@@ -1762,29 +1909,114 @@ impl App {
     /// Check permissions for the next tool in the pending list.
     /// If the tool is auto-allowed, execute it immediately and advance.
     /// If it needs user permission, show the dialog.
-    fn check_next_tool_permission(
+    async fn check_next_tool_permission(
         &mut self,
-        pending_tools: &[PendingTool],
+        pending_tools: &mut [PendingTool],
         pending_tool_index: &mut usize,
         perm_ctx: &ToolPermissionContext,
         tools: &ToolRegistry,
+        engine_tx: &mpsc::Sender<EngineCommand>,
         tx: &mpsc::Sender<AppEvent>,
     ) {
         if *pending_tool_index < pending_tools.len() {
-            let tool = &pending_tools[*pending_tool_index];
-            let info = &tool.info;
+            let tool_idx = *pending_tool_index;
             *pending_tool_index += 1;
+            let tool_name = pending_tools[tool_idx].info.name.clone();
+            let tool_id = pending_tools[tool_idx].info.id.clone();
+            let mut tool_input = pending_tools[tool_idx].info.input.clone();
+            let mut forced_permission: Option<Result<(), String>> = None;
+
+            if let Some(runner) = get_global_runner() {
+                let pre = run_pre_tool_use_hooks(
+                    &runner,
+                    &tool_name,
+                    &tool_id,
+                    &tool_input,
+                    Some(permission_mode_hook_name(&perm_ctx.mode)),
+                    None,
+                    None,
+                )
+                .await;
+                for context in &pre.additional_contexts {
+                    let _ = engine_tx
+                        .send(EngineCommand::AddUserContext(context.clone()))
+                        .await;
+                }
+                if let Some(message) =
+                    hook_blocking_errors_text(&pre.blocking_errors).or(pre.denial_message.clone())
+                {
+                    forced_permission = Some(Err(message));
+                } else if pre.prevent_continuation {
+                    forced_permission = Some(Err(pre
+                        .stop_reason
+                        .unwrap_or_else(|| "PreToolUse hook stopped tool execution".to_string())));
+                } else {
+                    let resolved =
+                        resolve_hook_permission_decision(&pre, &tool_input, |candidate_input| {
+                            let tool_name = tool_name.clone();
+                            let perm_ctx = perm_ctx.clone();
+                            let candidate_input = candidate_input.clone();
+                            async move {
+                                let is_read_only = tools
+                                    .get(&tool_name)
+                                    .map(|t| t.is_read_only(&candidate_input))
+                                    .unwrap_or(false);
+                                let tool_perms =
+                                    claude_core::permissions::evaluator::SimpleToolPermissions::new(
+                                        &tool_name,
+                                        is_read_only,
+                                    );
+                                let decision =
+                                    evaluate_permission(&tool_perms, &candidate_input, &perm_ctx);
+                                permission_decision_to_rule_check(&decision)
+                            }
+                        })
+                        .await;
+                    match resolved {
+                        ResolvedPermission::Allow { updated_input }
+                        | ResolvedPermission::NormalFlow { updated_input } => {
+                            tool_input = merge_hook_updated_input(&tool_input, &updated_input);
+                        }
+                        ResolvedPermission::Deny { message } => {
+                            forced_permission = Some(Err(message.unwrap_or_else(|| {
+                                "PreToolUse hook denied this tool".to_string()
+                            })));
+                        }
+                        ResolvedPermission::RequiresUserConfirmation {
+                            updated_input,
+                            force_decision,
+                        } => {
+                            tool_input = merge_hook_updated_input(&tool_input, &updated_input);
+                            forced_permission = Some(Err(force_decision
+                                .unwrap_or_else(|| "Tool requires user confirmation".to_string())));
+                        }
+                    }
+                }
+            }
+            pending_tools[tool_idx].info.input = tool_input.clone();
 
             // Determine if tool is read-only
             let is_read_only = tools
-                .get(&info.name)
-                .map(|t| t.is_read_only(&info.input))
+                .get(&tool_name)
+                .map(|t| t.is_read_only(&tool_input))
                 .unwrap_or(false);
 
-            let decision = {
+            let decision = if let Some(forced) = forced_permission {
+                match forced {
+                    Ok(()) => PermissionDecision::allow(),
+                    Err(message) => PermissionDecision::deny(
+                        message,
+                        PermissionDecisionReason::Hook {
+                            hook_name: format!("PreToolUse:{tool_name}"),
+                            hook_source: None,
+                            reason: None,
+                        },
+                    ),
+                }
+            } else {
                 use claude_core::permissions::evaluator::SimpleToolPermissions;
-                let tool_perms = SimpleToolPermissions::new(&info.name, is_read_only);
-                evaluate_permission(&tool_perms, &info.input, perm_ctx)
+                let tool_perms = SimpleToolPermissions::new(&tool_name, is_read_only);
+                evaluate_permission(&tool_perms, &tool_input, perm_ctx)
             };
 
             match decision {
@@ -1799,13 +2031,13 @@ impl App {
                     });
                 }
                 PermissionDecision::Ask(ask) => {
-                    let input_preview = serde_json::to_string_pretty(&info.input)
-                        .unwrap_or_else(|_| info.input.to_string());
-                    let tool_name_for_explainer = info.name.clone();
+                    let input_preview = serde_json::to_string_pretty(&tool_input)
+                        .unwrap_or_else(|_| tool_input.to_string());
+                    let tool_name_for_explainer = tool_name.clone();
                     let description_for_explainer = ask.message.clone();
                     let preview_for_explainer = input_preview.clone();
                     self.permission_dialog = Some(PermissionDialog::new(
-                        info.name.clone(),
+                        tool_name.clone(),
                         ask.message,
                         input_preview,
                     ));

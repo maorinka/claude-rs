@@ -78,6 +78,7 @@ impl HaikuSecondaryModel {
             api_version: "2023-06-01".into(),
             session_id: session_id.clone(),
             account_uuid: String::new(),
+            effort: None,
         };
         let web_search_config = ApiConfig {
             base_url,
@@ -88,6 +89,7 @@ impl HaikuSecondaryModel {
             api_version: "2023-06-01".into(),
             session_id,
             account_uuid: String::new(),
+            effort: None,
         };
         Self {
             client: ApiClient::new(config, auth.clone()),

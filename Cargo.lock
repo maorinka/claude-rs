@@ -246,7 +246,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claude-cli"
-version = "0.1.0"
+version = "2.1.119"
 dependencies = [
  "anyhow",
  "chrono",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "claude-core"
-version = "0.1.0"
+version = "2.1.119"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "claude-tools"
-version = "0.1.0"
+version = "2.1.119"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "claude-tui"
-version = "0.1.0"
+version = "2.1.119"
 dependencies = [
  "anyhow",
  "chrono",

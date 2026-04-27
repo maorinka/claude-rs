@@ -53,6 +53,12 @@ pub struct Skill {
     /// Whether the model should be prevented from invoking this skill itself.
     #[serde(default)]
     pub disable_model_invocation: bool,
+    /// True when this came from a plugin `commands/*.md` file rather than a
+    /// plugin `skills/<name>/SKILL.md` directory. TS exposes both as slash
+    /// commands, but only skill-directory entries are listed in
+    /// `system/init.skills`.
+    #[serde(default)]
+    pub is_plugin_command: bool,
 }
 
 fn default_true() -> bool {

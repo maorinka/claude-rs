@@ -517,12 +517,12 @@ impl CommandHandler for EffortHandler {
                 .and_then(|s| s.lock().ok().map(|st| st.effort_level.clone()))
                 .unwrap_or_else(|| "medium".to_string());
             Ok(CommandResult::Action(format!(
-                "Usage: /effort <low|medium|high>. Current effort level: {}",
+                "Usage: /effort <low|medium|high|xhigh|max|auto>. Current effort level: {}",
                 current
             )))
         } else {
             match level {
-                "low" | "medium" | "high" => {
+                "low" | "medium" | "high" | "xhigh" | "max" | "auto" => {
                     if let Some(ref shared) = ctx.shared {
                         if let Ok(mut state) = shared.lock() {
                             state.effort_level = level.to_string();
@@ -534,7 +534,7 @@ impl CommandHandler for EffortHandler {
                     )))
                 }
                 _ => Ok(CommandResult::Error(format!(
-                    "Invalid effort level: '{}'. Use low, medium, or high.",
+                    "Invalid effort level: '{}'. Use low, medium, high, xhigh, max, or auto.",
                     level
                 ))),
             }
@@ -1215,6 +1215,19 @@ impl CommandHandler for ExitPlanHandler {
              Begin with the first step."
                 .to_string(),
         ))
+    }
+}
+
+pub struct TeamOnboardingHandler;
+impl CommandHandler for TeamOnboardingHandler {
+    fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let focus = args.trim();
+        let mut prompt = "Generate a teammate onboarding guide from the current project and my local Claude Code usage. Review project files, recent git activity, configuration, commands, hooks, MCP/plugin setup, and recurring workflows. Keep the guide practical for a new teammate: what this project is, how to build/test/run it, important conventions, active work, useful slash commands/skills/agents, and local setup details that are safe to share.".to_string();
+        if !focus.is_empty() {
+            prompt.push_str("\n\nFocus: ");
+            prompt.push_str(focus);
+        }
+        Ok(CommandResult::Message(prompt))
     }
 }
 
@@ -2884,6 +2897,12 @@ pub fn build_default_commands() -> CommandRegistry {
     register!("refactor", "Suggest refactoring", Prompt, RefactorHandler);
     register!("explain", "Explain code", Prompt, ExplainHandler);
     register!("docs", "Generate documentation", Prompt, DocsHandler);
+    register!(
+        "team-onboarding",
+        "Generate a teammate ramp-up guide from local project usage",
+        Prompt,
+        TeamOnboardingHandler
+    );
 
     // Prompt commands (new)
     register!(

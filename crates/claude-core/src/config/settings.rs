@@ -54,6 +54,10 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
 
+    /// Thinking effort level (`low`, `medium`, `high`, `xhigh`, `max`, `auto`).
+    #[serde(rename = "effortLevel", skip_serializing_if = "Option::is_none")]
+    pub effort_level: Option<String>,
+
     /// API key override (overrides the environment variable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -147,6 +151,10 @@ impl Settings {
             model: overlay.model.clone().or_else(|| self.model.clone()),
             verbose: overlay.verbose.or(self.verbose),
             max_tokens: overlay.max_tokens.or(self.max_tokens),
+            effort_level: overlay
+                .effort_level
+                .clone()
+                .or_else(|| self.effort_level.clone()),
             api_key: overlay.api_key.clone().or_else(|| self.api_key.clone()),
             api_key_helper: overlay
                 .api_key_helper

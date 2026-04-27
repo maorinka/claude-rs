@@ -57,6 +57,52 @@ enum McpTransport {
     },
 }
 
+fn authorization_bearer_token(headers: &Option<HashMap<String, String>>) -> Option<String> {
+    let value = headers
+        .as_ref()?
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))?
+        .1
+        .trim();
+    value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))
+        .map(str::to_string)
+}
+
+async fn refresh_oauth_bearer_headers_after_401(
+    headers: &mut Option<HashMap<String, String>>,
+) -> bool {
+    let Some(failed_token) = authorization_bearer_token(headers) else {
+        return false;
+    };
+    let token_changed = crate::auth::resolve::handle_oauth_401_error(&failed_token)
+        .await
+        .unwrap_or(false);
+    if !token_changed {
+        return false;
+    }
+    let Ok(Some(tokens)) = crate::auth::storage::load_tokens().await else {
+        return false;
+    };
+    if tokens.access_token.is_empty() || tokens.access_token == failed_token {
+        return false;
+    }
+    let headers = headers.get_or_insert_with(HashMap::new);
+    if let Some((_, value)) = headers
+        .iter_mut()
+        .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+    {
+        *value = format!("Bearer {}", tokens.access_token);
+    } else {
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", tokens.access_token),
+        );
+    }
+    true
+}
+
 /// An MCP client that communicates with an MCP server via stdio, SSE, or HTTP transport.
 ///
 /// The MCP protocol uses JSON-RPC 2.0 messages. For stdio, these are sent
@@ -836,106 +882,120 @@ impl McpClient {
             } => {
                 // For HTTP (Streamable HTTP), POST the JSON-RPC request and
                 // read the response directly from the HTTP response body.
-                let mut req = mcp_streamable_http_post(http, url, headers.as_ref())
-                    .header("content-type", "application/json");
+                let mut request_headers = headers.clone();
+                let mut retried_after_oauth_refresh = false;
 
-                if let Some(hdrs) = headers {
-                    for (k, v) in hdrs {
-                        req = req.header(k, v);
+                loop {
+                    let mut req = mcp_streamable_http_post(http, url, request_headers.as_ref())
+                        .header("content-type", "application/json");
+
+                    if let Some(hdrs) = &request_headers {
+                        for (k, v) in hdrs {
+                            req = req.header(k, v);
+                        }
                     }
-                }
 
-                // Include session ID if we have one from a previous response
-                {
-                    let sid = session_id.lock().await;
-                    if let Some(ref s) = *sid {
-                        req = req.header("mcp-session-id", s);
+                    // Include session ID if we have one from a previous response
+                    {
+                        let sid = session_id.lock().await;
+                        if let Some(ref s) = *sid {
+                            req = req.header("mcp-session-id", s);
+                        }
                     }
-                }
 
-                // G4b: short-circuit if the lifecycle tracker has
-                // already signalled a close. Subsequent requests
-                // through a dead transport must fail fast rather
-                // than contact a server that we've declared dead.
-                if self.lifecycle.lock().await.has_triggered_close() {
-                    return Err(anyhow!(
-                        "MCP HTTP server '{}' transport closed (reconnect required)",
-                        self.name
-                    ));
-                }
-
-                let resp = match req.json(&request).send().await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        // G4b: feed send error to the tracker so
-                        // repeated terminal errors escalate to a
-                        // transport close signal.
-                        let _ = self.lifecycle.lock().await.record_error(&e.to_string());
-                        return Err(anyhow!(e).context(format!(
-                            "Failed to POST to MCP HTTP server '{}' at {}",
-                            self.name, url
-                        )));
-                    }
-                };
-
-                // Capture session ID from response header
-                if let Some(sid_val) = resp.headers().get("mcp-session-id") {
-                    if let Ok(s) = sid_val.to_str() {
-                        let mut sid = session_id.lock().await;
-                        *sid = Some(s.to_string());
-                    }
-                }
-
-                if !resp.status().is_success() {
-                    let status = resp.status().as_u16();
-                    let body = resp.text().await.unwrap_or_default();
-                    // G4b: detect HTTP session-expired signal (404
-                    // + JSON-RPC -32001) and fire the dedicated
-                    // record_session_expired path. Mirrors TS
-                    // `client.ts:1316-1329`.
-                    if super::helpers::is_mcp_session_expired_error(Some(status), &body) {
-                        let _ = self.lifecycle.lock().await.record_session_expired();
+                    // G4b: short-circuit if the lifecycle tracker has
+                    // already signalled a close. Subsequent requests
+                    // through a dead transport must fail fast rather
+                    // than contact a server that we've declared dead.
+                    if self.lifecycle.lock().await.has_triggered_close() {
                         return Err(anyhow!(
-                            "MCP HTTP server '{}' session expired (HTTP 404 + JSON-RPC -32001)",
+                            "MCP HTTP server '{}' transport closed (reconnect required)",
                             self.name
                         ));
                     }
-                    let _ = self
-                        .lifecycle
-                        .lock()
-                        .await
-                        .record_error(&format!("HTTP {} body: {}", status, body));
-                    return Err(anyhow!(
-                        "MCP HTTP server '{}' error {}: {}",
-                        self.name,
-                        status,
-                        body
-                    ));
+
+                    let resp = match req.json(&request).send().await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            // G4b: feed send error to the tracker so
+                            // repeated terminal errors escalate to a
+                            // transport close signal.
+                            let _ = self.lifecycle.lock().await.record_error(&e.to_string());
+                            return Err(anyhow!(e).context(format!(
+                                "Failed to POST to MCP HTTP server '{}' at {}",
+                                self.name, url
+                            )));
+                        }
+                    };
+
+                    // Capture session ID from response header
+                    if let Some(sid_val) = resp.headers().get("mcp-session-id") {
+                        if let Ok(s) = sid_val.to_str() {
+                            let mut sid = session_id.lock().await;
+                            *sid = Some(s.to_string());
+                        }
+                    }
+
+                    if !resp.status().is_success() {
+                        let status = resp.status().as_u16();
+                        let body = resp.text().await.unwrap_or_default();
+                        if status == 401
+                            && !retried_after_oauth_refresh
+                            && refresh_oauth_bearer_headers_after_401(&mut request_headers).await
+                        {
+                            retried_after_oauth_refresh = true;
+                            continue;
+                        }
+
+                        // G4b: detect HTTP session-expired signal (404
+                        // + JSON-RPC -32001) and fire the dedicated
+                        // record_session_expired path. Mirrors TS
+                        // `client.ts:1316-1329`.
+                        if super::helpers::is_mcp_session_expired_error(Some(status), &body) {
+                            let _ = self.lifecycle.lock().await.record_session_expired();
+                            return Err(anyhow!(
+                                "MCP HTTP server '{}' session expired (HTTP 404 + JSON-RPC -32001)",
+                                self.name
+                            ));
+                        }
+                        let _ = self
+                            .lifecycle
+                            .lock()
+                            .await
+                            .record_error(&format!("HTTP {} body: {}", status, body));
+                        return Err(anyhow!(
+                            "MCP HTTP server '{}' error {}: {}",
+                            self.name,
+                            status,
+                            body
+                        ));
+                    }
+
+                    debug!(
+                        server = self.name,
+                        method = method,
+                        id = id,
+                        "Sent MCP request (HTTP POST)"
+                    );
+
+                    let body = resp.text().await.with_context(|| {
+                        format!(
+                            "Failed to read response from MCP HTTP server '{}'",
+                            self.name
+                        )
+                    })?;
+
+                    let response: JsonRpcResponse =
+                        serde_json::from_str(&body).with_context(|| {
+                            format!(
+                                "Failed to parse JSON-RPC response from MCP HTTP server '{}': {}",
+                                self.name,
+                                &body[..body.len().min(200)]
+                            )
+                        })?;
+
+                    break Ok(response);
                 }
-
-                debug!(
-                    server = self.name,
-                    method = method,
-                    id = id,
-                    "Sent MCP request (HTTP POST)"
-                );
-
-                let body = resp.text().await.with_context(|| {
-                    format!(
-                        "Failed to read response from MCP HTTP server '{}'",
-                        self.name
-                    )
-                })?;
-
-                let response: JsonRpcResponse = serde_json::from_str(&body).with_context(|| {
-                    format!(
-                        "Failed to parse JSON-RPC response from MCP HTTP server '{}': {}",
-                        self.name,
-                        &body[..body.len().min(200)]
-                    )
-                })?;
-
-                Ok(response)
             }
             McpTransport::Ws { write_tx, .. } => {
                 // G18b: lifecycle short-circuit same shape as
@@ -2588,6 +2648,16 @@ mod tests {
             .downcast_ref::<super::super::errors::McpSessionExpiredError>()
             .is_none());
         assert!(classified.to_string().contains("parse error"));
+    }
+
+    #[test]
+    fn extracts_authorization_bearer_token_case_insensitively() {
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), "Bearer tok_123".to_string());
+        assert_eq!(
+            super::authorization_bearer_token(&Some(headers)).as_deref(),
+            Some("tok_123")
+        );
     }
 
     // ─── G4b: lifecycle wiring ─────────────────────────────────────

@@ -107,6 +107,8 @@ pub struct ApiConfig {
     pub thinking: ThinkingConfig,
     /// Optional speed hint.
     pub speed: Option<Speed>,
+    /// Optional model effort level for `output_config.effort`.
+    pub effort: Option<String>,
     /// Anthropic API version header value.
     pub api_version: String,
     /// Stable process-scoped session id, matching TS bootstrap session behavior.
@@ -123,6 +125,7 @@ impl Default for ApiConfig {
             max_tokens: get_max_output_tokens_for_model("claude-opus-4-6"),
             thinking: ThinkingConfig::Adaptive,
             speed: None,
+            effort: None,
             api_version: "2023-06-01".into(),
             session_id: get_session_id().clone(),
             account_uuid: String::new(),
@@ -239,7 +242,7 @@ pub fn build_request_body(
         body["thinking"] = thinking;
     }
     if supports_thinking && api_model.contains("opus") {
-        body["output_config"] = json!({ "effort": "high" });
+        body["output_config"] = json!({ "effort": config.effort.as_deref().unwrap_or("high") });
     }
 
     // Optional speed hint.

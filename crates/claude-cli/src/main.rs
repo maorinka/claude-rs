@@ -27,6 +27,10 @@ pub struct Cli {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Effort level for the current session
+    #[arg(long = "effort")]
+    pub effort: Option<String>,
+
     /// Verbose output
     #[arg(short, long)]
     pub verbose: bool,
@@ -114,11 +118,71 @@ pub enum SubCommand {
 
 /// Resolve short model names to full API model IDs.
 fn normalize_model_name(name: &str) -> String {
-    match name {
-        "opus" => "claude-opus-4-7".into(),
-        "sonnet" => "claude-sonnet-4-6".into(),
-        "haiku" => "claude-haiku-4-5".into(),
-        other => other.into(),
+    let trimmed = name.trim();
+    let lower = trimmed.to_lowercase();
+    let has_1m = lower.ends_with("[1m]");
+    let base = if has_1m {
+        lower.trim_end_matches("[1m]").trim()
+    } else {
+        lower.as_str()
+    };
+    let suffix = if has_1m { "[1m]" } else { "" };
+
+    match base {
+        "opus" => format!("{}{}", default_opus_model(), suffix),
+        "sonnet" => format!("{}{}", default_sonnet_model(), suffix),
+        "haiku" => format!("{}{}", default_haiku_model(), suffix),
+        "best" => default_opus_model(),
+        "opusplan" => format!("{}{}", default_sonnet_model(), suffix),
+        _ => trimmed.into(),
+    }
+}
+
+fn default_opus_model() -> String {
+    std::env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "claude-opus-4-7".into())
+}
+
+fn default_sonnet_model() -> String {
+    std::env::var("ANTHROPIC_DEFAULT_SONNET_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "claude-sonnet-4-6".into())
+}
+
+fn default_haiku_model() -> String {
+    std::env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "claude-haiku-4-5".into())
+}
+
+async fn default_main_loop_model_setting() -> String {
+    if claude_core::user_type::is_ant() {
+        return format!("{}[1m]", default_opus_model());
+    }
+
+    let tokens = claude_core::auth::storage::load_tokens()
+        .await
+        .ok()
+        .flatten();
+    let subscription_type = tokens
+        .as_ref()
+        .and_then(|tokens| tokens.subscription_type.as_deref());
+    let rate_limit_tier = tokens
+        .as_ref()
+        .and_then(|tokens| tokens.rate_limit_tier.as_deref());
+
+    let is_max = subscription_type == Some("max");
+    let is_team_premium =
+        subscription_type == Some("team") && rate_limit_tier == Some("default_claude_max_5x");
+
+    if is_max || is_team_premium {
+        format!("{}[1m]", default_opus_model())
+    } else {
+        default_sonnet_model()
     }
 }
 
@@ -371,12 +435,25 @@ fn enabled_plugin_roots(
     roots
 }
 
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 fn replace_plugin_root(value: &mut serde_json::Value, root: &std::path::Path) {
     match value {
         serde_json::Value::String(text) => {
+            let had_plugin_root = text.contains("${CLAUDE_PLUGIN_ROOT}");
+            let root_text = root.display().to_string();
             *text = text.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string());
             if cfg!(unix) && text.contains(".cmd") && !text.trim_start().starts_with("bash ") {
                 *text = format!("bash {}", text);
+            }
+            if had_plugin_root && !text.contains("CLAUDE_PLUGIN_ROOT=") {
+                *text = format!(
+                    "CLAUDE_PLUGIN_ROOT={} {}",
+                    shell_single_quote(&root_text),
+                    text
+                );
             }
         }
         serde_json::Value::Array(items) => {
@@ -409,8 +486,12 @@ fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value, project_root: &s
 
 fn load_enabled_plugin_mcp_servers(
     project_root: &std::path::Path,
-) -> std::collections::HashMap<String, claude_core::config::settings::McpServerSettingsEntry> {
+) -> (
+    std::collections::HashMap<String, claude_core::config::settings::McpServerSettingsEntry>,
+    Vec<String>,
+) {
     let mut servers = std::collections::HashMap::new();
+    let mut order = Vec::new();
     for (plugin_name, _, root) in enabled_plugin_roots(project_root) {
         let mcp_path = root.join(".mcp.json");
         let Ok(text) = std::fs::read_to_string(mcp_path) else {
@@ -425,10 +506,263 @@ fn load_enabled_plugin_mcp_servers(
             continue;
         };
         for (server_name, entry) in entries {
-            servers.insert(format!("plugin:{}:{}", plugin_name, server_name), entry);
+            let name = format!("plugin:{}:{}", plugin_name, server_name);
+            order.push(name.clone());
+            servers.insert(name, entry);
         }
     }
-    servers
+    (servers, order)
+}
+
+fn stream_json_plugin_entries(project_root: &std::path::Path) -> Vec<serde_json::Value> {
+    enabled_plugin_roots(project_root)
+        .into_iter()
+        .map(|(name, source, root)| {
+            serde_json::json!({
+                "name": name,
+                "path": root.display().to_string(),
+                "source": format!("{name}@{source}"),
+            })
+        })
+        .collect()
+}
+
+fn plugin_markdown_stems(project_root: &std::path::Path, dir_name: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for (plugin_name, _, root) in enabled_plugin_roots(project_root) {
+        let dir = root.join(dir_name);
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut stems = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                    return None;
+                }
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(|stem| stem.to_string())
+            })
+            .collect::<Vec<_>>();
+        stems.sort();
+        names.extend(
+            stems
+                .into_iter()
+                .map(|stem| format!("{plugin_name}:{stem}")),
+        );
+    }
+    names
+}
+
+fn stream_json_agent_names(project_root: &std::path::Path) -> Vec<String> {
+    let mut agents = Vec::new();
+    agents.extend(
+        claude_tools::agents::definitions::builtin_agents()
+            .into_iter()
+            .map(|agent| agent.name),
+    );
+    agents.extend(plugin_markdown_stems(project_root, "agents"));
+    agents.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b)));
+    agents
+}
+
+fn stream_json_slash_commands(
+    registered_skills: &[claude_tools::skill_tool::SkillEntry],
+    discovered_skills: &[claude_core::plugins::types::Skill],
+    mcp_prompt_commands: &[String],
+) -> Vec<String> {
+    let mut commands = Vec::new();
+
+    commands.extend(stream_json_registered_skill_names(registered_skills));
+    commands.extend(
+        discovered_skills
+            .iter()
+            .filter(|skill| {
+                !matches!(
+                    skill.source,
+                    claude_core::plugins::types::SkillSource::Plugin(_)
+                )
+            })
+            .filter(|skill| !skill.is_plugin_command)
+            .filter(|skill| skill.user_invocable)
+            .map(|skill| skill.name.clone()),
+    );
+    commands.extend(
+        discovered_skills
+            .iter()
+            .filter(|skill| skill.is_plugin_command)
+            .filter(|skill| skill.user_invocable)
+            .map(|skill| skill.name.clone()),
+    );
+    commands.extend(
+        discovered_skills
+            .iter()
+            .filter(|skill| {
+                matches!(
+                    skill.source,
+                    claude_core::plugins::types::SkillSource::Plugin(_)
+                )
+            })
+            .filter(|skill| !skill.is_plugin_command)
+            .filter(|skill| skill.user_invocable)
+            .map(|skill| skill.name.clone()),
+    );
+
+    let registry = claude_core::commands::builtin::build_default_commands();
+    for name in [
+        "clear",
+        "compact",
+        "context",
+        "heapdump",
+        "init",
+        "review",
+        "security-review",
+        "extra-usage",
+        "usage",
+        "insights",
+        "team-onboarding",
+    ] {
+        if registry.get(name).is_some() {
+            commands.push(name.to_string());
+        }
+    }
+    commands.extend(mcp_prompt_commands.iter().cloned());
+
+    let mut seen = std::collections::HashSet::new();
+    commands
+        .into_iter()
+        .filter(|name| seen.insert(name.clone()))
+        .collect()
+}
+
+fn stream_json_skill_names(
+    registered_skills: &[claude_tools::skill_tool::SkillEntry],
+    discovered_skills: &[claude_core::plugins::types::Skill],
+) -> Vec<String> {
+    let mut names = stream_json_registered_skill_names(registered_skills);
+    let mut seen = names
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+
+    for name in stream_json_discovered_skill_names(discovered_skills) {
+        if seen.insert(name.clone()) {
+            names.push(name);
+        }
+    }
+
+    names
+}
+
+fn stream_json_registered_skill_names(
+    registered_skills: &[claude_tools::skill_tool::SkillEntry],
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for skill in registered_skills {
+        if skill.prompt_phase == claude_tools::skill_tool::SkillPromptPhase::StaticCommand {
+            continue;
+        }
+        if !skill.user_invocable {
+            continue;
+        }
+        if seen.insert(skill.name.clone()) {
+            names.push(skill.name.clone());
+        }
+    }
+
+    names
+}
+
+fn stream_json_discovered_skill_names(
+    discovered_skills: &[claude_core::plugins::types::Skill],
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for skill in discovered_skills {
+        if skill.is_plugin_command {
+            continue;
+        }
+        if !skill.user_invocable {
+            continue;
+        }
+        if seen.insert(skill.name.clone()) {
+            names.push(skill.name.clone());
+        }
+    }
+
+    names
+}
+
+fn stream_json_api_key_source(auth: &claude_core::api::client::AuthMethod) -> &'static str {
+    match auth {
+        claude_core::api::client::AuthMethod::OAuthToken(_) => "none",
+        claude_core::api::client::AuthMethod::ApiKey(_) => {
+            if std::env::var("ANTHROPIC_API_KEY")
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+            {
+                "env"
+            } else if std::env::var("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR").is_ok() {
+                "fd"
+            } else {
+                "user"
+            }
+        }
+    }
+}
+
+fn stream_json_memory_paths(cwd: &std::path::Path) -> serde_json::Value {
+    if !claude_core::memdir::paths::auto_memory_enabled() {
+        return serde_json::json!({});
+    }
+    let mut auto = claude_core::memdir::paths::get_auto_mem_path(cwd)
+        .display()
+        .to_string();
+    if !auto.ends_with(std::path::MAIN_SEPARATOR) {
+        auto.push(std::path::MAIN_SEPARATOR);
+    }
+    serde_json::json!({ "auto": auto })
+}
+
+fn stream_json_mcp_servers_in_order(
+    connections: Vec<claude_core::mcp::types::McpServerConnection>,
+    order: &[String],
+) -> Vec<serde_json::Value> {
+    let mut by_name = connections
+        .into_iter()
+        .map(|conn| {
+            let status = match conn.status {
+                claude_core::mcp::types::McpConnectionStatus::Connected { .. } => "connected",
+                claude_core::mcp::types::McpConnectionStatus::Failed { .. } => "failed",
+                claude_core::mcp::types::McpConnectionStatus::Pending { .. } => "pending",
+                claude_core::mcp::types::McpConnectionStatus::Disabled => "disabled",
+                claude_core::mcp::types::McpConnectionStatus::NeedsAuth => "needs-auth",
+            };
+            (
+                conn.name.clone(),
+                serde_json::json!({
+                    "name": conn.name,
+                    "status": status,
+                }),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut out = Vec::new();
+    for name in order {
+        if let Some(value) = by_name.remove(name) {
+            out.push(value);
+        }
+    }
+    let mut remaining = by_name.into_iter().collect::<Vec<_>>();
+    remaining.sort_by(|a, b| a.0.cmp(&b.0));
+    out.extend(remaining.into_iter().map(|(_, value)| value));
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -447,6 +781,7 @@ struct ClaudeAiMcpServer {
 #[derive(Debug, Default)]
 struct ClaudeAiMcpDiscovery {
     configs: std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig>,
+    order: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,7 +872,7 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
             format!("Bearer {}", tokens.access_token),
         );
         discovery.configs.insert(
-            final_name,
+            final_name.clone(),
             ScopedMcpServerConfig {
                 config: McpServerConfig::Http(McpHttpServerConfig {
                     url: server.url,
@@ -546,6 +881,7 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
                 scope: ConfigScope::ClaudeAi,
             },
         );
+        discovery.order.push(final_name);
     }
 
     tracing::debug!(
@@ -698,6 +1034,10 @@ fn emit_stream_json(value: serde_json::Value) {
     );
 }
 
+fn normalize_model_display_for_stream_json(model: &str) -> String {
+    model.replace("[1M]", "[1m]").replace("[2M]", "[2m]")
+}
+
 fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
     let Some(obj) = data.as_object() else {
         return data.as_str().unwrap_or(&data.to_string()).to_string();
@@ -709,6 +1049,63 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
         (true, false) => stderr.to_string(),
         (false, false) => format!("{stdout}\n{stderr}"),
         (true, true) => String::new(),
+    }
+}
+
+fn permission_mode_hook_name(
+    mode: &claude_core::permissions::types::PermissionMode,
+) -> &'static str {
+    use claude_core::permissions::types::PermissionMode;
+    match mode {
+        PermissionMode::Default => "default",
+        PermissionMode::AcceptEdits => "acceptEdits",
+        PermissionMode::Auto => "auto",
+        PermissionMode::Plan => "plan",
+        PermissionMode::BypassPermissions => "bypassPermissions",
+        PermissionMode::DontAsk => "dontAsk",
+        PermissionMode::Bubble => "bubble",
+    }
+}
+
+fn merge_hook_updated_input(
+    input: &serde_json::Value,
+    updated: &Option<std::collections::HashMap<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let Some(updated) = updated else {
+        return input.clone();
+    };
+    let mut merged = input.clone();
+    if let Some(obj) = merged.as_object_mut() {
+        for (key, value) in updated {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+    merged
+}
+
+fn permission_decision_to_rule_check(
+    decision: &claude_core::permissions::types::PermissionDecision,
+) -> claude_core::hooks::RuleCheckResult {
+    use claude_core::hooks::RuleCheckResult;
+    use claude_core::permissions::types::PermissionDecision;
+    match decision {
+        PermissionDecision::Allow(_) => RuleCheckResult::NoMatch,
+        PermissionDecision::Ask(_) => RuleCheckResult::Ask,
+        PermissionDecision::Deny(deny) => RuleCheckResult::Deny(Some(deny.message.clone())),
+    }
+}
+
+fn hook_blocking_errors_text(errors: &[claude_core::hooks::HookBlockingError]) -> Option<String> {
+    if errors.is_empty() {
+        None
+    } else {
+        Some(
+            errors
+                .iter()
+                .map(|err| err.blocking_error.clone())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 }
 
@@ -735,9 +1132,9 @@ fn stream_event_to_stream_json(
             json!({
                 "type": "assistant",
                 "message": serde_json::to_value(&message.message).unwrap_or(serde_json::Value::Null),
+                "parent_tool_use_id": serde_json::Value::Null,
                 "session_id": session_id,
                 "uuid": message.uuid.to_string(),
-                "timestamp": message.timestamp,
             })
         }
         StreamEvent::Compacted { summary } => json!({
@@ -765,7 +1162,6 @@ fn stream_json_user_tool_result_event(
         },
         "session_id": session_id,
         "uuid": uuid::Uuid::new_v4().to_string(),
-        "timestamp": chrono::Utc::now(),
     })
 }
 
@@ -834,7 +1230,7 @@ fn stream_json_result_event_with_meta(
     let model_usage = meta.usage.map(|usage| {
         let mut map = serde_json::Map::new();
         map.insert(
-            meta.model_display.to_string(),
+            normalize_model_display_for_stream_json(meta.model_display),
             serde_json::json!({
                 "inputTokens": usage.input_tokens,
                 "outputTokens": usage.output_tokens,
@@ -865,39 +1261,51 @@ fn stream_json_result_event_with_meta(
         "modelUsage": model_usage,
         "permission_denials": [],
         "terminal_reason": "completed",
+        "fast_mode_state": "off",
         "uuid": uuid::Uuid::new_v4().to_string(),
     })
 }
 
-fn stream_json_init_event(
-    cwd: &std::path::Path,
-    session_id: &str,
+struct StreamJsonInitMeta<'a> {
+    cwd: &'a std::path::Path,
+    session_id: &'a str,
     tool_names: Vec<String>,
     mcp_servers: Vec<serde_json::Value>,
-    model_display: &str,
-    permission_mode: &claude_core::permissions::types::PermissionMode,
-    skills: &[claude_core::plugins::types::Skill],
-    output_style: Option<&str>,
-) -> serde_json::Value {
+    model_display: &'a str,
+    permission_mode: &'a claude_core::permissions::types::PermissionMode,
+    registered_skills: &'a [claude_tools::skill_tool::SkillEntry],
+    discovered_skills: &'a [claude_core::plugins::types::Skill],
+    stream_skill_names: &'a [String],
+    mcp_prompt_commands: &'a [String],
+    output_style: Option<&'a str>,
+    auth: &'a claude_core::api::client::AuthMethod,
+}
+
+fn stream_json_init_event(meta: StreamJsonInitMeta<'_>) -> serde_json::Value {
     serde_json::json!({
         "type": "system",
         "subtype": "init",
-        "cwd": cwd.display().to_string(),
-        "session_id": session_id,
-        "tools": tool_names,
-        "mcp_servers": mcp_servers,
-        "model": model_display,
-        "permissionMode": serde_json::to_value(permission_mode).unwrap_or(serde_json::json!("default")),
-        "output_style": output_style.unwrap_or("default"),
-        "skills": skills.iter().map(|skill| skill.name.clone()).collect::<Vec<_>>(),
+        "cwd": meta.cwd.display().to_string(),
+        "session_id": meta.session_id,
+        "tools": meta.tool_names,
+        "mcp_servers": meta.mcp_servers,
+        "model": normalize_model_display_for_stream_json(meta.model_display),
+        "permissionMode": serde_json::to_value(meta.permission_mode).unwrap_or(serde_json::json!("default")),
+        "slash_commands": stream_json_slash_commands(meta.registered_skills, meta.discovered_skills, meta.mcp_prompt_commands),
+        "apiKeySource": stream_json_api_key_source(meta.auth),
+        "claude_code_version": env!("CARGO_PKG_VERSION"),
+        "output_style": meta.output_style.unwrap_or("default"),
+        "agents": stream_json_agent_names(meta.cwd),
+        "skills": meta.stream_skill_names,
+        "plugins": stream_json_plugin_entries(meta.cwd),
+        "analytics_disabled": claude_core::privacy_level::is_telemetry_disabled(),
+        "memory_paths": stream_json_memory_paths(meta.cwd),
+        "fast_mode_state": "off",
         "uuid": uuid::Uuid::new_v4().to_string(),
     })
 }
 
-fn emit_stream_json_hook_events(
-    result: &claude_core::hooks::types::HookResult,
-    session_id: &str,
-) {
+fn emit_stream_json_hook_events(result: &claude_core::hooks::types::HookResult, session_id: &str) {
     let hook_id = result
         .hook_id
         .clone()
@@ -958,14 +1366,13 @@ async fn main() -> Result<()> {
 
     // Initialize tracing. Stream-json stdout must remain valid JSONL; TS does
     // not interleave normal log lines with stream-json records.
-    let trace_filter =
-        if cli.output_format == OutputFormat::StreamJson && prompt_arg.is_some() && !cli.verbose {
-            "off"
-        } else if cli.verbose {
-            "debug"
-        } else {
-            "error"
-        };
+    let trace_filter = if cli.output_format == OutputFormat::StreamJson && prompt_arg.is_some() {
+        "off"
+    } else if cli.verbose {
+        "debug"
+    } else {
+        "error"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(trace_filter)
         .init();
@@ -1108,10 +1515,15 @@ async fn main() -> Result<()> {
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
     let mut mcp_server_settings = settings.mcp_servers.clone();
-    mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&project_root));
+    let (plugin_mcp_servers, plugin_mcp_order) = load_enabled_plugin_mcp_servers(&project_root);
+    mcp_server_settings.extend(plugin_mcp_servers);
     let mut configs = std::collections::HashMap::new();
+    let mut mcp_server_order = plugin_mcp_order;
     let mut plugin_mcp_server_names = Vec::new();
     for (name, entry) in &mcp_server_settings {
+        if !mcp_server_order.contains(name) {
+            mcp_server_order.push(name.clone());
+        }
         let env = if entry.env.is_empty() {
             None
         } else {
@@ -1132,8 +1544,16 @@ async fn main() -> Result<()> {
         }
         configs.insert(name.clone(), scoped);
     }
-    let claude_ai_discovery = fetch_claude_ai_mcp_configs_if_eligible().await;
-    let claude_ai_configs = dedup_claude_ai_mcp_servers(claude_ai_discovery.configs, &configs);
+    let ClaudeAiMcpDiscovery {
+        configs: discovered_claude_ai_configs,
+        order: discovered_claude_ai_order,
+    } = fetch_claude_ai_mcp_configs_if_eligible().await;
+    let claude_ai_configs = dedup_claude_ai_mcp_servers(discovered_claude_ai_configs, &configs);
+    for name in discovered_claude_ai_order {
+        if claude_ai_configs.contains_key(&name) && !mcp_server_order.contains(&name) {
+            mcp_server_order.push(name);
+        }
+    }
     let claude_ai_shadow_servers = claude_ai_configs
         .iter()
         .map(|(name, config)| ShadowMcpServer {
@@ -1278,15 +1698,20 @@ async fn main() -> Result<()> {
     }
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
+    claude_tools::register_tool_search_snapshot(&mut tools);
 
     // --- Skill discovery ---
     let discovered_skills = claude_core::plugins::skill::discover_skills(&project_root);
+    let registered_skills = claude_tools::skill_tool::list_skills();
+    let stream_skill_names = stream_json_skill_names(&registered_skills, &discovered_skills);
     let mut skills = Vec::new();
     {
         let mut seen = std::collections::HashSet::new();
-        let registered_skills = claude_tools::skill_tool::list_skills();
         for skill in &registered_skills {
             if skill.prompt_phase == claude_tools::skill_tool::SkillPromptPhase::StaticCommand {
+                continue;
+            }
+            if skill.disable_model_invocation {
                 continue;
             }
             if !seen.insert(skill.name.clone()) {
@@ -1300,16 +1725,20 @@ async fn main() -> Result<()> {
                 argument_hint: None,
                 when_to_use: None,
                 allowed_tools: Vec::new(),
-                user_invocable: true,
-                disable_model_invocation: false,
+                user_invocable: skill.user_invocable,
+                disable_model_invocation: skill.disable_model_invocation,
+                is_plugin_command: false,
             });
         }
-        for skill in discovered_skills {
+        for skill in discovered_skills.iter().cloned() {
+            if skill.disable_model_invocation {
+                continue;
+            }
             if seen.insert(skill.name.clone()) {
                 skills.push(skill);
             }
         }
-        for skill in registered_skills {
+        for skill in &registered_skills {
             if skill.prompt_phase != claude_tools::skill_tool::SkillPromptPhase::StaticCommand {
                 continue;
             }
@@ -1317,15 +1746,16 @@ async fn main() -> Result<()> {
                 continue;
             }
             skills.push(claude_core::plugins::types::Skill {
-                name: skill.name,
-                description: skill.description,
-                content: skill.content,
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                content: skill.content.clone(),
                 source: claude_core::plugins::types::SkillSource::Builtin,
                 argument_hint: None,
                 when_to_use: None,
                 allowed_tools: Vec::new(),
-                user_invocable: true,
-                disable_model_invocation: false,
+                user_invocable: skill.user_invocable,
+                disable_model_invocation: skill.disable_model_invocation,
+                is_plugin_command: false,
             });
         }
     }
@@ -1333,11 +1763,11 @@ async fn main() -> Result<()> {
         tracing::info!(count = skills.len(), "Discovered skills");
     }
 
-    let model = normalize_model_name(
-        &cli.model
-            .or_else(|| settings.model.clone())
-            .unwrap_or_else(|| "claude-sonnet-4-6".into()),
-    );
+    let configured_model = match cli.model.or_else(|| settings.model.clone()) {
+        Some(model) => model,
+        None => default_main_loop_model_setting().await,
+    };
+    let model = normalize_model_name(&configured_model);
 
     tracing::info!(
         "claude-rs initialized: model={}, tools={}, mcp_servers={}, skills={}, project={}",
@@ -1390,6 +1820,11 @@ async fn main() -> Result<()> {
             .clone()
             .unwrap_or_else(|| claude_core::api::client::get_session_id().clone()),
         account_uuid,
+        effort: cli
+            .effort
+            .clone()
+            .or_else(|| settings.effort_level.clone())
+            .filter(|value| !value.trim().is_empty()),
         model: model.clone(),
         ..Default::default()
     };
@@ -1429,7 +1864,7 @@ async fn main() -> Result<()> {
     };
 
     let api_session_id = api_config.session_id.clone();
-    let api_client = claude_core::api::client::ApiClient::new(api_config, auth);
+    let api_client = claude_core::api::client::ApiClient::new(api_config, auth.clone());
 
     // Create cancellation token
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -1589,6 +2024,10 @@ async fn main() -> Result<()> {
     // Handle non-interactive prompt mode
     if let Some(prompt) = prompt_arg {
         // If using OAuth proxy, delegate to real claude binary
+        use claude_core::hooks::{
+            get_global_runner, resolve_hook_permission_decision, run_post_tool_use_failure_hooks,
+            run_post_tool_use_hooks, run_pre_tool_use_hooks, ResolvedPermission,
+        };
         use claude_core::permissions::evaluator::{evaluate_permission, SimpleToolPermissions};
         use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
         use claude_core::query::engine::TurnResult;
@@ -1622,48 +2061,37 @@ async fn main() -> Result<()> {
         }
 
         if cli.output_format == OutputFormat::StreamJson {
-            let mcp_servers = {
+            let (mcp_servers, mcp_prompt_commands) = {
                 let mgr = mcp_manager.read().await;
-                mgr.connections()
-                    .await
-                    .into_iter()
-                    .map(|conn| {
-                        let status = match conn.status {
-                            claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
-                                "connected"
-                            }
-                            claude_core::mcp::types::McpConnectionStatus::Failed { .. } => {
-                                "failed"
-                            }
-                            claude_core::mcp::types::McpConnectionStatus::Pending { .. } => {
-                                "pending"
-                            }
-                            claude_core::mcp::types::McpConnectionStatus::Disabled => "disabled",
-                            claude_core::mcp::types::McpConnectionStatus::NeedsAuth => {
-                                "needs-auth"
-                            }
-                        };
-                        serde_json::json!({
-                            "name": conn.name,
-                            "status": status,
-                        })
-                    })
-                    .collect::<Vec<_>>()
+                (
+                    stream_json_mcp_servers_in_order(mgr.connections().await, &mcp_server_order),
+                    mgr.prompt_command_names_in_order(&mcp_server_order).await,
+                )
             };
-            emit_stream_json(stream_json_init_event(
-                &cwd,
-                &api_session_id,
-                tools
+            emit_stream_json(stream_json_init_event(StreamJsonInitMeta {
+                cwd: &cwd,
+                session_id: &api_session_id,
+                tool_names: tools
                     .all()
                     .iter()
-                    .map(|tool| tool.name().to_string())
+                    .map(|tool| {
+                        if tool.name() == "Agent" {
+                            "Task".to_string()
+                        } else {
+                            tool.name().to_string()
+                        }
+                    })
                     .collect(),
                 mcp_servers,
-                &model_display,
-                &permission_mode,
-                &skills,
-                settings.output_style.as_deref(),
-            ));
+                model_display: &model_display,
+                permission_mode: &permission_mode,
+                registered_skills: &registered_skills,
+                discovered_skills: &discovered_skills,
+                stream_skill_names: &stream_skill_names,
+                mcp_prompt_commands: &mcp_prompt_commands,
+                output_style: settings.output_style.as_deref(),
+                auth: &auth,
+            }));
         }
 
         query_engine.add_user_message(&effective_prompt);
@@ -1743,18 +2171,110 @@ async fn main() -> Result<()> {
                     // Execute each tool, check permissions, feed results back
                     let mut stream_tool_results = Vec::new();
                     for tool_info in &tool_uses {
+                        let mut tool_input = tool_info.input.clone();
+                        let mut forced_permission: Option<Result<(), String>> = None;
+                        if let Some(runner) = get_global_runner() {
+                            let pre = run_pre_tool_use_hooks(
+                                &runner,
+                                &tool_info.name,
+                                &tool_info.id,
+                                &tool_input,
+                                Some(permission_mode_hook_name(&permission_mode)),
+                                None,
+                                None,
+                            )
+                            .await;
+                            for context in &pre.additional_contexts {
+                                query_engine.append_user_context_block(context.clone());
+                            }
+                            if let Some(message) = hook_blocking_errors_text(&pre.blocking_errors)
+                                .or_else(|| pre.denial_message.clone())
+                            {
+                                forced_permission = Some(Err(message));
+                            } else if pre.prevent_continuation {
+                                forced_permission =
+                                    Some(Err(pre.stop_reason.unwrap_or_else(|| {
+                                        "PreToolUse hook stopped tool execution".to_string()
+                                    })));
+                            } else {
+                                let resolved = resolve_hook_permission_decision(
+                                    &pre,
+                                    &tool_input,
+                                    |candidate_input| {
+                                        let tool_name = tool_info.name.clone();
+                                        let perm_ctx = perm_ctx.clone();
+                                        let tools = tools.clone();
+                                        let candidate_input = candidate_input.clone();
+                                        async move {
+                                            let is_read_only = tools
+                                                .get(&tool_name)
+                                                .map(|t| t.is_read_only(&candidate_input))
+                                                .unwrap_or(false);
+                                            let tool_perms = SimpleToolPermissions::new(
+                                                &tool_name,
+                                                is_read_only,
+                                            );
+                                            let decision = evaluate_permission(
+                                                &tool_perms,
+                                                &candidate_input,
+                                                &perm_ctx,
+                                            );
+                                            permission_decision_to_rule_check(&decision)
+                                        }
+                                    },
+                                )
+                                .await;
+                                match resolved {
+                                    ResolvedPermission::Allow { updated_input }
+                                    | ResolvedPermission::NormalFlow { updated_input } => {
+                                        tool_input =
+                                            merge_hook_updated_input(&tool_input, &updated_input);
+                                    }
+                                    ResolvedPermission::Deny { message } => {
+                                        forced_permission =
+                                            Some(Err(message.unwrap_or_else(|| {
+                                                "PreToolUse hook denied this tool".to_string()
+                                            })));
+                                    }
+                                    ResolvedPermission::RequiresUserConfirmation {
+                                        updated_input,
+                                        force_decision,
+                                    } => {
+                                        tool_input =
+                                            merge_hook_updated_input(&tool_input, &updated_input);
+                                        forced_permission = Some(Err(force_decision
+                                            .unwrap_or_else(|| {
+                                                "Tool requires user confirmation".to_string()
+                                            })));
+                                    }
+                                }
+                            }
+                        }
+
                         let is_read_only = tools
                             .get(&tool_info.name)
-                            .map(|t| t.is_read_only(&tool_info.input))
+                            .map(|t| t.is_read_only(&tool_input))
                             .unwrap_or(false);
 
-                        let decision = {
+                        let decision = if let Some(forced) = forced_permission {
+                            match forced {
+                                Ok(()) => PermissionDecision::allow(),
+                                Err(message) => PermissionDecision::deny(
+                                    message,
+                                    claude_core::permissions::types::PermissionDecisionReason::Hook {
+                                        hook_name: format!("PreToolUse:{}", tool_info.name),
+                                        hook_source: None,
+                                        reason: None,
+                                    },
+                                ),
+                            }
+                        } else {
                             let tool_perms =
                                 SimpleToolPermissions::new(&tool_info.name, is_read_only);
-                            evaluate_permission(&tool_perms, &tool_info.input, &perm_ctx)
+                            evaluate_permission(&tool_perms, &tool_input, &perm_ctx)
                         };
 
-                        let (result_text, is_error) = match decision {
+                        let (mut result_text, mut is_error, mut result_json) = match decision {
                             PermissionDecision::Ask(ask) => {
                                 // In non-interactive / headless mode, Ask decisions are DENIED
                                 // (matching TS headless behavior). Auto-allowing would bypass
@@ -1767,6 +2287,7 @@ async fn main() -> Result<()> {
                                 (
                                     format!("Permission denied (non-interactive): {}", ask.message),
                                     true,
+                                    serde_json::json!({"error": ask.message}),
                                 )
                             }
                             PermissionDecision::Allow(_) => {
@@ -1787,7 +2308,7 @@ async fn main() -> Result<()> {
                                             std::sync::Arc::new(claude_core::tool_host::NullToolHost),
                                         );
                                         match exec
-                                            .call(&tool_info.input, &ctx, cancel.clone(), None)
+                                            .call(&tool_input, &ctx, cancel.clone(), None)
                                             .await
                                         {
                                             Ok(data) => {
@@ -1823,18 +2344,93 @@ async fn main() -> Result<()> {
                                                         .unwrap_or(&data.data.to_string())
                                                         .to_string()
                                                 };
-                                                (text, data.is_error)
+                                                (text, data.is_error, data.data)
                                             }
-                                            Err(e) => (format!("Error: {}", e), true),
+                                            Err(e) => {
+                                                let message = format!("Error: {}", e);
+                                                (
+                                                    message.clone(),
+                                                    true,
+                                                    serde_json::json!({"error": message}),
+                                                )
+                                            }
                                         }
                                     }
-                                    None => (format!("Unknown tool: {}", tool_info.name), true),
+                                    None => {
+                                        let message = format!("Unknown tool: {}", tool_info.name);
+                                        (
+                                            message.clone(),
+                                            true,
+                                            serde_json::json!({"error": message}),
+                                        )
+                                    }
                                 }
                             }
-                            PermissionDecision::Deny(deny) => {
-                                (format!("Permission denied: {}", deny.message), true)
-                            }
+                            PermissionDecision::Deny(deny) => (
+                                format!("Permission denied: {}", deny.message),
+                                true,
+                                serde_json::json!({"error": deny.message}),
+                            ),
                         };
+
+                        if let Some(runner) = get_global_runner() {
+                            if is_error {
+                                let failure = run_post_tool_use_failure_hooks(
+                                    &runner,
+                                    &tool_info.name,
+                                    &tool_info.id,
+                                    &tool_input,
+                                    &result_text,
+                                    None,
+                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                                for context in &failure.additional_contexts {
+                                    query_engine.append_user_context_block(context.clone());
+                                }
+                                if let Some(message) =
+                                    hook_blocking_errors_text(&failure.blocking_errors)
+                                {
+                                    result_text = message;
+                                    is_error = true;
+                                }
+                            } else {
+                                let post = run_post_tool_use_hooks(
+                                    &runner,
+                                    &tool_info.name,
+                                    &tool_info.id,
+                                    &tool_input,
+                                    &result_json,
+                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                                for context in &post.additional_contexts {
+                                    query_engine.append_user_context_block(context.clone());
+                                }
+                                if let Some(updated) = post.updated_mcp_tool_output {
+                                    result_json = updated;
+                                    result_text = result_json
+                                        .as_str()
+                                        .unwrap_or(&result_json.to_string())
+                                        .to_string();
+                                }
+                                if let Some(message) =
+                                    hook_blocking_errors_text(&post.blocking_errors)
+                                {
+                                    result_text = message;
+                                    is_error = true;
+                                } else if post.prevent_continuation {
+                                    result_text = post.stop_reason.unwrap_or_else(|| {
+                                        "PostToolUse hook stopped continuation".to_string()
+                                    });
+                                    is_error = true;
+                                }
+                            }
+                        }
 
                         if cli.output_format == OutputFormat::StreamJson {
                             stream_tool_results.push(serde_json::json!({

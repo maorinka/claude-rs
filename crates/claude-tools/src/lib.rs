@@ -130,6 +130,10 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     } else {
         reg.register(Arc::new(todo_write::TodoWriteTool));
     }
+    // TS includes ToolSearch optimistically in the base registry when the
+    // feature is not disabled. The request-time API layer later decides
+    // whether any tools are actually deferred.
+    tool_search::register_tool_search_snapshot(&mut reg);
     reg.register(Arc::new(web_fetch::WebFetchTool));
     reg.register(Arc::new(web_search::WebSearchTool));
     reg.register(Arc::new(write::FileWriteTool));

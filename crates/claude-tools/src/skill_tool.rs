@@ -26,6 +26,15 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub content: String,
+    /// TS command metadata: `userInvocable: false` keeps a prompt
+    /// command available to the model while hiding it from
+    /// `/`/stream-json skill metadata (for example keybindings-help).
+    pub user_invocable: bool,
+    /// TS command metadata: `disableModelInvocation: true` keeps a
+    /// user slash command out of the SkillTool prompt while still
+    /// showing it in stream-json `system/init.skills` (for example
+    /// debug and batch).
+    pub disable_model_invocation: bool,
     /// Where this skill is listed in the prompt. TS builds the
     /// available-skills reminder from runtime/discovered commands first
     /// and appends static slash commands (`SN8`) last.
@@ -98,6 +107,8 @@ pub fn register_skill_full(
         argument_header,
         empty_args_message,
         SkillPromptPhase::Runtime,
+        true,
+        false,
     );
 }
 
@@ -115,6 +126,46 @@ pub fn register_static_command_skill(
         argument_header,
         empty_args_message,
         SkillPromptPhase::StaticCommand,
+        true,
+        false,
+    );
+}
+
+pub fn register_model_only_skill(
+    name: &str,
+    description: &str,
+    content: &str,
+    argument_header: Option<&str>,
+    empty_args_message: Option<&str>,
+) {
+    register_skill_full_with_phase(
+        name,
+        description,
+        content,
+        argument_header,
+        empty_args_message,
+        SkillPromptPhase::Runtime,
+        false,
+        false,
+    );
+}
+
+pub fn register_user_only_skill(
+    name: &str,
+    description: &str,
+    content: &str,
+    argument_header: Option<&str>,
+    empty_args_message: Option<&str>,
+) {
+    register_skill_full_with_phase(
+        name,
+        description,
+        content,
+        argument_header,
+        empty_args_message,
+        SkillPromptPhase::Runtime,
+        true,
+        true,
     );
 }
 
@@ -125,6 +176,8 @@ fn register_skill_full_with_phase(
     argument_header: Option<&str>,
     empty_args_message: Option<&str>,
     prompt_phase: SkillPromptPhase,
+    user_invocable: bool,
+    disable_model_invocation: bool,
 ) {
     let mut store = SKILL_STORE.lock().unwrap();
     if !store.entries.contains_key(name) {
@@ -136,6 +189,8 @@ fn register_skill_full_with_phase(
             name: name.to_string(),
             description: description.to_string(),
             content: content.to_string(),
+            user_invocable,
+            disable_model_invocation,
             prompt_phase,
             argument_header: argument_header.map(|s| s.to_string()),
             empty_args_message: empty_args_message.map(|s| s.to_string()),
