@@ -448,12 +448,14 @@ fn test_effort_rejects_invalid_level() {
     let (ctx, _shared) = make_ctx_with_shared();
     let registry = build_default_commands();
     let cmd = registry.get("effort").unwrap();
-    let result = cmd.handler.execute("ultra", &ctx).unwrap();
-    match result {
-        CommandResult::Error(text) => {
-            assert!(text.contains("Invalid"), "error msg: {}", text);
+    for level in ["ultra", "xhigh"] {
+        let result = cmd.handler.execute(level, &ctx).unwrap();
+        match result {
+            CommandResult::Error(text) => {
+                assert!(text.contains("Invalid"), "error msg: {}", text);
+            }
+            _ => panic!("expected Error for invalid effort level"),
         }
-        _ => panic!("expected Error for invalid effort level"),
     }
 }
 

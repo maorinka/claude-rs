@@ -192,6 +192,34 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
     }
 }
 
+fn model_supports_effort(model: &str) -> bool {
+    let lower = normalize_model_for_api(model).to_ascii_lowercase();
+    lower.contains("opus-4-6") || lower.contains("sonnet-4-6")
+}
+
+fn model_supports_max_effort(model: &str) -> bool {
+    normalize_model_for_api(model)
+        .to_ascii_lowercase()
+        .contains("opus-4-6")
+}
+
+fn resolve_output_effort(model: &str, effort: Option<&str>) -> Option<&'static str> {
+    if !model_supports_effort(model) {
+        return None;
+    }
+
+    match effort.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "low" => Some("low"),
+        Some(value) if value == "medium" => Some("medium"),
+        Some(value) if value == "high" => Some("high"),
+        Some(value) if value == "max" && model_supports_max_effort(model) => Some("max"),
+        Some(value) if value == "max" => Some("high"),
+        Some(value) if value == "auto" || value == "unset" || value.is_empty() => Some("high"),
+        Some(_) => Some("high"),
+        None => Some("high"),
+    }
+}
+
 // ── Tool definition (for the request body) ───────────────────────────────────
 
 /// A tool definition sent to the API.
@@ -261,8 +289,8 @@ pub fn build_request_body(
     if let Some(thinking) = thinking_obj {
         body["thinking"] = thinking;
     }
-    if supports_thinking && api_model.contains("opus") {
-        body["output_config"] = json!({ "effort": config.effort.as_deref().unwrap_or("high") });
+    if let Some(effort) = resolve_output_effort(&api_model, config.effort.as_deref()) {
+        body["output_config"] = json!({ "effort": effort });
     }
 
     // Optional speed hint.
@@ -797,13 +825,46 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_cache_env();
         let config = ApiConfig {
-            model: "claude-opus-4-7".into(),
+            model: "claude-opus-4-6".into(),
             max_tokens: 64_000,
             thinking: ThinkingConfig::Adaptive,
             ..Default::default()
         };
         let body = build_request_body(&config, &[], &[], &[], false);
         assert_eq!(body["output_config"], json!({"effort": "high"}));
+    }
+
+    #[test]
+    fn effort_is_limited_to_ts_supported_levels_and_models() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+
+        let sonnet_max = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 64_000,
+            effort: Some("max".into()),
+            ..Default::default()
+        };
+        let body = build_request_body(&sonnet_max, &[], &[], &[], false);
+        assert_eq!(body["output_config"], json!({"effort": "high"}));
+
+        let stale_xhigh = ApiConfig {
+            model: "claude-opus-4-6".into(),
+            max_tokens: 64_000,
+            effort: Some("xhigh".into()),
+            ..Default::default()
+        };
+        let body = build_request_body(&stale_xhigh, &[], &[], &[], false);
+        assert_eq!(body["output_config"], json!({"effort": "high"}));
+
+        let unsupported_model = ApiConfig {
+            model: "claude-opus-4-7".into(),
+            max_tokens: 64_000,
+            effort: Some("high".into()),
+            ..Default::default()
+        };
+        let body = build_request_body(&unsupported_model, &[], &[], &[], false);
+        assert!(body.get("output_config").is_none());
     }
 
     #[test]
