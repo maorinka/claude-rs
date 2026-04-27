@@ -684,7 +684,9 @@ impl McpManager {
     pub async fn add_tool_definitions(&self, tools: Vec<McpToolInfo>) {
         let mut existing = self.tool_definitions.write().await;
         for tool in tools {
-            if !existing.iter().any(|known| known.name == tool.name) {
+            if let Some(known) = existing.iter_mut().find(|known| known.name == tool.name) {
+                *known = tool;
+            } else {
                 existing.push(tool);
             }
         }
@@ -868,6 +870,43 @@ mod tests {
         assert_eq!(manager.connected_count().await, 0);
         assert!(manager.connections().await.is_empty());
         assert!(manager.tool_definitions().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_tool_definitions_replaces_existing_contract() {
+        let manager = McpManager::new();
+        manager
+            .add_tool_definitions(vec![McpToolInfo {
+                name: "mcp__server__tool".to_string(),
+                original_name: "tool".to_string(),
+                server_name: "server".to_string(),
+                description: Some("live".to_string()),
+                input_schema: Some(
+                    serde_json::json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+                ),
+            }])
+            .await;
+        manager
+            .add_tool_definitions(vec![McpToolInfo {
+                name: "mcp__server__tool".to_string(),
+                original_name: "tool".to_string(),
+                server_name: "server".to_string(),
+                description: Some("ts".to_string()),
+                input_schema: Some(
+                    serde_json::json!({"type": "object", "properties": {"b": {"type": "string"}}}),
+                ),
+            }])
+            .await;
+
+        let definitions = manager.tool_definitions().await;
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].description.as_deref(), Some("ts"));
+        assert!(definitions[0]
+            .input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/b")
+            .is_some());
     }
 
     #[tokio::test]

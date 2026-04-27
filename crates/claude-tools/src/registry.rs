@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{Datelike, Local};
+use chrono::{Datelike, Utc};
 use claude_core::types::events::{ToolProgressData, ToolResultData};
 use once_cell::sync::Lazy;
 use serde_json::Value;
@@ -404,7 +404,7 @@ fn refresh_dynamic_contract_description(description: &str) -> String {
 }
 
 fn current_ts_contract_date() -> String {
-    let today = Local::now().date_naive();
+    let today = Utc::now().date_naive();
     let month = match today.month() {
         1 => "January",
         2 => "February",
