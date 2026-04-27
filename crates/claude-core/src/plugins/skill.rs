@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::paths::claude_dir;
 use crate::plugins::types::{Skill, SkillSource};
@@ -299,30 +299,23 @@ fn load_enabled_plugin_skills(
             let plugin_name = plugin_name.to_string();
             let plugin_root = cache_root.join(marketplace).join(&plugin_name);
             let version_dir = newest_child_dir(&plugin_root)?;
-            Some((enabled_plugin, plugin_name, version_dir))
+            let paths = plugin_component_paths(&version_dir);
+            Some((enabled_plugin, plugin_name, paths))
         })
         .collect::<Vec<_>>();
 
-    for (enabled_plugin, plugin_name, version_dir) in &plugin_roots {
+    for (enabled_plugin, plugin_name, paths) in &plugin_roots {
         let source = SkillSource::Plugin(enabled_plugin.clone());
-        load_plugin_command_files(
-            plugin_name,
-            &version_dir.join("commands"),
-            &source,
-            skills,
-            seen_names,
-        );
+        for command_source in &paths.command_sources {
+            load_plugin_command_source(plugin_name, command_source, &source, skills, seen_names);
+        }
     }
 
-    for (enabled_plugin, plugin_name, version_dir) in &plugin_roots {
+    for (enabled_plugin, plugin_name, paths) in &plugin_roots {
         let source = SkillSource::Plugin(enabled_plugin.clone());
-        load_plugin_skill_dirs(
-            plugin_name,
-            &version_dir.join("skills"),
-            &source,
-            skills,
-            seen_names,
-        );
+        for skill_path in &paths.skill_paths {
+            load_plugin_skill_path(plugin_name, skill_path, &source, skills, seen_names);
+        }
     }
 }
 
@@ -542,13 +535,216 @@ fn newest_child_dir(path: &Path) -> Option<std::path::PathBuf> {
     dirs.pop()
 }
 
-fn load_plugin_skill_dirs(
+#[derive(Debug, Default)]
+struct PluginComponentPaths {
+    command_sources: Vec<PluginCommandSource>,
+    skill_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+enum PluginCommandSource {
+    Path {
+        path: PathBuf,
+        metadata: Option<PluginCommandMetadata>,
+    },
+    Inline {
+        name: String,
+        content: String,
+        metadata: PluginCommandMetadata,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+struct PluginCommandMetadata {
+    name: Option<String>,
+    description: Option<String>,
+    argument_hint: Option<String>,
+    allowed_tools: Vec<String>,
+}
+
+fn plugin_component_paths(plugin_root: &Path) -> PluginComponentPaths {
+    let manifest = read_plugin_manifest(plugin_root);
+    let mut paths = PluginComponentPaths::default();
+
+    if manifest.get("commands").is_some() {
+        paths.command_sources = manifest_command_sources(plugin_root, manifest.get("commands"));
+    } else {
+        let commands_dir = plugin_root.join("commands");
+        if commands_dir.exists() {
+            paths.command_sources.push(PluginCommandSource::Path {
+                path: commands_dir,
+                metadata: None,
+            });
+        }
+    }
+
+    if manifest.get("skills").is_some() {
+        paths.skill_paths = manifest_component_paths(plugin_root, manifest.get("skills"));
+    } else {
+        let skills_dir = plugin_root.join("skills");
+        if skills_dir.exists() {
+            paths.skill_paths.push(skills_dir);
+        }
+    }
+
+    paths
+}
+
+fn read_plugin_manifest(plugin_root: &Path) -> serde_json::Value {
+    let path = plugin_root.join(".claude-plugin").join("plugin.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn manifest_component_paths(plugin_root: &Path, value: Option<&serde_json::Value>) -> Vec<PathBuf> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+
+    match value {
+        serde_json::Value::String(path) => existing_relative_plugin_path(plugin_root, path)
+            .into_iter()
+            .collect(),
+        serde_json::Value::Array(paths) => paths
+            .iter()
+            .filter_map(|path| path.as_str())
+            .filter_map(|path| existing_relative_plugin_path(plugin_root, path))
+            .collect(),
+        serde_json::Value::Object(map) => map
+            .values()
+            .filter_map(|metadata| metadata.get("source").and_then(|source| source.as_str()))
+            .filter_map(|path| existing_relative_plugin_path(plugin_root, path))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn manifest_command_sources(
+    plugin_root: &Path,
+    value: Option<&serde_json::Value>,
+) -> Vec<PluginCommandSource> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+
+    match value {
+        serde_json::Value::String(path) => existing_relative_plugin_path(plugin_root, path)
+            .into_iter()
+            .map(|path| PluginCommandSource::Path {
+                path,
+                metadata: None,
+            })
+            .collect(),
+        serde_json::Value::Array(paths) => paths
+            .iter()
+            .filter_map(|path| path.as_str())
+            .filter_map(|path| existing_relative_plugin_path(plugin_root, path))
+            .map(|path| PluginCommandSource::Path {
+                path,
+                metadata: None,
+            })
+            .collect(),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .filter_map(|(name, metadata)| manifest_command_source(plugin_root, name, metadata))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn manifest_command_source(
+    plugin_root: &Path,
+    name: &str,
+    metadata: &serde_json::Value,
+) -> Option<PluginCommandSource> {
+    let metadata = plugin_command_metadata(name, metadata);
+    if let Some(content) = metadata
+        .raw
+        .get("content")
+        .and_then(|content| content.as_str())
+    {
+        return Some(PluginCommandSource::Inline {
+            name: name.to_string(),
+            content: content.to_string(),
+            metadata: metadata.into_metadata(),
+        });
+    }
+
+    metadata
+        .raw
+        .get("source")
+        .and_then(|source| source.as_str())
+        .and_then(|source| existing_relative_plugin_path(plugin_root, source))
+        .map(|path| PluginCommandSource::Path {
+            path,
+            metadata: Some(metadata.into_metadata()),
+        })
+}
+
+struct RawPluginCommandMetadata<'a> {
+    raw: &'a serde_json::Value,
+    metadata: PluginCommandMetadata,
+}
+
+impl RawPluginCommandMetadata<'_> {
+    fn into_metadata(self) -> PluginCommandMetadata {
+        self.metadata
+    }
+}
+
+fn plugin_command_metadata<'a>(
+    name: &str,
+    raw: &'a serde_json::Value,
+) -> RawPluginCommandMetadata<'a> {
+    let metadata = PluginCommandMetadata {
+        name: Some(name.to_string()),
+        description: raw
+            .get("description")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        argument_hint: raw
+            .get("argumentHint")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        allowed_tools: raw
+            .get("allowedTools")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    RawPluginCommandMetadata { raw, metadata }
+}
+
+fn existing_relative_plugin_path(plugin_root: &Path, relative: &str) -> Option<PathBuf> {
+    let path = plugin_root.join(relative);
+    path.exists().then_some(path)
+}
+
+fn load_plugin_skill_path(
     plugin_name: &str,
     base_dir: &Path,
     source: &SkillSource,
     skills: &mut Vec<Skill>,
     seen_names: &mut std::collections::HashSet<String>,
 ) {
+    if base_dir.join("SKILL.md").is_file() {
+        let loaded = read_plugin_jobs_with_node_fs_pool(
+            plugin_name,
+            source,
+            vec![PluginReadJob::SkillDir(base_dir.to_path_buf())],
+        );
+        push_plugin_skills_in_order(loaded, skills, seen_names);
+        return;
+    }
+
     let Some(entries) = read_plugin_dir_entries(base_dir) else {
         return;
     };
@@ -557,19 +753,61 @@ fn load_plugin_skill_dirs(
     push_plugin_skills_in_order(loaded, skills, seen_names);
 }
 
-fn load_plugin_command_files(
+fn load_plugin_command_source(
     plugin_name: &str,
-    base_dir: &Path,
+    command_source: &PluginCommandSource,
     source: &SkillSource,
     skills: &mut Vec<Skill>,
     seen_names: &mut std::collections::HashSet<String>,
 ) {
-    let Some(entries) = read_plugin_dir_entries(base_dir) else {
-        return;
+    let loaded = match command_source {
+        PluginCommandSource::Inline {
+            name,
+            content,
+            metadata,
+        } => {
+            let parsed = apply_plugin_command_metadata(parse_skill_file(content), metadata);
+            vec![plugin_skill_from_parsed(
+                plugin_name,
+                name.clone(),
+                parsed,
+                source,
+                true,
+            )]
+        }
+        PluginCommandSource::Path { path, metadata } if path.is_file() => {
+            read_plugin_jobs_with_node_fs_pool(
+                plugin_name,
+                source,
+                vec![PluginReadJob::CommandFile {
+                    path: path.to_path_buf(),
+                    base_dir: path.parent().unwrap_or_else(|| Path::new("")).to_path_buf(),
+                    metadata: metadata.clone(),
+                }],
+            )
+        }
+        PluginCommandSource::Path { path, .. } => {
+            let jobs = collect_plugin_command_jobs(path);
+            read_plugin_jobs_with_node_fs_pool(plugin_name, source, jobs)
+        }
     };
-
-    let loaded = read_plugin_command_files_concurrently(plugin_name, entries, source);
     push_plugin_skills_in_order(loaded, skills, seen_names);
+}
+
+fn apply_plugin_command_metadata(
+    mut parsed: ParsedSkillFile,
+    metadata: &PluginCommandMetadata,
+) -> ParsedSkillFile {
+    if let Some(description) = &metadata.description {
+        parsed.frontmatter.description = Some(description.clone());
+    }
+    if let Some(argument_hint) = &metadata.argument_hint {
+        parsed.frontmatter.argument_hint = Some(argument_hint.clone());
+    }
+    if !metadata.allowed_tools.is_empty() {
+        parsed.frontmatter.allowed_tools = metadata.allowed_tools.clone();
+    }
+    parsed
 }
 
 fn read_plugin_skill_dirs_concurrently(
@@ -585,22 +823,50 @@ fn read_plugin_skill_dirs_concurrently(
     read_plugin_jobs_with_node_fs_pool(plugin_name, source, jobs)
 }
 
-fn read_plugin_command_files_concurrently(
-    plugin_name: &str,
-    entries: Vec<std::path::PathBuf>,
-    source: &SkillSource,
-) -> Vec<Skill> {
-    let jobs = entries
-        .into_iter()
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("md"))
-        .map(PluginReadJob::CommandFile)
-        .collect();
-    read_plugin_jobs_with_node_fs_pool(plugin_name, source, jobs)
+fn collect_plugin_command_jobs(base_dir: &Path) -> Vec<PluginReadJob> {
+    let mut jobs = Vec::new();
+    collect_plugin_command_jobs_inner(base_dir, base_dir, &mut jobs);
+    jobs
+}
+
+fn collect_plugin_command_jobs_inner(dir: &Path, base_dir: &Path, jobs: &mut Vec<PluginReadJob>) {
+    let Some(entries) = read_plugin_dir_entries(dir) else {
+        return;
+    };
+
+    let has_skill_md = entries.iter().any(|path| {
+        path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
+    });
+
+    for path in entries {
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            jobs.push(PluginReadJob::CommandFile {
+                path,
+                base_dir: base_dir.to_path_buf(),
+                metadata: None,
+            });
+        } else if path.is_dir() && !has_skill_md {
+            collect_plugin_command_jobs_inner(&path, base_dir, jobs);
+        }
+    }
 }
 
 enum PluginReadJob {
     SkillDir(std::path::PathBuf),
-    CommandFile(std::path::PathBuf),
+    CommandFile {
+        path: PathBuf,
+        base_dir: PathBuf,
+        metadata: Option<PluginCommandMetadata>,
+    },
 }
 
 fn read_plugin_jobs_with_node_fs_pool(
@@ -673,19 +939,55 @@ fn read_plugin_job(job: PluginReadJob, plugin_name: &str, source: &SkillSource) 
                 false,
             ))
         }
-        PluginReadJob::CommandFile(path) => {
+        PluginReadJob::CommandFile {
+            path,
+            base_dir,
+            metadata,
+        } => {
             let content = std::fs::read_to_string(&path).ok()?;
-            let stem = path.file_stem().and_then(|n| n.to_str())?.to_string();
-            let parsed = parse_skill_file(&content);
+            let local_name = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.name.clone())
+                .or_else(|| plugin_command_local_name(&path, &base_dir))?;
+            let mut parsed = parse_skill_file(&content);
+            if let Some(metadata) = &metadata {
+                parsed = apply_plugin_command_metadata(parsed, metadata);
+            }
             Some(plugin_skill_from_parsed(
                 plugin_name,
-                stem,
+                local_name,
                 parsed,
                 source,
                 true,
             ))
         }
     }
+}
+
+fn plugin_command_local_name(path: &Path, base_dir: &Path) -> Option<String> {
+    let file_name = path.file_name().and_then(|name| name.to_str())?;
+    let is_skill = file_name.eq_ignore_ascii_case("SKILL.md");
+    let name_path = if is_skill { path.parent()? } else { path };
+    let relative = name_path.strip_prefix(base_dir).ok().unwrap_or(name_path);
+
+    let mut parts = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(|part| {
+            if is_skill || !part.ends_with(".md") {
+                part.to_string()
+            } else {
+                part.trim_end_matches(".md").to_string()
+            }
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() && !is_skill {
+        parts.push(path.file_stem().and_then(|stem| stem.to_str())?.to_string());
+    }
+
+    (!parts.is_empty()).then(|| parts.join(":"))
 }
 
 fn node_fs_pool_size() -> usize {
@@ -930,6 +1232,121 @@ Do the thing.
             parsed.frontmatter.allowed_tools,
             vec!["Read", "Write", "Bash"]
         );
+    }
+
+    #[test]
+    fn plugin_manifest_component_paths_disable_default_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        std::fs::create_dir_all(root.join("commands")).unwrap();
+        std::fs::create_dir_all(root.join("custom")).unwrap();
+        std::fs::create_dir_all(root.join("skills")).unwrap();
+        std::fs::create_dir_all(root.join("extra-skills")).unwrap();
+        std::fs::write(root.join("commands").join("default.md"), "default").unwrap();
+        std::fs::write(root.join("custom").join("one.md"), "custom").unwrap();
+        std::fs::write(root.join("extra-skills").join("SKILL.md"), "skill").unwrap();
+        std::fs::write(
+            root.join(".claude-plugin").join("plugin.json"),
+            r#"{"name":"plug","commands":"./custom","skills":"./extra-skills"}"#,
+        )
+        .unwrap();
+
+        let paths = plugin_component_paths(root);
+        assert_eq!(paths.command_sources.len(), 1);
+        match &paths.command_sources[0] {
+            PluginCommandSource::Path { path, metadata } => {
+                assert_eq!(path, &root.join("./custom"));
+                assert!(metadata.is_none());
+            }
+            PluginCommandSource::Inline { .. } => panic!("expected path command source"),
+        }
+        assert_eq!(paths.skill_paths, vec![root.join("./extra-skills")]);
+    }
+
+    #[test]
+    fn plugin_manifest_command_metadata_supports_source_and_inline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        std::fs::write(root.join("readme.md"), "---\ndescription: Old\n---\nBody").unwrap();
+        std::fs::write(
+            root.join(".claude-plugin").join("plugin.json"),
+            r#"{
+              "name":"plug",
+              "commands": {
+                "about": {
+                  "source": "./readme.md",
+                  "description": "About command",
+                  "argumentHint": "[topic]",
+                  "allowedTools": ["Read", "Bash"]
+                },
+                "inline": {
+                  "content": "---\ndescription: Inline old\n---\nInline body",
+                  "description": "Inline command"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let paths = plugin_component_paths(root);
+        assert_eq!(paths.command_sources.len(), 2);
+        match &paths.command_sources[0] {
+            PluginCommandSource::Path { path, metadata } => {
+                assert_eq!(path, &root.join("./readme.md"));
+                let metadata = metadata.as_ref().unwrap();
+                assert_eq!(metadata.name.as_deref(), Some("about"));
+                assert_eq!(metadata.description.as_deref(), Some("About command"));
+                assert_eq!(metadata.argument_hint.as_deref(), Some("[topic]"));
+                assert_eq!(metadata.allowed_tools, vec!["Read", "Bash"]);
+            }
+            PluginCommandSource::Inline { .. } => panic!("expected path command source"),
+        }
+        match &paths.command_sources[1] {
+            PluginCommandSource::Inline {
+                name,
+                content,
+                metadata,
+            } => {
+                assert_eq!(name, "inline");
+                assert!(content.contains("Inline body"));
+                assert_eq!(metadata.description.as_deref(), Some("Inline command"));
+            }
+            PluginCommandSource::Path { .. } => panic!("expected inline command source"),
+        }
+    }
+
+    #[test]
+    fn plugin_commands_walk_nested_and_skill_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("nested").join("leaf")).unwrap();
+        std::fs::create_dir_all(root.join("skill-dir").join("ignored")).unwrap();
+        std::fs::write(root.join("top.md"), "top").unwrap();
+        std::fs::write(root.join("nested").join("leaf").join("cmd.md"), "nested").unwrap();
+        std::fs::write(root.join("skill-dir").join("SKILL.md"), "skill").unwrap();
+        std::fs::write(
+            root.join("skill-dir").join("ignored").join("nope.md"),
+            "ignored",
+        )
+        .unwrap();
+
+        let jobs = collect_plugin_command_jobs(root);
+        let names = jobs
+            .into_iter()
+            .filter_map(|job| match job {
+                PluginReadJob::CommandFile { path, base_dir, .. } => {
+                    plugin_command_local_name(&path, &base_dir)
+                }
+                PluginReadJob::SkillDir(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"top".to_string()));
+        assert!(names.contains(&"nested:leaf:cmd".to_string()));
+        assert!(names.contains(&"skill-dir".to_string()));
+        assert!(!names.contains(&"skill-dir:ignored:nope".to_string()));
     }
 
     #[test]
