@@ -611,7 +611,7 @@ impl ApiClient {
         } else {
             request = request
                 .header("accept", "application/json")
-                .header("user-agent", "claude-cli/2.1.88 (external, cli)")
+                .header("user-agent", crate::user_agent::get_user_agent(None))
                 .header("x-claude-code-session-id", &self.config.session_id)
                 .header("x-stainless-lang", "js")
                 .header("x-stainless-package-version", "2.2.0")

@@ -2769,6 +2769,7 @@ async fn main() -> Result<()> {
         std::env::set_current_dir(dir)?;
     }
     let is_interactive_session = prompt_arg.is_none();
+    initialize_entrypoint(is_interactive_session);
 
     // Initialize tracing. Stream-json stdout must remain valid JSONL; TS does
     // not interleave normal log lines with stream-json records.
@@ -4151,4 +4152,20 @@ async fn main() -> Result<()> {
     mgr.disconnect_all().await;
 
     Ok(())
+}
+
+fn initialize_entrypoint(is_interactive_session: bool) {
+    if std::env::var_os("USER_TYPE").is_none() {
+        std::env::set_var("USER_TYPE", "external");
+    }
+    if std::env::var_os("CLAUDE_CODE_ENTRYPOINT").is_none() {
+        std::env::set_var(
+            "CLAUDE_CODE_ENTRYPOINT",
+            if is_interactive_session {
+                "cli"
+            } else {
+                "sdk-cli"
+            },
+        );
+    }
 }
