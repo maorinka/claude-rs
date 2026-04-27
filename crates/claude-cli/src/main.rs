@@ -778,6 +778,47 @@ mod tests {
             "fn main()"
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_background_tool_mappings() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "CronCreate",
+                &serde_json::json!({
+                    "id": "job-1",
+                    "humanSchedule": "every hour",
+                    "recurring": true,
+                    "durable": true
+                })
+            ),
+            "Scheduled recurring job job-1 (every hour). Persisted to .claude/scheduled_tasks.json. Auto-expires after 7 days. Use CronDelete to cancel sooner."
+        );
+        assert_eq!(
+            format_tool_result_for_model("CronDelete", &serde_json::json!({"id": "job-1"})),
+            "Cancelled job job-1."
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "CronList",
+                &serde_json::json!({
+                    "jobs": [{
+                        "id": "job-1",
+                        "humanSchedule": "every hour",
+                        "recurring": true,
+                        "prompt": "check status"
+                    }]
+                })
+            ),
+            "job-1 — every hour (recurring): check status"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "RemoteTrigger",
+                &serde_json::json!({"status": 202, "json": "{\"ok\":true}"})
+            ),
+            "HTTP 202\n{\"ok\":true}"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1460,6 +1501,23 @@ fn format_tool_result_content_for_model(
     serde_json::Value::String(format_tool_result_string_for_model(tool_name, data))
 }
 
+fn truncate_single_line(text: &str, max_width: usize) -> String {
+    let first_line = text.split('\n').next().unwrap_or("");
+    let had_newline = first_line.len() != text.len();
+    let mut truncated: String = first_line.chars().take(max_width).collect();
+    let over_width = first_line.chars().count() > max_width;
+    if over_width {
+        if max_width <= 1 {
+            return "…".to_string();
+        }
+        truncated = first_line.chars().take(max_width - 1).collect();
+    }
+    if had_newline || over_width {
+        truncated.push('…');
+    }
+    truncated
+}
+
 fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde_json::Value {
     let Some(status) = data.get("status").and_then(|value| value.as_str()) else {
         return serde_json::Value::String(data.to_string());
@@ -1636,6 +1694,104 @@ fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value
                     .unwrap_or_else(|| value.to_string())
             })
             .unwrap_or_else(|| data.to_string());
+    }
+
+    if tool_name == "SendMessage" || tool_name == "TaskStop" {
+        return data.to_string();
+    }
+
+    if tool_name == "CronCreate" || tool_name == "ScheduleCron" {
+        let id = data
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let human_schedule = data
+            .get("humanSchedule")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let recurring = data
+            .get("recurring")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let durable = data
+            .get("durable")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        let where_text = if durable {
+            "Persisted to .claude/scheduled_tasks.json"
+        } else {
+            "Session-only (not written to disk, dies when Claude exits)"
+        };
+        if recurring {
+            return format!(
+                "Scheduled recurring job {id} ({human_schedule}). {where_text}. Auto-expires after 7 days. Use CronDelete to cancel sooner."
+            );
+        }
+        return format!(
+            "Scheduled one-shot task {id} ({human_schedule}). {where_text}. It will fire once then auto-delete."
+        );
+    }
+
+    if tool_name == "CronDelete" {
+        let id = data
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return format!("Cancelled job {id}.");
+    }
+
+    if tool_name == "CronList" {
+        let Some(jobs) = data.get("jobs").and_then(|value| value.as_array()) else {
+            return "No scheduled jobs.".to_string();
+        };
+        if jobs.is_empty() {
+            return "No scheduled jobs.".to_string();
+        }
+        return jobs
+            .iter()
+            .map(|job| {
+                let id = job.get("id").and_then(|value| value.as_str()).unwrap_or("");
+                let human_schedule = job
+                    .get("humanSchedule")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let recurring = job
+                    .get("recurring")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                let durable_suffix =
+                    if job.get("durable").and_then(|value| value.as_bool()) == Some(false) {
+                        " [session-only]"
+                    } else {
+                        ""
+                    };
+                let prompt = job
+                    .get("prompt")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                format!(
+                    "{id} — {human_schedule}{}{}: {}",
+                    if recurring {
+                        " (recurring)"
+                    } else {
+                        " (one-shot)"
+                    },
+                    durable_suffix,
+                    truncate_single_line(prompt, 80)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    if tool_name == "RemoteTrigger" {
+        if let (Some(status), Some(json)) = (
+            data.get("status").and_then(|value| value.as_i64()),
+            data.get("json").and_then(|value| value.as_str()),
+        ) {
+            return format!("HTTP {status}\n{json}");
+        }
+        return data.to_string();
     }
 
     if tool_name == "EnterPlanMode" {
