@@ -462,6 +462,33 @@ mod tests {
     }
 
     #[test]
+    fn stream_json_usage_matches_sdk_shape() {
+        let usage = claude_core::types::usage::Usage {
+            input_tokens: 6,
+            output_tokens: 8,
+            cache_creation_input_tokens: Some(15445),
+            cache_read_input_tokens: Some(55640),
+        };
+
+        let assistant_usage = stream_json_usage_value(&usage, "not_available", false);
+        assert_eq!(assistant_usage["service_tier"], "standard");
+        assert_eq!(assistant_usage["inference_geo"], "not_available");
+        assert_eq!(
+            assistant_usage["cache_creation"]["ephemeral_5m_input_tokens"],
+            0
+        );
+        assert_eq!(
+            assistant_usage["cache_creation"]["ephemeral_1h_input_tokens"],
+            15445
+        );
+        assert!(assistant_usage.get("speed").is_none());
+
+        let result_usage = stream_json_usage_value(&usage, "", true);
+        assert_eq!(result_usage["speed"], "standard");
+        assert_eq!(result_usage["inference_geo"], "");
+    }
+
+    #[test]
     fn model_tool_result_matches_ts_write_mapping() {
         assert_eq!(
             format_tool_result_for_model(
@@ -2545,9 +2572,12 @@ fn stream_event_to_stream_json(
         | StreamEvent::UsageUpdate(_)
         | StreamEvent::Done { .. } => return None,
         StreamEvent::AssistantMessage(message) => {
+            let mut sdk_message =
+                serde_json::to_value(&message.message).unwrap_or(serde_json::Value::Null);
+            normalize_stream_json_assistant_message(&mut sdk_message);
             json!({
                 "type": "assistant",
-                "message": serde_json::to_value(&message.message).unwrap_or(serde_json::Value::Null),
+                "message": sdk_message,
                 "parent_tool_use_id": serde_json::Value::Null,
                 "session_id": session_id,
                 "uuid": message.uuid.to_string(),
@@ -2564,6 +2594,57 @@ fn stream_event_to_stream_json(
         StreamEvent::Error(error) => json!({"type": "error", "error": format!("{:?}", error)}),
     };
     Some(value)
+}
+
+fn stream_json_usage_value(
+    usage: &claude_core::types::usage::Usage,
+    inference_geo: &str,
+    include_speed: bool,
+) -> serde_json::Value {
+    let cache_creation_input_tokens = usage.cache_creation_input_tokens.unwrap_or(0);
+    let mut value = serde_json::json!({
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "cache_read_input_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": cache_creation_input_tokens,
+        },
+        "service_tier": "standard",
+        "inference_geo": inference_geo,
+    });
+    if include_speed {
+        value["speed"] = serde_json::json!("standard");
+    }
+    value
+}
+
+fn normalize_stream_json_assistant_message(message: &mut serde_json::Value) {
+    let Some(object) = message.as_object_mut() else {
+        return;
+    };
+    object
+        .entry("type".to_string())
+        .or_insert_with(|| serde_json::json!("message"));
+    object
+        .entry("stop_sequence".to_string())
+        .or_insert(serde_json::Value::Null);
+    object
+        .entry("stop_details".to_string())
+        .or_insert(serde_json::Value::Null);
+    object
+        .entry("context_management".to_string())
+        .or_insert(serde_json::Value::Null);
+
+    if let Some(usage_value) = object.get("usage").cloned() {
+        if let Ok(usage) = serde_json::from_value::<claude_core::types::usage::Usage>(usage_value) {
+            object.insert(
+                "usage".to_string(),
+                stream_json_usage_value(&usage, "not_available", false),
+            );
+        }
+    }
 }
 
 fn stream_json_user_tool_result_event(
@@ -2625,23 +2706,21 @@ fn stream_json_result_event_with_meta(
     meta: StreamJsonResultMeta<'_>,
 ) -> serde_json::Value {
     let usage = meta.usage.map(|usage| {
-        serde_json::json!({
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "cache_creation_input_tokens": usage.cache_creation_input_tokens.unwrap_or(0),
-            "cache_read_input_tokens": usage.cache_read_input_tokens.unwrap_or(0),
-            "server_tool_use": {
-                "web_search_requests": 0,
-                "web_fetch_requests": 0,
-            },
-            "iterations": [{
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "cache_creation_input_tokens": usage.cache_creation_input_tokens.unwrap_or(0),
-                "cache_read_input_tokens": usage.cache_read_input_tokens.unwrap_or(0),
-                "type": "message",
-            }],
-        })
+        let iteration = stream_json_usage_value(usage, "", false);
+        let mut usage_value = stream_json_usage_value(usage, "", true);
+        usage_value["server_tool_use"] = serde_json::json!({
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+        });
+        usage_value["iterations"] = serde_json::json!([{
+            "input_tokens": iteration["input_tokens"].clone(),
+            "output_tokens": iteration["output_tokens"].clone(),
+            "cache_creation_input_tokens": iteration["cache_creation_input_tokens"].clone(),
+            "cache_read_input_tokens": iteration["cache_read_input_tokens"].clone(),
+            "cache_creation": iteration["cache_creation"].clone(),
+            "type": "message",
+        }]);
+        usage_value
     });
     let model_usage = meta.usage.map(|usage| {
         let mut map = serde_json::Map::new();
