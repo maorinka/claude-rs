@@ -69,6 +69,10 @@ pub struct Cli {
     #[arg(long = "add-dir", num_args = 1..)]
     pub add_dirs: Vec<String>,
 
+    /// MCP tool to use for permission prompts in print mode
+    #[arg(long = "permission-prompt-tool", hide = true)]
+    pub permission_prompt_tool: Option<String>,
+
     /// Working directory
     #[arg(short = 'C', long = "cd")]
     pub working_dir: Option<PathBuf>,
@@ -1081,6 +1085,59 @@ fn permission_mode_hook_name(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionPromptToolOutput {
+    behavior: String,
+    #[serde(default)]
+    updated_input: Option<serde_json::Value>,
+    #[serde(default)]
+    updated_permissions: Option<Vec<claude_core::permissions::types::PermissionUpdate>>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+fn prompt_tool_output_text(data: &serde_json::Value) -> anyhow::Result<&str> {
+    data.as_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Permission prompt tool returned an invalid result. Expected a single text block param with type=\"text\" and a string text value."
+        )
+    })
+}
+
+async fn run_permission_prompt_tool(
+    permission_prompt_tool: &Arc<dyn claude_tools::ToolExecutor>,
+    target_tool_name: &str,
+    target_tool_use_id: &str,
+    target_input: &serde_json::Value,
+    cwd: &std::path::Path,
+    read_file_state: Arc<std::sync::Mutex<claude_tools::registry::ReadFileState>>,
+    permission_mode: claude_core::permissions::types::PermissionMode,
+    model: &str,
+    cancel: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<PermissionPromptToolOutput> {
+    let ctx = claude_tools::ToolUseContext::new(
+        cwd.to_path_buf(),
+        read_file_state,
+        permission_mode,
+        std::sync::Arc::new(
+            claude_core::tool_use_context_options::ToolUseContextOptions::minimal(model),
+        ),
+        std::sync::Arc::new(claude_core::tool_host::NullToolHost),
+    );
+    let prompt_input = serde_json::json!({
+        "tool_name": target_tool_name,
+        "input": target_input,
+        "tool_use_id": target_tool_use_id,
+    });
+    let result = permission_prompt_tool
+        .call(&prompt_input, &ctx, cancel, None)
+        .await?;
+    let text = prompt_tool_output_text(&result.data)?;
+    let parsed: PermissionPromptToolOutput = serde_json::from_str(text)?;
+    Ok(parsed)
+}
+
 fn merge_hook_updated_input(
     input: &serde_json::Value,
     updated: &Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -1719,6 +1776,40 @@ async fn main() -> Result<()> {
     }
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
+    let permission_prompt_tool = if let Some(name) = &cli.permission_prompt_tool {
+        if prompt_arg.is_none() {
+            eprintln!("Error: --permission-prompt-tool can only be used with --print");
+            std::process::exit(1);
+        }
+        let Some(tool) = tools.remove(name) else {
+            let available_mcp_tools = tools
+                .all()
+                .iter()
+                .filter(|tool| tool.name().starts_with("mcp__"))
+                .map(|tool| tool.name().to_string())
+                .collect::<Vec<_>>();
+            eprintln!(
+                "Error: MCP tool {} (passed via --permission-prompt-tool) not found. Available MCP tools: {}",
+                name,
+                if available_mcp_tools.is_empty() {
+                    "none".to_string()
+                } else {
+                    available_mcp_tools.join(", ")
+                }
+            );
+            std::process::exit(1);
+        };
+        if !tool.name().starts_with("mcp__") {
+            eprintln!(
+                "Error: tool {} (passed via --permission-prompt-tool) must be an MCP tool",
+                name
+            );
+            std::process::exit(1);
+        }
+        Some(tool)
+    } else {
+        None
+    };
     claude_tools::register_tool_search_snapshot(&mut tools);
 
     // --- Skill discovery ---
@@ -2089,7 +2180,7 @@ async fn main() -> Result<()> {
         let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         ));
-        let perm_ctx = initial_permission_context.clone();
+        let mut perm_ctx = initial_permission_context.clone();
 
         // Check if prompt is a skill invocation (e.g. "/commit fix typo")
         let mut effective_prompt = prompt.clone();
@@ -2320,19 +2411,170 @@ async fn main() -> Result<()> {
 
                         let (mut result_text, mut is_error, mut result_json) = match decision {
                             PermissionDecision::Ask(ask) => {
-                                // In non-interactive / headless mode, Ask decisions are DENIED
-                                // (matching TS headless behavior). Auto-allowing would bypass
-                                // permission semantics when running unattended.
-                                tracing::warn!(
-                                    tool = %tool_info.name,
-                                    reason = %ask.message,
-                                    "Non-interactive mode: denying tool requiring user confirmation"
-                                );
-                                (
-                                    format!("Permission denied (non-interactive): {}", ask.message),
-                                    true,
-                                    serde_json::json!({"error": ask.message}),
-                                )
+                                if let Some(permission_prompt_tool) = &permission_prompt_tool {
+                                    match run_permission_prompt_tool(
+                                        permission_prompt_tool,
+                                        &tool_info.name,
+                                        &tool_info.id,
+                                        &tool_input,
+                                        &cwd,
+                                        read_file_state.clone(),
+                                        permission_mode.clone(),
+                                        &model,
+                                        cancel.clone(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(output) if output.behavior == "allow" => {
+                                            if let Some(updates) = output.updated_permissions {
+                                                perm_ctx = claude_core::permissions::evaluator::apply_permission_updates(
+                                                    perm_ctx,
+                                                    &updates,
+                                                );
+                                                if let Err(err) = claude_core::permissions::evaluator::persist_permission_updates(
+                                                    &updates,
+                                                    &cwd,
+                                                ) {
+                                                    tracing::warn!(
+                                                        error = %err,
+                                                        "failed to persist permission prompt tool updates"
+                                                    );
+                                                }
+                                            }
+                                            let updated_input = output
+                                                .updated_input
+                                                .unwrap_or_else(|| tool_input.clone());
+                                            tool_input = if updated_input
+                                                .as_object()
+                                                .is_some_and(|obj| obj.is_empty())
+                                            {
+                                                tool_input
+                                            } else {
+                                                updated_input
+                                            };
+                                            let executor = tools.get(&tool_info.name);
+                                            match executor {
+                                                Some(exec) => {
+                                                    let ctx = ToolUseContext::new(
+                                                        cwd.clone(),
+                                                        read_file_state.clone(),
+                                                        permission_mode.clone(),
+                                                        std::sync::Arc::new(
+                                                            claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model),
+                                                        ),
+                                                        std::sync::Arc::new(claude_core::tool_host::NullToolHost),
+                                                    );
+                                                    match exec
+                                                        .call(
+                                                            &tool_input,
+                                                            &ctx,
+                                                            cancel.clone(),
+                                                            None,
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(data) => {
+                                                            if !data.is_error {
+                                                                match tool_info.name.as_str() {
+                                                                    "EnterWorktree" => {
+                                                                        if let Some(path) = data
+                                                                            .data["worktreePath"]
+                                                                            .as_str()
+                                                                        {
+                                                                            cwd =
+                                                                                PathBuf::from(path);
+                                                                            tracing::info!(
+                                                                                "Session cwd switched to worktree: {}",
+                                                                                path
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    "ExitWorktree" => {
+                                                                        cwd = original_cwd.clone();
+                                                                        tracing::info!(
+                                                                            "Session cwd restored to: {}",
+                                                                            original_cwd.display()
+                                                                        );
+                                                                    }
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                            let text = if tool_info.name == "Bash" {
+                                                                format_bash_tool_result_for_model(
+                                                                    &data.data,
+                                                                )
+                                                            } else {
+                                                                data.data
+                                                                    .as_str()
+                                                                    .unwrap_or(
+                                                                        &data.data.to_string(),
+                                                                    )
+                                                                    .to_string()
+                                                            };
+                                                            (text, data.is_error, data.data)
+                                                        }
+                                                        Err(e) => {
+                                                            let message = format!("Error: {}", e);
+                                                            (
+                                                                message.clone(),
+                                                                true,
+                                                                serde_json::json!({"error": message}),
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                None => {
+                                                    let message =
+                                                        format!("Unknown tool: {}", tool_info.name);
+                                                    (
+                                                        message.clone(),
+                                                        true,
+                                                        serde_json::json!({"error": message}),
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Ok(output) => {
+                                            let message = output.message.unwrap_or_else(|| {
+                                                "Permission denied by permission prompt tool"
+                                                    .to_string()
+                                            });
+                                            (
+                                                format!("Permission denied: {}", message),
+                                                true,
+                                                serde_json::json!({"error": message}),
+                                            )
+                                        }
+                                        Err(err) => {
+                                            let message = err.to_string();
+                                            (
+                                                format!(
+                                                    "Permission prompt tool error: {}",
+                                                    message
+                                                ),
+                                                true,
+                                                serde_json::json!({"error": message}),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // In non-interactive / headless mode, Ask decisions are DENIED
+                                    // (matching TS headless behavior). Auto-allowing would bypass
+                                    // permission semantics when running unattended.
+                                    tracing::warn!(
+                                        tool = %tool_info.name,
+                                        reason = %ask.message,
+                                        "Non-interactive mode: denying tool requiring user confirmation"
+                                    );
+                                    (
+                                        format!(
+                                            "Permission denied (non-interactive): {}",
+                                            ask.message
+                                        ),
+                                        true,
+                                        serde_json::json!({"error": ask.message}),
+                                    )
+                                }
                             }
                             PermissionDecision::Allow(_) => {
                                 let executor = tools.get(&tool_info.name);
