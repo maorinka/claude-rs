@@ -3250,7 +3250,19 @@ async fn main() -> Result<()> {
     claude_tools::register_tool_search_snapshot(&mut tools);
 
     // --- Skill discovery ---
-    let discovered_skills = claude_core::plugins::skill::discover_skills(&project_root);
+    let mut skill_additional_dirs =
+        claude_core::permissions::permission_additional_directories_from_settings_value(
+            &permission_settings,
+        );
+    skill_additional_dirs.extend(cli.add_dirs.clone());
+    let skill_additional_dirs = skill_additional_dirs
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    let discovered_skills = claude_core::plugins::skill::discover_skills_with_additional(
+        &project_root,
+        &skill_additional_dirs,
+    );
     let registered_skills = claude_tools::skill_tool::list_skills();
     let stream_skill_names = stream_json_skill_names(&registered_skills, &discovered_skills);
     let mut skills = Vec::new();

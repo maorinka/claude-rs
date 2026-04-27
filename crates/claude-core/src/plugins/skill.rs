@@ -257,6 +257,13 @@ fn parse_string_list(s: &str) -> Vec<String> {
 /// to the git boundary. Plugin skills are loaded afterward by their own TS
 /// bucket.
 pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
+    discover_skills_with_additional(project_root, &[])
+}
+
+pub fn discover_skills_with_additional(
+    project_root: &Path,
+    additional_dirs: &[PathBuf],
+) -> Vec<Skill> {
     let mut skills = Vec::new();
     let mut state = SkillLoadState::default();
 
@@ -277,6 +284,12 @@ pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
     for project_skills_dir in project_skill_dirs_up_to_boundary(project_root) {
         let source = SkillSource::Directory(project_skills_dir.clone());
         load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut state);
+    }
+
+    for additional_dir in additional_dirs {
+        let skills_dir = additional_dir.join(".claude").join("skills");
+        let source = SkillSource::Directory(skills_dir.clone());
+        load_skills_from_dir(&skills_dir, &source, &mut skills, &mut state);
     }
 
     load_enabled_plugin_skills(project_root, &mut skills);
@@ -1469,6 +1482,40 @@ Do the thing.
                 canonical_file_id(repo).join(".claude").join("skills")
             ]
         );
+    }
+
+    #[test]
+    fn additional_dirs_load_skills_after_project_sources_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let extra = tmp.path().join("extra");
+        let project_skill = project.join(".claude").join("skills").join("project");
+        let extra_skill = extra.join(".claude").join("skills").join("extra");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(&project_skill).unwrap();
+        std::fs::create_dir_all(&extra_skill).unwrap();
+        std::fs::write(
+            project_skill.join("SKILL.md"),
+            "---\ndescription: Project skill\n---\nproject",
+        )
+        .unwrap();
+        std::fs::write(
+            extra_skill.join("SKILL.md"),
+            "---\ndescription: Extra skill\n---\nextra",
+        )
+        .unwrap();
+
+        let skills = discover_skills_with_additional(&project, std::slice::from_ref(&extra));
+        let project_index = skills
+            .iter()
+            .position(|skill| skill.name == "project")
+            .unwrap();
+        let extra_index = skills
+            .iter()
+            .position(|skill| skill.name == "extra")
+            .unwrap();
+
+        assert!(project_index < extra_index);
     }
 
     #[test]
