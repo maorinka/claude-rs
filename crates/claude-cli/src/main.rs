@@ -375,6 +375,85 @@ fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value 
     merged
 }
 
+fn parse_permission_rules_from_settings_value(
+    value: &serde_json::Value,
+    source: claude_core::permissions::types::PermissionRuleSource,
+) -> Vec<claude_core::permissions::types::PermissionRule> {
+    use claude_core::permissions::types::{
+        PermissionBehavior, PermissionRule, PermissionRuleValue,
+    };
+
+    let Some(permissions) = value
+        .get("permissions")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    let mut rules = Vec::new();
+    for (key, behavior) in [
+        ("allow", PermissionBehavior::Allow),
+        ("deny", PermissionBehavior::Deny),
+        ("ask", PermissionBehavior::Ask),
+    ] {
+        let Some(entries) = permissions.get(key).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for entry in entries {
+            let Some(rule_string) = entry.as_str() else {
+                continue;
+            };
+            rules.push(PermissionRule {
+                source: source.clone(),
+                rule_behavior: behavior.clone(),
+                rule_value: PermissionRuleValue::from_string(rule_string),
+            });
+        }
+    }
+    rules
+}
+
+fn load_permission_rules_from_disk_by_source(
+    project_root: &std::path::Path,
+) -> Vec<claude_core::permissions::types::PermissionRule> {
+    use claude_core::permissions::types::PermissionRuleSource;
+
+    let mut sources = Vec::new();
+    if let Ok(user_path) = claude_core::config::paths::user_settings_path() {
+        sources.push((PermissionRuleSource::UserSettings, user_path));
+    }
+    sources.push((
+        PermissionRuleSource::ProjectSettings,
+        project_root.join(".claude").join("settings.json"),
+    ));
+    sources.push((
+        PermissionRuleSource::LocalSettings,
+        project_root.join(".claude").join("settings.local.json"),
+    ));
+
+    let mut rules = Vec::new();
+    for (source, path) in sources {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        rules.extend(parse_permission_rules_from_settings_value(&value, source));
+    }
+    rules
+}
+
+fn permission_mode_from_settings_value(
+    value: &serde_json::Value,
+) -> Option<claude_core::permissions::types::PermissionMode> {
+    value
+        .get("permissions")
+        .and_then(|permissions| permissions.get("defaultMode"))
+        .and_then(serde_json::Value::as_str)
+        .map(claude_core::permissions::types::PermissionMode::from_string)
+}
+
 fn enabled_plugin_roots(
     project_root: &std::path::Path,
 ) -> Vec<(String, String, std::path::PathBuf)> {
@@ -2006,9 +2085,22 @@ async fn main() -> Result<()> {
         claude_core::permissions::types::PermissionMode::from_string(mode_str)
     } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
         claude_core::permissions::types::PermissionMode::from_string(&mode_str)
+    } else if let Some(mode) = permission_mode_from_settings_value(&raw_settings) {
+        mode
     } else {
         claude_core::permissions::types::PermissionMode::Default
     };
+    let permission_rules_from_disk = load_permission_rules_from_disk_by_source(&project_root);
+    let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
+        &[],
+        &[],
+        permission_mode.clone(),
+        cli.dangerously_skip_permissions,
+        &[],
+        &permission_rules_from_disk,
+        cwd.clone(),
+    )
+    .tool_permission_context;
 
     // Handle non-interactive prompt mode
     if let Some(prompt) = prompt_arg {
@@ -2018,7 +2110,7 @@ async fn main() -> Result<()> {
             run_post_tool_use_hooks, run_pre_tool_use_hooks, ResolvedPermission,
         };
         use claude_core::permissions::evaluator::{evaluate_permission, SimpleToolPermissions};
-        use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
+        use claude_core::permissions::types::PermissionDecision;
         use claude_core::query::engine::TurnResult;
         use claude_core::types::events::StreamEvent;
         use claude_tools::ToolUseContext;
@@ -2031,10 +2123,7 @@ async fn main() -> Result<()> {
         let read_file_state = std::sync::Arc::new(std::sync::Mutex::new(
             claude_tools::registry::ReadFileState::new(),
         ));
-        let perm_ctx = ToolPermissionContext {
-            mode: permission_mode.clone(),
-            ..Default::default()
-        };
+        let perm_ctx = initial_permission_context.clone();
 
         // Check if prompt is a skill invocation (e.g. "/commit fix typo")
         let mut effective_prompt = prompt.clone();
@@ -2492,8 +2581,13 @@ async fn main() -> Result<()> {
     let mut app = claude_tui::app::App::new()?;
     app.set_model_name(&model_display);
     app.set_skills(skills);
-    app.run_with_engine(query_engine, tools, cancel.clone(), permission_mode)
-        .await?;
+    app.run_with_engine(
+        query_engine,
+        tools,
+        cancel.clone(),
+        initial_permission_context,
+    )
+    .await?;
 
     // Gracefully disconnect MCP servers
     let mgr = mcp_manager.read().await;

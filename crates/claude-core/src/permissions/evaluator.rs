@@ -8,7 +8,9 @@
 //! 4. **Mode apply** (dontAsk -> deny, auto -> classifier, headless -> hooks)
 //! 5. **Return**
 
+use anyhow::{Context, Result};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 use super::filesystem;
 use super::types::{
@@ -683,6 +685,206 @@ pub fn apply_permission_updates(
     context
 }
 
+/// TS `supportsPersistence`: only user/project/local settings are writable destinations.
+pub fn supports_permission_update_persistence(destination: &PermissionRuleSource) -> bool {
+    matches!(
+        destination,
+        PermissionRuleSource::UserSettings
+            | PermissionRuleSource::ProjectSettings
+            | PermissionRuleSource::LocalSettings
+    )
+}
+
+fn settings_path_for_permission_source(
+    source: &PermissionRuleSource,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    match source {
+        PermissionRuleSource::UserSettings => crate::config::paths::user_settings_path().ok(),
+        PermissionRuleSource::ProjectSettings => {
+            let project_root = crate::config::paths::detect_project_root(cwd);
+            Some(project_root.join(".claude").join("settings.json"))
+        }
+        PermissionRuleSource::LocalSettings => {
+            let project_root = crate::config::paths::detect_project_root(cwd);
+            Some(project_root.join(".claude").join("settings.local.json"))
+        }
+        _ => None,
+    }
+}
+
+fn permission_behavior_key(behavior: &PermissionBehavior) -> &'static str {
+    match behavior {
+        PermissionBehavior::Allow => "allow",
+        PermissionBehavior::Deny => "deny",
+        PermissionBehavior::Ask => "ask",
+    }
+}
+
+fn read_settings_json(path: &Path) -> Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn write_settings_json(path: &Path, value: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create settings directory {}", parent.display()))?;
+    }
+    let text = serde_json::to_string_pretty(value)?;
+    std::fs::write(path, format!("{text}\n"))
+        .with_context(|| format!("failed to write settings {}", path.display()))
+}
+
+fn normalize_permission_rule_string(rule: &str) -> String {
+    PermissionRuleValue::from_string(rule).to_rule_string()
+}
+
+fn permissions_object_mut(settings: &mut Value) -> &mut serde_json::Map<String, Value> {
+    if !settings.is_object() {
+        *settings = serde_json::json!({});
+    }
+    let obj = settings.as_object_mut().expect("settings is object");
+    let needs_insert = !obj
+        .get("permissions")
+        .map(|permissions| permissions.is_object())
+        .unwrap_or(false);
+    if needs_insert {
+        obj.insert("permissions".to_string(), serde_json::json!({}));
+    }
+    obj.get_mut("permissions")
+        .and_then(Value::as_object_mut)
+        .expect("permissions is object")
+}
+
+fn string_array_at_mut<'a>(
+    obj: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> &'a mut Vec<Value> {
+    let needs_insert = !obj.get(key).map(Value::is_array).unwrap_or(false);
+    if needs_insert {
+        obj.insert(key.to_string(), Value::Array(Vec::new()));
+    }
+    obj.get_mut(key)
+        .and_then(Value::as_array_mut)
+        .expect("permission setting is array")
+}
+
+/// Persist a single `PermissionUpdate` to the same editable settings destinations TS uses.
+pub fn persist_permission_update(update: &PermissionUpdate, cwd: &Path) -> Result<()> {
+    let destination = match update {
+        PermissionUpdate::AddRules { destination, .. }
+        | PermissionUpdate::ReplaceRules { destination, .. }
+        | PermissionUpdate::RemoveRules { destination, .. }
+        | PermissionUpdate::SetMode { destination, .. }
+        | PermissionUpdate::AddDirectories { destination, .. }
+        | PermissionUpdate::RemoveDirectories { destination, .. } => destination,
+    };
+    if !supports_permission_update_persistence(destination) {
+        return Ok(());
+    }
+    let Some(path) = settings_path_for_permission_source(destination, cwd) else {
+        return Ok(());
+    };
+    let mut settings = read_settings_json(&path);
+    let permissions = permissions_object_mut(&mut settings);
+
+    match update {
+        PermissionUpdate::AddRules {
+            rules, behavior, ..
+        } => {
+            let key = permission_behavior_key(behavior);
+            let existing = string_array_at_mut(permissions, key);
+            let mut normalized_existing = existing
+                .iter()
+                .filter_map(Value::as_str)
+                .map(normalize_permission_rule_string)
+                .collect::<std::collections::HashSet<_>>();
+            for rule in rules {
+                let rule_string = rule.to_rule_string();
+                if normalized_existing.insert(rule_string.clone()) {
+                    existing.push(Value::String(rule_string));
+                }
+            }
+        }
+        PermissionUpdate::ReplaceRules {
+            rules, behavior, ..
+        } => {
+            let key = permission_behavior_key(behavior);
+            permissions.insert(
+                key.to_string(),
+                Value::Array(
+                    rules
+                        .iter()
+                        .map(|rule| Value::String(rule.to_rule_string()))
+                        .collect(),
+                ),
+            );
+        }
+        PermissionUpdate::RemoveRules {
+            rules, behavior, ..
+        } => {
+            let key = permission_behavior_key(behavior);
+            let to_remove = rules
+                .iter()
+                .map(PermissionRuleValue::to_rule_string)
+                .collect::<std::collections::HashSet<_>>();
+            let existing = string_array_at_mut(permissions, key);
+            existing.retain(|value| {
+                value
+                    .as_str()
+                    .map(|rule| !to_remove.contains(&normalize_permission_rule_string(rule)))
+                    .unwrap_or(true)
+            });
+        }
+        PermissionUpdate::SetMode { mode, .. } => {
+            permissions.insert(
+                "defaultMode".to_string(),
+                serde_json::to_value(mode).unwrap_or_else(|_| Value::String("default".into())),
+            );
+        }
+        PermissionUpdate::AddDirectories { directories, .. } => {
+            let existing = string_array_at_mut(permissions, "additionalDirectories");
+            let mut current = existing
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<std::collections::HashSet<_>>();
+            for directory in directories {
+                if current.insert(directory.clone()) {
+                    existing.push(Value::String(directory.clone()));
+                }
+            }
+        }
+        PermissionUpdate::RemoveDirectories { directories, .. } => {
+            let to_remove = directories
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>();
+            let existing = string_array_at_mut(permissions, "additionalDirectories");
+            existing.retain(|value| {
+                value
+                    .as_str()
+                    .map(|directory| !to_remove.contains(directory))
+                    .unwrap_or(true)
+            });
+        }
+    }
+
+    write_settings_json(&path, &settings)
+}
+
+/// Persist multiple permission updates sequentially, matching TS `persistPermissionUpdates`.
+pub fn persist_permission_updates(updates: &[PermissionUpdate], cwd: &Path) -> Result<()> {
+    for update in updates {
+        persist_permission_update(update, cwd)?;
+    }
+    Ok(())
+}
+
 /// Sync permission rules from disk (replacement -- for settings changes).
 /// Clears all disk-based sources before applying new rules to avoid stale entries.
 pub fn sync_permission_rules_from_disk(
@@ -1133,5 +1335,51 @@ mod tests {
             .unwrap();
         assert!(rules.contains(&"NewTool".to_string()));
         assert!(!rules.contains(&"OldTool".to_string()));
+    }
+
+    #[test]
+    fn permission_update_allows_later_matching_tool() {
+        let ctx = empty_ctx();
+        let update = PermissionUpdate::AddRules {
+            destination: PermissionRuleSource::LocalSettings,
+            rules: vec![PermissionRuleValue {
+                tool_name: "Bash".to_string(),
+                rule_content: None,
+            }],
+            behavior: PermissionBehavior::Allow,
+        };
+
+        let updated = apply_permission_update(ctx, &update);
+        let tool = TestTool::new("Bash", false);
+        let decision = evaluate_permission(&tool, &serde_json::json!({}), &updated);
+
+        assert!(
+            decision.is_allow(),
+            "expected updated context to allow Bash"
+        );
+    }
+
+    #[test]
+    fn persist_permission_update_writes_local_settings_like_ts() {
+        let temp = tempfile::tempdir().unwrap();
+        let update = PermissionUpdate::AddRules {
+            destination: PermissionRuleSource::LocalSettings,
+            rules: vec![PermissionRuleValue {
+                tool_name: "Bash".to_string(),
+                rule_content: Some("git status".to_string()),
+            }],
+            behavior: PermissionBehavior::Allow,
+        };
+
+        persist_permission_update(&update, temp.path()).unwrap();
+        persist_permission_update(&update, temp.path()).unwrap();
+
+        let settings_path = temp.path().join(".claude").join("settings.local.json");
+        let value: Value =
+            serde_json::from_str(&std::fs::read_to_string(settings_path).unwrap()).unwrap();
+        assert_eq!(
+            value["permissions"]["allow"],
+            serde_json::json!(["Bash(git status)"])
+        );
     }
 }

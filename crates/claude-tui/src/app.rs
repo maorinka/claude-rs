@@ -22,9 +22,12 @@ use claude_core::hooks::{
     get_global_runner, resolve_hook_permission_decision, run_post_tool_use_failure_hooks,
     run_post_tool_use_hooks, run_pre_tool_use_hooks, ResolvedPermission,
 };
-use claude_core::permissions::evaluator::evaluate_permission;
+use claude_core::permissions::evaluator::{
+    apply_permission_updates, evaluate_permission, persist_permission_updates,
+};
 use claude_core::permissions::types::{
-    PermissionDecision, PermissionDecisionReason, PermissionMode, ToolPermissionContext,
+    PermissionBehavior, PermissionDecision, PermissionDecisionReason, PermissionMode,
+    PermissionRuleSource, PermissionRuleValue, PermissionUpdate, ToolPermissionContext,
 };
 use claude_core::query::engine::{QueryEngine, ToolUseInfo, TurnResult};
 use claude_core::types::events::{StreamEvent, ToolResultData};
@@ -216,6 +219,18 @@ enum EngineCommand {
 /// Pending tool that needs permission before execution.
 struct PendingTool {
     info: ToolUseInfo,
+    permission_updates_on_allow: Vec<PermissionUpdate>,
+}
+
+fn fallback_allow_update_for_tool(tool_name: &str) -> PermissionUpdate {
+    PermissionUpdate::AddRules {
+        destination: PermissionRuleSource::LocalSettings,
+        rules: vec![PermissionRuleValue {
+            tool_name: tool_name.to_string(),
+            rule_content: None,
+        }],
+        behavior: PermissionBehavior::Allow,
+    }
 }
 
 /// Result of executing a slash command.
@@ -720,7 +735,7 @@ impl App {
         engine: QueryEngine,
         tools: ToolRegistry,
         mut cancel: CancellationToken,
-        permission_mode: PermissionMode,
+        initial_permission_context: ToolPermissionContext,
     ) -> Result<()> {
         terminal::enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
@@ -829,6 +844,8 @@ impl App {
         });
 
         let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut perm_ctx = initial_permission_context;
+        let permission_mode = perm_ctx.mode.clone();
         // Remember the original directory so ExitWorktree can restore it.
         let original_cwd = cwd.clone();
 
@@ -863,11 +880,6 @@ impl App {
                 );
             }
         }
-
-        let perm_ctx = ToolPermissionContext {
-            mode: permission_mode.clone(),
-            ..Default::default()
-        };
 
         // Tools waiting for permission resolution
         let mut pending_tools: Vec<PendingTool> = Vec::new();
@@ -1598,6 +1610,22 @@ impl App {
 
                     match response.as_str() {
                         "allow" | "always" => {
+                            if response == "always" {
+                                let mut updates =
+                                    pending_tools[tool_idx].permission_updates_on_allow.clone();
+                                if updates.is_empty() {
+                                    updates.push(fallback_allow_update_for_tool(
+                                        &pending_tools[tool_idx].info.name,
+                                    ));
+                                }
+                                perm_ctx = apply_permission_updates(perm_ctx, &updates);
+                                if let Err(err) = persist_permission_updates(&updates, &cwd) {
+                                    tracing::warn!(
+                                        error = %err,
+                                        "failed to persist permission update"
+                                    );
+                                }
+                            }
                             // Execute this tool in background to keep UI responsive
                             let info = &pending_tools[tool_idx].info;
                             self.message_list.set_tool_running(&info.id, true);
@@ -1948,7 +1976,10 @@ impl App {
                         Ok(TurnResult::ToolUse(tool_uses)) => {
                             pending_tools = tool_uses
                                 .into_iter()
-                                .map(|info| PendingTool { info })
+                                .map(|info| PendingTool {
+                                    info,
+                                    permission_updates_on_allow: Vec::new(),
+                                })
                                 .collect();
                             pending_tool_index = 0;
                             self.spinner.stop();
@@ -2125,6 +2156,10 @@ impl App {
                 PermissionDecision::Ask(ask) => {
                     let input_preview = serde_json::to_string_pretty(&tool_input)
                         .unwrap_or_else(|_| tool_input.to_string());
+                    pending_tools[tool_idx].permission_updates_on_allow = ask
+                        .suggestions
+                        .clone()
+                        .unwrap_or_else(|| vec![fallback_allow_update_for_tool(&tool_name)]);
                     let tool_name_for_explainer = tool_name.clone();
                     let description_for_explainer = ask.message.clone();
                     let preview_for_explainer = input_preview.clone();

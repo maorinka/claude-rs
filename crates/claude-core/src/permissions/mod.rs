@@ -17,8 +17,9 @@ pub use evaluator::{
     apply_permission_rules_to_context, apply_permission_update, apply_permission_updates,
     check_rule_based_permissions, evaluate_permission, get_allow_rules, get_ask_rules,
     get_deny_rule_for_agent, get_deny_rule_for_tool, get_deny_rules, get_rule_by_contents_for_tool,
-    register_plan_mode_checker, sync_permission_rules_from_disk, tool_always_allowed_rule,
-    McpToolInfo, PlanModeChecker, ToolPermissions,
+    persist_permission_update, persist_permission_updates, register_plan_mode_checker,
+    supports_permission_update_persistence, sync_permission_rules_from_disk,
+    tool_always_allowed_rule, McpToolInfo, PlanModeChecker, ToolPermissions,
 };
 
 pub use filesystem::{
