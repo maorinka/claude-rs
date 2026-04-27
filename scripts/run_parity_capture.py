@@ -20,12 +20,13 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIR = ROOT / "captures" / "context-proxy-live"
+DEFAULT_OUTPUT_DIR = pathlib.Path(tempfile.gettempdir()) / "claude-rs-context-proxy-live"
 
 
 def run(cmd: list[str], env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -101,6 +102,24 @@ def skill_names(body: dict[str, Any]) -> list[str]:
     return []
 
 
+def normalize_skill_line_order(body: dict[str, Any]) -> dict[str, Any]:
+    result = json.loads(json.dumps(body))
+    for msg in result.get("messages", []):
+        for block in msg.get("content", []) if isinstance(msg, dict) else []:
+            text = block.get("text", "") if isinstance(block, dict) else ""
+            if "The following skills are available" not in text:
+                continue
+            prefix = []
+            skills = []
+            for line in text.splitlines():
+                if line.startswith("- "):
+                    skills.append(line)
+                else:
+                    prefix.append(line)
+            block["text"] = "\n".join(prefix + sorted(skills))
+    return result
+
+
 def scrub_body(body: dict[str, Any]) -> dict[str, Any]:
     def scrub(value: Any) -> Any:
         if isinstance(value, dict):
@@ -115,8 +134,12 @@ def scrub_body(body: dict[str, Any]) -> dict[str, Any]:
 
     result = scrub(body)
     if isinstance(result, dict) and isinstance(result.get("system"), list) and result["system"]:
-        if isinstance(result["system"][0], dict):
-            result["system"][0]["text"] = "<dynamic-system-block-0>"
+        for block in result["system"]:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.startswith("x-anthropic-billing-header:"):
+                block["text"] = "<dynamic-billing-header>"
     return result
 
 
@@ -179,6 +202,9 @@ def print_report(ts: dict[str, Any], rs: dict[str, Any]) -> None:
     rs_scrubbed = scrub_body(rs_body)
     print("== Scrubbed body ==")
     print(f"equal: {'yes' if ts_scrubbed == rs_scrubbed else 'no'}")
+    ts_normalized = normalize_skill_line_order(ts_scrubbed)
+    rs_normalized = normalize_skill_line_order(rs_scrubbed)
+    print(f"equal ignoring skill order: {'yes' if ts_normalized == rs_normalized else 'no'}")
 
 
 def stdout_events(text: str) -> list[str]:
