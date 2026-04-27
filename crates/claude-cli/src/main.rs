@@ -634,6 +634,21 @@ mod tests {
             "Created worktree at /tmp/wt. The session is now working in the worktree."
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_skill_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "Skill",
+                &serde_json::json!({
+                    "skill": "plugin:example",
+                    "content": "large skill body",
+                    "message": "Skill 'plugin:example' loaded successfully."
+                })
+            ),
+            "Launching skill: plugin:example"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1388,6 +1403,31 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
             Some("delete") => format!("Deleted cell {cell_id}"),
             _ => "Unknown edit mode".to_string(),
         };
+    }
+
+    if tool_name == "Skill" {
+        if let Some(status) = data.get("status").and_then(|value| value.as_str()) {
+            if status == "forked" {
+                let command_name = data
+                    .get("commandName")
+                    .or_else(|| data.get("skill"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let result = data
+                    .get("result")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                return format!(
+                    "Skill \"{command_name}\" completed (forked execution).\n\nResult:\n{result}"
+                );
+            }
+        }
+        let command_name = data
+            .get("commandName")
+            .or_else(|| data.get("skill"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return format!("Launching skill: {command_name}");
     }
 
     if tool_name == "WebFetch" {
