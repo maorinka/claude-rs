@@ -57,6 +57,30 @@ enum McpTransport {
     },
 }
 
+fn parse_streamable_http_response(body: &str) -> Result<JsonRpcResponse> {
+    if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(body) {
+        return Ok(response);
+    }
+
+    for line in body.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        return serde_json::from_str::<JsonRpcResponse>(data).with_context(|| {
+            format!(
+                "failed to parse JSON-RPC response from streamable HTTP data event: {}",
+                &data[..data.len().min(200)]
+            )
+        });
+    }
+
+    serde_json::from_str::<JsonRpcResponse>(body).context("response was neither JSON nor SSE data")
+}
+
 fn authorization_bearer_token(headers: &Option<HashMap<String, String>>) -> Option<String> {
     let value = headers
         .as_ref()?
@@ -985,8 +1009,8 @@ impl McpClient {
                         )
                     })?;
 
-                    let response: JsonRpcResponse =
-                        serde_json::from_str(&body).with_context(|| {
+                    let response: JsonRpcResponse = parse_streamable_http_response(&body)
+                        .with_context(|| {
                             format!(
                                 "Failed to parse JSON-RPC response from MCP HTTP server '{}': {}",
                                 self.name,
@@ -2250,6 +2274,26 @@ impl McpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_streamable_http_response_accepts_raw_json() {
+        let response = super::parse_streamable_http_response(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#,
+        )
+        .expect("raw JSON response");
+        assert_eq!(response.id, 1);
+        assert_eq!(response.result.unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn parse_streamable_http_response_accepts_sse_data() {
+        let response = super::parse_streamable_http_response(
+            "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}\n\n",
+        )
+        .expect("SSE data response");
+        assert_eq!(response.id, 2);
+        assert_eq!(response.result.unwrap()["ok"], true);
+    }
 
     // ─── G8: prompt types + list/get shape ───────────────────────
 

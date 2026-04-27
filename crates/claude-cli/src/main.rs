@@ -871,11 +871,28 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
             "Authorization".to_string(),
             format!("Bearer {}", tokens.access_token),
         );
+        headers.insert(
+            "User-Agent".to_string(),
+            claude_core::user_agent::get_mcp_user_agent(),
+        );
+        headers.insert(
+            "X-Mcp-Client-Session-Id".to_string(),
+            claude_core::api::client::get_session_id().clone(),
+        );
+        let proxy_url = match claude_core::constants::oauth::get_oauth_config() {
+            Ok(oauth) => format!(
+                "{}{}",
+                oauth.mcp_proxy_url,
+                oauth.mcp_proxy_path.replace("{server_id}", &server._id)
+            ),
+            Err(_) => server.url,
+        };
+
         discovery.configs.insert(
             final_name.clone(),
             ScopedMcpServerConfig {
                 config: McpServerConfig::Http(McpHttpServerConfig {
-                    url: server.url,
+                    url: proxy_url,
                     headers: Some(headers),
                 }),
                 scope: ConfigScope::ClaudeAi,
