@@ -9,7 +9,7 @@ use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
 /// Result of locating a `rg` binary.
-enum RgBinary {
+pub(crate) enum RgBinary {
     /// A native `rg` binary found at the given path.
     Native(PathBuf),
     /// The Claude multi-call binary that acts as rg when invoked with ARGV0=rg.
@@ -22,7 +22,7 @@ enum RgBinary {
 /// 1. Check common hard-coded paths where ripgrep is frequently installed.
 /// 2. Check if the Claude multi-call binary is available and supports ripgrep mode.
 /// 3. Fall back to just `"rg"` and let the OS resolve it from PATH.
-fn find_rg() -> RgBinary {
+pub(crate) fn find_rg() -> RgBinary {
     // Common installation paths (macOS / Linux)
     let home_rg = std::env::var("HOME")
         .map(|h| format!("{}/.local/bin/rg", h))

@@ -1,11 +1,12 @@
-use std::path::PathBuf;
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
+use crate::grep::{find_rg, RgBinary};
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
@@ -100,56 +101,32 @@ impl ToolExecutor for GlobTool {
             });
         }
 
-        // Build the full glob pattern: <dir>/<pattern>
-        let full_pattern = search_dir.join(pattern_str);
-        let full_pattern_str = full_pattern.to_string_lossy().to_string();
+        let mut cmd = ripgrep_files_command();
+        cmd.current_dir(&search_dir)
+            .arg("--files")
+            .arg("--glob")
+            .arg(pattern_str)
+            .arg("--sort=modified")
+            .arg("--no-ignore")
+            .arg("--hidden");
 
-        // Collect matching paths with their modification times
-        let mut entries: Vec<(PathBuf, SystemTime)> = Vec::new();
-
-        match glob::glob(&full_pattern_str) {
-            Ok(paths) => {
-                for entry in paths {
-                    match entry {
-                        Ok(path) => {
-                            if path.is_file() {
-                                let mtime = path
-                                    .metadata()
-                                    .and_then(|m| m.modified())
-                                    .unwrap_or(SystemTime::UNIX_EPOCH);
-                                entries.push((path, mtime));
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Glob entry error: {e}");
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                return Ok(ToolResultData {
-                    data: json!({ "error": format!("Invalid glob pattern: {e}") }),
-                    is_error: true,
-                });
-            }
+        let output = cmd.output().await?;
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Ok(ToolResultData {
+                data: json!({ "error": if stderr.is_empty() { "Glob search failed".to_string() } else { stderr } }),
+                is_error: true,
+            });
         }
 
-        // Sort by modification time, most recent first
-        entries.sort_by_key(|e| std::cmp::Reverse(e.1));
-
-        let total = entries.len();
-        let truncated = total > MAX_RESULTS;
-        entries.truncate(MAX_RESULTS);
-
-        // Relativize paths against the search_dir to save tokens
-        let filenames: Vec<String> = entries
-            .into_iter()
-            .map(|(path, _)| {
-                path.strip_prefix(&search_dir)
-                    .map(|rel| rel.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| path.to_string_lossy().to_string())
-            })
+        let all_filenames: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| normalize_glob_result_path(line, &search_dir))
             .collect();
+
+        let total = all_filenames.len();
+        let truncated = total > MAX_RESULTS;
+        let filenames: Vec<String> = all_filenames.into_iter().take(MAX_RESULTS).collect();
 
         let num_files = filenames.len() as u32;
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -164,4 +141,31 @@ impl ToolExecutor for GlobTool {
             is_error: false,
         })
     }
+}
+
+fn ripgrep_files_command() -> Command {
+    match find_rg() {
+        RgBinary::Native(path) => Command::new(path),
+        RgBinary::ClaudeMultiCall(path) => {
+            #[allow(unused_mut)]
+            let mut cmd = Command::new(&path);
+            #[cfg(unix)]
+            {
+                #[allow(unused_imports)]
+                use std::os::unix::process::CommandExt as _;
+                cmd.arg0("rg");
+            }
+            cmd
+        }
+    }
+}
+
+fn normalize_glob_result_path(line: &str, search_dir: &Path) -> String {
+    let path = Path::new(line);
+    let value = if path.is_absolute() {
+        path.strip_prefix(search_dir).unwrap_or(path)
+    } else {
+        path
+    };
+    value.to_string_lossy().to_string()
 }

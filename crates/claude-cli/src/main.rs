@@ -1094,6 +1094,28 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
         }
     }
 
+    if let Some(filenames) = data.get("filenames").and_then(|value| value.as_array()) {
+        let mut lines = filenames
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        if data
+            .get("truncated")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            lines.push(
+                "(Results are truncated. Consider using a more specific path or pattern.)"
+                    .to_string(),
+            );
+        }
+        return if lines.is_empty() {
+            "No files found".to_string()
+        } else {
+            lines.join("\n")
+        };
+    }
+
     data.to_string()
 }
 
