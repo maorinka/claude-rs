@@ -9,6 +9,7 @@
 
 pub mod evaluator;
 pub mod filesystem;
+pub mod settings;
 pub mod setup;
 pub mod types;
 
@@ -28,6 +29,15 @@ pub use filesystem::{
     get_file_read_ignore_patterns, get_paths_for_permission_check, matching_rule_for_input,
     normalize_case_for_comparison, normalize_patterns_to_path, path_in_allowed_working_path,
     path_in_working_path, PathSafetyResult, ToolType, DANGEROUS_DIRECTORIES, DANGEROUS_FILES,
+};
+
+pub use settings::{
+    allow_managed_permission_rules_only, load_permission_rules_from_disk_by_source,
+    load_permission_settings_value, load_raw_settings_value,
+    load_raw_settings_value_with_plugin_hooks, merge_enabled_plugin_hooks,
+    parse_permission_rules_from_settings_value,
+    permission_additional_directories_from_settings_value, permission_mode_from_settings_value,
+    raw_settings_paths, settings_change_fingerprint, SettingsFileStamp, SettingsFingerprint,
 };
 
 pub use setup::{

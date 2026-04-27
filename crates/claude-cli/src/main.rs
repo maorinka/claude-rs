@@ -389,179 +389,14 @@ fn base_tool_denials_from_cli_tools(
         .collect()
 }
 
-fn merge_json_objects(base: &mut serde_json::Value, overlay: serde_json::Value) {
-    let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) else {
-        *base = overlay;
-        return;
-    };
-    for (key, value) in overlay_obj {
-        match (base_obj.get_mut(key), value) {
-            (Some(existing), serde_json::Value::Object(_)) if existing.is_object() => {
-                merge_json_objects(existing, value.clone());
-            }
-            _ => {
-                base_obj.insert(key.clone(), value.clone());
-            }
-        }
-    }
-}
-
-fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value {
-    let mut merged = serde_json::json!({});
-    let mut paths = Vec::new();
-    if let Ok(claude_dir) = claude_core::config::paths::claude_dir() {
-        paths.push(claude_dir.join("settings.json"));
-        paths.push(claude_dir.join("settings.local.json"));
-    }
-    paths.push(project_root.join(".claude").join("settings.json"));
-    paths.push(project_root.join(".claude").join("settings.local.json"));
-
-    for path in paths {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        merge_json_objects(&mut merged, value);
-    }
-    merged
-}
-
-fn load_settings_json_value(path: &std::path::Path) -> Option<serde_json::Value> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
-    value.is_object().then_some(value)
-}
-
-fn load_permission_settings_value(project_root: &std::path::Path) -> serde_json::Value {
-    let user_project_local = load_raw_settings_value(project_root);
-    if let Some(policy) = claude_core::remote_managed_settings::load_from_disk() {
-        claude_core::remote_managed_settings::apply_policy_overlay(&user_project_local, &policy)
-    } else {
-        user_project_local
-    }
-}
-
-fn parse_permission_rules_from_settings_value(
-    value: &serde_json::Value,
-    source: claude_core::permissions::types::PermissionRuleSource,
-) -> Vec<claude_core::permissions::types::PermissionRule> {
-    use claude_core::permissions::types::{
-        PermissionBehavior, PermissionRule, PermissionRuleValue,
-    };
-
-    let Some(permissions) = value
-        .get("permissions")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return Vec::new();
-    };
-
-    let mut rules = Vec::new();
-    for (key, behavior) in [
-        ("allow", PermissionBehavior::Allow),
-        ("deny", PermissionBehavior::Deny),
-        ("ask", PermissionBehavior::Ask),
-    ] {
-        let Some(entries) = permissions.get(key).and_then(serde_json::Value::as_array) else {
-            continue;
-        };
-        for entry in entries {
-            let Some(rule_string) = entry.as_str() else {
-                continue;
-            };
-            rules.push(PermissionRule {
-                source: source.clone(),
-                rule_behavior: behavior.clone(),
-                rule_value: PermissionRuleValue::from_string(rule_string),
-            });
-        }
-    }
-    rules
-}
-
-fn load_permission_rules_from_disk_by_source(
-    project_root: &std::path::Path,
-) -> Vec<claude_core::permissions::types::PermissionRule> {
-    use claude_core::permissions::types::PermissionRuleSource;
-
-    let mut sources = Vec::new();
-    if let Ok(user_path) = claude_core::config::paths::user_settings_path() {
-        sources.push((PermissionRuleSource::UserSettings, user_path));
-    }
-    sources.push((
-        PermissionRuleSource::ProjectSettings,
-        project_root.join(".claude").join("settings.json"),
-    ));
-    sources.push((
-        PermissionRuleSource::LocalSettings,
-        project_root.join(".claude").join("settings.local.json"),
-    ));
-
-    let policy = claude_core::remote_managed_settings::load_from_disk();
-    if policy
-        .as_ref()
-        .and_then(|value| value.get("permissions"))
-        .and_then(|permissions| permissions.get("allowManagedPermissionRulesOnly"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return policy
-            .as_ref()
-            .map(|value| {
-                parse_permission_rules_from_settings_value(
-                    value,
-                    PermissionRuleSource::PolicySettings,
-                )
-            })
-            .unwrap_or_default();
-    }
-
-    let mut rules = Vec::new();
-    for (source, path) in sources {
-        let Some(value) = load_settings_json_value(&path) else {
-            continue;
-        };
-        rules.extend(parse_permission_rules_from_settings_value(&value, source));
-    }
-    if let Some(policy) = policy {
-        rules.extend(parse_permission_rules_from_settings_value(
-            &policy,
-            PermissionRuleSource::PolicySettings,
-        ));
-    }
-    rules
-}
-
-fn permission_mode_from_settings_value(
-    value: &serde_json::Value,
-) -> Option<claude_core::permissions::types::PermissionMode> {
-    value
-        .get("permissions")
-        .and_then(|permissions| permissions.get("defaultMode"))
-        .and_then(serde_json::Value::as_str)
-        .map(claude_core::permissions::types::PermissionMode::from_string)
-}
-
-fn permission_additional_directories_from_settings_value(value: &serde_json::Value) -> Vec<String> {
-    value
-        .get("permissions")
-        .and_then(|permissions| permissions.get("additionalDirectories"))
-        .and_then(serde_json::Value::as_array)
-        .map(|dirs| {
-            dirs.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use claude_core::permissions::types::{PermissionBehavior, PermissionRuleSource};
+    use claude_core::permissions::{
+        parse_permission_rules_from_settings_value,
+        permission_additional_directories_from_settings_value,
+    };
 
     #[test]
     fn permission_settings_parse_rules_and_directories() {
@@ -644,55 +479,6 @@ fn enabled_plugin_roots(
         }
     }
     roots
-}
-
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn replace_plugin_root(value: &mut serde_json::Value, root: &std::path::Path) {
-    match value {
-        serde_json::Value::String(text) => {
-            let had_plugin_root = text.contains("${CLAUDE_PLUGIN_ROOT}");
-            let root_text = root.display().to_string();
-            *text = text.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string());
-            if cfg!(unix) && text.contains(".cmd") && !text.trim_start().starts_with("bash ") {
-                *text = format!("bash {}", text);
-            }
-            if had_plugin_root && !text.contains("CLAUDE_PLUGIN_ROOT=") {
-                *text = format!(
-                    "CLAUDE_PLUGIN_ROOT={} {}",
-                    shell_single_quote(&root_text),
-                    text
-                );
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                replace_plugin_root(item, root);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for item in map.values_mut() {
-                replace_plugin_root(item, root);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value, project_root: &std::path::Path) {
-    for (_, _, root) in enabled_plugin_roots(project_root) {
-        let hooks_path = root.join("hooks").join("hooks.json");
-        let Ok(text) = std::fs::read_to_string(hooks_path) else {
-            continue;
-        };
-        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        replace_plugin_root(&mut value, &root);
-        merge_json_objects(settings, value);
-    }
 }
 
 fn load_enabled_plugin_mcp_servers(
@@ -1721,9 +1507,10 @@ async fn main() -> Result<()> {
         Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
         Err(_) => claude_core::config::settings::Settings::default(),
     };
-    let mut raw_settings = load_raw_settings_value(&project_root);
-    merge_enabled_plugin_hooks(&mut raw_settings, &project_root);
-    let permission_settings = load_permission_settings_value(&project_root);
+    let raw_settings =
+        claude_core::permissions::load_raw_settings_value_with_plugin_hooks(&project_root);
+    let permission_settings =
+        claude_core::permissions::load_permission_settings_value(&project_root);
 
     // Build tool registry
     let mut tools =
@@ -2250,14 +2037,19 @@ async fn main() -> Result<()> {
         claude_core::permissions::types::PermissionMode::from_string(mode_str)
     } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
         claude_core::permissions::types::PermissionMode::from_string(&mode_str)
-    } else if let Some(mode) = permission_mode_from_settings_value(&permission_settings) {
+    } else if let Some(mode) =
+        claude_core::permissions::permission_mode_from_settings_value(&permission_settings)
+    {
         mode
     } else {
         claude_core::permissions::types::PermissionMode::Default
     };
-    let permission_rules_from_disk = load_permission_rules_from_disk_by_source(&project_root);
+    let permission_rules_from_disk =
+        claude_core::permissions::load_permission_rules_from_disk_by_source(&project_root);
     let additional_dirs =
-        permission_additional_directories_from_settings_value(&permission_settings);
+        claude_core::permissions::permission_additional_directories_from_settings_value(
+            &permission_settings,
+        );
     let mut disallowed_tools_cli = cli.disallowed_tools.clone();
     disallowed_tools_cli.extend(base_tool_denials_from_cli_tools(
         &cli.tools,
@@ -2760,6 +2552,7 @@ async fn main() -> Result<()> {
         tools,
         cancel.clone(),
         initial_permission_context,
+        api_session_id.clone(),
     )
     .await?;
 

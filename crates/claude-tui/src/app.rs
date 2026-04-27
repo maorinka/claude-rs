@@ -20,10 +20,12 @@ use tokio_util::sync::CancellationToken;
 
 use claude_core::hooks::{
     get_global_runner, resolve_hook_permission_decision, run_post_tool_use_failure_hooks,
-    run_post_tool_use_hooks, run_pre_tool_use_hooks, ResolvedPermission,
+    run_post_tool_use_hooks, run_pre_tool_use_hooks, set_global_runner, HookRunner,
+    ResolvedPermission,
 };
 use claude_core::permissions::evaluator::{
     apply_permission_updates, evaluate_permission, persist_permission_updates,
+    sync_permission_rules_from_disk,
 };
 use claude_core::permissions::types::{
     PermissionBehavior, PermissionDecision, PermissionDecisionReason, PermissionMode,
@@ -736,6 +738,7 @@ impl App {
         tools: ToolRegistry,
         mut cancel: CancellationToken,
         initial_permission_context: ToolPermissionContext,
+        api_session_id: String,
     ) -> Result<()> {
         terminal::enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
@@ -845,6 +848,8 @@ impl App {
 
         let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mut perm_ctx = initial_permission_context;
+        let mut settings_fingerprint = claude_core::permissions::settings_change_fingerprint(&cwd);
+        let mut last_settings_check = Instant::now();
         let permission_mode = perm_ctx.mode.clone();
         // Remember the original directory so ExitWorktree can restore it.
         let original_cwd = cwd.clone();
@@ -897,6 +902,34 @@ impl App {
 
             match event {
                 AppEvent::Tick => {
+                    if last_settings_check.elapsed() >= Duration::from_millis(500) {
+                        last_settings_check = Instant::now();
+                        let next_fingerprint =
+                            claude_core::permissions::settings_change_fingerprint(&cwd);
+                        if next_fingerprint != settings_fingerprint {
+                            settings_fingerprint = next_fingerprint;
+                            let updated_rules =
+                                claude_core::permissions::load_permission_rules_from_disk_by_source(
+                                    &cwd,
+                                );
+                            perm_ctx = sync_permission_rules_from_disk(perm_ctx, &updated_rules);
+                            let settings_value =
+                                claude_core::permissions::load_raw_settings_value_with_plugin_hooks(
+                                    &cwd,
+                                );
+                            set_global_runner(Arc::new(HookRunner::from_settings(
+                                &settings_value,
+                                cwd.display().to_string(),
+                                api_session_id.clone(),
+                                String::new(),
+                            )));
+                            if let Ok(mut state) = self.shared_state.lock() {
+                                state.permission_mode =
+                                    permission_mode_hook_name(&perm_ctx.mode).to_string();
+                            }
+                        }
+                    }
+
                     // Reactive queue drain — mirrors TS useQueueProcessor:
                     // when engine becomes idle and there's a queued message, dispatch it.
                     if !self.engine_busy {

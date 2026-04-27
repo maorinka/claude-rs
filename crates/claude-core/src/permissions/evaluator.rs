@@ -888,6 +888,28 @@ pub fn sync_permission_rules_from_disk(
     mut context: ToolPermissionContext,
     rules: &[PermissionRule],
 ) -> ToolPermissionContext {
+    if super::settings::allow_managed_permission_rules_only() {
+        let sources_to_clear = [
+            PermissionRuleSource::UserSettings,
+            PermissionRuleSource::ProjectSettings,
+            PermissionRuleSource::LocalSettings,
+            PermissionRuleSource::CliArg,
+            PermissionRuleSource::Session,
+        ];
+        let behaviors = [
+            PermissionBehavior::Allow,
+            PermissionBehavior::Deny,
+            PermissionBehavior::Ask,
+        ];
+        for source in &sources_to_clear {
+            for behavior in &behaviors {
+                context
+                    .rules_for_behavior_mut(behavior)
+                    .insert(source.clone(), Vec::new());
+            }
+        }
+    }
+
     // Clear all disk-based source:behavior combos
     let disk_sources = [
         PermissionRuleSource::UserSettings,

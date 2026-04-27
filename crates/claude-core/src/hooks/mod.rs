@@ -16,19 +16,26 @@ pub mod types;
 // `get_global_runner` and no-op if nothing was installed (matches the TS
 // behaviour where hooks are optional config).
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-static GLOBAL_RUNNER: OnceLock<Arc<runner::HookRunner>> = OnceLock::new();
+static GLOBAL_RUNNER: OnceLock<RwLock<Option<Arc<runner::HookRunner>>>> = OnceLock::new();
 
-/// Install the process-wide HookRunner. Only the first call wins — subsequent
-/// calls are silently ignored (matches `OnceLock` semantics).
+/// Install or replace the process-wide HookRunner.
+///
+/// TS refreshes hook config when settings change; replacement keeps the Rust
+/// global handle compatible with that runtime flow.
 pub fn set_global_runner(runner: Arc<runner::HookRunner>) {
-    let _ = GLOBAL_RUNNER.set(runner);
+    let lock = GLOBAL_RUNNER.get_or_init(|| RwLock::new(None));
+    if let Ok(mut guard) = lock.write() {
+        *guard = Some(runner);
+    }
 }
 
 /// Fetch the registered HookRunner if one has been installed.
 pub fn get_global_runner() -> Option<Arc<runner::HookRunner>> {
-    GLOBAL_RUNNER.get().cloned()
+    GLOBAL_RUNNER
+        .get()
+        .and_then(|lock| lock.read().ok().and_then(|guard| guard.clone()))
 }
 
 /// Fire a `StopFailure` hook via the global runner, if one is installed.
