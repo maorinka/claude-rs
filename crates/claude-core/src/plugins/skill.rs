@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::paths::claude_dir;
@@ -257,7 +257,7 @@ fn parse_string_list(s: &str) -> Vec<String> {
 /// 2. `<project_root>/.claude/skills/` — project-level skills
 pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
     let mut skills = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    let mut state = SkillLoadState::default();
 
     // 1. User-level skills (~/.claude/skills/)
     if let Ok(home) = claude_dir() {
@@ -266,25 +266,21 @@ pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
             &user_skills_dir,
             &SkillSource::Builtin,
             &mut skills,
-            &mut seen_names,
+            &mut state,
         );
     }
 
     // 2. Project-level skills (<project>/.claude/skills/)
     let project_skills_dir = project_root.join(".claude").join("skills");
     let source = SkillSource::Directory(project_skills_dir.clone());
-    load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut seen_names);
+    load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut state);
 
-    load_enabled_plugin_skills(project_root, &mut skills, &mut seen_names);
+    load_enabled_plugin_skills(project_root, &mut skills);
 
     skills
 }
 
-fn load_enabled_plugin_skills(
-    project_root: &Path,
-    skills: &mut Vec<Skill>,
-    seen_names: &mut std::collections::HashSet<String>,
-) {
+fn load_enabled_plugin_skills(project_root: &Path, skills: &mut Vec<Skill>) {
     let Ok(claude_home) = claude_dir() else {
         return;
     };
@@ -305,15 +301,23 @@ fn load_enabled_plugin_skills(
 
     for (enabled_plugin, plugin_name, paths) in &plugin_roots {
         let source = SkillSource::Plugin(enabled_plugin.clone());
+        let mut loaded_paths = HashSet::new();
         for command_source in &paths.command_sources {
-            load_plugin_command_source(plugin_name, command_source, &source, skills, seen_names);
+            load_plugin_command_source(
+                plugin_name,
+                command_source,
+                &source,
+                &mut loaded_paths,
+                skills,
+            );
         }
     }
 
     for (enabled_plugin, plugin_name, paths) in &plugin_roots {
         let source = SkillSource::Plugin(enabled_plugin.clone());
+        let mut loaded_paths = HashSet::new();
         for skill_path in &paths.skill_paths {
-            load_plugin_skill_path(plugin_name, skill_path, &source, skills, seen_names);
+            load_plugin_skill_path(plugin_name, skill_path, &source, skills, &mut loaded_paths);
         }
     }
 }
@@ -727,20 +731,36 @@ fn existing_relative_plugin_path(plugin_root: &Path, relative: &str) -> Option<P
     path.exists().then_some(path)
 }
 
+#[derive(Default)]
+struct SkillLoadState {
+    seen_file_ids: HashSet<PathBuf>,
+}
+
+impl SkillLoadState {
+    fn should_load_file(&mut self, path: &Path) -> bool {
+        let id = canonical_file_id(path);
+        self.seen_file_ids.insert(id)
+    }
+}
+
+fn canonical_file_id(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn load_plugin_skill_path(
     plugin_name: &str,
     base_dir: &Path,
     source: &SkillSource,
     skills: &mut Vec<Skill>,
-    seen_names: &mut std::collections::HashSet<String>,
+    loaded_paths: &mut HashSet<PathBuf>,
 ) {
     if base_dir.join("SKILL.md").is_file() {
-        let loaded = read_plugin_jobs_in_completion_order(
-            plugin_name,
-            source,
+        let jobs = filter_plugin_jobs_by_path(
             vec![PluginReadJob::SkillDir(base_dir.to_path_buf())],
+            loaded_paths,
         );
-        push_plugin_skills_in_order(loaded, skills, seen_names);
+        let loaded = read_plugin_jobs_in_completion_order(plugin_name, source, jobs);
+        push_plugin_skills_in_order(loaded, skills);
         return;
     }
 
@@ -748,16 +768,16 @@ fn load_plugin_skill_path(
         return;
     };
 
-    let loaded = read_plugin_skill_dirs_concurrently(plugin_name, entries, source);
-    push_plugin_skills_in_order(loaded, skills, seen_names);
+    let loaded = read_plugin_skill_dirs_concurrently(plugin_name, entries, source, loaded_paths);
+    push_plugin_skills_in_order(loaded, skills);
 }
 
 fn load_plugin_command_source(
     plugin_name: &str,
     command_source: &PluginCommandSource,
     source: &SkillSource,
+    loaded_paths: &mut HashSet<PathBuf>,
     skills: &mut Vec<Skill>,
-    seen_names: &mut std::collections::HashSet<String>,
 ) {
     let loaded = match command_source {
         PluginCommandSource::Inline {
@@ -775,22 +795,23 @@ fn load_plugin_command_source(
             )]
         }
         PluginCommandSource::Path { path, metadata } if path.is_file() => {
-            read_plugin_jobs_in_input_order(
-                plugin_name,
-                source,
+            let jobs = filter_plugin_jobs_by_path(
                 vec![PluginReadJob::CommandFile {
                     path: path.to_path_buf(),
                     base_dir: path.parent().unwrap_or_else(|| Path::new("")).to_path_buf(),
                     metadata: metadata.clone(),
                 }],
-            )
+                loaded_paths,
+            );
+            read_plugin_jobs_in_input_order(plugin_name, source, jobs)
         }
         PluginCommandSource::Path { path, .. } => {
             let jobs = collect_plugin_command_jobs(path);
+            let jobs = filter_plugin_jobs_by_path(jobs, loaded_paths);
             read_plugin_jobs_in_completion_order(plugin_name, source, jobs)
         }
     };
-    push_plugin_skills_in_order(loaded, skills, seen_names);
+    push_plugin_skills_in_order(loaded, skills);
 }
 
 fn apply_plugin_command_metadata(
@@ -813,12 +834,14 @@ fn read_plugin_skill_dirs_concurrently(
     plugin_name: &str,
     entries: Vec<std::path::PathBuf>,
     source: &SkillSource,
+    loaded_paths: &mut HashSet<PathBuf>,
 ) -> Vec<Skill> {
     let jobs = entries
         .into_iter()
         .filter(|path| path.is_dir())
         .map(PluginReadJob::SkillDir)
         .collect();
+    let jobs = filter_plugin_jobs_by_path(jobs, loaded_paths);
     read_plugin_jobs_in_completion_order(plugin_name, source, jobs)
 }
 
@@ -866,6 +889,26 @@ enum PluginReadJob {
         base_dir: PathBuf,
         metadata: Option<PluginCommandMetadata>,
     },
+}
+
+fn filter_plugin_jobs_by_path(
+    jobs: Vec<PluginReadJob>,
+    loaded_paths: &mut HashSet<PathBuf>,
+) -> Vec<PluginReadJob> {
+    jobs.into_iter()
+        .filter(|job| {
+            plugin_job_file_path(job)
+                .map(|path| loaded_paths.insert(canonical_file_id(&path)))
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn plugin_job_file_path(job: &PluginReadJob) -> Option<PathBuf> {
+    match job {
+        PluginReadJob::SkillDir(path) => Some(path.join("SKILL.md")),
+        PluginReadJob::CommandFile { path, .. } => Some(path.clone()),
+    }
 }
 
 fn read_plugin_jobs_in_completion_order(
@@ -1015,16 +1058,8 @@ fn plugin_skill_from_parsed(
     }
 }
 
-fn push_plugin_skills_in_order(
-    loaded: Vec<Skill>,
-    skills: &mut Vec<Skill>,
-    seen_names: &mut std::collections::HashSet<String>,
-) {
-    for skill in loaded {
-        if seen_names.insert(skill.name.clone()) {
-            skills.push(skill);
-        }
-    }
+fn push_plugin_skills_in_order(loaded: Vec<Skill>, skills: &mut Vec<Skill>) {
+    skills.extend(loaded);
 }
 
 /// Load skill directories from a base path.
@@ -1036,7 +1071,7 @@ fn load_skills_from_dir(
     base_dir: &Path,
     source: &SkillSource,
     skills: &mut Vec<Skill>,
-    seen_names: &mut std::collections::HashSet<String>,
+    state: &mut SkillLoadState,
 ) {
     let Some(entries) = read_dir_paths(base_dir) else {
         return;
@@ -1052,6 +1087,9 @@ fn load_skills_from_dir(
             Ok(c) => c,
             Err(_) => continue, // no SKILL.md in this subdirectory
         };
+        if !state.should_load_file(&skill_file) {
+            continue;
+        }
 
         let dir_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
@@ -1064,11 +1102,6 @@ fn load_skills_from_dir(
             .name
             .clone()
             .unwrap_or_else(|| dir_name.clone());
-
-        // Deduplicate — first-seen wins (user-level before project-level).
-        if !seen_names.insert(name.clone()) {
-            continue;
-        }
 
         let description = parsed
             .frontmatter
@@ -1336,6 +1369,83 @@ Do the thing.
         assert!(names.contains(&"nested:leaf:cmd".to_string()));
         assert!(names.contains(&"skill-dir".to_string()));
         assert!(!names.contains(&"skill-dir:ignored:nope".to_string()));
+    }
+
+    #[test]
+    fn skill_dir_discovery_deduplicates_by_file_not_name_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("skills");
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(
+            first.join("SKILL.md"),
+            "---\nname: duplicate\ndescription: First\n---\nfirst",
+        )
+        .unwrap();
+        std::fs::write(
+            second.join("SKILL.md"),
+            "---\nname: duplicate\ndescription: Second\n---\nsecond",
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        let mut state = SkillLoadState::default();
+        load_skills_from_dir(&root, &SkillSource::Builtin, &mut skills, &mut state);
+
+        let duplicates = skills
+            .iter()
+            .filter(|skill| skill.name == "duplicate")
+            .collect::<Vec<_>>();
+        assert_eq!(duplicates.len(), 2);
+        assert!(duplicates.iter().any(|skill| skill.description == "First"));
+        assert!(duplicates.iter().any(|skill| skill.description == "Second"));
+    }
+
+    #[test]
+    fn plugin_loader_deduplicates_same_source_path_not_name_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let command = root.join("cmd.md");
+        std::fs::write(
+            &command,
+            "---\ndescription: Shared\n---\nshared command body",
+        )
+        .unwrap();
+
+        let source = SkillSource::Plugin("plug@example".to_string());
+        let mut loaded_paths = HashSet::new();
+        let mut skills = Vec::new();
+        load_plugin_command_source(
+            "plug",
+            &PluginCommandSource::Path {
+                path: command.clone(),
+                metadata: Some(PluginCommandMetadata {
+                    name: Some("one".to_string()),
+                    ..Default::default()
+                }),
+            },
+            &source,
+            &mut loaded_paths,
+            &mut skills,
+        );
+        load_plugin_command_source(
+            "plug",
+            &PluginCommandSource::Path {
+                path: command,
+                metadata: Some(PluginCommandMetadata {
+                    name: Some("two".to_string()),
+                    ..Default::default()
+                }),
+            },
+            &source,
+            &mut loaded_paths,
+            &mut skills,
+        );
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "plug:one");
     }
 
     #[test]
