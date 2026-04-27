@@ -619,6 +619,21 @@ mod tests {
             "Deleted cell abc123"
         );
     }
+
+    #[test]
+    fn model_tool_result_uses_ts_message_field_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "EnterWorktree",
+                &serde_json::json!({
+                    "worktreePath": "/tmp/wt",
+                    "worktreeBranch": "worktree/demo",
+                    "message": "Created worktree at /tmp/wt. The session is now working in the worktree."
+                })
+            ),
+            "Created worktree at /tmp/wt. The session is now working in the worktree."
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1553,6 +1568,14 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
         } else {
             lines.join("\n")
         };
+    }
+
+    if let Some(message) = data.get("message").and_then(|value| value.as_str()) {
+        return message.to_string();
+    }
+
+    if let Some(error) = data.get("error").and_then(|value| value.as_str()) {
+        return error.to_string();
     }
 
     data.to_string()
