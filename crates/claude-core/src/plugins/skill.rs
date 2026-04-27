@@ -581,7 +581,7 @@ fn read_plugin_skill_dirs_concurrently(
     let source = source.clone();
 
     std::thread::scope(|scope| {
-        for (index, path) in entries.into_iter().enumerate() {
+        for path in entries {
             if !path.is_dir() {
                 continue;
             }
@@ -601,13 +601,11 @@ fn read_plugin_skill_dirs_concurrently(
                 let parsed = parse_skill_file(&content);
                 let skill =
                     plugin_skill_from_parsed(&plugin_name, dir_name, parsed, &source, false);
-                let _ = tx.send((index, skill));
+                let _ = tx.send(skill);
             });
         }
         drop(tx);
-        let mut loaded: Vec<_> = rx.into_iter().collect();
-        loaded.sort_by_key(|(index, _)| *index);
-        loaded.into_iter().map(|(_, skill)| skill).collect()
+        rx.into_iter().collect()
     })
 }
 
@@ -621,7 +619,7 @@ fn read_plugin_command_files_concurrently(
     let source = source.clone();
 
     std::thread::scope(|scope| {
-        for (index, path) in entries.into_iter().enumerate() {
+        for path in entries {
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
@@ -639,13 +637,11 @@ fn read_plugin_command_files_concurrently(
                 };
                 let parsed = parse_skill_file(&content);
                 let skill = plugin_skill_from_parsed(&plugin_name, stem, parsed, &source, true);
-                let _ = tx.send((index, skill));
+                let _ = tx.send(skill);
             });
         }
         drop(tx);
-        let mut loaded: Vec<_> = rx.into_iter().collect();
-        loaded.sort_by_key(|(index, _)| *index);
-        loaded.into_iter().map(|(_, skill)| skill).collect()
+        rx.into_iter().collect()
     })
 }
 
