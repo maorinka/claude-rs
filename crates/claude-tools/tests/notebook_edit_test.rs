@@ -29,6 +29,7 @@ async fn write_sample_notebook() -> tempfile::NamedTempFile {
         "cells": [
             {
                 "cell_type": "code",
+                "id": "abc123",
                 "source": "print('hello')",
                 "metadata": {},
                 "outputs": [],
@@ -36,6 +37,7 @@ async fn write_sample_notebook() -> tempfile::NamedTempFile {
             },
             {
                 "cell_type": "markdown",
+                "id": "def456",
                 "source": "# Title\nSome text here.",
                 "metadata": {}
             }
@@ -58,7 +60,7 @@ async fn test_edit_code_cell_source() {
     let tool = NotebookEditTool;
     let input = json!({
         "notebook_path": path,
-        "cell_index": 0,
+        "cell_id": "abc123",
         "new_source": "print('world')"
     });
 
@@ -68,10 +70,10 @@ async fn test_edit_code_cell_source() {
         .unwrap();
 
     assert!(!result.is_error, "edit should succeed: {:?}", result.data);
-    assert_eq!(result.data["cellIndex"], 0);
-    assert_eq!(result.data["cellType"], "code");
-    assert_eq!(result.data["previousSource"], "print('hello')");
-    assert_eq!(result.data["filePath"], path);
+    assert_eq!(result.data["cell_id"], "abc123");
+    assert_eq!(result.data["cell_type"], "code");
+    assert_eq!(result.data["edit_mode"], "replace");
+    assert_eq!(result.data["notebook_path"], path);
 
     // Read back and verify
     let updated_raw = tokio::fs::read_to_string(&path).await.unwrap();
@@ -88,7 +90,7 @@ async fn test_edit_markdown_cell_source() {
     let tool = NotebookEditTool;
     let input = json!({
         "notebook_path": path,
-        "cell_index": 1,
+        "cell_id": "def456",
         "new_source": "# New Title\nUpdated content."
     });
 
@@ -98,14 +100,8 @@ async fn test_edit_markdown_cell_source() {
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(result.data["cellType"], "markdown");
-    assert!(
-        result.data["previousSource"]
-            .as_str()
-            .unwrap()
-            .contains("Title"),
-        "previousSource should contain original markdown"
-    );
+    assert_eq!(result.data["cell_type"], "code");
+    assert_eq!(result.data["cell_id"], "def456");
 
     // Verify written content
     let updated_raw = tokio::fs::read_to_string(&path).await.unwrap();
@@ -124,7 +120,7 @@ async fn test_edit_cell_type_change() {
     let tool = NotebookEditTool;
     let input = json!({
         "notebook_path": path,
-        "cell_index": 0,
+        "cell_id": "abc123",
         "new_source": "# Now markdown",
         "cell_type": "markdown"
     });
@@ -135,7 +131,7 @@ async fn test_edit_cell_type_change() {
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(result.data["cellType"], "markdown");
+    assert_eq!(result.data["cell_type"], "markdown");
 
     let updated_raw = tokio::fs::read_to_string(&path).await.unwrap();
     let updated: serde_json::Value = serde_json::from_str(&updated_raw).unwrap();
@@ -153,7 +149,7 @@ async fn test_edit_out_of_bounds_cell_returns_error() {
     let tool = NotebookEditTool;
     let input = json!({
         "notebook_path": path,
-        "cell_index": 99,
+        "cell_id": "cell-99",
         "new_source": "x = 1"
     });
 
@@ -165,7 +161,7 @@ async fn test_edit_out_of_bounds_cell_returns_error() {
     assert!(result.is_error, "out-of-bounds index should return error");
     let err = result.data["error"].as_str().unwrap_or("");
     assert!(
-        err.contains("out of bounds") || err.contains("99"),
+        err.contains("not found") || err.contains("99"),
         "error should mention index issue: {}",
         err
     );

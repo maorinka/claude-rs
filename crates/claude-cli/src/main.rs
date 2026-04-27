@@ -579,6 +579,46 @@ mod tests {
             "Set theme to \"dark\""
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_notebook_edit_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "NotebookEdit",
+                &serde_json::json!({
+                    "cell_id": "cell-1",
+                    "edit_mode": "replace",
+                    "new_source": "print(1)",
+                    "error": ""
+                })
+            ),
+            "Updated cell cell-1 with print(1)"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "NotebookEdit",
+                &serde_json::json!({
+                    "cell_id": "abc123",
+                    "edit_mode": "insert",
+                    "new_source": "# title",
+                    "error": ""
+                })
+            ),
+            "Inserted cell abc123 with # title"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "NotebookEdit",
+                &serde_json::json!({
+                    "cell_id": "abc123",
+                    "edit_mode": "delete",
+                    "new_source": "",
+                    "error": ""
+                })
+            ),
+            "Deleted cell abc123"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1311,6 +1351,28 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
             return format!("{base}\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type=\"verification\"). You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict.");
         }
         return base.to_string();
+    }
+
+    if tool_name == "NotebookEdit" {
+        if let Some(error) = data.get("error").and_then(|value| value.as_str()) {
+            if !error.is_empty() {
+                return error.to_string();
+            }
+        }
+        let cell_id = data
+            .get("cell_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let new_source = data
+            .get("new_source")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return match data.get("edit_mode").and_then(|value| value.as_str()) {
+            Some("replace") => format!("Updated cell {cell_id} with {new_source}"),
+            Some("insert") => format!("Inserted cell {cell_id} with {new_source}"),
+            Some("delete") => format!("Deleted cell {cell_id}"),
+            _ => "Unknown edit mode".to_string(),
+        };
     }
 
     if tool_name == "WebFetch" {
