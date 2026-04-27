@@ -264,8 +264,29 @@ pub fn discover_skills_with_additional(
     project_root: &Path,
     additional_dirs: &[PathBuf],
 ) -> Vec<Skill> {
+    discover_skills_inner(
+        project_root,
+        additional_dirs,
+        crate::errors_util::is_bare_mode(),
+    )
+}
+
+fn discover_skills_inner(
+    project_root: &Path,
+    additional_dirs: &[PathBuf],
+    bare_mode: bool,
+) -> Vec<Skill> {
     let mut skills = Vec::new();
     let mut state = SkillLoadState::default();
+
+    if bare_mode {
+        for additional_dir in additional_dirs {
+            let skills_dir = additional_dir.join(".claude").join("skills");
+            let source = SkillSource::Directory(skills_dir.clone());
+            load_skills_from_dir(&skills_dir, &source, &mut skills, &mut state);
+        }
+        return skills;
+    }
 
     if !is_env_truthy("CLAUDE_CODE_DISABLE_POLICY_SKILLS") {
         let managed_skills_dir = crate::managed_path::get_managed_file_path()
@@ -1682,6 +1703,33 @@ Do the thing.
         assert!(skills
             .iter()
             .any(|skill| skill.name == "skill-command" && skill.description == "Skill command"));
+    }
+
+    #[test]
+    fn bare_mode_skips_auto_skills_but_keeps_add_dir_skills_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let extra = tmp.path().join("extra");
+        let project_skill = project.join(".claude").join("skills").join("project");
+        let extra_skill = extra.join(".claude").join("skills").join("extra");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(&project_skill).unwrap();
+        std::fs::create_dir_all(&extra_skill).unwrap();
+        std::fs::write(
+            project_skill.join("SKILL.md"),
+            "---\ndescription: Project skill\n---\nproject",
+        )
+        .unwrap();
+        std::fs::write(
+            extra_skill.join("SKILL.md"),
+            "---\ndescription: Extra skill\n---\nextra",
+        )
+        .unwrap();
+
+        let skills = discover_skills_inner(&project, std::slice::from_ref(&extra), true);
+
+        assert!(!skills.iter().any(|skill| skill.name == "project"));
+        assert!(skills.iter().any(|skill| skill.name == "extra"));
     }
 
     #[test]
