@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 struct MockTool;
 struct OtherTool;
+struct NamedTool(&'static str);
 
 #[async_trait]
 impl ToolExecutor for MockTool {
@@ -37,6 +38,28 @@ impl ToolExecutor for MockTool {
 impl ToolExecutor for OtherTool {
     fn name(&self) -> &str {
         "OtherTool"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn call(
+        &self,
+        _input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> anyhow::Result<ToolResultData> {
+        Ok(ToolResultData {
+            data: json!("ok"),
+            is_error: false,
+        })
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for NamedTool {
+    fn name(&self) -> &str {
+        self.0
     }
     fn input_schema(&self) -> Value {
         json!({"type": "object"})
@@ -110,4 +133,25 @@ fn test_remove_updates_registration_order() {
         .map(|tool| tool.name().to_string())
         .collect();
     assert_eq!(names, vec!["OtherTool"]);
+}
+
+#[test]
+fn test_tool_definitions_match_ts_ordering() {
+    let mut reg = ToolRegistry::new();
+    reg.register(Arc::new(NamedTool("Zed")));
+    reg.register(Arc::new(NamedTool("mcp__zeta__tool")));
+    reg.register(Arc::new(NamedTool("Alpha")));
+    reg.register(Arc::new(NamedTool("ToolSearch")));
+    reg.register(Arc::new(NamedTool("mcp__alpha__tool")));
+
+    let names: Vec<String> = reg
+        .tool_definitions()
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["Alpha", "Zed", "mcp__alpha__tool", "mcp__zeta__tool"]
+    );
 }

@@ -97,46 +97,39 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     let mut reg = ToolRegistry::new();
     let todo_v2_enabled = is_todo_v2_enabled(options);
 
-    // ── Baseline tools (always registered in TS tools.ts getAllBaseTools()) ──
+    // Baseline tools from TS tools.ts `getAllBaseTools()`, before feature-gated
+    // spread entries. Tools with later feature gates must not appear here.
     reg.register(Arc::new(agent_tool::AgentTool));
-    reg.register(Arc::new(ask_user::AskUserQuestionTool));
-    reg.register(Arc::new(bash::BashTool::new()));
-    reg.register(Arc::new(cron_tool::ScheduleCronTool));
-    reg.register(Arc::new(cron_tool::CronDeleteTool));
-    reg.register(Arc::new(cron_tool::CronListTool));
-    reg.register(Arc::new(edit::FileEditTool));
-    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
-    reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
-    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
-    reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
-    reg.register(Arc::new(glob_tool::GlobTool));
-    reg.register(Arc::new(grep::GrepTool));
-    reg.register(Arc::new(lsp_tool::LSPTool));
-    reg.register(Arc::new(monitor_tool::MonitorTool));
-    reg.register(Arc::new(notebook_edit::NotebookEditTool));
-    reg.register(Arc::new(push_notification_tool::PushNotificationTool));
-    reg.register(Arc::new(read::FileReadTool));
-    reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
-    reg.register(Arc::new(sleep_tool::SleepTool));
-    reg.register(Arc::new(skill_tool::SkillTool));
     reg.register(Arc::new(task_tools::TaskOutputTool));
+    reg.register(Arc::new(bash::BashTool::new()));
+    if !claude_core::embedded_tools::has_embedded_search_tools() {
+        reg.register(Arc::new(glob_tool::GlobTool));
+        reg.register(Arc::new(grep::GrepTool));
+    }
+    reg.register(Arc::new(plan_mode::ExitPlanModeTool));
+    reg.register(Arc::new(read::FileReadTool));
+    reg.register(Arc::new(edit::FileEditTool));
+    reg.register(Arc::new(write::FileWriteTool));
+    reg.register(Arc::new(notebook_edit::NotebookEditTool));
+    reg.register(Arc::new(web_fetch::WebFetchTool));
+    reg.register(Arc::new(web_search::WebSearchTool));
     reg.register(Arc::new(task_tools::TaskStopTool));
+    reg.register(Arc::new(ask_user::AskUserQuestionTool));
+    reg.register(Arc::new(skill_tool::SkillTool));
+    reg.register(Arc::new(plan_mode::EnterPlanModeTool));
 
     if todo_v2_enabled {
         reg.register(Arc::new(task_tools::TaskCreateTool));
-        reg.register(Arc::new(task_tools::TaskListTool));
-        reg.register(Arc::new(task_tools::TaskUpdateTool));
         reg.register(Arc::new(task_tools::TaskGetTool));
+        reg.register(Arc::new(task_tools::TaskUpdateTool));
+        reg.register(Arc::new(task_tools::TaskListTool));
     } else {
         reg.register(Arc::new(todo_write::TodoWriteTool));
     }
-    // TS includes ToolSearch optimistically in the base registry when the
-    // feature is not disabled. The request-time API layer later decides
-    // whether any tools are actually deferred.
-    tool_search::register_tool_search_snapshot(&mut reg);
-    reg.register(Arc::new(web_fetch::WebFetchTool));
-    reg.register(Arc::new(web_search::WebSearchTool));
-    reg.register(Arc::new(write::FileWriteTool));
+    reg.register(Arc::new(worktree_tools::EnterWorktreeTool));
+    reg.register(Arc::new(worktree_tools::ExitWorktreeTool));
+    reg.register(Arc::new(send_message::SendMessageTool));
+    reg.register(Arc::new(brief_tool::BriefTool));
 
     if feature_enabled("ENABLE_LSP_TOOL") {
         reg.register(Arc::new(lsp_tool::LSPTool));
@@ -209,6 +202,10 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     if feature_enabled("CLAUDE_CODE_VERIFY_PLAN") {
         reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
     }
+
+    // TS includes ToolSearch optimistically after assembling the base tool set.
+    // The request-time API layer later decides whether any tools are deferred.
+    tool_search::register_tool_search_snapshot(&mut reg);
 
     reg
 }

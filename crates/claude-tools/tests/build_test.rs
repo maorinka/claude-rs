@@ -13,6 +13,8 @@ fn test_default_registry_has_all_phase1_tools() {
     assert!(reg.get("Edit").is_some());
     assert!(reg.get("Grep").is_some());
     assert!(reg.get("Glob").is_some());
+    assert!(reg.get("Brief").is_some());
+    assert!(reg.get("SendMessage").is_some());
     assert!(
         reg.get("LSP").is_none(),
         "LSP is hidden unless ENABLE_LSP_TOOL is truthy"
