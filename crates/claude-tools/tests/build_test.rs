@@ -32,6 +32,12 @@ fn clear_registry_env() {
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
         "CLAUDE_CODE_USE_POWERSHELL_TOOL",
         "CLAUDE_CODE_ENABLE_TASKS",
+        "ANTHROPIC_BASE_URL",
+        "ENABLE_TOOL_SEARCH",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
     ] {
         std::env::remove_var(key);
     }
@@ -225,6 +231,22 @@ fn test_repl_mode_hides_repl_only_tools_when_repl_is_available() {
 
     std::env::remove_var("USER_TYPE");
     std::env::remove_var("CLAUDE_REPL_MODE");
+}
+
+#[test]
+fn test_tool_search_hidden_by_default_for_non_first_party_base_url() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+    std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787");
+
+    let reg = build_default_registry();
+    assert!(reg.get("ToolSearch").is_none());
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+    let reg = build_default_registry();
+    assert!(reg.get("ToolSearch").is_some());
+
+    clear_registry_env();
 }
 
 #[test]

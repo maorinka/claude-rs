@@ -6,11 +6,71 @@ use tokio_util::sync::CancellationToken;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
-pub fn is_tool_search_enabled_optimistic() -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolSearchMode {
+    ToolSearch,
+    ToolSearchAuto,
+    Standard,
+}
+
+fn is_truthy_value(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn parse_auto_percentage(value: &str) -> Option<u8> {
+    let percent = value.strip_prefix("auto:")?.parse::<i32>().ok()?;
+    Some(percent.clamp(0, 100) as u8)
+}
+
+pub fn get_tool_search_mode() -> ToolSearchMode {
     if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") {
+        return ToolSearchMode::Standard;
+    }
+
+    let value = std::env::var("ENABLE_TOOL_SEARCH").ok();
+    if let Some(value) = value.as_deref() {
+        if let Some(percent) = parse_auto_percentage(value) {
+            return match percent {
+                0 => ToolSearchMode::ToolSearch,
+                100 => ToolSearchMode::Standard,
+                _ => ToolSearchMode::ToolSearchAuto,
+            };
+        }
+        if value == "auto" {
+            return ToolSearchMode::ToolSearchAuto;
+        }
+        if is_truthy_value(value) {
+            return ToolSearchMode::ToolSearch;
+        }
+    }
+
+    if claude_core::errors_util::is_env_definitely_falsy("ENABLE_TOOL_SEARCH") {
+        return ToolSearchMode::Standard;
+    }
+
+    ToolSearchMode::ToolSearch
+}
+
+pub fn is_tool_search_enabled_optimistic() -> bool {
+    if get_tool_search_mode() == ToolSearchMode::Standard {
         return false;
     }
-    !claude_core::errors_util::is_env_definitely_falsy("ENABLE_TOOL_SEARCH")
+
+    let explicitly_configured = std::env::var("ENABLE_TOOL_SEARCH")
+        .ok()
+        .is_some_and(|value| !value.is_empty());
+    if !explicitly_configured
+        && claude_core::privacy_level::get_api_provider()
+            == claude_core::privacy_level::ApiProvider::FirstParty
+        && !claude_core::privacy_level::is_first_party_anthropic_base_url()
+    {
+        return false;
+    }
+
+    true
 }
 
 /// Fallback list used by direct tests or embedders that construct the tool

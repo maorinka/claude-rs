@@ -1,8 +1,27 @@
 use claude_tools::registry::{ToolExecutor, ToolUseContext};
-use claude_tools::tool_search::ToolSearchTool;
+use claude_tools::tool_search::{
+    get_tool_search_mode, is_tool_search_enabled_optimistic, ToolSearchMode, ToolSearchTool,
+};
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn clear_tool_search_env() {
+    for key in [
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+        "ENABLE_TOOL_SEARCH",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "USER_TYPE",
+    ] {
+        std::env::remove_var(key);
+    }
+}
 
 fn make_ctx() -> ToolUseContext {
     ToolUseContext::for_test(
@@ -106,6 +125,44 @@ fn test_tool_search_is_read_only_and_concurrency_safe() {
     let input = json!({ "query": "bash" });
     assert!(tool.is_read_only(&input));
     assert!(tool.is_concurrency_safe(&input));
+}
+
+#[test]
+fn test_tool_search_mode_matches_ts_env_mapping() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_tool_search_env();
+    assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearch);
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "auto");
+    assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearchAuto);
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "auto:0");
+    assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearch);
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "auto:100");
+    assert_eq!(get_tool_search_mode(), ToolSearchMode::Standard);
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "false");
+    assert_eq!(get_tool_search_mode(), ToolSearchMode::Standard);
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+    std::env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1");
+    assert_eq!(get_tool_search_mode(), ToolSearchMode::Standard);
+
+    clear_tool_search_env();
+}
+
+#[test]
+fn test_tool_search_optimistic_disables_default_on_non_first_party_base_url() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_tool_search_env();
+    std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787");
+    assert!(!is_tool_search_enabled_optimistic());
+
+    std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+    assert!(is_tool_search_enabled_optimistic());
+
+    clear_tool_search_env();
 }
 
 #[tokio::test]
