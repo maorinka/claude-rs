@@ -52,6 +52,7 @@ fn test_query_engine_add_messages() {
     engine.add_tool_result("tu_1", "result data", false);
     assert_eq!(engine.messages().len(), 2);
     assert_eq!(engine.messages()[1]["content"][0]["content"], "result data");
+    assert!(engine.messages()[1]["content"][0].get("is_error").is_none());
 }
 
 #[test]
@@ -73,6 +74,18 @@ fn test_query_engine_batches_parallel_tool_results() {
     assert_eq!(content[0]["content"], "first");
     assert_eq!(content[1]["tool_use_id"], "tu_2");
     assert_eq!(content[1]["content"], "second");
+}
+
+#[test]
+fn test_query_engine_can_preserve_false_is_error() {
+    let config = ApiConfig::default();
+    let auth = AuthMethod::ApiKey("test".into());
+    let client = ApiClient::new(config, auth);
+    let cancel = CancellationToken::new();
+    let mut engine = QueryEngine::new(client, vec![], vec![], cancel);
+
+    engine.add_tool_result_with_error_field("tu_1", "ok", false, true);
+    assert_eq!(engine.messages()[0]["content"][0]["is_error"], false);
 }
 
 #[tokio::test]

@@ -167,12 +167,25 @@ impl QueryEngine {
 
     /// Add a tool result message
     pub fn add_tool_result(&mut self, tool_use_id: &str, content: &str, is_error: bool) {
-        let block = serde_json::json!({
+        self.add_tool_result_with_error_field(tool_use_id, content, is_error, is_error);
+    }
+
+    /// Add a tool result message, optionally preserving `is_error: false`.
+    pub fn add_tool_result_with_error_field(
+        &mut self,
+        tool_use_id: &str,
+        content: &str,
+        is_error: bool,
+        include_is_error: bool,
+    ) {
+        let mut block = serde_json::json!({
             "type": "tool_result",
             "tool_use_id": tool_use_id,
             "content": content,
-            "is_error": is_error,
         });
+        if include_is_error || is_error {
+            block["is_error"] = serde_json::json!(is_error);
+        }
 
         if let Some(last) = self.messages.last_mut() {
             let can_append = last.get("role").and_then(|role| role.as_str()) == Some("user")

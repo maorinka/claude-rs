@@ -1072,6 +1072,31 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
     }
 }
 
+fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {
+    if tool_name == "Bash" {
+        return format_bash_tool_result_for_model(data);
+    }
+
+    if let Some(text) = data.as_str() {
+        return text.to_string();
+    }
+
+    if data.get("type").and_then(|value| value.as_str()) == Some("text") {
+        if let Some(content) = data
+            .get("file")
+            .and_then(|file| file.get("content"))
+            .and_then(|content| content.as_str())
+        {
+            return content.to_string();
+        }
+        if let Some(content) = data.get("content").and_then(|content| content.as_str()) {
+            return content.to_string();
+        }
+    }
+
+    data.to_string()
+}
+
 fn permission_mode_hook_name(
     mode: &claude_core::permissions::types::PermissionMode,
 ) -> &'static str {
@@ -2515,18 +2540,10 @@ async fn main() -> Result<()> {
                                                                     _ => {}
                                                                 }
                                                             }
-                                                            let text = if tool_info.name == "Bash" {
-                                                                format_bash_tool_result_for_model(
-                                                                    &data.data,
-                                                                )
-                                                            } else {
-                                                                data.data
-                                                                    .as_str()
-                                                                    .unwrap_or(
-                                                                        &data.data.to_string(),
-                                                                    )
-                                                                    .to_string()
-                                                            };
+                                                            let text = format_tool_result_for_model(
+                                                                &tool_info.name,
+                                                                &data.data,
+                                                            );
                                                             (text, data.is_error, data.data)
                                                         }
                                                         Err(e) => {
@@ -2638,14 +2655,10 @@ async fn main() -> Result<()> {
                                                         _ => {}
                                                     }
                                                 }
-                                                let text = if tool_info.name == "Bash" {
-                                                    format_bash_tool_result_for_model(&data.data)
-                                                } else {
-                                                    data.data
-                                                        .as_str()
-                                                        .unwrap_or(&data.data.to_string())
-                                                        .to_string()
-                                                };
+                                                let text = format_tool_result_for_model(
+                                                    &tool_info.name,
+                                                    &data.data,
+                                                );
                                                 (text, data.is_error, data.data)
                                             }
                                             Err(e) => {
@@ -2742,7 +2755,12 @@ async fn main() -> Result<()> {
                                 "is_error": is_error,
                             }));
                         }
-                        query_engine.add_tool_result(&tool_info.id, &result_text, is_error);
+                        query_engine.add_tool_result_with_error_field(
+                            &tool_info.id,
+                            &result_text,
+                            is_error,
+                            is_error || tool_info.name == "Bash",
+                        );
                     }
                     if cli.output_format == OutputFormat::StreamJson
                         && !stream_tool_results.is_empty()
