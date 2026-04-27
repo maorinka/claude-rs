@@ -281,7 +281,7 @@ pub fn discover_skills_with_additional(
         load_skills_from_dir(&user_skills_dir, &source, &mut skills, &mut state);
     }
 
-    for project_skills_dir in project_skill_dirs_up_to_boundary(project_root) {
+    for project_skills_dir in project_claude_subdirs_up_to_boundary(project_root, "skills") {
         let source = SkillSource::Directory(project_skills_dir.clone());
         load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut state);
     }
@@ -292,12 +292,14 @@ pub fn discover_skills_with_additional(
         load_skills_from_dir(&skills_dir, &source, &mut skills, &mut state);
     }
 
+    load_legacy_command_skill_sources(project_root, additional_dirs, &mut skills, &mut state);
+
     load_enabled_plugin_skills(project_root, &mut skills);
 
     skills
 }
 
-fn project_skill_dirs_up_to_boundary(cwd: &Path) -> Vec<PathBuf> {
+fn project_claude_subdirs_up_to_boundary(cwd: &Path, subdir: &str) -> Vec<PathBuf> {
     let home = dirs::home_dir().map(|path| canonical_file_id(&path));
     let git_root = crate::find_git_root::find_git_root(cwd).map(|path| canonical_file_id(&path));
     let mut current = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
@@ -308,9 +310,9 @@ fn project_skill_dirs_up_to_boundary(cwd: &Path) -> Vec<PathBuf> {
             break;
         }
 
-        let skills_dir = current.join(".claude").join("skills");
-        if skills_dir.is_dir() {
-            dirs.push(skills_dir);
+        let claude_subdir = current.join(".claude").join(subdir);
+        if claude_subdir.is_dir() {
+            dirs.push(claude_subdir);
         }
 
         if git_root
@@ -339,6 +341,94 @@ fn is_env_truthy(name: &str) -> bool {
             !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
         })
         .unwrap_or(false)
+}
+
+fn load_legacy_command_skill_sources(
+    project_root: &Path,
+    additional_dirs: &[PathBuf],
+    skills: &mut Vec<Skill>,
+    state: &mut SkillLoadState,
+) {
+    let managed_commands_dir = crate::managed_path::get_managed_file_path()
+        .join(".claude")
+        .join("commands");
+    let source = SkillSource::Directory(managed_commands_dir.clone());
+    load_legacy_commands_from_dir(&managed_commands_dir, &source, skills, state);
+
+    if let Ok(home) = claude_dir() {
+        let user_commands_dir = home.join("commands");
+        let source = SkillSource::Directory(user_commands_dir.clone());
+        load_legacy_commands_from_dir(&user_commands_dir, &source, skills, state);
+    }
+
+    for project_commands_dir in project_claude_subdirs_up_to_boundary(project_root, "commands") {
+        let source = SkillSource::Directory(project_commands_dir.clone());
+        load_legacy_commands_from_dir(&project_commands_dir, &source, skills, state);
+    }
+
+    for additional_dir in additional_dirs {
+        let commands_dir = additional_dir.join(".claude").join("commands");
+        let source = SkillSource::Directory(commands_dir.clone());
+        load_legacy_commands_from_dir(&commands_dir, &source, skills, state);
+    }
+}
+
+fn load_legacy_commands_from_dir(
+    base_dir: &Path,
+    source: &SkillSource,
+    skills: &mut Vec<Skill>,
+    state: &mut SkillLoadState,
+) {
+    let jobs = collect_plugin_command_jobs(base_dir);
+    for job in jobs {
+        let Some(path) = plugin_job_file_path(&job) else {
+            continue;
+        };
+        if !state.should_load_file(&path) {
+            continue;
+        }
+        if let Some(skill) = read_legacy_command_job(job, source) {
+            skills.push(skill);
+        }
+    }
+}
+
+fn read_legacy_command_job(job: PluginReadJob, source: &SkillSource) -> Option<Skill> {
+    match job {
+        PluginReadJob::SkillDir(path) => {
+            let skill_file = path.join("SKILL.md");
+            let content = std::fs::read_to_string(&skill_file).ok()?;
+            let local_name = plugin_command_local_name(&skill_file, path.parent()?)?;
+            let parsed = parse_skill_file(&content);
+            Some(skill_from_parsed(
+                local_name,
+                parsed,
+                source,
+                "Custom command",
+            ))
+        }
+        PluginReadJob::CommandFile {
+            path,
+            base_dir,
+            metadata,
+        } => {
+            let content = std::fs::read_to_string(&path).ok()?;
+            let local_name = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.name.clone())
+                .or_else(|| plugin_command_local_name(&path, &base_dir))?;
+            let mut parsed = parse_skill_file(&content);
+            if let Some(metadata) = &metadata {
+                parsed = apply_plugin_command_metadata(parsed, metadata);
+            }
+            Some(skill_from_parsed(
+                local_name,
+                parsed,
+                source,
+                "Custom command",
+            ))
+        }
+    }
 }
 
 fn load_enabled_plugin_skills(project_root: &Path, skills: &mut Vec<Skill>) {
@@ -1099,6 +1189,62 @@ fn plugin_skill_from_parsed(
     is_plugin_command: bool,
 ) -> Skill {
     let name = format!("{plugin_name}:{local_name}");
+    let description = skill_description_from_parsed(&name, &parsed, "Skill");
+
+    Skill {
+        name,
+        description,
+        content: parsed.content,
+        source: source.clone(),
+        argument_hint: parsed.frontmatter.argument_hint,
+        when_to_use: parsed.frontmatter.when_to_use,
+        allowed_tools: parsed.frontmatter.allowed_tools,
+        user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
+        disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
+        is_plugin_command,
+    }
+}
+
+fn skill_from_parsed(
+    name: String,
+    parsed: ParsedSkillFile,
+    source: &SkillSource,
+    fallback_label: &str,
+) -> Skill {
+    let description = skill_description_from_parsed(&name, &parsed, fallback_label);
+
+    Skill {
+        name,
+        description,
+        content: parsed.content,
+        source: source.clone(),
+        argument_hint: parsed.frontmatter.argument_hint,
+        when_to_use: parsed.frontmatter.when_to_use,
+        allowed_tools: parsed.frontmatter.allowed_tools,
+        user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
+        disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
+        is_plugin_command: false,
+    }
+}
+
+fn skill_description_from_parsed(
+    name: &str,
+    parsed: &ParsedSkillFile,
+    fallback_label: &str,
+) -> String {
+    parsed.frontmatter.description.clone().unwrap_or_else(|| {
+        crate::markdown_config_loader::extract_description_from_markdown(
+            &parsed.content,
+            &format!("{fallback_label}: {name}"),
+        )
+    })
+}
+
+fn skill_from_skill_dir_parsed(
+    name: String,
+    parsed: ParsedSkillFile,
+    source: &SkillSource,
+) -> Skill {
     let description = parsed
         .frontmatter
         .description
@@ -1115,7 +1261,7 @@ fn plugin_skill_from_parsed(
         allowed_tools: parsed.frontmatter.allowed_tools,
         user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
         disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
-        is_plugin_command,
+        is_plugin_command: false,
     }
 }
 
@@ -1164,24 +1310,7 @@ fn load_skills_from_dir(
             .clone()
             .unwrap_or_else(|| dir_name.clone());
 
-        let description = parsed
-            .frontmatter
-            .description
-            .clone()
-            .unwrap_or_else(|| format!("Skill: {}", name));
-
-        skills.push(Skill {
-            name,
-            description,
-            content: parsed.content,
-            source: source.clone(),
-            argument_hint: parsed.frontmatter.argument_hint,
-            when_to_use: parsed.frontmatter.when_to_use,
-            allowed_tools: parsed.frontmatter.allowed_tools,
-            user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
-            disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
-            is_plugin_command: false,
-        });
+        skills.push(skill_from_skill_dir_parsed(name, parsed, source));
     }
 }
 
@@ -1473,7 +1602,7 @@ Do the thing.
         std::fs::create_dir_all(repo.join(".claude").join("skills")).unwrap();
         std::fs::create_dir_all(nested.join(".claude").join("skills")).unwrap();
 
-        let dirs = project_skill_dirs_up_to_boundary(&nested);
+        let dirs = project_claude_subdirs_up_to_boundary(&nested, "skills");
 
         assert_eq!(
             dirs,
@@ -1516,6 +1645,43 @@ Do the thing.
             .unwrap();
 
         assert!(project_index < extra_index);
+    }
+
+    #[test]
+    fn legacy_commands_are_loaded_as_skills_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let commands = project.join(".claude").join("commands");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(commands.join("nested")).unwrap();
+        std::fs::create_dir_all(commands.join("skill-command")).unwrap();
+        std::fs::write(
+            commands.join("deploy.md"),
+            "---\ndescription: Deploy command\n---\ndeploy body",
+        )
+        .unwrap();
+        std::fs::write(
+            commands.join("nested").join("check.md"),
+            "# Check command\n\ncheck body",
+        )
+        .unwrap();
+        std::fs::write(
+            commands.join("skill-command").join("SKILL.md"),
+            "---\ndescription: Skill command\n---\nskill body",
+        )
+        .unwrap();
+
+        let skills = discover_skills_with_additional(&project, &[]);
+
+        assert!(skills
+            .iter()
+            .any(|skill| skill.name == "deploy" && skill.description == "Deploy command"));
+        assert!(skills
+            .iter()
+            .any(|skill| skill.name == "nested:check" && skill.description == "Check command"));
+        assert!(skills
+            .iter()
+            .any(|skill| skill.name == "skill-command" && skill.description == "Skill command"));
     }
 
     #[test]
