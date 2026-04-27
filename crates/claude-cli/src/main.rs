@@ -649,6 +649,22 @@ mod tests {
             "Launching skill: plugin:example"
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_task_output_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "TaskOutput",
+                &serde_json::json!({
+                    "taskId": "task-1",
+                    "status": "completed",
+                    "output": "hello\n",
+                    "pid": 123
+                })
+            ),
+            "<retrieval_status>found</retrieval_status>\n\n<task_id>task-1</task_id>\n\n<task_type>background</task_type>\n\n<status>completed</status>\n\n<output>\nhello\n</output>"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1428,6 +1444,48 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
             .and_then(|value| value.as_str())
             .unwrap_or("");
         return format!("Launching skill: {command_name}");
+    }
+
+    if tool_name == "TaskOutput" {
+        let mut parts = vec![format!(
+            "<retrieval_status>{}</retrieval_status>",
+            data.get("retrieval_status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("found")
+        )];
+        let task_value = data.get("task").unwrap_or(data);
+        if let Some(task_id) = task_value
+            .get("task_id")
+            .or_else(|| task_value.get("taskId"))
+            .and_then(|value| value.as_str())
+        {
+            parts.push(format!("<task_id>{task_id}</task_id>"));
+            let task_type = task_value
+                .get("task_type")
+                .or_else(|| task_value.get("taskType"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("background");
+            parts.push(format!("<task_type>{task_type}</task_type>"));
+            if let Some(status) = task_value.get("status").and_then(|value| value.as_str()) {
+                parts.push(format!("<status>{status}</status>"));
+            }
+            if let Some(exit_code) = task_value
+                .get("exitCode")
+                .or_else(|| task_value.get("exit_code"))
+                .and_then(|value| value.as_i64())
+            {
+                parts.push(format!("<exit_code>{exit_code}</exit_code>"));
+            }
+            if let Some(output) = task_value.get("output").and_then(|value| value.as_str()) {
+                if !output.trim().is_empty() {
+                    parts.push(format!("<output>\n{}\n</output>", output.trim_end()));
+                }
+            }
+            if let Some(error) = task_value.get("error").and_then(|value| value.as_str()) {
+                parts.push(format!("<error>{error}</error>"));
+            }
+        }
+        return parts.join("\n\n");
     }
 
     if tool_name == "WebFetch" {
