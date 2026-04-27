@@ -252,32 +252,80 @@ fn parse_string_list(s: &str) -> Vec<String> {
 /// subdirectory containing a `SKILL.md` file (matching the TS convention in
 /// `loadSkillsFromSkillsDir`).
 ///
-/// Discovery order (mirrors TypeScript `getSkillDirCommands`):
-/// 1. `~/.claude/skills/` — user-level skills
-/// 2. `<project_root>/.claude/skills/` — project-level skills
+/// Discovery order mirrors TypeScript `getSkillDirCommands` for file-backed
+/// skills: managed policy skills, user skills, then project skills from cwd up
+/// to the git boundary. Plugin skills are loaded afterward by their own TS
+/// bucket.
 pub fn discover_skills(project_root: &Path) -> Vec<Skill> {
     let mut skills = Vec::new();
     let mut state = SkillLoadState::default();
 
-    // 1. User-level skills (~/.claude/skills/)
-    if let Ok(home) = claude_dir() {
-        let user_skills_dir = home.join("skills");
-        load_skills_from_dir(
-            &user_skills_dir,
-            &SkillSource::Builtin,
-            &mut skills,
-            &mut state,
-        );
+    if !is_env_truthy("CLAUDE_CODE_DISABLE_POLICY_SKILLS") {
+        let managed_skills_dir = crate::managed_path::get_managed_file_path()
+            .join(".claude")
+            .join("skills");
+        let source = SkillSource::Directory(managed_skills_dir.clone());
+        load_skills_from_dir(&managed_skills_dir, &source, &mut skills, &mut state);
     }
 
-    // 2. Project-level skills (<project>/.claude/skills/)
-    let project_skills_dir = project_root.join(".claude").join("skills");
-    let source = SkillSource::Directory(project_skills_dir.clone());
-    load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut state);
+    if let Ok(home) = claude_dir() {
+        let user_skills_dir = home.join("skills");
+        let source = SkillSource::Directory(user_skills_dir.clone());
+        load_skills_from_dir(&user_skills_dir, &source, &mut skills, &mut state);
+    }
+
+    for project_skills_dir in project_skill_dirs_up_to_boundary(project_root) {
+        let source = SkillSource::Directory(project_skills_dir.clone());
+        load_skills_from_dir(&project_skills_dir, &source, &mut skills, &mut state);
+    }
 
     load_enabled_plugin_skills(project_root, &mut skills);
 
     skills
+}
+
+fn project_skill_dirs_up_to_boundary(cwd: &Path) -> Vec<PathBuf> {
+    let home = dirs::home_dir().map(|path| canonical_file_id(&path));
+    let git_root = crate::find_git_root::find_git_root(cwd).map(|path| canonical_file_id(&path));
+    let mut current = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut dirs = Vec::new();
+
+    loop {
+        if home.as_ref().is_some_and(|home| *home == current) {
+            break;
+        }
+
+        let skills_dir = current.join(".claude").join("skills");
+        if skills_dir.is_dir() {
+            dirs.push(skills_dir);
+        }
+
+        if git_root
+            .as_ref()
+            .is_some_and(|git_root| *git_root == current)
+        {
+            break;
+        }
+
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if parent == current {
+            break;
+        }
+        current = parent.to_path_buf();
+    }
+
+    dirs
+}
+
+fn is_env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(false)
 }
 
 fn load_enabled_plugin_skills(project_root: &Path, skills: &mut Vec<Skill>) {
@@ -1401,6 +1449,26 @@ Do the thing.
         assert_eq!(duplicates.len(), 2);
         assert!(duplicates.iter().any(|skill| skill.description == "First"));
         assert!(duplicates.iter().any(|skill| skill.description == "Second"));
+    }
+
+    #[test]
+    fn project_skill_dirs_walk_from_cwd_to_git_boundary_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let nested = repo.join("crates").join("member");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join(".claude").join("skills")).unwrap();
+        std::fs::create_dir_all(nested.join(".claude").join("skills")).unwrap();
+
+        let dirs = project_skill_dirs_up_to_boundary(&nested);
+
+        assert_eq!(
+            dirs,
+            vec![
+                canonical_file_id(&nested).join(".claude").join("skills"),
+                canonical_file_id(repo).join(".claude").join("skills")
+            ]
+        );
     }
 
     #[test]
