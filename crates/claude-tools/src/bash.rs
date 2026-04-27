@@ -269,58 +269,6 @@ pub enum PermissionCheckResult {
     TooComplex,
 }
 
-/// Read-only commands that never need permission prompts.
-const READ_ONLY_COMMANDS: &[&str] = &[
-    "ls",
-    "cat",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "wc",
-    "file",
-    "stat",
-    "find",
-    "grep",
-    "rg",
-    "ag",
-    "ack",
-    "which",
-    "where",
-    "type",
-    "echo",
-    "printf",
-    "date",
-    "pwd",
-    "whoami",
-    "hostname",
-    "uname",
-    "env",
-    "printenv",
-    "true",
-    "false",
-    "test",
-    "[",
-    "git status",
-    "git log",
-    "git diff",
-    "git show",
-    "git branch",
-    "git remote",
-    "git tag",
-    "git stash list",
-    "cargo check",
-    "cargo test",
-    "cargo clippy",
-    "cargo build",
-    "npm test",
-    "npm run lint",
-    "npx tsc",
-    "node -e",
-    "python -c",
-    "python3 -c",
-];
-
 /// Check permissions for a command by splitting compound commands and
 /// evaluating each sub-command against permission rules.
 ///
@@ -336,18 +284,15 @@ pub fn check_permissions(command: &str) -> PermissionCheckResult {
     let mut needs_ask = Vec::new();
 
     for sub_cmd in &sub_commands {
-        let _cmd_name = match extract_command_name(sub_cmd) {
-            Some(name) => name,
-            None => continue,
-        };
+        if extract_command_name(sub_cmd).is_none() {
+            continue;
+        }
 
-        // Check if the command (or command + subcommand prefix) is read-only
-        let is_safe = READ_ONLY_COMMANDS
-            .iter()
-            .any(|safe| sub_cmd.starts_with(safe));
-
-        if !is_safe {
-            needs_ask.push(sub_cmd.clone());
+        match classify_command(sub_cmd) {
+            Classification::ReadOnly => {}
+            Classification::Mutating | Classification::Unknown => {
+                needs_ask.push(sub_cmd.clone());
+            }
         }
     }
 
@@ -991,6 +936,50 @@ mod tests {
             }
             other => panic!("expected Ask, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_permission_build_commands_need_ask_like_ts() {
+        for command in [
+            "cargo build",
+            "cargo build 2>&1 | tail -5",
+            "git rev-list --left-right --count main...HEAD",
+        ] {
+            match check_permissions(command) {
+                PermissionCheckResult::Ask(cmds) => {
+                    assert!(
+                        !cmds.is_empty(),
+                        "{command} should ask for at least one subcommand"
+                    );
+                }
+                other => panic!("expected Ask for {command}, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_default_mode_prompts_for_build_commands_like_ts() {
+        let tool = crate::registry::ExecutorToolPermissions::new(
+            Arc::new(BashTool::new()),
+            json!({ "command": "cargo build 2>&1 | tail -5" }),
+        );
+        let ctx = claude_core::permissions::ToolPermissionContext {
+            mode: claude_core::permissions::PermissionMode::Default,
+            ..Default::default()
+        };
+        let decision = claude_core::permissions::evaluator::evaluate_permission(
+            &tool,
+            &json!({ "command": "cargo build 2>&1 | tail -5" }),
+            &ctx,
+        );
+        assert!(
+            matches!(
+                decision,
+                claude_core::permissions::PermissionDecision::Ask(_)
+            ),
+            "Default mode should ask for cargo build, got: {:?}",
+            decision
+        );
     }
 
     #[test]
