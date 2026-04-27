@@ -249,6 +249,19 @@ def print_array_field_diff(label: str, ts_event: dict[str, Any], rs_event: dict[
             print(line)
 
 
+def sorted_keys(value: Any) -> list[str]:
+    return sorted(value.keys()) if isinstance(value, dict) else []
+
+
+def nested(value: dict[str, Any] | None, *path: str) -> Any:
+    current: Any = value
+    for part in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
 def scrub_init_scalar(label: str, value: Any) -> Any:
     if label in {"session_id", "uuid", "cwd"}:
         return "<dynamic>"
@@ -293,6 +306,43 @@ def print_stdout_report(ts_stdout: str, rs_stdout: str) -> None:
             print(f"{field}: {'==' if ts_value == rs_value else '!='}")
         for field in ["tools", "slash_commands", "skills", "agents"]:
             print_array_field_diff(field, ts_init, rs_init)
+
+    ts_assistant = first_event(stdout_json_events(ts_stdout), "assistant")
+    rs_assistant = first_event(stdout_json_events(rs_stdout), "assistant")
+    if ts_assistant and rs_assistant:
+        print()
+        print("== Stdout assistant ==")
+        for label, ts_value, rs_value in [
+            ("event keys", ts_assistant, rs_assistant),
+            ("message keys", nested(ts_assistant, "message"), nested(rs_assistant, "message")),
+            (
+                "usage keys",
+                nested(ts_assistant, "message", "usage"),
+                nested(rs_assistant, "message", "usage"),
+            ),
+        ]:
+            print(f"{label}: {'==' if sorted_keys(ts_value) == sorted_keys(rs_value) else '!='}")
+
+    ts_result = first_event(stdout_json_events(ts_stdout), "result", "success")
+    rs_result = first_event(stdout_json_events(rs_stdout), "result", "success")
+    if ts_result and rs_result:
+        print()
+        print("== Stdout result ==")
+        for label, ts_value, rs_value in [
+            ("event keys", ts_result, rs_result),
+            ("usage keys", nested(ts_result, "usage"), nested(rs_result, "usage")),
+            (
+                "iteration keys",
+                (nested(ts_result, "usage", "iterations") or [{}])[0],
+                (nested(rs_result, "usage", "iterations") or [{}])[0],
+            ),
+            (
+                "model usage keys",
+                next(iter((ts_result.get("modelUsage") or {}).values()), {}),
+                next(iter((rs_result.get("modelUsage") or {}).values()), {}),
+            ),
+        ]:
+            print(f"{label}: {'==' if sorted_keys(ts_value) == sorted_keys(rs_value) else '!='}")
 
 
 def main() -> int:
