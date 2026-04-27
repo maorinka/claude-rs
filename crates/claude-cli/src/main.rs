@@ -763,6 +763,21 @@ mod tests {
             serde_json::json!([{ "type": "text", "text": "Report." }])
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_lsp_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "LSP",
+                &serde_json::json!({
+                    "operation": "hover",
+                    "result": "fn main()",
+                    "filePath": "src/main.rs"
+                })
+            ),
+            "fn main()"
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1609,6 +1624,18 @@ fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value
         return format!(
             "User has answered your questions: {answers_text}. You can now continue with the user's answers in mind."
         );
+    }
+
+    if tool_name == "LSP" {
+        return data
+            .get("result")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| value.to_string())
+            })
+            .unwrap_or_else(|| data.to_string());
     }
 
     if tool_name == "EnterPlanMode" {

@@ -172,8 +172,7 @@ impl ToolExecutor for LSPTool {
                         "goToImplementation",
                         "prepareCallHierarchy",
                         "incomingCalls",
-                        "outgoingCalls",
-                        "diagnostics"
+                        "outgoingCalls"
                     ],
                     "description": "The LSP operation to perform."
                 },
@@ -190,7 +189,8 @@ impl ToolExecutor for LSPTool {
                     "description": "The 1-based character offset (required for position-based operations)."
                 }
             },
-            "required": ["operation", "filePath"]
+            "required": ["operation", "filePath", "line", "character"],
+            "additionalProperties": false
         })
     }
 
@@ -547,7 +547,11 @@ mod tests {
         assert!(ops.contains(&"prepareCallHierarchy"));
         assert!(ops.contains(&"incomingCalls"));
         assert!(ops.contains(&"outgoingCalls"));
-        assert!(ops.contains(&"diagnostics"));
+        assert!(!ops.contains(&"diagnostics"));
+        assert_eq!(
+            schema["required"],
+            json!(["operation", "filePath", "line", "character"])
+        );
     }
 
     #[test]
