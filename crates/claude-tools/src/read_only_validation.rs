@@ -325,9 +325,12 @@ fn classify_single(cmd: &str) -> Classification {
         return Classification::ReadOnly;
     }
 
-    // Per-binary subcommand allowlists (git, gh, docker).
+    if binary == "git" {
+        return classify_git_command(&tokens, binary);
+    }
+
+    // Per-binary subcommand allowlists (gh, docker).
     if let Some(allow) = subcommand_allowlist(binary) {
-        // Find first non-flag token after the binary.
         let sub = tokens
             .iter()
             .skip_while(|t| t.as_str() != binary)
@@ -337,12 +340,62 @@ fn classify_single(cmd: &str) -> Classification {
         return match sub {
             Some(s) if allow.contains(s) => Classification::ReadOnly,
             Some(_) => Classification::Mutating,
-            None => Classification::ReadOnly, // bare `git`/`gh` prints help
+            None => Classification::ReadOnly, // bare `gh`/`docker` prints help
         };
     }
 
     let _ = first;
     Classification::Unknown
+}
+
+fn classify_git_command(tokens: &[String], binary: &str) -> Classification {
+    let Some(git_index) = tokens.iter().position(|t| t == binary) else {
+        return Classification::Unknown;
+    };
+    let args = &tokens[git_index + 1..];
+    let Some(sub) = args
+        .iter()
+        .find(|t| !t.starts_with('-'))
+        .map(String::as_str)
+    else {
+        return Classification::ReadOnly;
+    };
+    let sub_index = args.iter().position(|t| t == sub).unwrap_or(0);
+    let rest = &args[sub_index + 1..];
+
+    match sub {
+        "status" | "log" | "show" | "diff" | "branch" | "tag" | "blame" | "describe" | "reflog"
+        | "shortlog" | "rev-parse" | "ls-files" | "ls-tree" | "cat-file" | "grep" | "name-rev"
+        | "help" | "version" | "for-each-ref" | "check-ignore" | "whatchanged" => {
+            Classification::ReadOnly
+        }
+        "stash" if rest.first().is_some_and(|arg| arg == "list") => Classification::ReadOnly,
+        "worktree" if rest.first().is_some_and(|arg| arg == "list") => Classification::ReadOnly,
+        "config" if rest.first().is_some_and(|arg| arg == "--get") => Classification::ReadOnly,
+        "remote" if git_remote_is_read_only(rest) => Classification::ReadOnly,
+        _ => Classification::Mutating,
+    }
+}
+
+fn git_remote_is_read_only(args: &[String]) -> bool {
+    if args.is_empty() {
+        return true;
+    }
+    if args.iter().all(|arg| arg == "-v" || arg == "--verbose") {
+        return true;
+    }
+    if args.first().is_some_and(|arg| arg == "show") {
+        let positional = args
+            .iter()
+            .skip(1)
+            .filter(|arg| arg.as_str() != "-n")
+            .collect::<Vec<_>>();
+        return positional.len() == 1
+            && positional[0]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    }
+    false
 }
 
 /// If the command starts with `VAR=value VAR2=value2 <binary>`, return the
@@ -418,6 +471,44 @@ mod tests {
             Classification::Mutating
         );
         assert_eq!(classify_command("git push"), Classification::Mutating);
+    }
+
+    #[test]
+    fn git_multiword_readonly_forms_match_ts() {
+        assert_eq!(
+            classify_command("git worktree list"),
+            Classification::ReadOnly
+        );
+        assert_eq!(
+            classify_command("git stash list --oneline"),
+            Classification::ReadOnly
+        );
+        assert_eq!(
+            classify_command("git config --get user.name"),
+            Classification::ReadOnly
+        );
+        assert_eq!(classify_command("git remote -v"), Classification::ReadOnly);
+        assert_eq!(
+            classify_command("git remote show origin"),
+            Classification::ReadOnly
+        );
+    }
+
+    #[test]
+    fn git_multiword_mutating_forms_require_permission_like_ts() {
+        assert_eq!(
+            classify_command("git worktree add ../tmp HEAD"),
+            Classification::Mutating
+        );
+        assert_eq!(classify_command("git stash pop"), Classification::Mutating);
+        assert_eq!(
+            classify_command("git config user.name test"),
+            Classification::Mutating
+        );
+        assert_eq!(
+            classify_command("git remote add origin https://example.com/repo.git"),
+            Classification::Mutating
+        );
     }
 
     #[test]
