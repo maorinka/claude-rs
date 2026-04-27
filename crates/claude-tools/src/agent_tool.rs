@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -223,6 +224,14 @@ impl ToolExecutor for AgentTool {
         let isolation = input.get("isolation").and_then(|v| v.as_str());
         let agent_name = input.get("name").and_then(|v| v.as_str());
         let team_name = input.get("team_name").and_then(|v| v.as_str());
+        let agent_id = agent_name
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("agent-{}", uuid::Uuid::new_v4()));
+        let agent_type = input
+            .get("subagent_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("general-purpose");
+        let start_time = Instant::now();
         let run_in_background = input
             .get("run_in_background")
             .and_then(|v| v.as_bool())
@@ -369,10 +378,13 @@ impl ToolExecutor for AgentTool {
 
             Ok(ToolResultData {
                 data: json!({
-                    "status": "spawned",
+                    "status": "async_launched",
+                    "agentId": agent_id,
                     "task_id": task_id,
+                    "description": description,
                     "prompt": prompt,
-                    "background": true,
+                    "outputFile": "",
+                    "canReadOutputFile": false,
                     "pid": pid,
                 }),
                 is_error: false,
@@ -400,6 +412,13 @@ impl ToolExecutor for AgentTool {
                 data: json!({
                     "status": "completed",
                     "prompt": prompt,
+                    "agentId": agent_id,
+                    "agentType": agent_type,
+                    "content": [{ "type": "text", "text": result }],
+                    "totalDurationMs": start_time.elapsed().as_millis() as u64,
+                    "totalTokens": 0,
+                    "totalToolUseCount": 0,
+                    "usage": null,
                     "result": result,
                 }),
                 is_error: !output.status.success(),

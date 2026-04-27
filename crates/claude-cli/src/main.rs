@@ -726,6 +726,43 @@ mod tests {
             "User has answered your questions: \"Which approach?\"=\"Use Rust\" selected preview:\ncargo test user notes: matches the port. You can now continue with the user's answers in mind."
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_agent_completed_mapping() {
+        assert_eq!(
+            format_tool_result_content_for_model(
+                "Agent",
+                &serde_json::json!({
+                    "status": "completed",
+                    "agentId": "agent-1",
+                    "agentType": "general-purpose",
+                    "content": [{ "type": "text", "text": "Done." }],
+                    "totalTokens": 42,
+                    "totalToolUseCount": 3,
+                    "totalDurationMs": 99
+                })
+            ),
+            serde_json::json!([
+                { "type": "text", "text": "Done." },
+                { "type": "text", "text": "agentId: agent-1 (use SendMessage with to: 'agent-1' to continue this agent)\n<usage>total_tokens: 42\ntool_uses: 3\nduration_ms: 99</usage>" }
+            ])
+        );
+        assert_eq!(
+            format_tool_result_content_for_model(
+                "Agent",
+                &serde_json::json!({
+                    "status": "completed",
+                    "agentId": "agent-1",
+                    "agentType": "Explore",
+                    "content": [{ "type": "text", "text": "Report." }],
+                    "totalTokens": 42,
+                    "totalToolUseCount": 3,
+                    "totalDurationMs": 99
+                })
+            ),
+            serde_json::json!([{ "type": "text", "text": "Report." }])
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1356,6 +1393,10 @@ fn format_tool_result_content_for_model(
     tool_name: &str,
     data: &serde_json::Value,
 ) -> serde_json::Value {
+    if tool_name == "Agent" || tool_name == "agent" {
+        return format_agent_tool_result_content_for_model(data);
+    }
+
     if tool_name == "ToolSearch" {
         let matches = data
             .get("matches")
@@ -1402,6 +1443,130 @@ fn format_tool_result_content_for_model(
         );
     }
     serde_json::Value::String(format_tool_result_string_for_model(tool_name, data))
+}
+
+fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde_json::Value {
+    let Some(status) = data.get("status").and_then(|value| value.as_str()) else {
+        return serde_json::Value::String(data.to_string());
+    };
+
+    if status == "teammate_spawned" {
+        let teammate_id = data
+            .get("teammate_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let name = data
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let team_name = data
+            .get("team_name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return serde_json::json!([{
+            "type": "text",
+            "text": format!("Spawned successfully.\nagent_id: {teammate_id}\nname: {name}\nteam_name: {team_name}\nThe agent is now running and will receive instructions via mailbox.")
+        }]);
+    }
+
+    if status == "remote_launched" {
+        let task_id = data
+            .get("taskId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let session_url = data
+            .get("sessionUrl")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let output_file = data
+            .get("outputFile")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return serde_json::json!([{
+            "type": "text",
+            "text": format!("Remote agent launched in CCR.\ntaskId: {task_id}\nsession_url: {session_url}\noutput_file: {output_file}\nThe agent is running remotely. You will be notified automatically when it completes.\nBriefly tell the user what you launched and end your response.")
+        }]);
+    }
+
+    if status == "async_launched" {
+        let agent_id = data
+            .get("agentId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let prefix = format!(
+            "Async agent launched successfully.\nagentId: {agent_id} (internal ID - do not mention to user. Use SendMessage with to: '{agent_id}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes."
+        );
+        let instructions = if data
+            .get("canReadOutputFile")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            let output_file = data
+                .get("outputFile")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            format!("Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: {output_file}\nIf asked, you can check progress before completion by using Read or Bash tail on the output file.")
+        } else {
+            "Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.".to_string()
+        };
+        return serde_json::json!([{ "type": "text", "text": format!("{prefix}\n{instructions}") }]);
+    }
+
+    if status == "completed" {
+        let mut content = data
+            .get("content")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if content.is_empty() {
+            content.push(serde_json::json!({
+                "type": "text",
+                "text": "(Subagent completed but returned no output.)"
+            }));
+        }
+
+        let worktree_info = match (
+            data.get("worktreePath").and_then(|value| value.as_str()),
+            data.get("worktreeBranch").and_then(|value| value.as_str()),
+        ) {
+            (Some(path), Some(branch)) => {
+                format!("\nworktreePath: {path}\nworktreeBranch: {branch}")
+            }
+            _ => String::new(),
+        };
+        let one_shot = data
+            .get("agentType")
+            .and_then(|value| value.as_str())
+            .map(|agent_type| matches!(agent_type, "Explore" | "Plan"))
+            .unwrap_or(false);
+        if one_shot && worktree_info.is_empty() {
+            return serde_json::Value::Array(content);
+        }
+
+        let agent_id = data
+            .get("agentId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let total_tokens = data
+            .get("totalTokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let total_tool_use_count = data
+            .get("totalToolUseCount")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let total_duration_ms = data
+            .get("totalDurationMs")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": format!("agentId: {agent_id} (use SendMessage with to: '{agent_id}' to continue this agent){worktree_info}\n<usage>total_tokens: {total_tokens}\ntool_uses: {total_tool_use_count}\nduration_ms: {total_duration_ms}</usage>")
+        }));
+        return serde_json::Value::Array(content);
+    }
+
+    serde_json::Value::String(data.to_string())
 }
 
 fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value) -> String {
