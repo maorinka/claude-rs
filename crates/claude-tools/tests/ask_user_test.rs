@@ -25,6 +25,20 @@ fn make_ctx() -> ToolUseContext {
     )
 }
 
+fn question_input(question: &str) -> serde_json::Value {
+    json!({
+        "questions": [{
+            "question": question,
+            "header": "Choice",
+            "options": [
+                { "label": "Yes", "description": "Use this option" },
+                { "label": "No", "description": "Use the other option" }
+            ],
+            "multiSelect": false
+        }]
+    })
+}
+
 /// Verify tool name and schema properties.
 #[test]
 fn test_ask_user_tool_properties() {
@@ -32,10 +46,10 @@ fn test_ask_user_tool_properties() {
     assert_eq!(tool.name(), "AskUserQuestion");
     assert_eq!(tool.aliases(), &["AskUser"]);
     assert!(tool.is_read_only(&json!({})));
-    assert!(!tool.is_concurrency_safe(&json!({})));
+    assert!(tool.is_concurrency_safe(&json!({})));
 }
 
-/// Test missing `question` field returns an error result.
+/// Test missing `questions` field returns an error result.
 #[tokio::test]
 async fn test_missing_question_returns_error() {
     let _guard = TEST_LOCK.lock().unwrap();
@@ -45,9 +59,12 @@ async fn test_missing_question_returns_error() {
         .call(&input, &make_ctx(), CancellationToken::new(), None)
         .await
         .unwrap();
-    assert!(result.is_error, "missing question should be an error");
+    assert!(result.is_error, "missing questions should be an error");
     let err = result.data["error"].as_str().unwrap_or("");
-    assert!(err.contains("question"), "error should mention 'question'");
+    assert!(
+        err.contains("questions"),
+        "error should mention 'questions'"
+    );
 }
 
 /// Test the channel-based flow: tool call + send_user_answer.
@@ -56,7 +73,7 @@ async fn test_channel_flow_returns_answer() {
     let _guard = TEST_LOCK.lock().unwrap();
 
     let tool = AskUserQuestionTool;
-    let input = json!({ "question": "What is your favourite color?" });
+    let input = question_input("What is your favourite color?");
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
@@ -81,7 +98,9 @@ async fn test_channel_flow_returns_answer() {
         result.data
     );
     assert_eq!(
-        result.data["answer"].as_str().unwrap_or(""),
+        result.data["answers"]["What is your favourite color?"]
+            .as_str()
+            .unwrap_or(""),
         "Blue",
         "answer should match what was sent"
     );
@@ -94,8 +113,16 @@ async fn test_channel_flow_with_options() {
 
     let tool = AskUserQuestionTool;
     let input = json!({
-        "question": "Pick a number",
-        "options": ["1", "2", "3"]
+        "questions": [{
+            "question": "Pick a number",
+            "header": "Number",
+            "options": [
+                { "label": "1", "description": "First" },
+                { "label": "2", "description": "Second" },
+                { "label": "3", "description": "Third" }
+            ],
+            "multiSelect": false
+        }]
     });
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
@@ -112,7 +139,12 @@ async fn test_channel_flow_with_options() {
         "result should not be an error: {:?}",
         result.data
     );
-    assert_eq!(result.data["answer"].as_str().unwrap_or(""), "2");
+    assert_eq!(
+        result.data["answers"]["Pick a number"]
+            .as_str()
+            .unwrap_or(""),
+        "2"
+    );
 }
 
 /// Test cancellation: when the token is cancelled the tool should return an error.
@@ -121,7 +153,7 @@ async fn test_cancellation_returns_error() {
     let _guard = TEST_LOCK.lock().unwrap();
 
     let tool = AskUserQuestionTool;
-    let input = json!({ "question": "Will you wait?" });
+    let input = question_input("Will you wait?");
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 

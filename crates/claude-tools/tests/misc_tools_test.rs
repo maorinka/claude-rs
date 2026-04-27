@@ -27,6 +27,20 @@ fn make_ctx() -> ToolUseContext {
     )
 }
 
+fn question_input(question: &str) -> serde_json::Value {
+    json!({
+        "questions": [{
+            "question": question,
+            "header": "Choice",
+            "options": [
+                { "label": "Yes", "description": "Use this option" },
+                { "label": "No", "description": "Use the other option" }
+            ],
+            "multiSelect": false
+        }]
+    })
+}
+
 // -- AskUserQuestionTool -------------------------------------------------------
 
 #[tokio::test]
@@ -36,7 +50,7 @@ async fn test_ask_user_basic() {
     let handle = tokio::spawn(async {
         AskUserQuestionTool
             .call(
-                &json!({ "question": "What is your name?" }),
+                &question_input("What is your name?"),
                 &make_ctx(),
                 CancellationToken::new(),
                 None,
@@ -54,12 +68,10 @@ async fn test_ask_user_basic() {
         "result should not be an error: {:?}",
         result.data
     );
-    let answer = result.data["answer"]
+    let answer = result.data["answers"]["What is your name?"]
         .as_str()
         .expect("answer should be a string");
     assert_eq!(answer, "Alice", "answer should match what was sent");
-    // Check answers map
-    assert_eq!(result.data["answers"]["What is your name?"], "Alice");
 }
 
 #[tokio::test]
@@ -70,8 +82,16 @@ async fn test_ask_user_with_options() {
         AskUserQuestionTool
             .call(
                 &json!({
-                    "question": "Pick a color",
-                    "options": ["red", "green", "blue"]
+                    "questions": [{
+                        "question": "Pick a color",
+                        "header": "Color",
+                        "options": [
+                            { "label": "red", "description": "Warm" },
+                            { "label": "green", "description": "Cool" },
+                            { "label": "blue", "description": "Cold" }
+                        ],
+                        "multiSelect": false
+                    }]
                 }),
                 &make_ctx(),
                 CancellationToken::new(),
@@ -90,7 +110,7 @@ async fn test_ask_user_with_options() {
         "result should not be an error: {:?}",
         result.data
     );
-    let answer = result.data["answer"]
+    let answer = result.data["answers"]["Pick a color"]
         .as_str()
         .expect("answer should be a string");
     assert_eq!(answer, "red");

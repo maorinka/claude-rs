@@ -707,6 +707,25 @@ mod tests {
             serde_json::json!("No matching deferred tools found")
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_ask_user_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "AskUserQuestion",
+                &serde_json::json!({
+                    "answers": { "Which approach?": "Use Rust" },
+                    "annotations": {
+                        "Which approach?": {
+                            "preview": "cargo test",
+                            "notes": "matches the port"
+                        }
+                    }
+                })
+            ),
+            "User has answered your questions: \"Which approach?\"=\"Use Rust\" selected preview:\ncargo test user notes: matches the port. You can now continue with the user's answers in mind."
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1388,6 +1407,43 @@ fn format_tool_result_content_for_model(
 fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value) -> String {
     if tool_name == "Bash" {
         return format_bash_tool_result_for_model(data);
+    }
+
+    if tool_name == "AskUserQuestion" || tool_name == "AskUser" {
+        let answers_text = data
+            .get("answers")
+            .and_then(|value| value.as_object())
+            .map(|answers| {
+                answers
+                    .iter()
+                    .map(|(question_text, answer)| {
+                        let answer = answer.as_str().unwrap_or("");
+                        let mut parts = vec![format!("\"{question_text}\"=\"{answer}\"")];
+                        let annotation = data
+                            .get("annotations")
+                            .and_then(|value| value.as_object())
+                            .and_then(|annotations| annotations.get(question_text));
+                        if let Some(preview) = annotation
+                            .and_then(|value| value.get("preview"))
+                            .and_then(|value| value.as_str())
+                        {
+                            parts.push(format!("selected preview:\n{preview}"));
+                        }
+                        if let Some(notes) = annotation
+                            .and_then(|value| value.get("notes"))
+                            .and_then(|value| value.as_str())
+                        {
+                            parts.push(format!("user notes: {notes}"));
+                        }
+                        parts.join(" ")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        return format!(
+            "User has answered your questions: {answers_text}. You can now continue with the user's answers in mind."
+        );
     }
 
     if tool_name == "EnterPlanMode" {

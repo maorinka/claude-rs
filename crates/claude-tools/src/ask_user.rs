@@ -2,7 +2,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -12,7 +11,7 @@ use claude_core::types::events::ToolResultData;
 
 // -- Channel for user-input responses ----------------------------------------
 //
-// When `AskUserQuestionTool::call` is invoked it:
+// When `AskUserQuestionTool::call` needs to collect an answer locally it:
 //   1. Creates a `oneshot` channel.
 //   2. Stores the `Sender` here so the TUI can pick it up.
 //   3. Blocks on the `Receiver` until the TUI sends an answer.
@@ -83,30 +82,68 @@ impl ToolExecutor for AskUserQuestionTool {
         json!({
             "type": "object",
             "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "The question to ask the user. Should be clear and end with a question mark."
-                },
-                "options": {
+                "questions": {
                     "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
                     "items": {
                         "type": "object",
                         "properties": {
-                            "label": {
+                            "question": {
                                 "type": "string",
-                                "description": "The display text for this option (1-5 words)."
+                                "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark."
                             },
-                            "description": {
+                            "header": {
                                 "type": "string",
-                                "description": "Explanation of what this option means."
+                                "description": "Very short label displayed as a chip/tag."
+                            },
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 4,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {
+                                            "type": "string",
+                                            "description": "The display text for this option that the user will see and select."
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Explanation of what this option means or what will happen if chosen."
+                                        },
+                                        "preview": {
+                                            "type": "string",
+                                            "description": "Optional preview content rendered when this option is focused."
+                                        }
+                                    },
+                                    "required": ["label", "description"]
+                                }
+                            },
+                            "multiSelect": {
+                                "type": "boolean",
+                                "description": "Set to true to allow the user to select multiple options instead of just one."
                             }
                         },
-                        "required": ["label", "description"]
+                        "required": ["question", "header", "options", "multiSelect"]
                     },
-                    "description": "Optional list of choices to present to the user (2-4 options)."
+                    "description": "Questions to ask the user (1-4 questions)"
+                },
+                "answers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "User answers collected by the permission component"
+                },
+                "annotations": {
+                    "type": "object",
+                    "description": "Optional per-question annotations from the user."
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional metadata for tracking and analytics purposes. Not displayed to user."
                 }
             },
-            "required": ["question"]
+            "required": ["questions"]
         })
     }
 
@@ -115,8 +152,7 @@ impl ToolExecutor for AskUserQuestionTool {
     }
 
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
-        // Only one question can be asked at a time (single TUI dialog).
-        false
+        true
     }
 
     async fn call(
@@ -126,34 +162,93 @@ impl ToolExecutor for AskUserQuestionTool {
         cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
-        let question = match input["question"].as_str() {
-            Some(q) if !q.trim().is_empty() => q.to_string(),
+        let questions = match input.get("questions").and_then(|value| value.as_array()) {
+            Some(questions) if !questions.is_empty() => questions.clone(),
             _ => {
                 return Ok(ToolResultData {
-                    data: json!({ "error": "missing required field: question" }),
+                    data: json!({ "error": "missing required field: questions" }),
                     is_error: true,
                 });
             }
         };
 
-        // Extract options -- support both simple string arrays and structured objects
-        let options: Vec<String> = input
-            .get("options")
-            .and_then(|o| o.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| {
-                        // Support { label, description } objects or plain strings
-                        v.as_str().map(|s| s.to_string()).or_else(|| {
-                            v.get("label")
-                                .and_then(|l| l.as_str())
-                                .map(|s| s.to_string())
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        if let Some(answers) = input.get("answers").and_then(|value| value.as_object()) {
+            let mut data = json!({
+                "questions": questions,
+                "answers": answers,
+            });
+            if let Some(annotations) = input.get("annotations") {
+                data["annotations"] = annotations.clone();
+            }
+            return Ok(ToolResultData {
+                data,
+                is_error: false,
+            });
+        }
 
+        let mut answers = serde_json::Map::new();
+        for question_def in &questions {
+            let question = match question_def
+                .get("question")
+                .and_then(|value| value.as_str())
+            {
+                Some(question) if !question.trim().is_empty() => question.to_string(),
+                _ => {
+                    return Ok(ToolResultData {
+                        data: json!({ "error": "missing required field: question" }),
+                        is_error: true,
+                    });
+                }
+            };
+            let options = option_labels(question_def);
+            let answer = match Self::ask_one(question.clone(), options, cancel.clone()).await {
+                Ok(answer) => answer,
+                Err(error) => {
+                    return Ok(ToolResultData {
+                        data: json!({ "error": error.to_string() }),
+                        is_error: true,
+                    });
+                }
+            };
+            answers.insert(question, Value::String(answer));
+        }
+
+        Ok(ToolResultData {
+            data: json!({
+                "questions": questions,
+                "answers": answers,
+            }),
+            is_error: false,
+        })
+    }
+}
+
+fn option_labels(question_def: &Value) -> Vec<String> {
+    question_def
+        .get("options")
+        .and_then(|options| options.as_array())
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|option| {
+                    option.as_str().map(str::to_string).or_else(|| {
+                        option
+                            .get("label")
+                            .and_then(|label| label.as_str())
+                            .map(str::to_string)
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+impl AskUserQuestionTool {
+    async fn ask_one(
+        question: String,
+        options: Vec<String>,
+        cancel: CancellationToken,
+    ) -> Result<String> {
         // Set up a oneshot channel so the TUI can send the user's reply.
         let (tx, rx) = oneshot::channel::<String>();
         {
@@ -177,43 +272,22 @@ impl ToolExecutor for AskUserQuestionTool {
                     Ok(ans) => ans,
                     Err(_) => {
                         // Sender dropped without sending (e.g. TUI exited).
-                        Self::clear_pending();
-                        return Ok(ToolResultData {
-                            data: json!({ "error": "user input channel closed" }),
-                            is_error: true,
-                        });
+                        anyhow::bail!("user input channel closed");
                     }
                 }
             }
             _ = cancel.cancelled() => {
                 // Cancelled -- clean up the stored sender.
                 Self::clear_pending();
-                return Ok(ToolResultData {
-                    data: json!({ "error": "cancelled" }),
-                    is_error: true,
-                });
+                anyhow::bail!("cancelled");
             }
         };
 
         // Clean up pending state
         Self::clear_pending();
-
-        // Build the response with questions and answers map (matching TS output schema)
-        let mut answers = HashMap::new();
-        answers.insert(question.clone(), answer.clone());
-
-        Ok(ToolResultData {
-            data: json!({
-                "questions": [{ "question": question, "options": options }],
-                "answers": answers,
-                "answer": answer
-            }),
-            is_error: false,
-        })
+        Ok(answer)
     }
-}
 
-impl AskUserQuestionTool {
     fn clear_pending() {
         {
             let mut guard = ASK_USER_TX.lock().unwrap();
@@ -244,12 +318,26 @@ mod tests {
         )
     }
 
+    fn question_input(question: &str) -> Value {
+        json!({
+            "questions": [{
+                "question": question,
+                "header": "Choice",
+                "options": [
+                    { "label": "Yes", "description": "Use this option" },
+                    { "label": "No", "description": "Use the other option" }
+                ],
+                "multiSelect": false
+            }]
+        })
+    }
+
     #[tokio::test]
     async fn test_channel_flow_returns_answer() {
         let _guard = TEST_LOCK.lock().unwrap();
 
         let tool = AskUserQuestionTool;
-        let input = json!({ "question": "What is your name?" });
+        let input = question_input("What is your name?");
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
@@ -267,8 +355,6 @@ mod tests {
 
         let result = handle.await.unwrap().unwrap();
         assert!(!result.is_error);
-        assert_eq!(result.data["answer"], "Alice");
-        // Check answers map
         assert_eq!(result.data["answers"]["What is your name?"], "Alice");
     }
 
@@ -278,11 +364,15 @@ mod tests {
 
         let tool = AskUserQuestionTool;
         let input = json!({
-            "question": "Pick a color",
-            "options": [
-                { "label": "Red", "description": "A warm color" },
-                { "label": "Blue", "description": "A cool color" }
-            ]
+            "questions": [{
+                "question": "Pick a color",
+                "header": "Color",
+                "options": [
+                    { "label": "Red", "description": "A warm color" },
+                    { "label": "Blue", "description": "A cool color" }
+                ],
+                "multiSelect": false
+            }]
         });
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -295,10 +385,45 @@ mod tests {
 
         let result = handle.await.unwrap().unwrap();
         assert!(!result.is_error);
-        assert_eq!(result.data["answer"], "Red");
+        assert_eq!(result.data["answers"]["Pick a color"], "Red");
         // Options should be stored in the response
         let questions = result.data["questions"].as_array().unwrap();
-        assert_eq!(questions[0]["options"][0], "Red");
+        assert_eq!(questions[0]["options"][0]["label"], "Red");
+    }
+
+    #[tokio::test]
+    async fn test_call_returns_permission_collected_answers() {
+        let _guard = TEST_LOCK.lock().unwrap();
+
+        let tool = AskUserQuestionTool;
+        let result = tool
+            .call(
+                &json!({
+                    "questions": [{
+                        "question": "Pick one?",
+                        "header": "Pick",
+                        "options": [
+                            { "label": "A", "description": "First" },
+                            { "label": "B", "description": "Second" }
+                        ],
+                        "multiSelect": false
+                    }],
+                    "answers": { "Pick one?": "A" },
+                    "annotations": { "Pick one?": { "notes": "fast path" } }
+                }),
+                &make_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["answers"]["Pick one?"], "A");
+        assert_eq!(
+            result.data["annotations"]["Pick one?"]["notes"],
+            "fast path"
+        );
+        assert!(!is_awaiting_answer());
     }
 
     #[tokio::test]
@@ -306,7 +431,7 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap();
 
         let tool = AskUserQuestionTool;
-        let input = json!({ "question": "Will you wait?" });
+        let input = question_input("Will you wait?");
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
@@ -343,7 +468,7 @@ mod tests {
         assert_eq!(tool.name(), "AskUserQuestion");
         assert_eq!(tool.aliases(), &["AskUser"]);
         assert!(tool.is_read_only(&json!({})));
-        assert!(!tool.is_concurrency_safe(&json!({})));
+        assert!(tool.is_concurrency_safe(&json!({})));
     }
 
     #[test]
