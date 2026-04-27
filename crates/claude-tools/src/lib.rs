@@ -89,6 +89,23 @@ fn is_agent_swarms_enabled() -> bool {
     is_ant_user() || feature_enabled("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
 }
 
+fn is_repl_mode_enabled() -> bool {
+    if claude_core::errors_util::is_env_definitely_falsy("CLAUDE_CODE_REPL") {
+        return false;
+    }
+    if feature_enabled("CLAUDE_REPL_MODE") {
+        return true;
+    }
+    is_ant_user()
+        && std::env::var("CLAUDE_CODE_ENTRYPOINT")
+            .map(|entrypoint| entrypoint == "cli")
+            .unwrap_or(false)
+}
+
+fn is_coordinator_mode_enabled() -> bool {
+    feature_enabled("COORDINATOR_MODE") && claude_core::teams::is_coordinator_mode()
+}
+
 pub fn build_default_registry() -> ToolRegistry {
     build_default_registry_with_options(RegistryOptions::default())
 }
@@ -96,6 +113,27 @@ pub fn build_default_registry() -> ToolRegistry {
 pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     let todo_v2_enabled = is_todo_v2_enabled(options);
+
+    if feature_enabled("CLAUDE_CODE_SIMPLE") {
+        if is_repl_mode_enabled() && is_ant_user() {
+            reg.register(Arc::new(repl_tool::REPLTool));
+            if is_coordinator_mode_enabled() {
+                reg.register(Arc::new(task_tools::TaskStopTool));
+                reg.register(Arc::new(send_message::SendMessageTool));
+            }
+            return reg;
+        }
+
+        reg.register(Arc::new(bash::BashTool::new()));
+        reg.register(Arc::new(read::FileReadTool));
+        reg.register(Arc::new(edit::FileEditTool));
+        if is_coordinator_mode_enabled() {
+            reg.register(Arc::new(agent_tool::AgentTool));
+            reg.register(Arc::new(task_tools::TaskStopTool));
+            reg.register(Arc::new(send_message::SendMessageTool));
+        }
+        return reg;
+    }
 
     // Baseline tools from TS tools.ts `getAllBaseTools()`, before feature-gated
     // spread entries. Tools with later feature gates must not appear here.
@@ -201,6 +239,21 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
     }
     if feature_enabled("CLAUDE_CODE_VERIFY_PLAN") {
         reg.register(Arc::new(verify_plan_tool::VerifyPlanExecutionTool));
+    }
+
+    if is_repl_mode_enabled() && reg.get("REPL").is_some() {
+        for name in [
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Bash",
+            "NotebookEdit",
+            "Agent",
+        ] {
+            reg.remove(name);
+        }
     }
 
     // TS includes ToolSearch optimistically after assembling the base tool set.

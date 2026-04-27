@@ -3,9 +3,45 @@ use claude_tools::{
     build_default_registry, build_default_registry_with_options, filter_registry_by_deny_rules,
     RegistryOptions,
 };
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn clear_registry_env() {
+    for key in [
+        "CLAUDE_CODE_SIMPLE",
+        "USER_TYPE",
+        "CLAUDE_REPL_MODE",
+        "CLAUDE_CODE_REPL",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "MONITOR_TOOL",
+        "HISTORY_SNIP",
+        "CONTEXT_COLLAPSE",
+        "TERMINAL_PANEL",
+        "WEB_BROWSER_TOOL",
+        "UDS_INBOX",
+        "WORKFLOW_SCRIPTS",
+        "CLAUDE_CODE_VERIFY_PLAN",
+        "AGENT_TRIGGERS",
+        "AGENT_TRIGGERS_REMOTE",
+        "KAIROS",
+        "KAIROS_PUSH_NOTIFICATION",
+        "KAIROS_GITHUB_WEBHOOKS",
+        "PROACTIVE",
+        "ENABLE_LSP_TOOL",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+        "CLAUDE_CODE_USE_POWERSHELL_TOOL",
+        "CLAUDE_CODE_ENABLE_TASKS",
+    ] {
+        std::env::remove_var(key);
+    }
+}
 
 #[test]
 fn test_default_registry_has_all_phase1_tools() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+
     let reg = build_default_registry();
     assert!(reg.get("Bash").is_some());
     assert!(reg.get("Read").is_some());
@@ -32,6 +68,9 @@ fn test_default_registry_has_all_phase1_tools() {
 
 #[test]
 fn test_default_registry_schemas() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+
     let reg = build_default_registry();
     let schemas = reg.schemas();
     assert!(
@@ -51,6 +90,9 @@ fn test_default_registry_schemas() {
 /// harness, so this is the default state.
 #[test]
 fn test_gated_tools_hidden_by_default() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+
     // These env vars must be unset for this test to be meaningful.
     // Other tests in the same process can set them — guard explicitly.
     let gates = [
@@ -117,6 +159,9 @@ fn test_gated_tools_hidden_by_default() {
 
 #[test]
 fn test_non_interactive_uses_todowrite_unless_tasks_are_forced() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+
     if std::env::var("CLAUDE_CODE_ENABLE_TASKS").is_ok() {
         eprintln!("skipping non-interactive task assertion: CLAUDE_CODE_ENABLE_TASKS is set");
         return;
@@ -135,7 +180,58 @@ fn test_non_interactive_uses_todowrite_unless_tasks_are_forced() {
 }
 
 #[test]
+fn test_simple_mode_matches_ts_tool_subset() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+    std::env::set_var("CLAUDE_CODE_SIMPLE", "1");
+
+    let reg = build_default_registry();
+    let names = reg
+        .all()
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["Bash", "Read", "Edit"]);
+
+    std::env::remove_var("CLAUDE_CODE_SIMPLE");
+}
+
+#[test]
+fn test_repl_mode_hides_repl_only_tools_when_repl_is_available() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+    std::env::set_var("USER_TYPE", "ant");
+    std::env::set_var("CLAUDE_REPL_MODE", "1");
+
+    let reg = build_default_registry();
+    assert!(reg.get("REPL").is_some());
+    for name in [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash",
+        "NotebookEdit",
+        "Agent",
+    ] {
+        assert!(
+            reg.get(name).is_none(),
+            "{name} should be hidden by REPL mode"
+        );
+    }
+    assert!(reg.get("TaskStop").is_some());
+    assert!(reg.get("SendMessage").is_some());
+
+    std::env::remove_var("USER_TYPE");
+    std::env::remove_var("CLAUDE_REPL_MODE");
+}
+
+#[test]
 fn test_blanket_deny_rules_filter_default_registry() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+
     let mut reg = build_default_registry();
     filter_registry_by_deny_rules(
         &mut reg,
