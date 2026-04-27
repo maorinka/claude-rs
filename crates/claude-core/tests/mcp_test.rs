@@ -512,7 +512,7 @@ fn test_build_mcp_tool_name_basic() {
 fn test_build_mcp_tool_name_with_special_chars() {
     assert_eq!(
         build_mcp_tool_name("my-server", "my-tool"),
-        "mcp__my_server__my_tool"
+        "mcp__my-server__my-tool"
     );
     assert_eq!(
         build_mcp_tool_name("server.v2", "tool.name"),
@@ -528,7 +528,7 @@ fn test_normalize_mcp_name_preserves_alphanum() {
 
 #[test]
 fn test_normalize_mcp_name_replaces_special() {
-    assert_eq!(normalize_mcp_name("a-b.c d"), "a_b_c_d");
+    assert_eq!(normalize_mcp_name("a-b.c d"), "a-b_c_d");
     assert_eq!(normalize_mcp_name("@scope/package"), "_scope_package");
 }
 

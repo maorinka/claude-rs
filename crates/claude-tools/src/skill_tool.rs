@@ -14,11 +14,22 @@ use claude_core::types::events::ToolResultData;
 // Skills are registered at startup. Each skill has a name and content that
 // is injected as a prompt when the skill is invoked.
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SkillPromptPhase {
+    #[default]
+    Runtime,
+    StaticCommand,
+}
+
 #[derive(Clone, Debug)]
 pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub content: String,
+    /// Where this skill is listed in the prompt. TS builds the
+    /// available-skills reminder from runtime/discovered commands first
+    /// and appends static slash commands (`SN8`) last.
+    pub prompt_phase: SkillPromptPhase,
     /// Optional per-skill header under which user-supplied args
     /// are appended at invoke time. When `None`, the tool falls
     /// back to a generic `Arguments: {args}` line.
@@ -36,8 +47,13 @@ pub struct SkillEntry {
     pub empty_args_message: Option<String>,
 }
 
-static SKILL_STORE: Lazy<Mutex<HashMap<String, SkillEntry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+#[derive(Default)]
+struct SkillStore {
+    entries: HashMap<String, SkillEntry>,
+    order: Vec<String>,
+}
+
+static SKILL_STORE: Lazy<Mutex<SkillStore>> = Lazy::new(|| Mutex::new(SkillStore::default()));
 
 /// Register a skill that can be invoked via the SkillTool.
 ///
@@ -75,13 +91,52 @@ pub fn register_skill_full(
     argument_header: Option<&str>,
     empty_args_message: Option<&str>,
 ) {
+    register_skill_full_with_phase(
+        name,
+        description,
+        content,
+        argument_header,
+        empty_args_message,
+        SkillPromptPhase::Runtime,
+    );
+}
+
+pub fn register_static_command_skill(
+    name: &str,
+    description: &str,
+    content: &str,
+    argument_header: Option<&str>,
+    empty_args_message: Option<&str>,
+) {
+    register_skill_full_with_phase(
+        name,
+        description,
+        content,
+        argument_header,
+        empty_args_message,
+        SkillPromptPhase::StaticCommand,
+    );
+}
+
+fn register_skill_full_with_phase(
+    name: &str,
+    description: &str,
+    content: &str,
+    argument_header: Option<&str>,
+    empty_args_message: Option<&str>,
+    prompt_phase: SkillPromptPhase,
+) {
     let mut store = SKILL_STORE.lock().unwrap();
-    store.insert(
+    if !store.entries.contains_key(name) {
+        store.order.push(name.to_string());
+    }
+    store.entries.insert(
         name.to_string(),
         SkillEntry {
             name: name.to_string(),
             description: description.to_string(),
             content: content.to_string(),
+            prompt_phase,
             argument_header: argument_header.map(|s| s.to_string()),
             empty_args_message: empty_args_message.map(|s| s.to_string()),
         },
@@ -91,14 +146,19 @@ pub fn register_skill_full(
 /// Get all registered skills.
 pub fn list_skills() -> Vec<SkillEntry> {
     let store = SKILL_STORE.lock().unwrap();
-    store.values().cloned().collect()
+    store
+        .order
+        .iter()
+        .filter_map(|name| store.entries.get(name).cloned())
+        .collect()
 }
 
 /// Clear all registered skills (for testing).
 #[cfg(test)]
 pub fn clear_skills() {
     let mut store = SKILL_STORE.lock().unwrap();
-    store.clear();
+    store.entries.clear();
+    store.order.clear();
 }
 
 // ─── SkillTool ───────────────────────────────────────────────────────────────
@@ -176,10 +236,12 @@ Important:
         let store = SKILL_STORE.lock().unwrap();
 
         // Try exact match first, then try with plugin prefix matching
-        let skill = store.get(skill_name).or_else(|| {
+        let skill = store.entries.get(skill_name).or_else(|| {
             // Try matching by the last segment for qualified names like "plugin:skill"
             store
-                .values()
+                .order
+                .iter()
+                .filter_map(|name| store.entries.get(name))
                 .find(|s| s.name.ends_with(&format!(":{}", skill_name)) || s.name == skill_name)
         });
 
@@ -223,7 +285,7 @@ Important:
                 })
             }
             None => {
-                let available: Vec<String> = store.keys().cloned().collect();
+                let available: Vec<String> = store.order.clone();
                 let available_str = if available.is_empty() {
                     "No skills are currently registered.".to_string()
                 } else {

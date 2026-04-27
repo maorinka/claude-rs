@@ -36,6 +36,21 @@ fn default_mode_asks_for_destructive_tool() {
 }
 
 #[test]
+fn default_mode_allows_read_only_tool() {
+    let tool = SimpleToolPermissions::new("Bash", true);
+    let ctx = ToolPermissionContext {
+        mode: PermissionMode::Default,
+        ..Default::default()
+    };
+    let decision = evaluate_permission(&tool, &serde_json::json!({"command": "git status"}), &ctx);
+    assert!(
+        matches!(decision, PermissionDecision::Allow(_)),
+        "Default mode should allow read-only tool calls, got: {:?}",
+        decision
+    );
+}
+
+#[test]
 fn permission_mode_from_string_roundtrip() {
     assert_eq!(
         PermissionMode::from_string("bypassPermissions"),

@@ -311,74 +311,6 @@ fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value 
     merged
 }
 
-fn sort_skills_for_prompt_parity(skills: &mut [claude_core::plugins::types::Skill]) {
-    const BUILTIN_PREFIX: &[&str] = &[
-        "update-config",
-        "keybindings-help",
-        "simplify",
-        "fewer-permission-prompts",
-        "loop",
-        "schedule",
-        "claude-api",
-        "code-review-remediation",
-    ];
-    const HOOKIFY_COMMANDS: &[&str] = &[
-        "hookify:help",
-        "hookify:list",
-        "hookify:configure",
-        "hookify:hookify",
-    ];
-    const DEPRECATED_SUPERPOWER_COMMANDS: &[&str] = &[
-        "superpowers:execute-plan",
-        "superpowers:write-plan",
-        "superpowers:brainstorm",
-    ];
-    const MIDDLE_STABLE: &[&str] = &[
-        "code-review:code-review",
-        "frontend-design:frontend-design",
-        "hookify:writing-rules",
-    ];
-    const BUILTIN_SUFFIX: &[&str] = &["init", "review", "security-review"];
-
-    let original_positions: std::collections::HashMap<String, usize> = skills
-        .iter()
-        .enumerate()
-        .map(|(index, skill)| (skill.name.clone(), index))
-        .collect();
-
-    let key = |name: &str| {
-        let original = *original_positions.get(name).unwrap_or(&usize::MAX);
-        if let Some(index) = BUILTIN_PREFIX.iter().position(|skill| *skill == name) {
-            return (0usize, index);
-        }
-        if HOOKIFY_COMMANDS.contains(&name) {
-            return (1usize, original);
-        }
-        if let Some(index) = DEPRECATED_SUPERPOWER_COMMANDS
-            .iter()
-            .position(|skill| *skill == name)
-        {
-            return (2usize, index);
-        }
-        if let Some(index) = MIDDLE_STABLE.iter().position(|skill| *skill == name) {
-            return (3usize, index);
-        }
-        if let Some(index) = ts_skill_order(name) {
-            return (4usize, index);
-        }
-        if let Some(index) = BUILTIN_SUFFIX.iter().position(|skill| *skill == name) {
-            return (6usize, index);
-        }
-        (5usize, original)
-    };
-
-    skills.sort_by(|a, b| {
-        key(&a.name)
-            .cmp(&key(&b.name))
-            .then_with(|| a.name.cmp(&b.name))
-    });
-}
-
 fn hugging_face_mcp_instruction() -> String {
     let username = claude_core::config::global::load_global_config()
         .ok()
@@ -406,19 +338,15 @@ fn hugging_face_mcp_instruction() -> String {
     instruction
 }
 
-fn enabled_plugin_roots(settings: &serde_json::Value) -> Vec<(String, String, std::path::PathBuf)> {
-    let Some(enabled) = settings.get("enabledPlugins").and_then(|v| v.as_object()) else {
-        return Vec::new();
-    };
+fn enabled_plugin_roots(
+    project_root: &std::path::Path,
+) -> Vec<(String, String, std::path::PathBuf)> {
     let Ok(claude_dir) = claude_core::config::paths::claude_dir() else {
         return Vec::new();
     };
 
     let mut roots = Vec::new();
-    for (plugin_id, value) in enabled {
-        if value.as_bool() != Some(true) {
-            continue;
-        }
+    for plugin_id in claude_core::plugins::skill::enabled_plugins_for_project(project_root) {
         let Some((name, source)) = plugin_id.split_once('@') else {
             continue;
         };
@@ -440,7 +368,6 @@ fn enabled_plugin_roots(settings: &serde_json::Value) -> Vec<(String, String, st
             roots.push((name.to_string(), source.to_string(), root));
         }
     }
-    roots.sort_by(|a, b| a.0.cmp(&b.0));
     roots
 }
 
@@ -466,8 +393,8 @@ fn replace_plugin_root(value: &mut serde_json::Value, root: &std::path::Path) {
     }
 }
 
-fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value) {
-    for (_, _, root) in enabled_plugin_roots(settings) {
+fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value, project_root: &std::path::Path) {
+    for (_, _, root) in enabled_plugin_roots(project_root) {
         let hooks_path = root.join("hooks").join("hooks.json");
         let Ok(text) = std::fs::read_to_string(hooks_path) else {
             continue;
@@ -481,10 +408,10 @@ fn merge_enabled_plugin_hooks(settings: &mut serde_json::Value) {
 }
 
 fn load_enabled_plugin_mcp_servers(
-    settings: &serde_json::Value,
+    project_root: &std::path::Path,
 ) -> std::collections::HashMap<String, claude_core::config::settings::McpServerSettingsEntry> {
     let mut servers = std::collections::HashMap::new();
-    for (plugin_name, _, root) in enabled_plugin_roots(settings) {
+    for (plugin_name, _, root) in enabled_plugin_roots(project_root) {
         let mcp_path = root.join(".mcp.json");
         let Ok(text) = std::fs::read_to_string(mcp_path) else {
             continue;
@@ -529,6 +456,14 @@ struct TsToolContract {
     description: String,
     #[serde(default)]
     input_schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone)]
+struct ShadowMcpServer {
+    name: String,
+    url: Option<String>,
+    needs_auth: bool,
+    include_tools: bool,
 }
 
 async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
@@ -621,7 +556,7 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
 }
 
 fn mcp_contract_shadow_tools(
-    server_names: impl IntoIterator<Item = String>,
+    servers: impl IntoIterator<Item = ShadowMcpServer>,
 ) -> Vec<claude_core::mcp::manager::McpToolInfo> {
     let Ok(contracts) = serde_json::from_str::<Vec<TsToolContract>>(include_str!(
         "../../claude-tools/src/ts_tool_contracts_2_1_119.json"
@@ -629,27 +564,98 @@ fn mcp_contract_shadow_tools(
         return Vec::new();
     };
 
-    let server_by_normalized = server_names
+    let server_by_normalized = servers
         .into_iter()
-        .map(|name| (normalize_name_for_mcp(&name), name))
+        .filter(|server| server.include_tools)
+        .map(|server| (normalize_name_for_mcp(&server.name), server))
         .collect::<std::collections::HashMap<_, _>>();
 
-    contracts
-        .into_iter()
-        .filter_map(|contract| {
-            let tool_name = contract.name.clone();
-            let rest = tool_name.strip_prefix("mcp__")?;
-            let (normalized_server, original_name) = rest.split_once("__")?;
-            let server_name = server_by_normalized.get(normalized_server)?;
-            Some(claude_core::mcp::manager::McpToolInfo {
-                name: contract.name,
-                original_name: original_name.to_string(),
-                server_name: server_name.clone(),
-                description: Some(contract.description),
-                input_schema: contract.input_schema,
-            })
+    let mut tools = Vec::new();
+    for server in server_by_normalized
+        .values()
+        .filter(|server| server.needs_auth)
+    {
+        tools.extend(mcp_auth_shadow_tools(server));
+    }
+
+    tools.extend(contracts.into_iter().filter_map(|contract| {
+        let tool_name = contract.name.clone();
+        let rest = tool_name.strip_prefix("mcp__")?;
+        let (normalized_server, original_name) = rest.split_once("__")?;
+        let server = server_by_normalized.get(normalized_server)?;
+        if server.needs_auth {
+            return None;
+        }
+        Some(claude_core::mcp::manager::McpToolInfo {
+            name: contract.name,
+            original_name: original_name.to_string(),
+            server_name: server.name.clone(),
+            description: Some(contract.description),
+            input_schema: contract.input_schema,
         })
-        .collect()
+    }));
+    tools
+}
+
+fn mcp_auth_shadow_tools(server: &ShadowMcpServer) -> Vec<claude_core::mcp::manager::McpToolInfo> {
+    let normalized_server = normalize_name_for_mcp(&server.name);
+    let server_label = server.name.as_str();
+    let url = server.url.as_deref().unwrap_or("unknown URL");
+    vec![
+        claude_core::mcp::manager::McpToolInfo {
+            name: format!("mcp__{}__authenticate", normalized_server),
+            original_name: "authenticate".to_string(),
+            server_name: server.name.clone(),
+            description: Some(format!(
+                "The `{server_label}` MCP server (claudeai-proxy at {url}) is installed but requires authentication. Call this tool to start the OAuth flow — you'll receive an authorization URL to share with the user. Once the user completes authorization in their browser, the server's real tools will become available automatically."
+            )),
+            input_schema: Some(serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {},
+                "type": "object",
+            })),
+        },
+        claude_core::mcp::manager::McpToolInfo {
+            name: format!("mcp__{}__complete_authentication", normalized_server),
+            original_name: "complete_authentication".to_string(),
+            server_name: server.name.clone(),
+            description: Some(format!(
+                "Complete an in-progress OAuth flow for the `{server_label}` MCP server by submitting the callback URL. Call `mcp__{normalized_server}__authenticate` first to start the flow and get the authorization URL. After the user authorizes in their browser, the browser is redirected to a `http://localhost:<port>/callback?code=...&state=...` URL — on remote sessions that page fails to load, but the URL in the address bar is still valid. Pass that full URL here as `callback_url`."
+            )),
+            input_schema: Some(serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {
+                    "callback_url": {
+                        "description": "The full callback URL from the browser address bar after authorizing, e.g. http://localhost:<port>/callback?code=...&state=...",
+                        "type": "string",
+                    }
+                },
+                "required": ["callback_url"],
+                "type": "object",
+            })),
+        },
+    ]
+}
+
+fn mcp_config_url(config: &claude_core::mcp::types::ScopedMcpServerConfig) -> Option<String> {
+    match &config.config {
+        claude_core::mcp::types::McpServerConfig::Http(http) => Some(http.url.clone()),
+        claude_core::mcp::types::McpServerConfig::Sse(sse)
+        | claude_core::mcp::types::McpServerConfig::SseIde(sse) => Some(sse.url.clone()),
+        _ => None,
+    }
+}
+
+fn claude_ai_server_uses_auth_shadow(
+    name: &str,
+    _config: &claude_core::mcp::types::ScopedMcpServerConfig,
+) -> bool {
+    // TS respects the MCP needs-auth cache before attempting another remote
+    // connection. Do the same here instead of inferring auth state from URL
+    // substrings such as "login".
+    claude_core::mcp::auth_cache::is_mcp_auth_cached(name)
 }
 
 fn dedup_claude_ai_mcp_servers(
@@ -685,30 +691,6 @@ fn dedup_claude_ai_mcp_servers(
         .collect()
 }
 
-fn ts_skill_order(name: &str) -> Option<usize> {
-    const ORDER: &[&str] = &[
-        "superpowers:execute-plan",
-        "superpowers:write-plan",
-        "superpowers:brainstorm",
-        "superpowers:receiving-code-review",
-        "superpowers:finishing-a-development-branch",
-        "superpowers:code-review-remediation",
-        "superpowers:requesting-code-review",
-        "superpowers:subagent-driven-development",
-        "superpowers:test-driven-development",
-        "superpowers:writing-plans",
-        "superpowers:brainstorming",
-        "superpowers:systematic-debugging",
-        "superpowers:using-git-worktrees",
-        "superpowers:verification-before-completion",
-        "superpowers:executing-plans",
-        "superpowers:dispatching-parallel-agents",
-        "superpowers:writing-skills",
-        "superpowers:using-superpowers",
-    ];
-    ORDER.iter().position(|known| *known == name)
-}
-
 fn emit_stream_json(value: serde_json::Value) {
     println!(
         "{}",
@@ -716,68 +698,242 @@ fn emit_stream_json(value: serde_json::Value) {
     );
 }
 
-fn stream_event_to_json(ev: &claude_core::types::events::StreamEvent) -> serde_json::Value {
-    use claude_core::types::events::{StreamEvent, ToolProgressData};
+fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
+    let Some(obj) = data.as_object() else {
+        return data.as_str().unwrap_or(&data.to_string()).to_string();
+    };
+    let stdout = obj.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("{stdout}\n{stderr}"),
+        (true, true) => String::new(),
+    }
+}
+
+fn stream_event_to_stream_json(
+    ev: &claude_core::types::events::StreamEvent,
+    session_id: &str,
+) -> Option<serde_json::Value> {
+    use claude_core::types::events::StreamEvent;
     use serde_json::json;
 
-    match ev {
-        StreamEvent::RequestStart { request_id } => {
-            json!({"type": "request_start", "request_id": request_id})
-        }
+    let value = match ev {
+        // TS stream-json exposes model messages, user tool-result turns, system
+        // records, and the final result. It does not print Rust's internal
+        // request/delta/progress bookkeeping events as first-class records.
+        StreamEvent::RequestStart { .. }
+        | StreamEvent::ToolStart { .. }
+        | StreamEvent::ToolProgress { .. }
+        | StreamEvent::ToolResult { .. }
+        | StreamEvent::ThinkingDelta { .. }
+        | StreamEvent::TextDelta { .. }
+        | StreamEvent::UsageUpdate(_)
+        | StreamEvent::Done { .. } => return None,
         StreamEvent::AssistantMessage(message) => {
-            json!({"type": "assistant_message", "message": format!("{:?}", message)})
+            json!({
+                "type": "assistant",
+                "message": serde_json::to_value(&message.message).unwrap_or(serde_json::Value::Null),
+                "session_id": session_id,
+                "uuid": message.uuid.to_string(),
+                "timestamp": message.timestamp,
+            })
         }
-        StreamEvent::ToolStart {
-            tool_use_id,
-            name,
-            input,
-        } => json!({
-            "type": "tool_start",
-            "tool_use_id": tool_use_id,
-            "name": name,
-            "input": input,
+        StreamEvent::Compacted { summary } => json!({
+            "type": "system",
+            "subtype": "compact_boundary",
+            "session_id": session_id,
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "timestamp": chrono::Utc::now(),
+            "message": {"summary": summary},
         }),
-        StreamEvent::ToolProgress {
-            tool_use_id,
-            progress,
-        } => {
-            let progress = match progress {
-                ToolProgressData::BashProgress { stdout, stderr } => {
-                    json!({"kind": "bash", "stdout": stdout, "stderr": stderr})
-                }
-                ToolProgressData::ReadProgress { bytes_read } => {
-                    json!({"kind": "read", "bytes_read": bytes_read})
-                }
-                ToolProgressData::WebSearchProgress { results_found } => {
-                    json!({"kind": "web_search", "results_found": results_found})
-                }
-            };
-            json!({"type": "tool_progress", "tool_use_id": tool_use_id, "progress": progress})
+        StreamEvent::Error(error) => json!({"type": "error", "error": format!("{:?}", error)}),
+    };
+    Some(value)
+}
+
+fn stream_json_user_tool_result_event(
+    tool_results: Vec<serde_json::Value>,
+    session_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": tool_results,
+        },
+        "session_id": session_id,
+        "uuid": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now(),
+    })
+}
+
+#[derive(Default)]
+struct StreamJsonPrintState {
+    text: String,
+    latest_usage: Option<claude_core::types::usage::Usage>,
+}
+
+fn merge_stream_usage(
+    current: &mut Option<claude_core::types::usage::Usage>,
+    update: claude_core::types::usage::Usage,
+) {
+    match current {
+        Some(existing) => {
+            if update.input_tokens > 0 {
+                existing.input_tokens = update.input_tokens;
+            }
+            existing.output_tokens = existing.output_tokens.max(update.output_tokens);
+            if update.cache_creation_input_tokens.is_some() {
+                existing.cache_creation_input_tokens = update.cache_creation_input_tokens;
+            }
+            if update.cache_read_input_tokens.is_some() {
+                existing.cache_read_input_tokens = update.cache_read_input_tokens;
+            }
         }
-        StreamEvent::ToolResult {
-            tool_use_id,
-            result,
-        } => json!({
-            "type": "tool_result",
-            "tool_use_id": tool_use_id,
-            "result": result.data,
-            "is_error": result.is_error,
-        }),
-        StreamEvent::ThinkingDelta { text } => json!({"type": "thinking_delta", "text": text}),
-        StreamEvent::TextDelta { text } => json!({"type": "text_delta", "text": text}),
-        StreamEvent::Compacted { summary } => json!({"type": "compacted", "summary": summary}),
-        StreamEvent::UsageUpdate(usage) => json!({
-            "type": "usage",
+        None => *current = Some(update),
+    }
+}
+
+struct StreamJsonResultMeta<'a> {
+    duration_ms: u128,
+    num_turns: u32,
+    stop_reason: &'a str,
+    usage: Option<&'a claude_core::types::usage::Usage>,
+    model_display: &'a str,
+    max_tokens: u64,
+    context_window: u64,
+    total_cost_usd: f64,
+}
+
+fn stream_json_result_event_with_meta(
+    final_text: &str,
+    session_id: &str,
+    meta: StreamJsonResultMeta<'_>,
+) -> serde_json::Value {
+    let usage = meta.usage.map(|usage| {
+        serde_json::json!({
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
-            "cache_creation_input_tokens": usage.cache_creation_input_tokens,
-            "cache_read_input_tokens": usage.cache_read_input_tokens,
-        }),
-        StreamEvent::Done { stop_reason } => {
-            json!({"type": "done", "stop_reason": format!("{:?}", stop_reason)})
-        }
-        StreamEvent::Error(error) => json!({"type": "error", "error": format!("{:?}", error)}),
-    }
+            "cache_creation_input_tokens": usage.cache_creation_input_tokens.unwrap_or(0),
+            "cache_read_input_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+            "server_tool_use": {
+                "web_search_requests": 0,
+                "web_fetch_requests": 0,
+            },
+            "iterations": [{
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_creation_input_tokens": usage.cache_creation_input_tokens.unwrap_or(0),
+                "cache_read_input_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+                "type": "message",
+            }],
+        })
+    });
+    let model_usage = meta.usage.map(|usage| {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            meta.model_display.to_string(),
+            serde_json::json!({
+                "inputTokens": usage.input_tokens,
+                "outputTokens": usage.output_tokens,
+                "cacheReadInputTokens": usage.cache_read_input_tokens.unwrap_or(0),
+                "cacheCreationInputTokens": usage.cache_creation_input_tokens.unwrap_or(0),
+                "webSearchRequests": 0,
+                "costUSD": meta.total_cost_usd,
+                "contextWindow": meta.context_window,
+                "maxOutputTokens": meta.max_tokens,
+            }),
+        );
+        serde_json::Value::Object(map)
+    });
+
+    serde_json::json!({
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "api_error_status": serde_json::Value::Null,
+        "duration_ms": meta.duration_ms,
+        "duration_api_ms": meta.duration_ms,
+        "num_turns": meta.num_turns,
+        "result": final_text,
+        "stop_reason": meta.stop_reason,
+        "session_id": session_id,
+        "total_cost_usd": meta.total_cost_usd,
+        "usage": usage,
+        "modelUsage": model_usage,
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "uuid": uuid::Uuid::new_v4().to_string(),
+    })
+}
+
+fn stream_json_init_event(
+    cwd: &std::path::Path,
+    session_id: &str,
+    tool_names: Vec<String>,
+    mcp_servers: Vec<serde_json::Value>,
+    model_display: &str,
+    permission_mode: &claude_core::permissions::types::PermissionMode,
+    skills: &[claude_core::plugins::types::Skill],
+    output_style: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "system",
+        "subtype": "init",
+        "cwd": cwd.display().to_string(),
+        "session_id": session_id,
+        "tools": tool_names,
+        "mcp_servers": mcp_servers,
+        "model": model_display,
+        "permissionMode": serde_json::to_value(permission_mode).unwrap_or(serde_json::json!("default")),
+        "output_style": output_style.unwrap_or("default"),
+        "skills": skills.iter().map(|skill| skill.name.clone()).collect::<Vec<_>>(),
+        "uuid": uuid::Uuid::new_v4().to_string(),
+    })
+}
+
+fn emit_stream_json_hook_events(
+    result: &claude_core::hooks::types::HookResult,
+    session_id: &str,
+) {
+    let hook_id = result
+        .hook_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let hook_name = result.hook_name.as_deref().unwrap_or("Hook");
+    let hook_event = result.hook_event.as_deref().unwrap_or("Hook");
+
+    emit_stream_json(serde_json::json!({
+        "type": "system",
+        "subtype": "hook_started",
+        "hook_id": hook_id,
+        "hook_name": hook_name,
+        "hook_event": hook_event,
+        "uuid": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+    }));
+
+    let output = if !result.stdout.is_empty() {
+        result.stdout.as_str()
+    } else {
+        result.stderr.as_str()
+    };
+    emit_stream_json(serde_json::json!({
+        "type": "system",
+        "subtype": "hook_response",
+        "hook_id": hook_id,
+        "hook_name": hook_name,
+        "hook_event": hook_event,
+        "output": output,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+        "outcome": result.outcome.to_string(),
+        "uuid": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+    }));
 }
 
 #[tokio::main]
@@ -800,9 +956,18 @@ async fn main() -> Result<()> {
     }
     let is_interactive_session = prompt_arg.is_none();
 
-    // Initialize tracing
+    // Initialize tracing. Stream-json stdout must remain valid JSONL; TS does
+    // not interleave normal log lines with stream-json records.
+    let trace_filter =
+        if cli.output_format == OutputFormat::StreamJson && prompt_arg.is_some() && !cli.verbose {
+            "off"
+        } else if cli.verbose {
+            "debug"
+        } else {
+            "error"
+        };
     tracing_subscriber::fmt()
-        .with_env_filter(if cli.verbose { "debug" } else { "error" })
+        .with_env_filter(trace_filter)
         .init();
 
     // Handle subcommands
@@ -922,7 +1087,7 @@ async fn main() -> Result<()> {
         Err(_) => claude_core::config::settings::Settings::default(),
     };
     let mut raw_settings = load_raw_settings_value(&project_root);
-    merge_enabled_plugin_hooks(&mut raw_settings);
+    merge_enabled_plugin_hooks(&mut raw_settings, &project_root);
 
     // Build tool registry
     let mut tools =
@@ -943,7 +1108,7 @@ async fn main() -> Result<()> {
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
     let mut mcp_server_settings = settings.mcp_servers.clone();
-    mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&raw_settings));
+    mcp_server_settings.extend(load_enabled_plugin_mcp_servers(&project_root));
     let mut configs = std::collections::HashMap::new();
     let mut plugin_mcp_server_names = Vec::new();
     for (name, entry) in &mcp_server_settings {
@@ -969,10 +1134,27 @@ async fn main() -> Result<()> {
     }
     let claude_ai_discovery = fetch_claude_ai_mcp_configs_if_eligible().await;
     let claude_ai_configs = dedup_claude_ai_mcp_servers(claude_ai_discovery.configs, &configs);
-    let claude_ai_server_names = claude_ai_configs.keys().cloned().collect::<Vec<_>>();
+    let claude_ai_shadow_servers = claude_ai_configs
+        .iter()
+        .map(|(name, config)| ShadowMcpServer {
+            name: name.clone(),
+            url: mcp_config_url(config),
+            needs_auth: claude_ai_server_uses_auth_shadow(name, config),
+            include_tools: true,
+        })
+        .collect::<Vec<_>>();
     configs.extend(claude_ai_configs);
-    let mut claude_ai_shadow_tools = mcp_contract_shadow_tools(claude_ai_server_names);
-    claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(plugin_mcp_server_names));
+    let mut claude_ai_shadow_tools = Vec::new();
+    claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(
+        plugin_mcp_server_names
+            .into_iter()
+            .map(|name| ShadowMcpServer {
+                name,
+                url: None,
+                needs_auth: false,
+                include_tools: true,
+            }),
+    ));
     if !configs.is_empty() {
         tracing::info!(
             count = configs.len(),
@@ -981,9 +1163,42 @@ async fn main() -> Result<()> {
 
         if is_interactive_session {
             let manager = mcp_manager.clone();
+            let claude_ai_shadow_servers = claude_ai_shadow_servers.clone();
             tokio::spawn(async move {
                 let mgr = manager.read().await;
                 let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+                let connected = connections
+                    .iter()
+                    .filter(|conn| {
+                        matches!(
+                            conn.status,
+                            claude_core::mcp::types::McpConnectionStatus::Connected { .. }
+                        )
+                    })
+                    .map(|conn| conn.name.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                let needs_auth = connections
+                    .iter()
+                    .filter(|conn| {
+                        matches!(
+                            conn.status,
+                            claude_core::mcp::types::McpConnectionStatus::NeedsAuth
+                        )
+                    })
+                    .map(|conn| conn.name.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                let auth_shadow_tools = mcp_contract_shadow_tools(
+                    claude_ai_shadow_servers.into_iter().map(|mut server| {
+                        let is_connected = connected.contains(&server.name);
+                        server.needs_auth = needs_auth.contains(&server.name)
+                            || (server.needs_auth && !is_connected);
+                        server.include_tools = is_connected || server.needs_auth;
+                        server
+                    }),
+                );
+                if !auth_shadow_tools.is_empty() {
+                    mgr.add_tool_definitions(auth_shadow_tools).await;
+                }
                 drop(mgr);
                 for conn in &connections {
                     match &conn.status {
@@ -1004,6 +1219,35 @@ async fn main() -> Result<()> {
         } else {
             let mgr = mcp_manager.read().await;
             let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+            let connected = connections
+                .iter()
+                .filter(|conn| {
+                    matches!(
+                        conn.status,
+                        claude_core::mcp::types::McpConnectionStatus::Connected { .. }
+                    )
+                })
+                .map(|conn| conn.name.clone())
+                .collect::<std::collections::HashSet<_>>();
+            let needs_auth = connections
+                .iter()
+                .filter(|conn| {
+                    matches!(
+                        conn.status,
+                        claude_core::mcp::types::McpConnectionStatus::NeedsAuth
+                    )
+                })
+                .map(|conn| conn.name.clone())
+                .collect::<std::collections::HashSet<_>>();
+            claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(
+                claude_ai_shadow_servers.into_iter().map(|mut server| {
+                    let is_connected = connected.contains(&server.name);
+                    server.needs_auth =
+                        needs_auth.contains(&server.name) || (server.needs_auth && !is_connected);
+                    server.include_tools = is_connected || server.needs_auth;
+                    server
+                }),
+            ));
             drop(mgr);
 
             // Report connection results
@@ -1040,7 +1284,35 @@ async fn main() -> Result<()> {
     let mut skills = Vec::new();
     {
         let mut seen = std::collections::HashSet::new();
-        for skill in claude_tools::skill_tool::list_skills() {
+        let registered_skills = claude_tools::skill_tool::list_skills();
+        for skill in &registered_skills {
+            if skill.prompt_phase == claude_tools::skill_tool::SkillPromptPhase::StaticCommand {
+                continue;
+            }
+            if !seen.insert(skill.name.clone()) {
+                continue;
+            }
+            skills.push(claude_core::plugins::types::Skill {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                content: skill.content.clone(),
+                source: claude_core::plugins::types::SkillSource::Builtin,
+                argument_hint: None,
+                when_to_use: None,
+                allowed_tools: Vec::new(),
+                user_invocable: true,
+                disable_model_invocation: false,
+            });
+        }
+        for skill in discovered_skills {
+            if seen.insert(skill.name.clone()) {
+                skills.push(skill);
+            }
+        }
+        for skill in registered_skills {
+            if skill.prompt_phase != claude_tools::skill_tool::SkillPromptPhase::StaticCommand {
+                continue;
+            }
             if !seen.insert(skill.name.clone()) {
                 continue;
             }
@@ -1056,13 +1328,7 @@ async fn main() -> Result<()> {
                 disable_model_invocation: false,
             });
         }
-        for skill in discovered_skills {
-            if seen.insert(skill.name.clone()) {
-                skills.push(skill);
-            }
-        }
     }
-    sort_skills_for_prompt_parity(&mut skills);
     if !skills.is_empty() {
         tracing::info!(count = skills.len(), "Discovered skills");
     }
@@ -1162,6 +1428,7 @@ async fn main() -> Result<()> {
         runner
     };
 
+    let api_session_id = api_config.session_id.clone();
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth);
 
     // Create cancellation token
@@ -1223,42 +1490,28 @@ async fn main() -> Result<()> {
         }
     }
 
-    if is_interactive_session {
-        let hook_runner = hook_runner.clone();
-        let resume = cli.resume.is_some();
-        tokio::spawn(async move {
-            let _ = hook_runner
-                .run_hooks(
-                    &claude_core::hooks::types::HookEvent::SessionStart,
-                    serde_json::json!({
-                        "source": if resume { "resume" } else { "startup" },
-                    }),
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .await;
-        });
-    } else {
-        let session_start = hook_runner
-            .run_hooks(
-                &claude_core::hooks::types::HookEvent::SessionStart,
-                serde_json::json!({
-                    "source": if cli.resume.is_some() { "resume" } else { "startup" },
-                }),
-                None,
-                None,
-                None,
-                None,
-            )
-            .await;
-        for context in session_start.additional_contexts {
-            query_engine.append_user_context_block(format!(
-                "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
-                context
-            ));
+    let session_start = hook_runner
+        .run_hooks(
+            &claude_core::hooks::types::HookEvent::SessionStart,
+            serde_json::json!({
+                "source": if cli.resume.is_some() { "resume" } else { "startup" },
+            }),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+    if cli.output_format == OutputFormat::StreamJson {
+        for result in &session_start.individual_results {
+            emit_stream_json_hook_events(result, &api_session_id);
         }
+    }
+    for context in session_start.additional_contexts {
+        query_engine.append_user_context_block(format!(
+            "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
+            context
+        ));
     }
 
     // Add MCP server instructions as request-time user context, matching TS.
@@ -1368,17 +1621,67 @@ async fn main() -> Result<()> {
             }
         }
 
+        if cli.output_format == OutputFormat::StreamJson {
+            let mcp_servers = {
+                let mgr = mcp_manager.read().await;
+                mgr.connections()
+                    .await
+                    .into_iter()
+                    .map(|conn| {
+                        let status = match conn.status {
+                            claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                                "connected"
+                            }
+                            claude_core::mcp::types::McpConnectionStatus::Failed { .. } => {
+                                "failed"
+                            }
+                            claude_core::mcp::types::McpConnectionStatus::Pending { .. } => {
+                                "pending"
+                            }
+                            claude_core::mcp::types::McpConnectionStatus::Disabled => "disabled",
+                            claude_core::mcp::types::McpConnectionStatus::NeedsAuth => {
+                                "needs-auth"
+                            }
+                        };
+                        serde_json::json!({
+                            "name": conn.name,
+                            "status": status,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            emit_stream_json(stream_json_init_event(
+                &cwd,
+                &api_session_id,
+                tools
+                    .all()
+                    .iter()
+                    .map(|tool| tool.name().to_string())
+                    .collect(),
+                mcp_servers,
+                &model_display,
+                &permission_mode,
+                &skills,
+                settings.output_style.as_deref(),
+            ));
+        }
+
         query_engine.add_user_message(&effective_prompt);
 
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
         let mut final_text = String::new();
-        loop {
+        let session_id = api_session_id.clone();
+        let started_at = std::time::Instant::now();
+        let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
+        let mut num_turns: u32 = 0;
+        let final_stop_reason = loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
             let output_format = cli.output_format.clone();
+            let stream_session_id = session_id.clone();
 
             // Spawn a task to print streamed text to stdout
             let print_handle = tokio::spawn(async move {
-                let mut text = String::new();
+                let mut state = StreamJsonPrintState::default();
                 while let Some(ev) = stream_rx.recv().await {
                     match &output_format {
                         OutputFormat::Text => match ev {
@@ -1394,29 +1697,43 @@ async fn main() -> Result<()> {
                         },
                         OutputFormat::Json => {
                             if let StreamEvent::TextDelta { text: delta } = ev {
-                                text.push_str(&delta);
+                                state.text.push_str(&delta);
                             }
                         }
                         OutputFormat::StreamJson => {
                             if let StreamEvent::TextDelta { text: delta } = &ev {
-                                text.push_str(delta);
+                                state.text.push_str(delta);
                             }
-                            emit_stream_json(stream_event_to_json(&ev));
+                            if let StreamEvent::UsageUpdate(usage) = &ev {
+                                merge_stream_usage(&mut state.latest_usage, usage.clone());
+                            }
+                            if let Some(value) =
+                                stream_event_to_stream_json(&ev, &stream_session_id)
+                            {
+                                emit_stream_json(value);
+                            }
                         }
                     }
                 }
-                text
+                state
             });
 
+            num_turns += 1;
             let result = query_engine.run_turn(&stream_tx).await?;
             drop(stream_tx);
-            if let Ok(text) = print_handle.await {
-                final_text.push_str(&text);
+            if let Ok(state) = print_handle.await {
+                final_text.push_str(&state.text);
+                if state.latest_usage.is_some() {
+                    latest_usage = state.latest_usage;
+                }
             }
 
             match result {
-                TurnResult::Done(_) => {
-                    break;
+                TurnResult::Done(stop_reason) => {
+                    break serde_json::to_string(&stop_reason)
+                        .ok()
+                        .and_then(|value| serde_json::from_str::<String>(&value).ok())
+                        .unwrap_or_else(|| "end_turn".to_string());
                 }
                 TurnResult::ContinueRecovery => {
                     // max_tokens recovery — run again immediately
@@ -1424,6 +1741,7 @@ async fn main() -> Result<()> {
                 }
                 TurnResult::ToolUse(tool_uses) => {
                     // Execute each tool, check permissions, feed results back
+                    let mut stream_tool_results = Vec::new();
                     for tool_info in &tool_uses {
                         let is_read_only = tools
                             .get(&tool_info.name)
@@ -1497,11 +1815,14 @@ async fn main() -> Result<()> {
                                                         _ => {}
                                                     }
                                                 }
-                                                let text = data
-                                                    .data
-                                                    .as_str()
-                                                    .unwrap_or(&data.data.to_string())
-                                                    .to_string();
+                                                let text = if tool_info.name == "Bash" {
+                                                    format_bash_tool_result_for_model(&data.data)
+                                                } else {
+                                                    data.data
+                                                        .as_str()
+                                                        .unwrap_or(&data.data.to_string())
+                                                        .to_string()
+                                                };
                                                 (text, data.is_error)
                                             }
                                             Err(e) => (format!("Error: {}", e), true),
@@ -1516,20 +1837,27 @@ async fn main() -> Result<()> {
                         };
 
                         if cli.output_format == OutputFormat::StreamJson {
-                            emit_stream_json(serde_json::json!({
+                            stream_tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": tool_info.id,
-                                "name": tool_info.name,
-                                "result": result_text,
+                                "content": result_text,
                                 "is_error": is_error,
                             }));
                         }
                         query_engine.add_tool_result(&tool_info.id, &result_text, is_error);
                     }
+                    if cli.output_format == OutputFormat::StreamJson
+                        && !stream_tool_results.is_empty()
+                    {
+                        emit_stream_json(stream_json_user_tool_result_event(
+                            stream_tool_results,
+                            &session_id,
+                        ));
+                    }
                     // Continue the loop to call run_turn again with the tool results
                 }
             }
-        }
+        };
 
         if cli.output_format == OutputFormat::Json {
             println!(
@@ -1541,6 +1869,31 @@ async fn main() -> Result<()> {
                     "result": final_text,
                 }))?
             );
+        } else if cli.output_format == OutputFormat::StreamJson {
+            let mut cost_tracker = claude_core::cost::tracker::CostTracker::new(&model);
+            if let Some(ref usage) = latest_usage {
+                cost_tracker.add_usage(usage);
+            }
+            let context_window = if model_display.contains("[1M]") || model_display.contains("[1m]")
+            {
+                1_000_000
+            } else {
+                claude_core::compact::compactor::default_context_window()
+            };
+            emit_stream_json(stream_json_result_event_with_meta(
+                &final_text,
+                &session_id,
+                StreamJsonResultMeta {
+                    duration_ms: started_at.elapsed().as_millis(),
+                    num_turns,
+                    stop_reason: &final_stop_reason,
+                    usage: latest_usage.as_ref(),
+                    model_display: &model_display,
+                    max_tokens: resolve_max_output_tokens(&model, &settings),
+                    context_window,
+                    total_cost_usd: cost_tracker.total_cost_usd(),
+                },
+            ));
         }
 
         // Gracefully disconnect MCP servers

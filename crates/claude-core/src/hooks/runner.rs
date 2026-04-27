@@ -369,6 +369,7 @@ async fn exec_hook(
     http_policy: &HttpHookPolicy,
 ) -> HookResult {
     let start = Instant::now();
+    let hook_id = uuid::Uuid::new_v4().to_string();
     let command_display = matched.hook.display_text();
 
     // Per-hook timeout overrides the batch timeout
@@ -405,6 +406,9 @@ async fn exec_hook(
 
     match result {
         Ok(mut r) => {
+            r.hook_id = Some(hook_id);
+            r.hook_name = Some(hook_name.to_string());
+            r.hook_event = Some(event.to_string());
             r.duration_ms = Some(duration_ms);
             r.command_display = command_display;
             r
@@ -412,6 +416,9 @@ async fn exec_hook(
         Err(e) => {
             warn!("Hook {} failed: {}", hook_name, e);
             HookResult {
+                hook_id: Some(hook_id),
+                hook_name: Some(hook_name.to_string()),
+                hook_event: Some(event.to_string()),
                 outcome: HookOutcome::NonBlockingError,
                 stderr: format!("Failed to run: {}", e),
                 duration_ms: Some(duration_ms),

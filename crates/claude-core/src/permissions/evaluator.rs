@@ -77,9 +77,20 @@ impl ToolPermissions for SimpleToolPermissions {
 
     fn check_permissions(
         &self,
-        _input: &Value,
+        input: &Value,
         _context: &ToolPermissionContext,
     ) -> PermissionResult {
+        if self.read_only {
+            return PermissionResult::Allow(PermissionAllowDecision {
+                updated_input: Some(input.clone()),
+                user_modified: None,
+                decision_reason: Some(PermissionDecisionReason::Other {
+                    reason: "Tool invocation is read-only".to_string(),
+                }),
+                tool_use_id: None,
+                accept_feedback: None,
+            });
+        }
         PermissionResult::passthrough("")
     }
 
@@ -860,7 +871,9 @@ mod tests {
         let ctx = empty_ctx();
         let tool = TestTool::new("Read", true);
         let decision = evaluate_permission(&tool, &serde_json::json!({}), &ctx);
-        // Read-only in default mode: tool returns passthrough -> becomes ask
+        // TestTool returns passthrough, so the evaluator asks. The
+        // SimpleToolPermissions adapter used by the CLI maps known
+        // read-only tools to Allow before reaching this fallback.
         assert!(decision.is_ask());
     }
 

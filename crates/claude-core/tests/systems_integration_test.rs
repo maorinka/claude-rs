@@ -399,14 +399,14 @@ mod mcp_transports {
     fn build_mcp_tool_name_normalizes() {
         assert_eq!(
             build_mcp_tool_name("my-sse-server", "list-items"),
-            "mcp__my_sse_server__list_items"
+            "mcp__my-sse-server__list-items"
         );
     }
 
     #[test]
     fn normalize_mcp_name_handles_special_chars() {
         assert_eq!(normalize_mcp_name("sse.server"), "sse_server");
-        assert_eq!(normalize_mcp_name("http-server"), "http_server");
+        assert_eq!(normalize_mcp_name("http-server"), "http-server");
         assert_eq!(normalize_mcp_name("server name"), "server_name");
     }
 

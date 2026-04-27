@@ -239,7 +239,7 @@ pub fn build_request_body(
         body["thinking"] = thinking;
     }
     if supports_thinking && api_model.contains("opus") {
-        body["output_config"] = json!({ "effort": "max" });
+        body["output_config"] = json!({ "effort": "high" });
     }
 
     // Optional speed hint.
@@ -281,12 +281,14 @@ pub fn build_request_body(
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
     // containing device_id, account_uuid, and session_id.
     let device_id = get_or_create_device_id();
-    let mut user_id_obj = extra_metadata();
-    user_id_obj.insert("device_id".into(), json!(device_id));
-    user_id_obj.insert("account_uuid".into(), json!(config.account_uuid));
-    user_id_obj.insert("session_id".into(), json!(config.session_id));
+    let user_id = api_metadata_user_id(
+        extra_metadata(),
+        &device_id,
+        &config.account_uuid,
+        &config.session_id,
+    );
     body["metadata"] = json!({
-        "user_id": Value::Object(user_id_obj).to_string(),
+        "user_id": user_id,
     });
 
     // context_management: mirrors TS getAPIContextManagement().
@@ -455,6 +457,40 @@ fn extra_metadata() -> serde_json::Map<String, Value> {
         Ok(Value::Object(map)) => map,
         _ => serde_json::Map::new(),
     }
+}
+
+fn api_metadata_user_id(
+    mut extra: serde_json::Map<String, Value>,
+    device_id: &str,
+    account_uuid: &str,
+    session_id: &str,
+) -> String {
+    // Match TS getAPIMetadata() insertion order for the stable Claude Code
+    // fields. Extra metadata is preserved after those fields, except callers
+    // cannot override the canonical ids.
+    extra.remove("device_id");
+    extra.remove("account_uuid");
+    extra.remove("session_id");
+
+    let mut parts = vec![
+        json_string_pair("device_id", device_id),
+        json_string_pair("account_uuid", account_uuid),
+        json_string_pair("session_id", session_id),
+    ];
+    for (key, value) in extra {
+        if let (Ok(key_json), Ok(value_json)) =
+            (serde_json::to_string(&key), serde_json::to_string(&value))
+        {
+            parts.push(format!("{key_json}:{value_json}"));
+        }
+    }
+    format!("{{{}}}", parts.join(","))
+}
+
+fn json_string_pair(key: &str, value: &str) -> String {
+    let key_json = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
+    let value_json = serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+    format!("{key_json}:{value_json}")
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -657,6 +693,8 @@ mod tests {
         };
         let body = build_request_body(&config, &[], &[], &[], false);
         let user_id = body["metadata"]["user_id"].as_str().unwrap();
+        assert!(user_id.starts_with(r#"{"device_id":"#,));
+        assert!(user_id.contains(r#","account_uuid":"account-456","session_id":"session-123""#));
         let parsed: Value = serde_json::from_str(user_id).unwrap();
         assert_eq!(parsed["session_id"], "session-123");
         assert_eq!(parsed["account_uuid"], "account-456");
@@ -678,6 +716,8 @@ mod tests {
         };
         let body = build_request_body(&config, &[], &[], &[], false);
         let user_id = body["metadata"]["user_id"].as_str().unwrap();
+        assert!(user_id.starts_with(r#"{"device_id":"#,));
+        assert!(user_id.contains(r#","account_uuid":"account-456","session_id":"session-123""#));
         let parsed: Value = serde_json::from_str(user_id).unwrap();
         assert_eq!(parsed["source"], "test");
         assert_eq!(parsed["session_id"], "session-123");
@@ -709,6 +749,20 @@ mod tests {
         assert!(body.get("context_management").is_none());
         assert!(body.get("thinking").is_none());
         clear_cache_env();
+    }
+
+    #[test]
+    fn opus_output_config_uses_supported_ts_effort_value() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-opus-4-7".into(),
+            max_tokens: 64_000,
+            thinking: ThinkingConfig::Adaptive,
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[], false);
+        assert_eq!(body["output_config"], json!({"effort": "high"}));
     }
 
     #[test]

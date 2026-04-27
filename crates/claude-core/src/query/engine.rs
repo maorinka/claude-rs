@@ -8,7 +8,7 @@ use crate::api::client::{ApiClient, ToolDefinition};
 use crate::api::sse::{self, ContentDelta, SseEvent};
 use crate::types::content::ContentBlock;
 use crate::types::events::StreamEvent;
-use crate::types::message::StopReason;
+use crate::types::message::{ApiMessage, AssistantMessage, StopReason};
 use crate::types::usage::Usage;
 
 use super::state::{QueryState, TransitionReason};
@@ -147,14 +147,39 @@ impl QueryEngine {
 
     /// Add a tool result message
     pub fn add_tool_result(&mut self, tool_use_id: &str, content: &str, is_error: bool) {
+        let block = serde_json::json!({
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "content": [{"type": "text", "text": content}],
+            "is_error": is_error,
+        });
+
+        if let Some(last) = self.messages.last_mut() {
+            let can_append = last.get("role").and_then(|role| role.as_str()) == Some("user")
+                && last
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .map(|content| {
+                        !content.is_empty()
+                            && content.iter().all(|block| {
+                                block.get("type").and_then(|ty| ty.as_str()) == Some("tool_result")
+                            })
+                    })
+                    .unwrap_or(false);
+            if can_append {
+                if let Some(content) = last
+                    .get_mut("content")
+                    .and_then(|content| content.as_array_mut())
+                {
+                    content.push(block);
+                    return;
+                }
+            }
+        }
+
         self.messages.push(serde_json::json!({
             "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": [{"type": "text", "text": content}],
-                "is_error": is_error,
-            }]
+            "content": [block]
         }));
     }
 
@@ -468,6 +493,8 @@ impl QueryEngine {
         let mut needs_follow_up = false;
         let mut stop_reason = StopReason::EndTurn;
         let mut assistant_content: Vec<serde_json::Value> = Vec::new();
+        let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+        let mut response_message: Option<ApiMessage> = None;
         let mut response_usage: Option<Usage> = None;
         'stream: loop {
             // Issue 27: apply idle timeout to each chunk read.
@@ -582,6 +609,7 @@ impl QueryEngine {
                                 }
                                 SseEvent::ContentBlockStop { index } => {
                                     if let Ok(block) = accumulator.on_stop(index) {
+                                        assistant_blocks.push(block.clone());
                                         match &block {
                                             ContentBlock::ToolUse { id, name, input } => {
                                                 let _ = event_tx
@@ -673,6 +701,7 @@ impl QueryEngine {
                                 }
                                 SseEvent::MessageStart { message } => {
                                     response_usage = Some(message.usage.clone());
+                                    response_message = Some(message.clone());
                                     let _ = event_tx
                                         .send(StreamEvent::UsageUpdate(message.usage.clone()))
                                         .await;
@@ -704,6 +733,21 @@ impl QueryEngine {
 
         // Add assistant message to history
         if !assistant_content.is_empty() {
+            if let Some(mut message) = response_message {
+                message.content = assistant_blocks;
+                message.stop_reason = Some(stop_reason.clone());
+                if let Some(usage) = response_usage.clone() {
+                    message.usage = usage;
+                }
+                let _ = event_tx
+                    .send(StreamEvent::AssistantMessage(AssistantMessage {
+                        uuid: uuid::Uuid::new_v4(),
+                        message,
+                        request_id: None,
+                        timestamp: chrono::Utc::now(),
+                    }))
+                    .await;
+            }
             self.add_assistant_message(assistant_content);
             if let Some(usage) = response_usage {
                 self.usage_anchor = Some(UsageAnchor {

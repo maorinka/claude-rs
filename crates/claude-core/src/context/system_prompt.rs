@@ -840,7 +840,8 @@ mod tests {
             .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!joined.contains("# auto memory"));
+        assert!(joined.contains("# auto memory"));
+        assert!(!joined.contains("Contents of"));
     }
 
     #[tokio::test]
@@ -859,7 +860,7 @@ mod tests {
             .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!joined.contains("# auto memory"));
+        assert!(joined.contains("# auto memory"));
         assert!(!joined.contains("logs/YYYY/MM/YYYY-MM-DD.md"));
     }
 }

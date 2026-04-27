@@ -156,7 +156,6 @@ fn subcommand_allowlist(binary: &str) -> Option<&'static HashSet<&'static str>> 
                 "shortlog",
                 "worktree",
                 "rev-parse",
-                "rev-list",
                 "ls-files",
                 "ls-tree",
                 "cat-file",
@@ -397,6 +396,18 @@ mod tests {
         assert_eq!(
             classify_command("git diff --cached"),
             Classification::ReadOnly
+        );
+    }
+
+    #[test]
+    fn git_rev_list_requires_permission_like_ts() {
+        assert_eq!(
+            classify_command("git rev-list --left-right --count main...HEAD"),
+            Classification::Mutating
+        );
+        assert_eq!(
+            classify_command("git status && git rev-list --left-right --count main...HEAD"),
+            Classification::Mutating
         );
     }
 

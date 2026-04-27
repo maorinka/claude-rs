@@ -961,7 +961,11 @@ mod tests {
     fn test_bash_mutating_or_build_commands_are_not_concurrency_safe() {
         let tool = BashTool::new();
 
-        for command in ["cargo build 2>&1 | tail -5", "rm -rf /tmp/claude-rs-test"] {
+        for command in [
+            "cargo build 2>&1 | tail -5",
+            "git rev-list --left-right --count main...HEAD",
+            "rm -rf /tmp/claude-rs-test",
+        ] {
             let input = json!({ "command": command });
             assert!(
                 !tool.is_read_only(&input),

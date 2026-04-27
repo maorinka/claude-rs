@@ -288,29 +288,22 @@ fn load_enabled_plugin_skills(
     let Ok(claude_home) = claude_dir() else {
         return;
     };
-    let mut enabled = enabled_plugins_from_settings(&claude_home.join("settings.json"));
-    enabled.extend(enabled_plugins_from_settings(
-        &project_root.join(".claude").join("settings.json"),
-    ));
+    let enabled = enabled_plugins_for_project(project_root);
 
     let cache_root = claude_home.join("plugins").join("cache");
-    for enabled_plugin in enabled {
-        let Some((plugin_name, marketplace)) = enabled_plugin.split_once('@') else {
-            continue;
-        };
-        let plugin_root = cache_root.join(marketplace).join(plugin_name);
-        let Some(version_dir) = newest_child_dir(&plugin_root) else {
-            continue;
-        };
-        let source = SkillSource::Plugin(enabled_plugin.clone());
+    let plugin_roots = enabled
+        .into_iter()
+        .filter_map(|enabled_plugin| {
+            let (plugin_name, marketplace) = enabled_plugin.split_once('@')?;
+            let plugin_name = plugin_name.to_string();
+            let plugin_root = cache_root.join(marketplace).join(&plugin_name);
+            let version_dir = newest_child_dir(&plugin_root)?;
+            Some((enabled_plugin, plugin_name, version_dir))
+        })
+        .collect::<Vec<_>>();
 
-        load_plugin_skill_dirs(
-            plugin_name,
-            &version_dir.join("skills"),
-            &source,
-            skills,
-            seen_names,
-        );
+    for (enabled_plugin, plugin_name, version_dir) in &plugin_roots {
+        let source = SkillSource::Plugin(enabled_plugin.clone());
         load_plugin_command_files(
             plugin_name,
             &version_dir.join("commands"),
@@ -319,9 +312,55 @@ fn load_enabled_plugin_skills(
             seen_names,
         );
     }
+
+    for (enabled_plugin, plugin_name, version_dir) in &plugin_roots {
+        let source = SkillSource::Plugin(enabled_plugin.clone());
+        load_plugin_skill_dirs(
+            plugin_name,
+            &version_dir.join("skills"),
+            &source,
+            skills,
+            seen_names,
+        );
+    }
 }
 
-fn enabled_plugins_from_settings(path: &Path) -> Vec<String> {
+pub fn enabled_plugins_for_project(project_root: &Path) -> Vec<String> {
+    let Ok(claude_home) = claude_dir() else {
+        return Vec::new();
+    };
+    let paths = [
+        claude_home.join("settings.json"),
+        claude_home.join("settings.local.json"),
+        project_root.join(".claude").join("settings.json"),
+        project_root.join(".claude").join("settings.local.json"),
+    ];
+
+    let mut order = Vec::new();
+    let mut state = std::collections::HashMap::new();
+    for path in paths {
+        for (name, enabled) in enabled_plugin_entries_from_settings(&path) {
+            if !state.contains_key(&name) {
+                order.push(name.clone());
+            }
+            state.insert(name, enabled);
+        }
+    }
+
+    order
+        .into_iter()
+        .filter(|name| state.get(name) == Some(&true))
+        .collect()
+}
+
+pub fn enabled_plugins_from_settings(path: &Path) -> Vec<String> {
+    enabled_plugin_entries_from_settings(path)
+        .into_iter()
+        .filter_map(|(name, enabled)| enabled.then_some(name))
+        .collect()
+}
+
+fn enabled_plugin_entries_from_settings(path: &Path) -> Vec<(String, bool)> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -331,19 +370,170 @@ fn enabled_plugins_from_settings(path: &Path) -> Vec<String> {
     let Some(map) = value.get("enabledPlugins").and_then(|v| v.as_object()) else {
         return Vec::new();
     };
-    let mut plugins: Vec<String> = map
-        .iter()
-        .filter_map(|(name, enabled)| enabled.as_bool().unwrap_or(false).then(|| name.clone()))
-        .collect();
-    plugins.sort();
-    plugins
+    ordered_enabled_plugin_keys(&text)
+        .into_iter()
+        .filter_map(|name| {
+            map.get(&name)
+                .and_then(|enabled| enabled.as_bool())
+                .map(|enabled| (name, enabled))
+        })
+        .collect()
+}
+
+fn ordered_enabled_plugin_keys(text: &str) -> Vec<String> {
+    let Some((object_start, object_end)) = object_value_range_for_key(text, "enabledPlugins")
+    else {
+        return Vec::new();
+    };
+    let mut keys = Vec::new();
+    let mut pos = object_start + 1;
+    while pos < object_end {
+        pos = skip_ws(text, pos);
+        if pos >= object_end || text.as_bytes()[pos] == b'}' {
+            break;
+        }
+        let Some((key, after_key)) = parse_json_string_at(text, pos) else {
+            break;
+        };
+        pos = skip_ws(text, after_key);
+        if text.as_bytes().get(pos) != Some(&b':') {
+            break;
+        }
+        pos = skip_json_value(text, skip_ws(text, pos + 1)).unwrap_or(pos);
+        keys.push(key);
+        pos = skip_ws(text, pos);
+        if text.as_bytes().get(pos) == Some(&b',') {
+            pos += 1;
+        }
+    }
+    keys
+}
+
+fn object_value_range_for_key(text: &str, target_key: &str) -> Option<(usize, usize)> {
+    let mut pos = skip_ws(text, 0);
+    if text.as_bytes().get(pos) != Some(&b'{') {
+        return None;
+    }
+    pos += 1;
+    loop {
+        pos = skip_ws(text, pos);
+        match text.as_bytes().get(pos) {
+            Some(b'}') | None => return None,
+            Some(b'"') => {}
+            _ => return None,
+        }
+        let (key, after_key) = parse_json_string_at(text, pos)?;
+        pos = skip_ws(text, after_key);
+        if text.as_bytes().get(pos) != Some(&b':') {
+            return None;
+        }
+        pos = skip_ws(text, pos + 1);
+        let value_start = pos;
+        let value_end = skip_json_value(text, pos)?;
+        if key == target_key && text.as_bytes().get(value_start) == Some(&b'{') {
+            return Some((value_start, value_end));
+        }
+        pos = skip_ws(text, value_end);
+        match text.as_bytes().get(pos) {
+            Some(b',') => pos += 1,
+            Some(b'}') => return None,
+            _ => return None,
+        }
+    }
+}
+
+fn parse_json_string_at(text: &str, start: usize) -> Option<(String, usize)> {
+    let end = json_string_end(text, start)?;
+    let value = serde_json::from_str::<String>(&text[start..end]).ok()?;
+    Some((value, end))
+}
+
+fn json_string_end(text: &str, start: usize) -> Option<usize> {
+    if text.as_bytes().get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut escaped = false;
+    for (offset, byte) in text.as_bytes()[start + 1..].iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' => escaped = true,
+            b'"' => return Some(start + 1 + offset + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn skip_json_value(text: &str, start: usize) -> Option<usize> {
+    match text.as_bytes().get(start)? {
+        b'"' => json_string_end(text, start),
+        b'{' | b'[' => skip_json_container(text, start),
+        _ => {
+            let mut pos = start;
+            while let Some(byte) = text.as_bytes().get(pos) {
+                if matches!(byte, b',' | b'}' | b']') {
+                    break;
+                }
+                pos += 1;
+            }
+            Some(pos)
+        }
+    }
+}
+
+fn skip_json_container(text: &str, start: usize) -> Option<usize> {
+    let opening = *text.as_bytes().get(start)?;
+    let closing = if opening == b'{' { b'}' } else { b']' };
+    let mut depth = 0usize;
+    let mut pos = start;
+    while let Some(byte) = text.as_bytes().get(pos) {
+        match byte {
+            b'"' => pos = json_string_end(text, pos)?,
+            value if *value == opening => {
+                depth += 1;
+                pos += 1;
+            }
+            value if *value == closing => {
+                depth -= 1;
+                pos += 1;
+                if depth == 0 {
+                    return Some(pos);
+                }
+            }
+            _ => pos += 1,
+        }
+    }
+    None
+}
+
+fn skip_ws(text: &str, mut pos: usize) -> usize {
+    while text
+        .as_bytes()
+        .get(pos)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        pos += 1;
+    }
+    pos
+}
+
+fn read_dir_paths(path: &Path) -> Option<Vec<std::path::PathBuf>> {
+    let entries = std::fs::read_dir(path).ok()?;
+    let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
+    Some(paths)
+}
+
+fn read_plugin_dir_entries(path: &Path) -> Option<Vec<std::path::PathBuf>> {
+    read_dir_paths(path)
 }
 
 fn newest_child_dir(path: &Path) -> Option<std::path::PathBuf> {
-    let entries = std::fs::read_dir(path).ok()?;
-    let mut dirs: Vec<std::path::PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
+    let mut dirs: Vec<std::path::PathBuf> = read_dir_paths(path)?
+        .into_iter()
         .filter(|path| path.is_dir())
         .collect();
     dirs.sort();
@@ -357,35 +547,12 @@ fn load_plugin_skill_dirs(
     skills: &mut Vec<Skill>,
     seen_names: &mut std::collections::HashSet<String>,
 ) {
-    let entries = match std::fs::read_dir(base_dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
+    let Some(entries) = read_plugin_dir_entries(base_dir) else {
+        return;
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let skill_file = path.join("SKILL.md");
-        let content = match std::fs::read_to_string(&skill_file) {
-            Ok(content) => content,
-            Err(_) => continue,
-        };
-        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(name) => name,
-            None => continue,
-        };
-        let parsed = parse_skill_file(&content);
-        push_plugin_skill(
-            plugin_name,
-            dir_name.to_string(),
-            parsed,
-            source,
-            skills,
-            seen_names,
-        );
-    }
+    let loaded = read_plugin_skill_dirs_concurrently(plugin_name, entries, source);
+    push_plugin_skills_in_order(loaded, skills, seen_names);
 }
 
 fn load_plugin_command_files(
@@ -395,56 +562,109 @@ fn load_plugin_command_files(
     skills: &mut Vec<Skill>,
     seen_names: &mut std::collections::HashSet<String>,
 ) {
-    let entries = match std::fs::read_dir(base_dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
+    let Some(entries) = read_plugin_dir_entries(base_dir) else {
+        return;
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(_) => continue,
-        };
-        let stem = match path.file_stem().and_then(|n| n.to_str()) {
-            Some(name) => name,
-            None => continue,
-        };
-        let parsed = parse_skill_file(&content);
-        push_plugin_skill(
-            plugin_name,
-            stem.to_string(),
-            parsed,
-            source,
-            skills,
-            seen_names,
-        );
-    }
+    let loaded = read_plugin_command_files_concurrently(plugin_name, entries, source);
+    push_plugin_skills_in_order(loaded, skills, seen_names);
 }
 
-fn push_plugin_skill(
+fn read_plugin_skill_dirs_concurrently(
+    plugin_name: &str,
+    entries: Vec<std::path::PathBuf>,
+    source: &SkillSource,
+) -> Vec<Skill> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let plugin_name = plugin_name.to_string();
+    let source = source.clone();
+
+    std::thread::scope(|scope| {
+        for path in entries {
+            if !path.is_dir() {
+                continue;
+            }
+            let tx = tx.clone();
+            let plugin_name = plugin_name.clone();
+            let source = source.clone();
+            scope.spawn(move || {
+                let skill_file = path.join("SKILL.md");
+                let content = match std::fs::read_to_string(&skill_file) {
+                    Ok(content) => content,
+                    Err(_) => return,
+                };
+                let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => return,
+                };
+                let parsed = parse_skill_file(&content);
+                let _ = tx.send(plugin_skill_from_parsed(
+                    &plugin_name,
+                    dir_name,
+                    parsed,
+                    &source,
+                ));
+            });
+        }
+        drop(tx);
+        rx.into_iter().collect()
+    })
+}
+
+fn read_plugin_command_files_concurrently(
+    plugin_name: &str,
+    entries: Vec<std::path::PathBuf>,
+    source: &SkillSource,
+) -> Vec<Skill> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let plugin_name = plugin_name.to_string();
+    let source = source.clone();
+
+    std::thread::scope(|scope| {
+        for path in entries {
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let tx = tx.clone();
+            let plugin_name = plugin_name.clone();
+            let source = source.clone();
+            scope.spawn(move || {
+                let content = match std::fs::read_to_string(&path) {
+                    Ok(content) => content,
+                    Err(_) => return,
+                };
+                let stem = match path.file_stem().and_then(|n| n.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => return,
+                };
+                let parsed = parse_skill_file(&content);
+                let _ = tx.send(plugin_skill_from_parsed(
+                    &plugin_name,
+                    stem,
+                    parsed,
+                    &source,
+                ));
+            });
+        }
+        drop(tx);
+        rx.into_iter().collect()
+    })
+}
+
+fn plugin_skill_from_parsed(
     plugin_name: &str,
     local_name: String,
     parsed: ParsedSkillFile,
     source: &SkillSource,
-    skills: &mut Vec<Skill>,
-    seen_names: &mut std::collections::HashSet<String>,
-) {
+) -> Skill {
     let name = format!("{plugin_name}:{local_name}");
-    if !seen_names.insert(name.clone()) {
-        return;
-    }
-
     let description = parsed
         .frontmatter
         .description
         .clone()
         .unwrap_or_else(|| format!("Skill: {name}"));
 
-    skills.push(Skill {
+    Skill {
         name,
         description,
         content: parsed.content,
@@ -454,7 +674,19 @@ fn push_plugin_skill(
         allowed_tools: parsed.frontmatter.allowed_tools,
         user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
         disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
-    });
+    }
+}
+
+fn push_plugin_skills_in_order(
+    loaded: Vec<Skill>,
+    skills: &mut Vec<Skill>,
+    seen_names: &mut std::collections::HashSet<String>,
+) {
+    for skill in loaded {
+        if seen_names.insert(skill.name.clone()) {
+            skills.push(skill);
+        }
+    }
 }
 
 /// Load skill directories from a base path.
@@ -468,13 +700,11 @@ fn load_skills_from_dir(
     skills: &mut Vec<Skill>,
     seen_names: &mut std::collections::HashSet<String>,
 ) {
-    let entries = match std::fs::read_dir(base_dir) {
-        Ok(entries) => entries,
-        Err(_) => return, // directory doesn't exist or is inaccessible
+    let Some(entries) = read_dir_paths(base_dir) else {
+        return;
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if !path.is_dir() {
             continue;
         }
@@ -651,6 +881,26 @@ Do the thing.
         assert_eq!(
             parsed.frontmatter.allowed_tools,
             vec!["Read", "Write", "Bash"]
+        );
+    }
+
+    #[test]
+    fn enabled_plugin_keys_preserve_json_order() {
+        let settings = r#"{
+          "other": {"enabledPlugins": {"ignored@example": true}},
+          "enabledPlugins": {
+            "frontend-design@marketplace": true,
+            "context7@marketplace": false,
+            "superpowers@marketplace": true
+          }
+        }"#;
+        assert_eq!(
+            ordered_enabled_plugin_keys(settings),
+            vec![
+                "frontend-design@marketplace",
+                "context7@marketplace",
+                "superpowers@marketplace"
+            ]
         );
     }
 

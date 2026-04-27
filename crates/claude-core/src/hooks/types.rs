@@ -410,6 +410,15 @@ pub enum PermissionRequestResult {
 /// Result of a single hook execution.
 #[derive(Clone, Debug)]
 pub struct HookResult {
+    /// Per-execution hook id used by stream-json hook events.
+    pub hook_id: Option<String>,
+
+    /// Display hook name, e.g. `SessionStart:startup`.
+    pub hook_name: Option<String>,
+
+    /// Hook event name, e.g. `SessionStart`.
+    pub hook_event: Option<String>,
+
     /// Outcome of this hook execution.
     pub outcome: HookOutcome,
 
@@ -471,6 +480,9 @@ pub struct HookResult {
 impl Default for HookResult {
     fn default() -> Self {
         Self {
+            hook_id: None,
+            hook_name: None,
+            hook_event: None,
             outcome: HookOutcome::Success,
             blocking_error: None,
             prevent_continuation: None,

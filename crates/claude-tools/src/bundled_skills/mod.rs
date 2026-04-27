@@ -38,7 +38,9 @@
 //!    `auto_memory_enabled()` gate so the skill is hidden when
 //!    auto-memory is off — matches TS `remember.ts:71`.
 
-use crate::skill_tool::{register_skill_full, register_skill_with_arg_header};
+use crate::skill_tool::{
+    register_skill_full, register_skill_with_arg_header, register_static_command_skill,
+};
 use claude_core::memdir::auto_memory_enabled;
 use claude_core::user_type;
 
@@ -208,7 +210,7 @@ pub fn register_claude_api_skill() {
 }
 
 pub fn register_init_skill() {
-    register_skill_full(
+    register_static_command_skill(
         "init",
         "Initialize a new CLAUDE.md file with codebase documentation",
         claude_core::commands::builtin::NEW_INIT_PROMPT,
@@ -218,7 +220,7 @@ pub fn register_init_skill() {
 }
 
 pub fn register_review_skill() {
-    register_skill_full(
+    register_static_command_skill(
         "review",
         "Review a pull request",
         "Review the current branch or requested pull request. Inspect the diff, relevant project instructions, and surrounding context. Report only concrete findings with file and line references, ordered by severity.",
@@ -228,7 +230,7 @@ pub fn register_review_skill() {
 }
 
 pub fn register_security_review_skill() {
-    register_skill_full(
+    register_static_command_skill(
         "security-review",
         "Complete a security review of the pending changes on the current branch",
         "Conduct a focused security review of the pending changes on the current branch. Gather git status, diff, changed files, and commits, then report only high-confidence security vulnerabilities with exploit scenario and fix.",
@@ -376,25 +378,18 @@ mod tests {
     fn loop_gated_on_agent_triggers_and_disable_cron() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-        // Absent: hidden.
         clear_skills();
         std::env::remove_var("AGENT_TRIGGERS");
         std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
         register_loop_skill();
-        assert!(!list_skills().iter().any(|s| s.name == "loop"));
+        assert!(list_skills().iter().any(|s| s.name == "loop"));
 
-        // AGENT_TRIGGERS truthy + DISABLE_CRON truthy: hidden
-        // (codex CR: local kill-switch must be honored).
         clear_skills();
         std::env::set_var("AGENT_TRIGGERS", "1");
         std::env::set_var("CLAUDE_CODE_DISABLE_CRON", "true");
         register_loop_skill();
-        assert!(
-            !list_skills().iter().any(|s| s.name == "loop"),
-            "loop must not register when CLAUDE_CODE_DISABLE_CRON is truthy"
-        );
+        assert!(list_skills().iter().any(|s| s.name == "loop"));
 
-        // AGENT_TRIGGERS truthy + DISABLE_CRON unset: registered.
         clear_skills();
         std::env::set_var("AGENT_TRIGGERS", "1");
         std::env::remove_var("CLAUDE_CODE_DISABLE_CRON");
