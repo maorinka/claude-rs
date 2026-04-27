@@ -113,6 +113,13 @@ pub fn append_output(task_id: &str, text: &str) {
     }
 }
 
+pub fn update_task_status(task_id: &str, status: &str) {
+    let mut store = TASK_STORE.lock().unwrap();
+    if let Some(entry) = store.get_mut(task_id) {
+        entry.status = status.to_string();
+    }
+}
+
 // ─── TaskCreateTool ────────────────────────────────────────────────────────────
 
 pub struct TaskCreateTool;

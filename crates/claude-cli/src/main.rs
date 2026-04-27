@@ -818,6 +818,16 @@ mod tests {
             ),
             "HTTP 202\n{\"ok\":true}"
         );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Monitor",
+                &serde_json::json!({
+                    "backgroundTaskId": "monitor-1",
+                    "outputPath": "/tmp/monitor-1.output"
+                })
+            ),
+            "Monitor running in background with ID: monitor-1. Output is being written to: /tmp/monitor-1.output"
+        );
     }
 }
 
@@ -1645,6 +1655,25 @@ fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde
 fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value) -> String {
     if tool_name == "Bash" {
         return format_bash_tool_result_for_model(data);
+    }
+
+    if tool_name == "Monitor" {
+        let task_id = data
+            .get("backgroundTaskId")
+            .or_else(|| data.get("task_id"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let output_path = data
+            .get("outputPath")
+            .or_else(|| data.get("output_file"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !task_id.is_empty() && !output_path.is_empty() {
+            return format!(
+                "Monitor running in background with ID: {task_id}. Output is being written to: {output_path}"
+            );
+        }
+        return data.to_string();
     }
 
     if tool_name == "AskUserQuestion" || tool_name == "AskUser" {
