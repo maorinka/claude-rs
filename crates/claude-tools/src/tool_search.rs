@@ -206,7 +206,10 @@ Query forms:
                 .collect();
 
             return Ok(ToolResultData {
-                data: json!({ "tools": matched }),
+                data: json!({
+                    "matches": matched.iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>(),
+                    "tools": matched,
+                }),
                 is_error: false,
             });
         }
@@ -227,7 +230,10 @@ Query forms:
             .collect();
 
         Ok(ToolResultData {
-            data: json!({ "tools": matched }),
+            data: json!({
+                "matches": matched.iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>(),
+                "tools": matched,
+            }),
             is_error: false,
         })
     }

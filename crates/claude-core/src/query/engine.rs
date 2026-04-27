@@ -178,6 +178,23 @@ impl QueryEngine {
         is_error: bool,
         include_is_error: bool,
     ) {
+        self.add_tool_result_content_with_error_field(
+            tool_use_id,
+            serde_json::Value::String(content.to_string()),
+            is_error,
+            include_is_error,
+        );
+    }
+
+    /// Add a tool result whose content can be either a string or structured
+    /// content blocks, matching Anthropic's tool_result content union.
+    pub fn add_tool_result_content_with_error_field(
+        &mut self,
+        tool_use_id: &str,
+        content: serde_json::Value,
+        is_error: bool,
+        include_is_error: bool,
+    ) {
         let mut block = serde_json::json!({
             "type": "tool_result",
             "tool_use_id": tool_use_id,

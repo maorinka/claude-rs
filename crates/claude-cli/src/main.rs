@@ -689,6 +689,24 @@ mod tests {
             "#7 [pending] Wire task formatting"
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_tool_search_mapping() {
+        assert_eq!(
+            format_tool_result_content_for_model(
+                "ToolSearch",
+                &serde_json::json!({"matches": ["Read", "Grep"]})
+            ),
+            serde_json::json!([
+                {"type": "tool_reference", "tool_name": "Read"},
+                {"type": "tool_reference", "tool_name": "Grep"}
+            ])
+        );
+        assert_eq!(
+            format_tool_result_content_for_model("ToolSearch", &serde_json::json!({"matches": []})),
+            serde_json::json!("No matching deferred tools found")
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1312,6 +1330,62 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
 }
 
 fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {
+    format_tool_result_string_for_model(tool_name, data)
+}
+
+fn format_tool_result_content_for_model(
+    tool_name: &str,
+    data: &serde_json::Value,
+) -> serde_json::Value {
+    if tool_name == "ToolSearch" {
+        let matches = data
+            .get("matches")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .or_else(|| {
+                data.get("tools")
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()))
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .unwrap_or_default();
+        if matches.is_empty() {
+            let mut text = "No matching deferred tools found".to_string();
+            if let Some(pending) = data
+                .get("pending_mcp_servers")
+                .and_then(|value| value.as_array())
+                .filter(|items| !items.is_empty())
+            {
+                let names = pending
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                text.push_str(&format!(". Some MCP servers are still connecting: {names}. Their tools will become available shortly — try searching again."));
+            }
+            return serde_json::Value::String(text);
+        }
+        return serde_json::Value::Array(
+            matches
+                .into_iter()
+                .map(|name| serde_json::json!({"type": "tool_reference", "tool_name": name}))
+                .collect(),
+        );
+    }
+    serde_json::Value::String(format_tool_result_string_for_model(tool_name, data))
+}
+
+fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value) -> String {
     if tool_name == "Bash" {
         return format_bash_tool_result_for_model(data);
     }
@@ -3471,17 +3545,23 @@ async fn main() -> Result<()> {
                             }
                         }
 
+                        let result_content = if is_error {
+                            serde_json::Value::String(result_text.clone())
+                        } else {
+                            format_tool_result_content_for_model(&tool_info.name, &result_json)
+                        };
+
                         if cli.output_format == OutputFormat::StreamJson {
                             stream_tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": tool_info.id,
-                                "content": result_text,
+                                "content": result_content.clone(),
                                 "is_error": is_error,
                             }));
                         }
-                        query_engine.add_tool_result_with_error_field(
+                        query_engine.add_tool_result_content_with_error_field(
                             &tool_info.id,
-                            &result_text,
+                            result_content,
                             is_error,
                             is_error || tool_info.name == "Bash",
                         );
