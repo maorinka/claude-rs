@@ -43,9 +43,31 @@ pub struct Cli {
     #[arg(long = "permission-mode")]
     pub permission_mode: Option<String>,
 
+    /// Comma or space-separated list of tool permission rules to allow
+    #[arg(
+        long = "allowedTools",
+        alias = "allowed-tools",
+        num_args = 1..,
+        value_delimiter = ','
+    )]
+    pub allowed_tools: Vec<String>,
+
+    /// Comma or space-separated list of tool permission rules to deny
+    #[arg(
+        long = "disallowedTools",
+        alias = "disallowed-tools",
+        num_args = 1..,
+        value_delimiter = ','
+    )]
+    pub disallowed_tools: Vec<String>,
+
     /// Specify available tools ("default", "", or comma/space-separated tool names)
     #[arg(long = "tools", num_args = 1.., value_delimiter = ',')]
     pub tools: Vec<String>,
+
+    /// Additional directories to allow tool access to
+    #[arg(long = "add-dir", num_args = 1..)]
+    pub add_dirs: Vec<String>,
 
     /// Working directory
     #[arg(short = 'C', long = "cd")]
@@ -336,6 +358,37 @@ fn filter_registry_by_cli_tools(registry: &mut claude_tools::ToolRegistry, value
     }
 }
 
+fn base_tool_denials_from_cli_tools(
+    base_tools_cli: &[String],
+    all_tool_names: &[String],
+) -> Vec<String> {
+    use claude_core::permissions::{normalize_legacy_tool_name, parse_tool_list_from_cli};
+
+    if base_tools_cli.is_empty() {
+        return Vec::new();
+    }
+
+    let joined = base_tools_cli.join(" ");
+    let trimmed = joined.trim();
+    if trimmed.is_empty() || trimmed == "default" {
+        return Vec::new();
+    }
+
+    let base_tools = parse_tool_list_from_cli(base_tools_cli)
+        .into_iter()
+        .map(|name| normalize_legacy_tool_name(&name))
+        .collect::<std::collections::HashSet<_>>();
+    if base_tools.is_empty() {
+        return all_tool_names.to_vec();
+    }
+
+    all_tool_names
+        .iter()
+        .filter(|name| !base_tools.contains(*name))
+        .cloned()
+        .collect()
+}
+
 fn merge_json_objects(base: &mut serde_json::Value, overlay: serde_json::Value) {
     let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) else {
         *base = overlay;
@@ -542,6 +595,21 @@ mod tests {
             permission_additional_directories_from_settings_value(&value),
             vec!["/tmp/work".to_string(), "/tmp/other".to_string()]
         );
+    }
+
+    #[test]
+    fn base_tools_create_denials_for_non_base_tools() {
+        let all_tools = vec![
+            "Bash".to_string(),
+            "Read".to_string(),
+            "Write".to_string(),
+            "Agent".to_string(),
+        ];
+
+        let denials = base_tool_denials_from_cli_tools(&["Bash,Read".to_string()], &all_tools);
+
+        assert_eq!(denials, vec!["Write".to_string(), "Agent".to_string()]);
+        assert!(base_tool_denials_from_cli_tools(&["default".to_string()], &all_tools).is_empty());
     }
 }
 
@@ -1662,6 +1730,11 @@ async fn main() -> Result<()> {
         claude_tools::build_default_registry_with_options(claude_tools::RegistryOptions {
             is_non_interactive_session: prompt_arg.is_some(),
         });
+    let base_permission_tool_names = tools
+        .all()
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
 
     // Register bundled skills (simplify, stuck, remember, …).
@@ -2185,12 +2258,19 @@ async fn main() -> Result<()> {
     let permission_rules_from_disk = load_permission_rules_from_disk_by_source(&project_root);
     let additional_dirs =
         permission_additional_directories_from_settings_value(&permission_settings);
+    let mut disallowed_tools_cli = cli.disallowed_tools.clone();
+    disallowed_tools_cli.extend(base_tool_denials_from_cli_tools(
+        &cli.tools,
+        &base_permission_tool_names,
+    ));
+    let mut add_dirs = additional_dirs;
+    add_dirs.extend(cli.add_dirs.clone());
     let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
-        &[],
-        &[],
+        &cli.allowed_tools,
+        &disallowed_tools_cli,
         permission_mode.clone(),
         cli.dangerously_skip_permissions,
-        &additional_dirs,
+        &add_dirs,
         &permission_rules_from_disk,
         cwd.clone(),
     )
