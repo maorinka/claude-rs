@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::api::accumulator::ContentBlockAccumulator;
 use crate::api::client::ApiClient;
 use crate::api::sse::{self, SseEvent};
+use crate::hooks::{run_post_compact_hooks, run_pre_compact_hooks};
 use crate::types::content::ContentBlock;
 use crate::types::usage::Usage;
 
@@ -121,6 +122,12 @@ fn estimate_block_tokens(block: &Value) -> u64 {
 const AUTOCOMPACT_BUFFER_TOKENS: u64 = 13_000;
 const MAX_OUTPUT_TOKENS_FOR_SUMMARY: u64 = 20_000;
 
+#[derive(Clone, Debug)]
+pub struct PartialCompactResult {
+    pub messages: Vec<Value>,
+    pub hook_messages: Vec<String>,
+}
+
 /// Check if compaction is needed based on estimated token count.
 pub fn should_compact(messages: &[Value], context_window: u64) -> bool {
     let estimated = estimate_tokens(messages);
@@ -146,7 +153,9 @@ pub async fn compact_conversation(
     messages: &[Value],
     system_prompt: &[ContentBlock],
 ) -> Result<Vec<Value>> {
-    let prompt = super::prompt::compact_prompt();
+    let pre_hooks = run_pre_compact_hooks("auto", None).await;
+    let prompt =
+        super::prompt::compact_prompt_with_instructions(pre_hooks.custom_instructions.as_deref());
 
     // Build the compaction request: send the conversation + ask for summary
     // Use a separate, smaller request with no tools
@@ -157,6 +166,7 @@ pub async fn compact_conversation(
     }));
 
     let summary = summarize_messages(api_client, &compact_messages, system_prompt).await?;
+    let _ = run_post_compact_hooks("auto", &summary).await;
 
     // Build compacted messages: just the summary as a user message
     let compact_user_msg = super::prompt::format_compact_user_message_simple(&summary);
@@ -177,12 +187,15 @@ pub async fn partial_compact_conversation_from(
     messages: &[Value],
     pivot_index: usize,
     system_prompt: &[ContentBlock],
-) -> Result<Vec<Value>> {
+) -> Result<PartialCompactResult> {
     if pivot_index >= messages.len() {
         anyhow::bail!("Nothing to summarize after the selected message.");
     }
 
-    let prompt = super::prompt::partial_compact_prompt();
+    let pre_hooks = run_pre_compact_hooks("manual", None).await;
+    let prompt = super::prompt::partial_compact_prompt_with_instructions(
+        pre_hooks.custom_instructions.as_deref(),
+    );
     let mut compact_messages: Vec<Value> = messages.to_vec();
     compact_messages.push(json!({
         "role": "user",
@@ -190,6 +203,7 @@ pub async fn partial_compact_conversation_from(
     }));
 
     let summary = summarize_messages(api_client, &compact_messages, system_prompt).await?;
+    let post_hooks = run_post_compact_hooks("manual", &summary).await;
     let compact_user_msg = super::prompt::format_compact_user_message_simple(&summary);
 
     let mut result = messages[..pivot_index].to_vec();
@@ -197,7 +211,17 @@ pub async fn partial_compact_conversation_from(
         "role": "user",
         "content": [{"type": "text", "text": compact_user_msg}]
     }));
-    Ok(result)
+    let hook_messages = [
+        pre_hooks.user_display_message,
+        post_hooks.user_display_message,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    Ok(PartialCompactResult {
+        messages: result,
+        hook_messages,
+    })
 }
 
 async fn summarize_messages(

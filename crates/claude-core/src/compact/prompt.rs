@@ -59,6 +59,12 @@ Tool calls will be rejected and you will fail the task.";
 /// Matches the TS prompt.ts structure: NO_TOOLS_PREAMBLE + body + NO_TOOLS_TRAILER,
 /// with <analysis> scratchpad then <summary> output format.
 pub fn compact_prompt() -> String {
+    compact_prompt_with_instructions(None)
+}
+
+/// Full compaction prompt with optional hook-provided custom instructions.
+pub fn compact_prompt_with_instructions(custom_instructions: Option<&str>) -> String {
+    let additional = additional_instructions(custom_instructions);
     format!("{preamble}Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
@@ -141,9 +147,11 @@ When summarizing the conversation focus on typescript code changes and also reme
 # Summary instructions
 When you are using compact - please focus on test output and code changes. Include file reads verbatim.
 </example>
+{additional}
 {trailer}",
         preamble = NO_TOOLS_PREAMBLE,
         analysis = DETAILED_ANALYSIS_INSTRUCTION,
+        additional = additional,
         trailer = NO_TOOLS_TRAILER,
     )
 }
@@ -152,6 +160,12 @@ When you are using compact - please focus on test output and code changes. Inclu
 /// preserving earlier context intact.
 /// Matches the TS `PARTIAL_COMPACT_PROMPT`.
 pub fn partial_compact_prompt() -> String {
+    partial_compact_prompt_with_instructions(None)
+}
+
+/// Partial compaction prompt with optional hook-provided custom instructions.
+pub fn partial_compact_prompt_with_instructions(custom_instructions: Option<&str>) -> String {
+    let additional = additional_instructions(custom_instructions);
     format!("{preamble}Your task is to create a detailed summary of the RECENT portion of the conversation \u{2014} the messages that follow earlier retained context. The earlier messages are being kept intact and do NOT need to be summarized. Focus your summary on what was discussed, learned, and accomplished in the recent messages only.
 
 {analysis}
@@ -221,11 +235,24 @@ Here's an example of how your output should be structured:
 </example>
 
 Please provide your summary based on the RECENT messages only (after the retained earlier context), following this structure and ensuring precision and thoroughness in your response.
+{additional}
 {trailer}",
         preamble = NO_TOOLS_PREAMBLE,
         analysis = DETAILED_ANALYSIS_INSTRUCTION_PARTIAL,
+        additional = additional,
         trailer = NO_TOOLS_TRAILER,
     )
+}
+
+fn additional_instructions(custom_instructions: Option<&str>) -> String {
+    let Some(instructions) = custom_instructions.map(str::trim) else {
+        return String::new();
+    };
+    if instructions.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nAdditional Instructions:\n{instructions}")
+    }
 }
 
 /// Prefix-preserving partial compaction prompt — summarizes messages up to

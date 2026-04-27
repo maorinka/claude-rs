@@ -118,7 +118,7 @@ impl QueryEngine {
     pub async fn partial_compact_from(
         &mut self,
         pivot_index: usize,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> anyhow::Result<crate::compact::compactor::PartialCompactResult> {
         let compacted = crate::compact::compactor::partial_compact_conversation_from(
             &self.api_client,
             &self.messages,
@@ -126,7 +126,7 @@ impl QueryEngine {
             &self.system_prompt,
         )
         .await?;
-        self.messages = compacted.clone();
+        self.messages = compacted.messages.clone();
         self.usage_anchor = None;
         self.skip_autocompact = true;
         self.turns_since_compact = 0;

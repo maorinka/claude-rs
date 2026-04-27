@@ -60,6 +60,22 @@ fn test_compact_prompt_structure() {
 }
 
 #[test]
+fn test_compact_prompt_includes_custom_instructions_before_trailer() {
+    let prompt = compact_prompt_with_instructions(Some("preserve hook output"));
+    let instructions = prompt
+        .find("Additional Instructions:\npreserve hook output")
+        .unwrap();
+    let trailer = prompt.find("REMINDER: Do NOT call any tools").unwrap();
+    assert!(instructions < trailer);
+}
+
+#[test]
+fn test_partial_compact_prompt_omits_blank_custom_instructions() {
+    let prompt = partial_compact_prompt_with_instructions(Some("  \n "));
+    assert!(!prompt.contains("Additional Instructions:"));
+}
+
+#[test]
 fn test_default_context_window() {
     assert_eq!(default_context_window(), 200_000);
 }

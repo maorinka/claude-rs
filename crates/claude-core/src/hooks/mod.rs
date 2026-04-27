@@ -1,4 +1,5 @@
 pub mod aggregation;
+pub mod compact_hooks;
 pub mod matching;
 pub mod runner;
 pub mod ssrf;
@@ -65,6 +66,9 @@ pub async fn fire_stop_failure(reason: &str) -> Option<String> {
 
 // Re-export the most commonly used types at the module level.
 pub use aggregation::aggregate_hook_results;
+pub use compact_hooks::{
+    run_post_compact_hooks, run_pre_compact_hooks, PostCompactHookOutput, PreCompactHookOutput,
+};
 pub use matching::{get_matching_hooks, matches_pattern, resolve_match_query, MatchedHook};
 pub use runner::{
     get_pre_tool_hook_blocking_message, get_stop_hook_message, get_task_completed_hook_message,

@@ -204,7 +204,8 @@ enum EngineCommand {
     PartialCompactFrom {
         messages: Vec<serde_json::Value>,
         pivot_index: usize,
-        response: oneshot::Sender<anyhow::Result<Vec<serde_json::Value>>>,
+        response:
+            oneshot::Sender<anyhow::Result<claude_core::compact::compactor::PartialCompactResult>>,
     },
     SetModel(String),
     /// Replace the cancellation token after an Escape-cancel so the next turn
@@ -1149,10 +1150,17 @@ impl App {
                                                     if let Some(prompt_text) = self
                                                         .apply_partial_compact_result(
                                                             confirm.message_index,
-                                                            &compacted,
+                                                            &compacted.messages,
                                                         )
                                                     {
                                                         self.prompt.set_text(prompt_text);
+                                                        for message in compacted.hook_messages {
+                                                            self.message_list.push(
+                                                                MessageEntry::System {
+                                                                    text: message,
+                                                                },
+                                                            );
+                                                        }
                                                         self.message_list.push(MessageEntry::System {
                                                             text: "Conversation summarized. Edit the restored prompt, then press Enter to resubmit.".to_string(),
                                                         });
