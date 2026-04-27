@@ -1944,15 +1944,23 @@ async fn main() -> Result<()> {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
         let mut instructions_parts: Vec<String> = Vec::new();
+        let mut connected_instruction_blocks = Vec::new();
         for conn in &connections {
             if let claude_core::mcp::types::McpConnectionStatus::Connected {
                 instructions: Some(ref instr),
                 ..
             } = conn.status
             {
-                instructions_parts.push(format!("## {}\n{}", conn.name, instr));
+                connected_instruction_blocks
+                    .push((conn.name.clone(), format!("## {}\n{}", conn.name, instr)));
             }
         }
+        connected_instruction_blocks.sort_by(|a, b| a.0.cmp(&b.0));
+        instructions_parts.extend(
+            connected_instruction_blocks
+                .into_iter()
+                .map(|(_, block)| block),
+        );
         if !instructions_parts.is_empty() {
             query_engine.append_user_context_block(format!(
                 "<system-reminder>\n# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n{}\n</system-reminder>",
