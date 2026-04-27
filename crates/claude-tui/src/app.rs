@@ -1636,7 +1636,7 @@ impl App {
                             let cwd_clone = cwd.clone();
                             let cancel_clone = cancel.clone();
                             let rfs_clone = read_file_state.clone();
-                            let perm_mode_clone = permission_mode.clone();
+                            let perm_mode_clone = perm_ctx.mode.clone();
                             let model_clone = self.model_name.clone();
                             let tx_tool = tx.clone();
                             let tidx = tool_idx;
@@ -1861,7 +1861,7 @@ impl App {
                                     &info.input,
                                     &result_text,
                                     None,
-                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    Some(permission_mode_hook_name(&perm_ctx.mode)),
                                     None,
                                     None,
                                 )
@@ -1885,7 +1885,7 @@ impl App {
                                     &info.id,
                                     &info.input,
                                     &result_json,
-                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    Some(permission_mode_hook_name(&perm_ctx.mode)),
                                     None,
                                     None,
                                 )
