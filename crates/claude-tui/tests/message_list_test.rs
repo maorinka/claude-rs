@@ -122,11 +122,11 @@ fn test_permission_dialog_buttons() {
         PermissionDialog::new("Bash".into(), "Execute command".into(), "ls -la".into());
     assert_eq!(dialog.selected(), "allow");
     dialog.next_button();
-    assert_eq!(dialog.selected(), "deny");
-    dialog.next_button();
     assert_eq!(dialog.selected(), "always");
+    dialog.next_button();
+    assert_eq!(dialog.selected(), "deny");
     dialog.next_button();
     assert_eq!(dialog.selected(), "allow"); // wraps
     dialog.prev_button();
-    assert_eq!(dialog.selected(), "always");
+    assert_eq!(dialog.selected(), "deny");
 }

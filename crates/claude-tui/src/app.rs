@@ -931,14 +931,24 @@ impl App {
                     } else if self.permission_dialog.is_some() {
                         // Route keys to permission dialog
                         match k.code {
-                            KeyCode::Tab | KeyCode::Right => {
+                            KeyCode::Down | KeyCode::Right => {
                                 if let Some(ref mut dialog) = self.permission_dialog {
                                     dialog.next_button();
                                 }
                             }
-                            KeyCode::BackTab | KeyCode::Left => {
+                            KeyCode::Up | KeyCode::Left => {
                                 if let Some(ref mut dialog) = self.permission_dialog {
                                     dialog.prev_button();
+                                }
+                            }
+                            KeyCode::Esc => {
+                                let _ = tx
+                                    .send(AppEvent::PermissionResponse("deny".to_string()))
+                                    .await;
+                            }
+                            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(ref mut dialog) = self.permission_dialog {
+                                    dialog.toggle_explanation();
                                 }
                             }
                             KeyCode::Enter => {
@@ -2569,7 +2579,13 @@ impl App {
 
             // Permission dialog overlay
             if let Some(dialog) = permission_dialog {
-                let dialog_area = centered_rect(60, 10, area);
+                let dialog_height = dialog.height().min(area.height.saturating_sub(3)).max(4);
+                let dialog_area = Rect::new(
+                    area.x,
+                    chunks[2].y.saturating_sub(dialog_height),
+                    area.width,
+                    dialog_height,
+                );
                 frame.render_widget(dialog, dialog_area);
             }
 
