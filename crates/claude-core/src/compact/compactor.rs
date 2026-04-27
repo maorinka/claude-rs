@@ -156,9 +156,58 @@ pub async fn compact_conversation(
         "content": [{"type": "text", "text": prompt}]
     }));
 
+    let summary = summarize_messages(api_client, &compact_messages, system_prompt).await?;
+
+    // Build compacted messages: just the summary as a user message
+    let compact_user_msg = super::prompt::format_compact_user_message_simple(&summary);
+
+    Ok(vec![json!({
+        "role": "user",
+        "content": [{"type": "text", "text": compact_user_msg}]
+    })])
+}
+
+/// Summarize messages from `pivot_index` onward while preserving the earlier
+/// prefix. This mirrors TS `partialCompactConversation(..., direction='from')`:
+/// the summary request sees the full active conversation so the retained prefix
+/// remains available as context, then the returned history keeps only the prefix
+/// plus a compact-summary user message.
+pub async fn partial_compact_conversation_from(
+    api_client: &ApiClient,
+    messages: &[Value],
+    pivot_index: usize,
+    system_prompt: &[ContentBlock],
+) -> Result<Vec<Value>> {
+    if pivot_index >= messages.len() {
+        anyhow::bail!("Nothing to summarize after the selected message.");
+    }
+
+    let prompt = super::prompt::partial_compact_prompt();
+    let mut compact_messages: Vec<Value> = messages.to_vec();
+    compact_messages.push(json!({
+        "role": "user",
+        "content": [{"type": "text", "text": prompt}]
+    }));
+
+    let summary = summarize_messages(api_client, &compact_messages, system_prompt).await?;
+    let compact_user_msg = super::prompt::format_compact_user_message_simple(&summary);
+
+    let mut result = messages[..pivot_index].to_vec();
+    result.push(json!({
+        "role": "user",
+        "content": [{"type": "text", "text": compact_user_msg}]
+    }));
+    Ok(result)
+}
+
+async fn summarize_messages(
+    api_client: &ApiClient,
+    compact_messages: &[Value],
+    system_prompt: &[ContentBlock],
+) -> Result<String> {
     // Make API call for summarization (streaming, no tools)
     let response = api_client
-        .stream_request(&compact_messages, system_prompt, &[])
+        .stream_request(compact_messages, system_prompt, &[])
         .await?;
 
     // Stream SSE events from the response to extract the summary text
@@ -220,13 +269,7 @@ pub async fn compact_conversation(
     // (matches TS formatCompactSummary behavior)
     let summary = format_compact_summary(&summary);
 
-    // Build compacted messages: just the summary as a user message
-    let compact_user_msg = super::prompt::format_compact_user_message_simple(&summary);
-
-    Ok(vec![json!({
-        "role": "user",
-        "content": [{"type": "text", "text": compact_user_msg}]
-    })])
+    Ok(summary)
 }
 
 /// Format the compact summary by stripping the `<analysis>` drafting scratchpad

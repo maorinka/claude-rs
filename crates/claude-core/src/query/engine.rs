@@ -113,6 +113,26 @@ impl QueryEngine {
         self.usage_anchor = None;
     }
 
+    /// Run prefix-preserving partial compaction from the selected message onward.
+    /// Returns the compacted active message list and installs it into the engine.
+    pub async fn partial_compact_from(
+        &mut self,
+        pivot_index: usize,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let compacted = crate::compact::compactor::partial_compact_conversation_from(
+            &self.api_client,
+            &self.messages,
+            pivot_index,
+            &self.system_prompt,
+        )
+        .await?;
+        self.messages = compacted.clone();
+        self.usage_anchor = None;
+        self.skip_autocompact = true;
+        self.turns_since_compact = 0;
+        Ok(compacted)
+    }
+
     /// Append a text block to the system prompt.
     pub fn append_system_prompt(&mut self, text: String) {
         self.system_prompt.push(ContentBlock::Text { text });

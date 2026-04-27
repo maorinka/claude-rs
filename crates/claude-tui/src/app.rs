@@ -15,7 +15,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use claude_core::hooks::{
@@ -201,6 +201,11 @@ enum EngineCommand {
     },
     RunTurn(mpsc::Sender<StreamEvent>),
     LoadMessages(Vec<serde_json::Value>),
+    PartialCompactFrom {
+        messages: Vec<serde_json::Value>,
+        pivot_index: usize,
+        response: oneshot::Sender<anyhow::Result<Vec<serde_json::Value>>>,
+    },
     SetModel(String),
     /// Replace the cancellation token after an Escape-cancel so the next turn
     /// can be independently cancelled.
@@ -445,6 +450,7 @@ impl App {
         })
     }
 
+    #[cfg(test)]
     fn summarize_rewind_from(&mut self, idx: usize) -> Option<String> {
         let prompt_text = match self.message_list.messages().get(idx) {
             Some(MessageEntry::User { text }) => text.clone(),
@@ -492,6 +498,37 @@ impl App {
         self.message_list.push(MessageEntry::CompactionSummary {
             text: compact_user_msg,
         });
+        Some(prompt_text)
+    }
+
+    fn prepare_partial_compact_from(
+        &self,
+        idx: usize,
+    ) -> Option<(String, Vec<serde_json::Value>, usize)> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        let messages = reconstruct_engine_messages(self.message_list.messages());
+        let pivot_index = reconstruct_engine_messages(&self.message_list.messages()[..idx]).len();
+        Some((prompt_text, messages, pivot_index))
+    }
+
+    fn apply_partial_compact_result(
+        &mut self,
+        idx: usize,
+        compacted: &[serde_json::Value],
+    ) -> Option<String> {
+        let prompt_text = match self.message_list.messages().get(idx) {
+            Some(MessageEntry::User { text }) => text.clone(),
+            _ => return None,
+        };
+        let summary_text = compacted.last().and_then(message_text).unwrap_or_else(|| {
+            "Conversation summary was generated, but no summary text was returned.".to_string()
+        });
+        self.message_list.truncate(idx);
+        self.message_list
+            .push(MessageEntry::CompactionSummary { text: summary_text });
         Some(prompt_text)
     }
 
@@ -718,6 +755,15 @@ impl App {
                         }
                         EngineCommand::LoadMessages(msgs) => {
                             engine.load_messages(msgs);
+                        }
+                        EngineCommand::PartialCompactFrom {
+                            messages,
+                            pivot_index,
+                            response,
+                        } => {
+                            engine.load_messages(messages);
+                            let result = engine.partial_compact_from(pivot_index).await;
+                            let _ = response.send(result);
                         }
                         EngineCommand::SetModel(model) => {
                             engine.set_model(model);
@@ -1084,19 +1130,47 @@ impl App {
                                         }
                                     }
                                     RewindRestoreOption::SummarizeFromHere => {
-                                        if let Some(prompt_text) =
-                                            self.summarize_rewind_from(confirm.message_index)
+                                        if let Some((_, messages, pivot_index)) =
+                                            self.prepare_partial_compact_from(confirm.message_index)
                                         {
-                                            let messages = reconstruct_engine_messages(
-                                                self.message_list.messages(),
-                                            );
-                                            let _ = engine_tx
-                                                .send(EngineCommand::LoadMessages(messages))
-                                                .await;
-                                            self.prompt.set_text(prompt_text);
                                             self.message_list.push(MessageEntry::System {
-                                                text: "Conversation summarized. Edit the restored prompt, then press Enter to resubmit.".to_string(),
+                                                text: "Summarizing conversation...".to_string(),
                                             });
+                                            let (response_tx, response_rx) = oneshot::channel();
+                                            let _ = engine_tx
+                                                .send(EngineCommand::PartialCompactFrom {
+                                                    messages,
+                                                    pivot_index,
+                                                    response: response_tx,
+                                                })
+                                                .await;
+                                            match response_rx.await {
+                                                Ok(Ok(compacted)) => {
+                                                    if let Some(prompt_text) = self
+                                                        .apply_partial_compact_result(
+                                                            confirm.message_index,
+                                                            &compacted,
+                                                        )
+                                                    {
+                                                        self.prompt.set_text(prompt_text);
+                                                        self.message_list.push(MessageEntry::System {
+                                                            text: "Conversation summarized. Edit the restored prompt, then press Enter to resubmit.".to_string(),
+                                                        });
+                                                    }
+                                                }
+                                                Ok(Err(err)) => {
+                                                    self.message_list.push(MessageEntry::System {
+                                                        text: format!(
+                                                            "Unable to summarize conversation: {err}"
+                                                        ),
+                                                    });
+                                                }
+                                                Err(_) => {
+                                                    self.message_list.push(MessageEntry::System {
+                                                        text: "Unable to summarize conversation: engine stopped responding.".to_string(),
+                                                    });
+                                                }
+                                            }
                                         }
                                     }
                                     RewindRestoreOption::NeverMind => {}
@@ -2874,6 +2948,21 @@ fn reconstruct_engine_messages(entries: &[MessageEntry]) -> Vec<serde_json::Valu
             _ => None,
         })
         .collect()
+}
+
+fn message_text(message: &serde_json::Value) -> Option<String> {
+    let content = message.get("content")?;
+    match content {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Array(blocks) => Some(
+            blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(|text| text.as_str()))
+                .collect::<Vec<_>>()
+                .join(""),
+        ),
+        _ => None,
+    }
 }
 
 fn fit_status_for_width(status: &str, width: usize) -> String {
