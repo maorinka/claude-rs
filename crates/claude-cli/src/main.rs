@@ -828,6 +828,44 @@ mod tests {
             ),
             "Monitor running in background with ID: monitor-1. Output is being written to: /tmp/monitor-1.output"
         );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Bash",
+                &serde_json::json!({
+                    "stdout": "",
+                    "stderr": "",
+                    "backgroundTaskId": "bg-1",
+                    "outputPath": "/tmp/bg-1.output"
+                })
+            ),
+            "Command running in background with ID: bg-1. Output is being written to: /tmp/bg-1.output"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Bash",
+                &serde_json::json!({
+                    "stdout": "started\n",
+                    "stderr": "",
+                    "backgroundTaskId": "bg-2",
+                    "outputPath": "/tmp/bg-2.output",
+                    "backgroundedByUser": true
+                })
+            ),
+            "started\nCommand was manually backgrounded by user with ID: bg-2. Output is being written to: /tmp/bg-2.output"
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "Bash",
+                &serde_json::json!({
+                    "stdout": "",
+                    "stderr": "",
+                    "backgroundTaskId": "bg-3",
+                    "outputPath": "/tmp/bg-3.output",
+                    "assistantAutoBackgrounded": true
+                })
+            ),
+            "Command exceeded the assistant-mode blocking budget (10s) and was moved to the background with ID: bg-3. It is still running — you will be notified when it completes. Output is being written to: /tmp/bg-3.output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
+        );
     }
 }
 
@@ -1441,14 +1479,53 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
     };
     let stdout = obj.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
     let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let mut parts = Vec::new();
     match (stdout.is_empty(), stderr.is_empty()) {
-        (false, true) => stdout.trim_end_matches('\n').to_string(),
-        (true, false) => stderr.trim_end_matches('\n').to_string(),
-        (false, false) => format!("{stdout}\n{stderr}")
-            .trim_end_matches('\n')
-            .to_string(),
-        (true, true) => String::new(),
+        (false, true) => parts.push(stdout.trim_end_matches('\n').to_string()),
+        (true, false) => parts.push(stderr.trim_end_matches('\n').to_string()),
+        (false, false) => parts.push(
+            format!("{stdout}\n{stderr}")
+                .trim_end_matches('\n')
+                .to_string(),
+        ),
+        (true, true) => {}
     }
+
+    let task_id = obj
+        .get("backgroundTaskId")
+        .or_else(|| obj.get("task_id"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let output_path = obj
+        .get("outputPath")
+        .or_else(|| obj.get("output_file"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if !task_id.is_empty() && !output_path.is_empty() {
+        let background_info = if obj
+            .get("assistantAutoBackgrounded")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            format!("Command exceeded the assistant-mode blocking budget (10s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to: {output_path}. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive.")
+        } else if obj
+            .get("backgroundedByUser")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            format!(
+                "Command was manually backgrounded by user with ID: {task_id}. Output is being written to: {output_path}"
+            )
+        } else {
+            format!(
+                "Command running in background with ID: {task_id}. Output is being written to: {output_path}"
+            )
+        };
+        parts.push(background_info);
+    }
+
+    parts.retain(|part| !part.is_empty());
+    parts.join("\n")
 }
 
 fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {
