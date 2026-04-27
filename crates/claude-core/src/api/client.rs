@@ -194,29 +194,23 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u64 {
 
 fn model_supports_effort(model: &str) -> bool {
     let lower = normalize_model_for_api(model).to_ascii_lowercase();
-    lower.contains("opus-4-6") || lower.contains("sonnet-4-6")
+    lower.contains("opus") || lower.contains("sonnet")
 }
 
-fn model_supports_max_effort(model: &str) -> bool {
-    normalize_model_for_api(model)
-        .to_ascii_lowercase()
-        .contains("opus-4-6")
-}
-
-fn resolve_output_effort(model: &str, effort: Option<&str>) -> Option<&'static str> {
+fn resolve_output_effort(model: &str, effort: Option<&str>) -> Option<String> {
     if !model_supports_effort(model) {
         return None;
     }
 
     match effort.map(|value| value.trim().to_ascii_lowercase()) {
-        Some(value) if value == "low" => Some("low"),
-        Some(value) if value == "medium" => Some("medium"),
-        Some(value) if value == "high" => Some("high"),
-        Some(value) if value == "max" && model_supports_max_effort(model) => Some("max"),
-        Some(value) if value == "max" => Some("high"),
-        Some(value) if value == "auto" || value == "unset" || value.is_empty() => Some("high"),
-        Some(_) => Some("high"),
-        None => Some("high"),
+        Some(value) if matches!(value.as_str(), "low" | "medium" | "high" | "xhigh" | "max") => {
+            Some(value)
+        }
+        Some(value) if value == "auto" || value == "unset" || value.is_empty() => {
+            Some("high".into())
+        }
+        Some(_) => Some("high".into()),
+        None => Some("high".into()),
     }
 }
 
@@ -839,26 +833,26 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_cache_env();
 
-        let sonnet_max = ApiConfig {
+        let sonnet_xhigh = ApiConfig {
             model: "claude-sonnet-4-6".into(),
             max_tokens: 64_000,
-            effort: Some("max".into()),
+            effort: Some("xhigh".into()),
             ..Default::default()
         };
-        let body = build_request_body(&sonnet_max, &[], &[], &[], false);
-        assert_eq!(body["output_config"], json!({"effort": "high"}));
+        let body = build_request_body(&sonnet_xhigh, &[], &[], &[], false);
+        assert_eq!(body["output_config"], json!({"effort": "xhigh"}));
 
         let stale_xhigh = ApiConfig {
-            model: "claude-opus-4-6".into(),
+            model: "claude-opus-4-7".into(),
             max_tokens: 64_000,
             effort: Some("xhigh".into()),
             ..Default::default()
         };
         let body = build_request_body(&stale_xhigh, &[], &[], &[], false);
-        assert_eq!(body["output_config"], json!({"effort": "high"}));
+        assert_eq!(body["output_config"], json!({"effort": "xhigh"}));
 
         let unsupported_model = ApiConfig {
-            model: "claude-opus-4-7".into(),
+            model: "claude-haiku-4-5".into(),
             max_tokens: 64_000,
             effort: Some("high".into()),
             ..Default::default()

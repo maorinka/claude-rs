@@ -517,12 +517,12 @@ impl CommandHandler for EffortHandler {
                 .and_then(|s| s.lock().ok().map(|st| st.effort_level.clone()))
                 .unwrap_or_else(|| "medium".to_string());
             Ok(CommandResult::Action(format!(
-                "Usage: /effort <low|medium|high|max|auto>. Current effort level: {}",
+                "Usage: /effort <low|medium|high|xhigh|max|auto>. Current effort level: {}",
                 current
             )))
         } else {
             match level {
-                "low" | "medium" | "high" | "max" | "auto" => {
+                "low" | "medium" | "high" | "xhigh" | "max" | "auto" => {
                     if let Some(ref shared) = ctx.shared {
                         if let Ok(mut state) = shared.lock() {
                             state.effort_level = level.to_string();
@@ -534,7 +534,7 @@ impl CommandHandler for EffortHandler {
                     )))
                 }
                 _ => Ok(CommandResult::Error(format!(
-                    "Invalid effort level: '{}'. Use low, medium, high, max, or auto.",
+                    "Invalid effort level: '{}'. Use low, medium, high, xhigh, max, or auto.",
                     level
                 ))),
             }
