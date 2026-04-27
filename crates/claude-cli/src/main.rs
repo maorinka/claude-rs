@@ -375,6 +375,21 @@ fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value 
     merged
 }
 
+fn load_settings_json_value(path: &std::path::Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    value.is_object().then_some(value)
+}
+
+fn load_permission_settings_value(project_root: &std::path::Path) -> serde_json::Value {
+    let user_project_local = load_raw_settings_value(project_root);
+    if let Some(policy) = claude_core::remote_managed_settings::load_from_disk() {
+        claude_core::remote_managed_settings::apply_policy_overlay(&user_project_local, &policy)
+    } else {
+        user_project_local
+    }
+}
+
 fn parse_permission_rules_from_settings_value(
     value: &serde_json::Value,
     source: claude_core::permissions::types::PermissionRuleSource,
@@ -431,15 +446,37 @@ fn load_permission_rules_from_disk_by_source(
         project_root.join(".claude").join("settings.local.json"),
     ));
 
+    let policy = claude_core::remote_managed_settings::load_from_disk();
+    if policy
+        .as_ref()
+        .and_then(|value| value.get("permissions"))
+        .and_then(|permissions| permissions.get("allowManagedPermissionRulesOnly"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return policy
+            .as_ref()
+            .map(|value| {
+                parse_permission_rules_from_settings_value(
+                    value,
+                    PermissionRuleSource::PolicySettings,
+                )
+            })
+            .unwrap_or_default();
+    }
+
     let mut rules = Vec::new();
     for (source, path) in sources {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        let Some(value) = load_settings_json_value(&path) else {
             continue;
         };
         rules.extend(parse_permission_rules_from_settings_value(&value, source));
+    }
+    if let Some(policy) = policy {
+        rules.extend(parse_permission_rules_from_settings_value(
+            &policy,
+            PermissionRuleSource::PolicySettings,
+        ));
     }
     rules
 }
@@ -452,6 +489,60 @@ fn permission_mode_from_settings_value(
         .and_then(|permissions| permissions.get("defaultMode"))
         .and_then(serde_json::Value::as_str)
         .map(claude_core::permissions::types::PermissionMode::from_string)
+}
+
+fn permission_additional_directories_from_settings_value(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("permissions")
+        .and_then(|permissions| permissions.get("additionalDirectories"))
+        .and_then(serde_json::Value::as_array)
+        .map(|dirs| {
+            dirs.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::permissions::types::{PermissionBehavior, PermissionRuleSource};
+
+    #[test]
+    fn permission_settings_parse_rules_and_directories() {
+        let value = serde_json::json!({
+            "permissions": {
+                "allow": ["Bash(git status)"],
+                "deny": ["Write"],
+                "ask": ["Edit"],
+                "additionalDirectories": ["/tmp/work", 42, "/tmp/other"]
+            }
+        });
+
+        let rules =
+            parse_permission_rules_from_settings_value(&value, PermissionRuleSource::LocalSettings);
+        assert_eq!(rules.len(), 3);
+        assert!(rules.iter().any(|rule| {
+            rule.source == PermissionRuleSource::LocalSettings
+                && rule.rule_behavior == PermissionBehavior::Allow
+                && rule.rule_value.to_rule_string() == "Bash(git status)"
+        }));
+        assert!(rules.iter().any(|rule| {
+            rule.rule_behavior == PermissionBehavior::Deny
+                && rule.rule_value.to_rule_string() == "Write"
+        }));
+        assert!(rules.iter().any(|rule| {
+            rule.rule_behavior == PermissionBehavior::Ask
+                && rule.rule_value.to_rule_string() == "Edit"
+        }));
+
+        assert_eq!(
+            permission_additional_directories_from_settings_value(&value),
+            vec!["/tmp/work".to_string(), "/tmp/other".to_string()]
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1564,6 +1655,7 @@ async fn main() -> Result<()> {
     };
     let mut raw_settings = load_raw_settings_value(&project_root);
     merge_enabled_plugin_hooks(&mut raw_settings, &project_root);
+    let permission_settings = load_permission_settings_value(&project_root);
 
     // Build tool registry
     let mut tools =
@@ -2085,18 +2177,20 @@ async fn main() -> Result<()> {
         claude_core::permissions::types::PermissionMode::from_string(mode_str)
     } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
         claude_core::permissions::types::PermissionMode::from_string(&mode_str)
-    } else if let Some(mode) = permission_mode_from_settings_value(&raw_settings) {
+    } else if let Some(mode) = permission_mode_from_settings_value(&permission_settings) {
         mode
     } else {
         claude_core::permissions::types::PermissionMode::Default
     };
     let permission_rules_from_disk = load_permission_rules_from_disk_by_source(&project_root);
+    let additional_dirs =
+        permission_additional_directories_from_settings_value(&permission_settings);
     let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
         &[],
         &[],
         permission_mode.clone(),
         cli.dangerously_skip_permissions,
-        &[],
+        &additional_dirs,
         &permission_rules_from_disk,
         cwd.clone(),
     )
