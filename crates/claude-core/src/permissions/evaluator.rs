@@ -622,10 +622,7 @@ pub fn apply_permission_update(
             let rules_map = context.rules_for_behavior_mut(behavior);
             let entry = rules_map.entry(destination.clone()).or_default();
             for rule in rules {
-                let rule_string = rule.to_rule_string();
-                if !entry.contains(&rule_string) {
-                    entry.push(rule_string);
-                }
+                entry.push(rule.to_rule_string());
             }
         }
         PermissionUpdate::ReplaceRules {
