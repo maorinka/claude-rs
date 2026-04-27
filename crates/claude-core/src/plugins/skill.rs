@@ -581,7 +581,7 @@ fn read_plugin_skill_dirs_concurrently(
     let source = source.clone();
 
     std::thread::scope(|scope| {
-        for path in entries {
+        for (index, path) in entries.into_iter().enumerate() {
             if !path.is_dir() {
                 continue;
             }
@@ -599,17 +599,15 @@ fn read_plugin_skill_dirs_concurrently(
                     None => return,
                 };
                 let parsed = parse_skill_file(&content);
-                let _ = tx.send(plugin_skill_from_parsed(
-                    &plugin_name,
-                    dir_name,
-                    parsed,
-                    &source,
-                    false,
-                ));
+                let skill =
+                    plugin_skill_from_parsed(&plugin_name, dir_name, parsed, &source, false);
+                let _ = tx.send((index, skill));
             });
         }
         drop(tx);
-        rx.into_iter().collect()
+        let mut loaded: Vec<_> = rx.into_iter().collect();
+        loaded.sort_by_key(|(index, _)| *index);
+        loaded.into_iter().map(|(_, skill)| skill).collect()
     })
 }
 
