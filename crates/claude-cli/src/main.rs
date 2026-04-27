@@ -1094,6 +1094,79 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
         }
     }
 
+    if let Some(mode) = data.get("mode").and_then(|value| value.as_str()) {
+        let content = data
+            .get("content")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let limit_info = format_search_limit_info(data);
+        match mode {
+            "content" => {
+                let result = if content.is_empty() {
+                    "No matches found".to_string()
+                } else {
+                    content.to_string()
+                };
+                return if let Some(limit_info) = limit_info {
+                    format!("{result}\n\n[Showing results with pagination = {limit_info}]")
+                } else {
+                    result
+                };
+            }
+            "count" => {
+                let raw_content = if content.is_empty() {
+                    "No matches found".to_string()
+                } else {
+                    content.to_string()
+                };
+                let matches = data
+                    .get("numMatches")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let files = data
+                    .get("numFiles")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let occurrence = if matches == 1 {
+                    "occurrence"
+                } else {
+                    "occurrences"
+                };
+                let file = if files == 1 { "file" } else { "files" };
+                let mut summary =
+                    format!("\n\nFound {matches} total {occurrence} across {files} {file}.");
+                if let Some(limit_info) = limit_info {
+                    summary.push_str(&format!(" with pagination = {limit_info}"));
+                }
+                return raw_content + &summary;
+            }
+            _ => {
+                let filenames = data
+                    .get("filenames")
+                    .and_then(|value| value.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let files = data
+                    .get("numFiles")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(filenames.len() as u64);
+                if files == 0 {
+                    return "No files found".to_string();
+                }
+                let file = if files == 1 { "file" } else { "files" };
+                let limit = limit_info
+                    .map(|info| format!(" {info}"))
+                    .unwrap_or_default();
+                return format!("Found {files} {file}{limit}\n{}", filenames.join("\n"));
+            }
+        }
+    }
+
     if let Some(filenames) = data.get("filenames").and_then(|value| value.as_array()) {
         let mut lines = filenames
             .iter()
@@ -1117,6 +1190,21 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
     }
 
     data.to_string()
+}
+
+fn format_search_limit_info(data: &serde_json::Value) -> Option<String> {
+    let limit = data.get("appliedLimit").and_then(|value| value.as_u64());
+    let offset = data
+        .get("appliedOffset")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    limit.map(|limit| {
+        if offset > 0 {
+            format!("limit: {limit}, offset: {offset}")
+        } else {
+            format!("limit: {limit}")
+        }
+    })
 }
 
 fn permission_mode_hook_name(

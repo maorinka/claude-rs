@@ -328,43 +328,46 @@ impl ToolExecutor for GrepTool {
             .take(head_limit)
             .collect();
 
-        let applied_limit = sliced.len();
+        let was_truncated = total > offset + head_limit;
 
         match output_mode {
             "content" => {
                 let content = sliced.join("\n");
                 let content = truncate_to_max(&content, MAX_RESULT_SIZE_CHARS);
                 Ok(ToolResultData {
-                    data: json!({
-                        "mode": "content",
-                        "numFiles": count_unique_files_in_content(&content),
-                        "filenames": extract_filenames_from_content(&content),
-                        "content": content,
-                        "numLines": applied_limit,
-                        "appliedLimit": applied_limit,
-                        "appliedOffset": offset,
-                    }),
+                    data: with_pagination_fields(
+                        json!({
+                            "mode": "content",
+                            "numFiles": count_unique_files_in_content(&content),
+                            "filenames": extract_filenames_from_content(&content),
+                            "content": content,
+                            "numLines": sliced.len(),
+                        }),
+                        was_truncated,
+                        head_limit,
+                        offset,
+                    ),
                     is_error: false,
                 })
             }
             "count" => {
                 // count mode: each line is "filename:count"
                 let content = sliced.join("\n");
-                let num_files = sliced.len();
-                let filenames: Vec<&str> = sliced
-                    .iter()
-                    .map(|l| l.split(':').next().unwrap_or(l))
-                    .collect();
+                let (num_files, num_matches) = count_files_and_matches(&sliced);
                 Ok(ToolResultData {
-                    data: json!({
-                        "mode": "count",
-                        "numFiles": num_files,
-                        "filenames": filenames,
-                        "content": content,
-                        "numLines": applied_limit,
-                        "appliedLimit": applied_limit,
-                        "appliedOffset": offset,
-                    }),
+                    data: with_pagination_fields(
+                        json!({
+                            "mode": "count",
+                            "numFiles": num_files,
+                            "filenames": [],
+                            "content": content,
+                            "numMatches": num_matches,
+                            "numLines": sliced.len(),
+                        }),
+                        was_truncated,
+                        head_limit,
+                        offset,
+                    ),
                     is_error: false,
                 })
             }
@@ -377,8 +380,10 @@ impl ToolExecutor for GrepTool {
                     "numFiles": num_files,
                     "filenames": filenames,
                 });
-                if applied_limit > 0 || offset > 0 {
-                    data["appliedLimit"] = json!(applied_limit);
+                if was_truncated {
+                    data["appliedLimit"] = json!(head_limit);
+                }
+                if offset > 0 {
                     data["appliedOffset"] = json!(offset);
                 }
                 if total > offset + head_limit {
@@ -391,6 +396,37 @@ impl ToolExecutor for GrepTool {
             }
         }
     }
+}
+
+fn with_pagination_fields(
+    mut data: serde_json::Value,
+    was_truncated: bool,
+    head_limit: usize,
+    offset: usize,
+) -> serde_json::Value {
+    if was_truncated {
+        data["appliedLimit"] = json!(head_limit);
+    }
+    if offset > 0 {
+        data["appliedOffset"] = json!(offset);
+    }
+    data
+}
+
+fn count_files_and_matches(lines: &[&str]) -> (u64, u64) {
+    let mut files = 0;
+    let mut matches = 0;
+    for line in lines {
+        let Some((_, count)) = line.rsplit_once(':') else {
+            continue;
+        };
+        let Ok(count) = count.parse::<u64>() else {
+            continue;
+        };
+        files += 1;
+        matches += count;
+    }
+    (files, matches)
 }
 
 /// Replace absolute path prefix with a relative path so output is portable.
