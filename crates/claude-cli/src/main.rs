@@ -375,33 +375,6 @@ fn load_raw_settings_value(project_root: &std::path::Path) -> serde_json::Value 
     merged
 }
 
-fn hugging_face_mcp_instruction() -> String {
-    let username = claude_core::config::global::load_global_config()
-        .ok()
-        .and_then(|config| config.oauth_account)
-        .map(|account| account.email_address)
-        .and_then(|email| email.split('@').next().map(|local| local.to_string()))
-        .map(|local| {
-            let mut chars = local.chars();
-            match chars.next() {
-                Some(first) => {
-                    let mut out = first.to_uppercase().collect::<String>();
-                    out.push_str(chars.as_str());
-                    out
-                }
-                None => local,
-            }
-        });
-
-    let mut instruction = "## claude.ai Hugging Face\nYou have tools for using the Hugging Face Hub. arXiv paper id's are often used as references between datasets, models and papers. There are over 100 tags in use, common tags include 'Text Generation', 'Transformers', 'Image Classification' and so on.".to_string();
-    if let Some(username) = username {
-        instruction.push_str(&format!(
-            "\nHugging Face tools are being used by authenticated user '{username}'"
-        ));
-    }
-    instruction
-}
-
 fn enabled_plugin_roots(
     project_root: &std::path::Path,
 ) -> Vec<(String, String, std::path::PathBuf)> {
@@ -1971,15 +1944,6 @@ async fn main() -> Result<()> {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
         let mut instructions_parts: Vec<String> = Vec::new();
-        let has_hugging_face_tools = tools.all().iter().any(|tool| {
-            let name = tool.name();
-            name.starts_with("mcp__claude_ai_Hugging_Face__")
-                && !name.ends_with("__authenticate")
-                && !name.ends_with("__complete_authentication")
-        });
-        if has_hugging_face_tools {
-            instructions_parts.push(hugging_face_mcp_instruction());
-        }
         for conn in &connections {
             if let claude_core::mcp::types::McpConnectionStatus::Connected {
                 instructions: Some(ref instr),
