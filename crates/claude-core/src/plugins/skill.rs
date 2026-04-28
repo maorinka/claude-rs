@@ -15,6 +15,7 @@ pub struct SkillFrontmatter {
     pub description: Option<String>,
     pub argument_hint: Option<String>,
     pub when_to_use: Option<String>,
+    pub paths: Vec<String>,
     pub allowed_tools: Vec<String>,
     pub user_invocable: Option<bool>,
     pub disable_model_invocation: Option<bool>,
@@ -142,6 +143,9 @@ fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
     if let Some(v) = map.get("when_to_use") {
         fm.when_to_use = Some(unquote_yaml_string(v));
     }
+    if let Some(v) = map.get("paths") {
+        fm.paths = parse_path_patterns(v);
+    }
     if let Some(v) = map.get("user-invocable") {
         fm.user_invocable = parse_bool_value(v);
     }
@@ -240,6 +244,30 @@ fn parse_string_list(s: &str) -> Vec<String> {
         .map(unquote_yaml_string)
         .filter(|item| !item.is_empty())
         .collect()
+}
+
+fn parse_path_patterns(s: &str) -> Vec<String> {
+    let patterns: Vec<String> = parse_string_list(s)
+        .into_iter()
+        .map(|pattern| {
+            if pattern.ends_with("/**") {
+                pattern.trim_end_matches("/**").to_string()
+            } else {
+                pattern
+            }
+        })
+        .filter(|pattern| !pattern.is_empty())
+        .collect();
+
+    if patterns.is_empty() || patterns.iter().all(|pattern| pattern == "**") {
+        Vec::new()
+    } else {
+        patterns
+    }
+}
+
+fn is_conditional_skill(parsed: &ParsedSkillFile) -> bool {
+    !parsed.frontmatter.paths.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +449,9 @@ fn read_legacy_command_job(job: PluginReadJob, source: &SkillSource) -> Option<S
             let content = std::fs::read_to_string(&skill_file).ok()?;
             let local_name = plugin_command_local_name(&skill_file, path.parent()?)?;
             let parsed = parse_skill_file(&content);
+            if is_conditional_skill(&parsed) {
+                return None;
+            }
             Some(skill_from_parsed(
                 local_name,
                 parsed,
@@ -441,6 +472,9 @@ fn read_legacy_command_job(job: PluginReadJob, source: &SkillSource) -> Option<S
             let mut parsed = parse_skill_file(&content);
             if let Some(metadata) = &metadata {
                 parsed = apply_plugin_command_metadata(parsed, metadata);
+            }
+            if is_conditional_skill(&parsed) {
+                return None;
             }
             Some(skill_from_parsed(
                 local_name,
@@ -958,13 +992,17 @@ fn load_plugin_command_source(
             metadata,
         } => {
             let parsed = apply_plugin_command_metadata(parse_skill_file(content), metadata);
-            vec![plugin_skill_from_parsed(
-                plugin_name,
-                name.clone(),
-                parsed,
-                source,
-                true,
-            )]
+            if is_conditional_skill(&parsed) {
+                Vec::new()
+            } else {
+                vec![plugin_skill_from_parsed(
+                    plugin_name,
+                    name.clone(),
+                    parsed,
+                    source,
+                    true,
+                )]
+            }
         }
         PluginCommandSource::Path { path, metadata } if path.is_file() => {
             let jobs = filter_plugin_jobs_by_path(
@@ -1143,6 +1181,9 @@ fn read_plugin_job(job: PluginReadJob, plugin_name: &str, source: &SkillSource) 
             let content = std::fs::read_to_string(&skill_file).ok()?;
             let dir_name = path.file_name().and_then(|n| n.to_str())?.to_string();
             let parsed = parse_skill_file(&content);
+            if is_conditional_skill(&parsed) {
+                return None;
+            }
             Some(plugin_skill_from_parsed(
                 plugin_name,
                 dir_name,
@@ -1164,6 +1205,9 @@ fn read_plugin_job(job: PluginReadJob, plugin_name: &str, source: &SkillSource) 
             let mut parsed = parse_skill_file(&content);
             if let Some(metadata) = &metadata {
                 parsed = apply_plugin_command_metadata(parsed, metadata);
+            }
+            if is_conditional_skill(&parsed) {
+                return None;
             }
             Some(plugin_skill_from_parsed(
                 plugin_name,
@@ -1325,6 +1369,9 @@ fn load_skills_from_dir(
         };
 
         let parsed = parse_skill_file(&content);
+        if is_conditional_skill(&parsed) {
+            continue;
+        }
         let name = parsed
             .frontmatter
             .name
@@ -1465,6 +1512,22 @@ Do the thing.
             parsed.frontmatter.allowed_tools,
             vec!["Read", "Write", "Bash"]
         );
+    }
+
+    #[test]
+    fn parse_paths_frontmatter_like_ts() {
+        let md = "---\npaths:\n  - src/**\n  - tests/*.rs\n---\ncontent";
+        let parsed = parse_skill_file(md);
+        assert_eq!(parsed.frontmatter.paths, vec!["src", "tests/*.rs"]);
+        assert!(is_conditional_skill(&parsed));
+    }
+
+    #[test]
+    fn parse_match_all_paths_as_unconditional_like_ts() {
+        let md = "---\npaths: \"**\"\n---\ncontent";
+        let parsed = parse_skill_file(md);
+        assert!(parsed.frontmatter.paths.is_empty());
+        assert!(!is_conditional_skill(&parsed));
     }
 
     #[test]
@@ -1612,6 +1675,33 @@ Do the thing.
         assert_eq!(duplicates.len(), 2);
         assert!(duplicates.iter().any(|skill| skill.description == "First"));
         assert!(duplicates.iter().any(|skill| skill.description == "Second"));
+    }
+
+    #[test]
+    fn conditional_path_skills_are_not_initially_loaded_like_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("skills");
+        let unconditional = root.join("always");
+        let conditional = root.join("only-rust");
+        std::fs::create_dir_all(&unconditional).unwrap();
+        std::fs::create_dir_all(&conditional).unwrap();
+        std::fs::write(
+            unconditional.join("SKILL.md"),
+            "---\ndescription: Always\n---\nalways",
+        )
+        .unwrap();
+        std::fs::write(
+            conditional.join("SKILL.md"),
+            "---\ndescription: Rust only\npaths:\n  - src/**/*.rs\n---\nconditional",
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        let mut state = SkillLoadState::default();
+        load_skills_from_dir(&root, &SkillSource::Builtin, &mut skills, &mut state);
+
+        assert!(skills.iter().any(|skill| skill.name == "always"));
+        assert!(!skills.iter().any(|skill| skill.name == "only-rust"));
     }
 
     #[test]
