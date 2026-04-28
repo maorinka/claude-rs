@@ -149,6 +149,15 @@ pub enum SubCommand {
         /// Write debug logs to file
         #[arg(long = "debug-file")]
         debug_file: Option<PathBuf>,
+        /// Enable sandboxing for remote-control child sessions
+        #[arg(long = "sandbox", hide = true)]
+        sandbox: bool,
+        /// Disable sandboxing for remote-control child sessions
+        #[arg(long = "no-sandbox", hide = true)]
+        no_sandbox: bool,
+        /// Session timeout in minutes
+        #[arg(long = "session-timeout", hide = true)]
+        session_timeout: Option<String>,
         /// Enable verbose output
         #[arg(short, long)]
         verbose: bool,
@@ -3249,7 +3258,98 @@ fn validate_remote_control_bridge_options(
     Ok((spawn, capacity))
 }
 
-fn maybe_handle_remote_control_help() {
+fn require_remote_control_value<'a>(
+    args: &'a [String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<&'a str, String> {
+    *index += 1;
+    args.get(*index).map(|value| value.as_str()).ok_or_else(|| {
+        format!("Unknown argument: {flag}\nRun 'claude remote-control --help' for usage.")
+    })
+}
+
+fn validate_remote_control_fast_path_args(args: &[String]) -> Result<(), String> {
+    let mut spawn: Option<String> = None;
+    let mut capacity: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--help" || arg == "-h" {
+            return Ok(());
+        } else if arg == "--verbose"
+            || arg == "-v"
+            || arg == "--sandbox"
+            || arg == "--no-sandbox"
+            || arg == "--create-session-in-dir"
+            || arg == "--no-create-session-in-dir"
+        {
+            // Flag-only options.
+        } else if arg == "--debug-file" {
+            let _ = require_remote_control_value(args, &mut i, arg)?;
+        } else if arg.starts_with("--debug-file=") {
+            // Value carried by the same argument.
+        } else if arg == "--session-timeout" {
+            let _ = require_remote_control_value(args, &mut i, arg)?;
+        } else if arg.starts_with("--session-timeout=") {
+            // Value carried by the same argument.
+        } else if arg == "--permission-mode" {
+            let _ = require_remote_control_value(args, &mut i, arg)?;
+        } else if arg.starts_with("--permission-mode=") {
+            // Value carried by the same argument.
+        } else if arg == "--name" {
+            let _ = require_remote_control_value(args, &mut i, arg)?;
+        } else if arg.starts_with("--name=") {
+            // Value carried by the same argument.
+        } else if arg == "--remote-control-session-name-prefix" {
+            let _ = require_remote_control_value(args, &mut i, arg)?;
+        } else if arg.starts_with("--remote-control-session-name-prefix=") {
+            // Value carried by the same argument.
+        } else if arg == "--spawn" || arg.starts_with("--spawn=") {
+            if spawn.is_some() {
+                return Err("--spawn may only be specified once".to_string());
+            }
+            let raw = if let Some(value) = arg.strip_prefix("--spawn=") {
+                value.to_string()
+            } else {
+                match args.get(i + 1) {
+                    Some(value) => {
+                        i += 1;
+                        value.clone()
+                    }
+                    None => "<missing>".to_string(),
+                }
+            };
+            spawn = Some(raw);
+        } else if arg == "--capacity" || arg.starts_with("--capacity=") {
+            if capacity.is_some() {
+                return Err("--capacity may only be specified once".to_string());
+            }
+            let raw = if let Some(value) = arg.strip_prefix("--capacity=") {
+                value.to_string()
+            } else {
+                match args.get(i + 1) {
+                    Some(value) => {
+                        i += 1;
+                        value.clone()
+                    }
+                    None => "<missing>".to_string(),
+                }
+            };
+            capacity = Some(raw);
+        } else {
+            return Err(format!(
+                "Unknown argument: {arg}\nRun 'claude remote-control --help' for usage."
+            ));
+        }
+        i += 1;
+    }
+
+    validate_remote_control_bridge_options(spawn.as_deref(), capacity.as_deref()).map(|_| ())
+}
+
+fn maybe_handle_remote_control_fast_path_args() {
     let mut args = std::env::args().skip(1);
     let Some(first) = args.next() else {
         return;
@@ -3257,15 +3357,20 @@ fn maybe_handle_remote_control_help() {
     if !is_remote_control_command(&first) {
         return;
     }
-    if args.any(|arg| arg == "-h" || arg == "--help") {
+    let rest = args.collect::<Vec<_>>();
+    if rest.iter().any(|arg| arg == "-h" || arg == "--help") {
         println!("{}", remote_control_help_text());
         std::process::exit(0);
+    }
+    if let Err(message) = validate_remote_control_fast_path_args(&rest) {
+        eprintln!("Error: {message}");
+        std::process::exit(1);
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    maybe_handle_remote_control_help();
+    maybe_handle_remote_control_fast_path_args();
     let cli = Cli::parse();
     let mut prompt_arg = cli.prompt.clone();
     if cli.print && prompt_arg.is_none() {
@@ -3358,6 +3463,9 @@ async fn main() -> Result<()> {
             remote_control_session_name_prefix,
             permission_mode,
             debug_file,
+            sandbox,
+            no_sandbox,
+            session_timeout,
             verbose,
             spawn,
             capacity,
@@ -3387,6 +3495,15 @@ async fn main() -> Result<()> {
             }
             if debug_file.is_some() {
                 accepted_options.push("--debug-file");
+            }
+            if *sandbox {
+                accepted_options.push("--sandbox");
+            }
+            if *no_sandbox {
+                accepted_options.push("--no-sandbox");
+            }
+            if session_timeout.is_some() {
+                accepted_options.push("--session-timeout");
             }
             if *verbose {
                 accepted_options.push("--verbose");
@@ -4901,6 +5018,8 @@ mod remote_control_tests {
             "default",
             "--debug-file",
             "/tmp/bridge.log",
+            "--sandbox",
+            "--session-timeout=15",
             "--verbose",
             "--spawn",
             "same-dir",
@@ -4915,6 +5034,9 @@ mod remote_control_tests {
                 remote_control_session_name_prefix,
                 permission_mode,
                 debug_file,
+                sandbox,
+                no_sandbox,
+                session_timeout,
                 verbose,
                 spawn,
                 capacity,
@@ -4928,6 +5050,9 @@ mod remote_control_tests {
                     debug_file.as_deref(),
                     Some(std::path::Path::new("/tmp/bridge.log"))
                 );
+                assert!(sandbox);
+                assert!(!no_sandbox);
+                assert_eq!(session_timeout.as_deref(), Some("15"));
                 assert!(verbose);
                 assert_eq!(spawn.as_deref(), Some("same-dir"));
                 assert_eq!(capacity.as_deref(), Some("2"));
@@ -4936,6 +5061,56 @@ mod remote_control_tests {
             }
             _ => panic!("expected remote-control command"),
         }
+    }
+
+    #[test]
+    fn remote_control_fast_path_argument_validation_matches_ts() {
+        assert!(validate_remote_control_fast_path_args(&[
+            "--name".into(),
+            "demo".into(),
+            "--debug-file=/tmp/bridge.log".into(),
+            "--sandbox".into(),
+            "--session-timeout".into(),
+            "15".into(),
+            "--permission-mode=default".into(),
+            "--remote-control-session-name-prefix=host".into(),
+            "--spawn=same-dir".into(),
+            "--capacity".into(),
+            "2".into(),
+            "--create-session-in-dir".into(),
+        ])
+        .is_ok());
+
+        assert_eq!(
+            validate_remote_control_fast_path_args(&["foo".into()]).unwrap_err(),
+            "Unknown argument: foo\nRun 'claude remote-control --help' for usage."
+        );
+        assert_eq!(
+            validate_remote_control_fast_path_args(&["--spawn".into()]).unwrap_err(),
+            "--spawn requires one of: session, same-dir, worktree (got: <missing>)"
+        );
+        assert_eq!(
+            validate_remote_control_fast_path_args(&["--capacity".into()]).unwrap_err(),
+            "--capacity requires a positive integer (got: <missing>)"
+        );
+        assert_eq!(
+            validate_remote_control_fast_path_args(&[
+                "--spawn=session".into(),
+                "--spawn=worktree".into()
+            ])
+            .unwrap_err(),
+            "--spawn may only be specified once"
+        );
+        assert_eq!(
+            validate_remote_control_fast_path_args(&["--capacity=1".into(), "--capacity=2".into()])
+                .unwrap_err(),
+            "--capacity may only be specified once"
+        );
+        assert_eq!(
+            validate_remote_control_fast_path_args(&["--spawn=session".into(), "--capacity=2".into()])
+                .unwrap_err(),
+            "--capacity cannot be used with --spawn=session (single-session mode has fixed capacity 1)."
+        );
     }
 
     #[test]
