@@ -980,6 +980,37 @@ mod tests {
             "Command exceeded the assistant-mode blocking budget (10s) and was moved to the background with ID: bg-3. It is still running — you will be notified when it completes. Output is being written to: /tmp/bg-3.output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
         );
     }
+
+    #[test]
+    fn model_tool_result_matches_ts_empty_result_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "Bash",
+                &serde_json::json!({
+                    "stdout": "",
+                    "stderr": ""
+                })
+            ),
+            "(Bash completed with no output)"
+        );
+        assert_eq!(
+            ensure_non_empty_tool_result_content(
+                "Example",
+                serde_json::json!([
+                    { "type": "text", "text": "   " },
+                    { "type": "text", "text": "" }
+                ])
+            ),
+            serde_json::json!("(Example completed with no output)")
+        );
+        assert_eq!(
+            ensure_non_empty_tool_result_content(
+                "Example",
+                serde_json::json!([{ "type": "image", "source": { "type": "base64" } }])
+            ),
+            serde_json::json!([{ "type": "image", "source": { "type": "base64" } }])
+        );
+    }
 }
 
 fn enabled_plugin_roots(
@@ -1713,7 +1744,10 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
 }
 
 fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {
-    format_tool_result_string_for_model(tool_name, data)
+    ensure_non_empty_tool_result_string(
+        tool_name,
+        format_tool_result_string_for_model(tool_name, data),
+    )
 }
 
 fn add_line_numbers_ts(content: &str, start_line: usize) -> String {
@@ -1734,7 +1768,10 @@ fn format_tool_result_content_for_model(
     data: &serde_json::Value,
 ) -> serde_json::Value {
     if tool_name == "Agent" || tool_name == "agent" {
-        return format_agent_tool_result_content_for_model(data);
+        return ensure_non_empty_tool_result_content(
+            tool_name,
+            format_agent_tool_result_content_for_model(data),
+        );
     }
 
     if tool_name == "ToolSearch" {
@@ -1773,16 +1810,64 @@ fn format_tool_result_content_for_model(
                     .join(", ");
                 text.push_str(&format!(". Some MCP servers are still connecting: {names}. Their tools will become available shortly — try searching again."));
             }
-            return serde_json::Value::String(text);
+            return ensure_non_empty_tool_result_content(
+                tool_name,
+                serde_json::Value::String(text),
+            );
         }
-        return serde_json::Value::Array(
-            matches
-                .into_iter()
-                .map(|name| serde_json::json!({"type": "tool_reference", "tool_name": name}))
-                .collect(),
+        return ensure_non_empty_tool_result_content(
+            tool_name,
+            serde_json::Value::Array(
+                matches
+                    .into_iter()
+                    .map(|name| serde_json::json!({"type": "tool_reference", "tool_name": name}))
+                    .collect(),
+            ),
         );
     }
-    serde_json::Value::String(format_tool_result_string_for_model(tool_name, data))
+    ensure_non_empty_tool_result_content(
+        tool_name,
+        serde_json::Value::String(format_tool_result_string_for_model(tool_name, data)),
+    )
+}
+
+fn ensure_non_empty_tool_result_string(tool_name: &str, content: String) -> String {
+    if content.trim().is_empty() {
+        format!("({tool_name} completed with no output)")
+    } else {
+        content
+    }
+}
+
+fn ensure_non_empty_tool_result_content(
+    tool_name: &str,
+    content: serde_json::Value,
+) -> serde_json::Value {
+    if is_tool_result_content_empty(&content) {
+        serde_json::Value::String(format!("({tool_name} completed with no output)"))
+    } else {
+        content
+    }
+}
+
+fn is_tool_result_content_empty(content: &serde_json::Value) -> bool {
+    match content {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(text) => text.trim().is_empty(),
+        serde_json::Value::Array(blocks) => {
+            blocks.is_empty()
+                || blocks.iter().all(|block| {
+                    block.get("type").and_then(|value| value.as_str()) == Some("text")
+                        && block
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .is_empty()
+                })
+        }
+        _ => false,
+    }
 }
 
 fn truncate_single_line(text: &str, max_width: usize) -> String {

@@ -235,6 +235,9 @@ Improved:
   defaulting to 10.
 - Existing executor tests cover mixed concurrent/exclusive scheduling and
   ordered result yielding; a regression test now covers the TS concurrency cap.
+- Rust CLI model-result mapping now applies the TS empty-result guard:
+  empty strings, empty arrays, and whitespace-only text block arrays become
+  `(<ToolName> completed with no output)` instead of an empty tool result.
 
 ### Query user context still needs lifecycle parity
 
