@@ -1346,6 +1346,7 @@ struct ClaudeAiMcpServer {
 struct ClaudeAiMcpDiscovery {
     configs: std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig>,
     order: Vec<String>,
+    original_urls: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1449,7 +1450,7 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
                 oauth.mcp_proxy_url,
                 oauth.mcp_proxy_path.replace("{server_id}", &server._id)
             ),
-            Err(_) => server.url,
+            Err(_) => server.url.clone(),
         };
 
         discovery.configs.insert(
@@ -1462,6 +1463,9 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
                 scope: ConfigScope::ClaudeAi,
             },
         );
+        discovery
+            .original_urls
+            .insert(final_name.clone(), server.url);
         discovery.order.push(final_name);
     }
 
@@ -3341,6 +3345,7 @@ async fn main() -> Result<()> {
     let ClaudeAiMcpDiscovery {
         configs: discovered_claude_ai_configs,
         order: discovered_claude_ai_order,
+        original_urls: discovered_claude_ai_original_urls,
     } = fetch_claude_ai_mcp_configs_if_eligible().await;
     let claude_ai_configs = dedup_claude_ai_mcp_servers(discovered_claude_ai_configs, &configs);
     for name in discovered_claude_ai_order {
@@ -3352,7 +3357,10 @@ async fn main() -> Result<()> {
         .iter()
         .map(|(name, config)| ShadowMcpServer {
             name: name.clone(),
-            url: mcp_config_url(config),
+            url: discovered_claude_ai_original_urls
+                .get(name)
+                .cloned()
+                .or_else(|| mcp_config_url(config)),
             needs_auth: claude_ai_server_uses_auth_shadow(name, config),
             include_tools: true,
         })
@@ -3406,7 +3414,7 @@ async fn main() -> Result<()> {
                         let is_connected = connected.contains(&server.name);
                         server.needs_auth = needs_auth.contains(&server.name)
                             || (server.needs_auth && !is_connected);
-                        server.include_tools = is_connected || server.needs_auth;
+                        server.include_tools = true;
                         server
                     }),
                 );
@@ -3481,7 +3489,7 @@ async fn main() -> Result<()> {
                     let is_connected = connected.contains(&server.name);
                     server.needs_auth =
                         needs_auth.contains(&server.name) || (server.needs_auth && !is_connected);
-                    server.include_tools = is_connected || server.needs_auth;
+                    server.include_tools = true;
                     server
                 }),
             ));

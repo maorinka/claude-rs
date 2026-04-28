@@ -692,7 +692,25 @@ impl McpManager {
     pub async fn add_tool_definitions(&self, tools: Vec<McpToolInfo>) {
         let mut existing = self.tool_definitions.write().await;
         for tool in tools {
-            if !existing.iter().any(|known| known.name == tool.name) {
+            if let Some(known) = existing.iter_mut().find(|known| known.name == tool.name) {
+                if known
+                    .description
+                    .as_ref()
+                    .is_none_or(|description| description.is_empty())
+                    || tool.description.as_ref().is_some_and(|description| {
+                        known.description.as_ref().is_none_or(|known_description| {
+                            description.len() > known_description.len()
+                        })
+                    })
+                {
+                    known.description = tool.description.clone();
+                }
+                if schema_score(tool.input_schema.as_ref())
+                    > schema_score(known.input_schema.as_ref())
+                {
+                    known.input_schema = tool.input_schema;
+                }
+            } else {
                 existing.push(tool);
             }
         }
@@ -846,6 +864,26 @@ impl Default for McpManager {
     }
 }
 
+fn schema_score(schema: Option<&Value>) -> usize {
+    let Some(schema) = schema else {
+        return 0;
+    };
+    let Some(object) = schema.as_object() else {
+        return 0;
+    };
+    let property_count = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .map_or(0, |properties| properties.len());
+    let required_count = object
+        .get("required")
+        .and_then(Value::as_array)
+        .map_or(0, |required| required.len());
+    let schema_metadata = usize::from(object.contains_key("$schema"))
+        + usize::from(object.contains_key("additionalProperties"));
+    property_count * 100 + required_count * 10 + schema_metadata + object.len()
+}
+
 /// Does this connect error look like an authentication failure
 /// rather than a generic transport error? Case-insensitive match
 /// on `"HTTP 401"` / `"unauthorized"` — same patterns as
@@ -939,6 +977,81 @@ mod tests {
             .as_ref()
             .unwrap()
             .pointer("/properties/a")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn add_tool_definitions_fills_weak_live_schema() {
+        let manager = McpManager::new();
+        manager
+            .add_tool_definitions(vec![McpToolInfo {
+                name: "mcp__server__tool".to_string(),
+                original_name: "tool".to_string(),
+                server_name: "server".to_string(),
+                description: Some("live".to_string()),
+                input_schema: Some(serde_json::json!({"type": "object", "properties": {}})),
+            }])
+            .await;
+        manager
+            .add_tool_definitions(vec![McpToolInfo {
+                name: "mcp__server__tool".to_string(),
+                original_name: "tool".to_string(),
+                server_name: "server".to_string(),
+                description: Some("ts".to_string()),
+                input_schema: Some(
+                    serde_json::json!({"type": "object", "properties": {"b": {"type": "string"}}}),
+                ),
+            }])
+            .await;
+
+        let definitions = manager.tool_definitions().await;
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].description.as_deref(), Some("live"));
+        assert!(definitions[0]
+            .input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/b")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn add_tool_definitions_fills_schema_metadata() {
+        let manager = McpManager::new();
+        manager
+            .add_tool_definitions(vec![McpToolInfo {
+                name: "mcp__server__tool".to_string(),
+                original_name: "tool".to_string(),
+                server_name: "server".to_string(),
+                description: Some("short".to_string()),
+                input_schema: Some(serde_json::json!({"type": "object", "properties": {}})),
+            }])
+            .await;
+        manager
+            .add_tool_definitions(vec![McpToolInfo {
+                name: "mcp__server__tool".to_string(),
+                original_name: "tool".to_string(),
+                server_name: "server".to_string(),
+                description: Some("longer description".to_string()),
+                input_schema: Some(serde_json::json!({
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "additionalProperties": false,
+                    "type": "object",
+                    "properties": {}
+                })),
+            }])
+            .await;
+
+        let definitions = manager.tool_definitions().await;
+        assert_eq!(
+            definitions[0].description.as_deref(),
+            Some("longer description")
+        );
+        assert!(definitions[0]
+            .input_schema
+            .as_ref()
+            .unwrap()
+            .get("$schema")
             .is_some());
     }
 
