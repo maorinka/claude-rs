@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
@@ -48,7 +48,6 @@ pub type ToolCallFn = Arc<
 /// Concurrent-safe tools run in parallel.
 /// Non-concurrent tools run exclusively.
 pub struct StreamingToolExecutor {
-    cancel: CancellationToken,
     executing: JoinSet<(usize, bool, CompletedTool)>,
     queued: VecDeque<QueuedTool>,
     active: BTreeMap<usize, bool>,
@@ -59,12 +58,14 @@ pub struct StreamingToolExecutor {
     running_exclusive: bool,
     max_concurrent_tools: usize,
     tool_call_fn: ToolCallFn,
+    sibling_cancel: CancellationToken,
+    bash_error_description: Option<String>,
 }
 
 impl StreamingToolExecutor {
     pub fn new(cancel: CancellationToken, tool_call_fn: ToolCallFn) -> Self {
+        let sibling_cancel = cancel.child_token();
         Self {
-            cancel,
             executing: JoinSet::new(),
             queued: VecDeque::new(),
             active: BTreeMap::new(),
@@ -75,6 +76,8 @@ impl StreamingToolExecutor {
             running_exclusive: false,
             max_concurrent_tools: get_max_tool_use_concurrency(),
             tool_call_fn,
+            sibling_cancel,
+            bash_error_description: None,
         }
     }
 
@@ -92,14 +95,7 @@ impl StreamingToolExecutor {
         while let Some(result) = self.executing.try_join_next() {
             match result {
                 Ok((index, is_concurrent, completed)) => {
-                    self.active.remove(&index);
-                    if is_concurrent {
-                        self.running_concurrent_count =
-                            self.running_concurrent_count.saturating_sub(1);
-                    } else {
-                        self.running_exclusive = false;
-                    }
-                    self.completed_buffer.insert(index, completed);
+                    self.handle_completed_task(index, is_concurrent, completed);
                 }
                 Err(e) => {
                     tracing::warn!("Tool task panicked: {}", e);
@@ -118,14 +114,7 @@ impl StreamingToolExecutor {
             if let Some(result) = self.executing.join_next().await {
                 match result {
                     Ok((index, is_concurrent, completed)) => {
-                        self.active.remove(&index);
-                        if is_concurrent {
-                            self.running_concurrent_count =
-                                self.running_concurrent_count.saturating_sub(1);
-                        } else {
-                            self.running_exclusive = false;
-                        }
-                        self.completed_buffer.insert(index, completed);
+                        self.handle_completed_task(index, is_concurrent, completed);
                     }
                     Err(e) => tracing::warn!("Tool task panicked: {}", e),
                 }
@@ -169,7 +158,19 @@ impl StreamingToolExecutor {
     }
 
     fn spawn_tool(&mut self, index: usize, tool: PendingTool) {
-        let cancel = self.cancel.child_token();
+        if let Some(description) = self.bash_error_description.clone() {
+            self.completed_buffer.insert(
+                index,
+                CompletedTool {
+                    id: tool.id,
+                    name: tool.name,
+                    result: Ok(cancelled_by_parallel_bash_result(&description)),
+                },
+            );
+            return;
+        }
+
+        let cancel = self.sibling_cancel.child_token();
         let call_fn = self.tool_call_fn.clone();
         let id = tool.id.clone();
         let name = tool.name.clone();
@@ -191,6 +192,40 @@ impl StreamingToolExecutor {
             (index, is_concurrent, CompletedTool { id, name, result })
         });
     }
+
+    fn handle_completed_task(
+        &mut self,
+        index: usize,
+        is_concurrent: bool,
+        completed: CompletedTool,
+    ) {
+        let mut completed = completed;
+        self.active.remove(&index);
+        if is_concurrent {
+            self.running_concurrent_count = self.running_concurrent_count.saturating_sub(1);
+        } else {
+            self.running_exclusive = false;
+        }
+
+        match self.bash_error_description.clone() {
+            Some(description) if completed.name != "Bash" => {
+                completed.result = Ok(cancelled_by_parallel_bash_result(&description));
+            }
+            None if completed.name == "Bash"
+                && completed
+                    .result
+                    .as_ref()
+                    .map(|result| result.is_error)
+                    .unwrap_or(false) =>
+            {
+                self.bash_error_description = Some(describe_tool(&completed.name, &completed.id));
+                self.sibling_cancel.cancel();
+            }
+            _ => {}
+        }
+
+        self.completed_buffer.insert(index, completed);
+    }
 }
 
 fn get_max_tool_use_concurrency() -> usize {
@@ -199,4 +234,20 @@ fn get_max_tool_use_concurrency() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(10)
+}
+
+fn cancelled_by_parallel_bash_result(description: &str) -> ToolResultData {
+    let message = format!("Cancelled: parallel tool call {description} errored");
+    ToolResultData {
+        data: json!({ "error": message }),
+        is_error: true,
+    }
+}
+
+fn describe_tool(name: &str, id: &str) -> String {
+    if id.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}({id})")
+    }
 }

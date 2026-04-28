@@ -234,3 +234,65 @@ async fn test_concurrent_tools_respect_ts_concurrency_cap() {
     assert_eq!(results.len(), 3);
     assert_eq!(started.load(Ordering::SeqCst), 3);
 }
+
+#[tokio::test]
+async fn test_bash_error_cancels_parallel_siblings_like_ts() {
+    let call_fn: ToolCallFn = Arc::new(|name, id, _input, cancel| {
+        tokio::spawn(async move {
+            if name == "Bash" {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                return Ok(ToolResultData {
+                    data: serde_json::json!({"stderr": "failed"}),
+                    is_error: true,
+                });
+            }
+
+            tokio::select! {
+                _ = cancel.cancelled() => Err(anyhow::anyhow!("cancelled")),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => Ok(ToolResultData {
+                    data: serde_json::json!({"tool": name, "id": id}),
+                    is_error: false,
+                }),
+            }
+        })
+    });
+
+    let cancel = CancellationToken::new();
+    let mut exec = StreamingToolExecutor::new(cancel, call_fn);
+    exec.add_tool(PendingTool {
+        id: "tu_bash".into(),
+        name: "Bash".into(),
+        input: serde_json::json!({}),
+        is_concurrent: true,
+    });
+    exec.add_tool(PendingTool {
+        id: "tu_read".into(),
+        name: "Read".into(),
+        input: serde_json::json!({}),
+        is_concurrent: true,
+    });
+    exec.add_tool(PendingTool {
+        id: "tu_glob".into(),
+        name: "Glob".into(),
+        input: serde_json::json!({}),
+        is_concurrent: true,
+    });
+
+    let results = exec.flush().await;
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].id, "tu_bash");
+    assert!(results[0].result.as_ref().unwrap().is_error);
+
+    for result in &results[1..] {
+        let data = result.result.as_ref().unwrap();
+        assert!(data.is_error);
+        assert!(
+            data.data["error"]
+                .as_str()
+                .unwrap()
+                .contains("Cancelled: parallel tool call Bash(tu_bash) errored"),
+            "expected TS-style sibling cancellation, got {:?}",
+            data.data
+        );
+    }
+}
