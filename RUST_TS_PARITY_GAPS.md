@@ -38,7 +38,7 @@ The largest remaining gaps are behavioral depth, not just missing files:
 Captured through `scripts/run_parity_capture.py` on 2026-04-28:
 
 - Capture directory:
-  `/tmp/claude-rs-parity-static-prompt-fix`
+  `/tmp/claude-rs-parity-after-remote-entry`
 
 Now matching:
 
@@ -74,6 +74,12 @@ Now matching:
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content
   block like TS, instead of emitting one combined thinking+tool_use message.
+- `remote-control` / `rc` is now hidden from root help like the TS Commander
+  registration, accepts the installed TS bridge flags (`--name`,
+  `--remote-control-session-name-prefix`, `--permission-mode`, `--debug-file`,
+  `--spawn`, `--capacity`, `--[no-]create-session-in-dir`), prints the
+  TS-style custom help screen before normal CLI parsing, and applies the TS
+  `--spawn` / `--capacity` validation rules.
 
 Expected dynamic differences:
 
@@ -657,9 +663,11 @@ Missing or partial:
 - Full remote-control/session manager behavior. Rust now exposes the
   `remote-control` / `rc` CLI surface and `/remote-control` TUI command, but
   it is intentionally a guarded stub until the real TS bridge runtime is
-  ported. Still missing: entitlement/policy checks, environment registration,
-  session creation/reconnect, session-ingress WebSocket forwarding, inbound
-  web/mobile prompt queueing, and connected/disconnect lifecycle.
+  ported. The CLI entrypoint shape, help text, accepted flags, hidden root-help
+  behavior, and bridge flag validation now match the installed TS fast path.
+  Still missing: entitlement/policy checks, environment registration, session
+  creation/reconnect, session-ingress WebSocket forwarding, inbound web/mobile
+  prompt queueing, and connected/disconnect lifecycle.
 - Remote managed settings.
 - Settings sync.
 - Policy limits.
