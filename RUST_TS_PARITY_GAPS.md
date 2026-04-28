@@ -169,9 +169,11 @@ Improved:
   ToolSearch/defer-loading is actually used.
 - Worktree tools remain visible by default because the inspected TS reference
   now returns `true` from `isWorktreeModeEnabled()`.
+- REPL mode now hides the same primitive tools as TS when the `REPL` tool is
+  active: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`,
+  `NotebookEdit`, and `Agent`.
 
 Needs work:
-- Hide REPL-only primitive tools when REPL mode is active.
 - Keep tool ordering stable for prompt-cache compatibility.
 - Replace the request-time ToolSearch `auto` character fallback with the TS
   preferred token-counting path when the count-tokens API is wired into this
