@@ -165,8 +165,8 @@ Improved:
 - Rust now applies the TS request-time ToolSearch gate in the API layer:
   model support, explicit/env mode, non-first-party proxy default-disable,
   `auto:N` character fallback threshold, discovered `tool_reference` scan,
-  deferred MCP tool filtering, and beta-header insertion only when
-  ToolSearch/defer-loading is actually used.
+  deferred MCP and `shouldDefer` built-in tool filtering, and beta-header
+  insertion only when ToolSearch/defer-loading is actually used.
 - Worktree tools remain visible by default because the inspected TS reference
   now returns `true` from `isWorktreeModeEnabled()`.
 - REPL mode now hides the same primitive tools as TS when the `REPL` tool is
@@ -235,6 +235,9 @@ Improved:
   defaulting to 10.
 - Existing executor tests cover mixed concurrent/exclusive scheduling and
   ordered result yielding; a regression test now covers the TS concurrency cap.
+- The shared executor now mirrors TS Bash-error cancellation: a failed Bash
+  call cancels parallel siblings and yields ordered synthetic cancellation
+  results instead of letting sibling tools continue silently.
 - Rust CLI and TUI model-result mapping now apply the TS empty-result guard:
   empty strings, empty arrays, and whitespace-only text block arrays become
   `(<ToolName> completed with no output)` instead of an empty tool result.
@@ -553,6 +556,10 @@ Improved:
 - Direct `mcp__server` prefix matching, case-insensitive `select:`, deferred
   count reporting, and model-facing `tool_reference` mapping are covered by
   focused tests.
+- Rust now marks TS `shouldDefer` built-ins as deferred metadata too, so
+  `ToolSearch` can discover tools such as `TodoWrite`, `WebFetch`,
+  `WebSearch`, plan/task/cron/config/LSP tools, and worktree/team tools
+  without request-time name guessing.
 
 Needs work:
 - Replace fallback-only request-time `auto` threshold with TS's preferred

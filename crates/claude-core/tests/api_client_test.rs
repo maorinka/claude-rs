@@ -72,6 +72,7 @@ fn test_build_request_body_with_tools() {
         name: "MyTool".to_string(),
         description: "A tool".to_string(),
         input_schema: serde_json::json!({"type": "object"}),
+        defer_loading: false,
     }];
     let body = build_request_body(&config, &[], &[], &tools, false);
 

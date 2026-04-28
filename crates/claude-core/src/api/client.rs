@@ -256,6 +256,8 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    #[serde(default, skip)]
+    pub defer_loading: bool,
 }
 
 // ── Request body builder ──────────────────────────────────────────────────────
@@ -520,7 +522,7 @@ fn model_supports_tool_reference(model: &str) -> bool {
 }
 
 fn is_deferred_tool(tool: &ToolDefinition) -> bool {
-    tool.name.starts_with("mcp__")
+    tool.defer_loading || tool.name.starts_with("mcp__")
 }
 
 fn prepare_tool_definitions_for_request(
@@ -954,6 +956,14 @@ mod tests {
             name: name.into(),
             description: format!("{name} description"),
             input_schema: json!({"type": "object", "properties": {}}),
+            defer_loading: name.starts_with("mcp__"),
+        }
+    }
+
+    fn deferred_tool_def(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            defer_loading: true,
+            ..tool_def(name)
         }
     }
 
@@ -1178,11 +1188,13 @@ mod tests {
                 name: "Read".into(),
                 description: "Read a file".into(),
                 input_schema: json!({"type": "object"}),
+                defer_loading: false,
             },
             ToolDefinition {
                 name: "Write".into(),
                 description: "Write a file".into(),
                 input_schema: json!({"type": "object"}),
+                defer_loading: false,
             },
         ];
         let body = build_request_body(&config, &[], &[], &tools, false);
@@ -1287,6 +1299,57 @@ mod tests {
             .unwrap();
         assert_eq!(jira["defer_loading"], true);
         assert!(body_uses_tool_search(&body));
+        clear_tool_search_env();
+    }
+
+    #[test]
+    fn tool_search_defers_builtin_should_defer_tools_match_ts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            deferred_tool_def("TodoWrite"),
+            deferred_tool_def("WebFetch"),
+        ];
+
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        let names = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Read", "ToolSearch"]);
+
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [{"type": "tool_reference", "tool_name": "TodoWrite"}]
+            }]
+        })];
+        let body = build_request_body(&config, &messages, &[], &tools, false);
+        let tools_arr = body["tools"].as_array().unwrap();
+        let names = tools_arr
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["Read", "ToolSearch", "TodoWrite"]);
+        let todo = tools_arr
+            .iter()
+            .find(|tool| tool["name"] == "TodoWrite")
+            .unwrap();
+        assert_eq!(todo["defer_loading"], true);
         clear_tool_search_env();
     }
 
@@ -1491,6 +1554,7 @@ mod tests {
             name: "T".into(),
             description: "d".into(),
             input_schema: json!({"type": "object"}),
+            defer_loading: false,
         }];
         let messages = vec![json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})];
         let body = build_request_body(&config, &messages, &system, &tools, false);

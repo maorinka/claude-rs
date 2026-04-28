@@ -64,7 +64,19 @@ async fn test_exact_search_bash_finds_loaded_bash() {
 
 #[tokio::test]
 async fn test_keyword_search_only_searches_deferred_tools() {
-    let result = search("file").await;
+    let tool = ToolSearchTool::new(vec![(
+        "Read".to_string(),
+        "Read a local file from disk".to_string(),
+    )]);
+    let result = tool
+        .call(
+            &json!({ "query": "file" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
     assert!(!result.is_error);
     assert!(matches(&result).is_empty());
     assert_eq!(result.data["total_deferred_tools"], 0);
@@ -203,6 +215,30 @@ async fn test_search_uses_deferred_mcp_snapshot_and_camel_case() {
 
     assert!(!result.is_error);
     assert_eq!(matches(&result), vec!["mcp__custom_mcp__fetcher"]);
+    assert_eq!(result.data["total_deferred_tools"], 1);
+}
+
+#[tokio::test]
+async fn test_search_uses_ts_should_defer_builtin_metadata() {
+    let tool = ToolSearchTool::new(vec![
+        (
+            "TodoWrite".to_string(),
+            "Update and maintain the session todo list".to_string(),
+        ),
+        ("Read".to_string(), "Read a local file".to_string()),
+    ]);
+    let result = tool
+        .call(
+            &json!({ "query": "todo" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(!result.is_error);
+    assert_eq!(matches(&result), vec!["TodoWrite"]);
     assert_eq!(result.data["total_deferred_tools"], 1);
 }
 

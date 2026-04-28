@@ -346,6 +346,7 @@ impl ToolRegistry {
                     name: t.name().to_string(),
                     description: t.description(),
                     input_schema: normalize_local_tool_schema(t.name(), t.input_schema()),
+                    defer_loading: crate::tool_search::is_deferred_tool_name(t.name()),
                 };
                 apply_ts_tool_contract(&mut definition);
                 definition

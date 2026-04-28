@@ -375,8 +375,38 @@ struct ParsedToolName {
     is_mcp: bool,
 }
 
-fn is_deferred_tool_name(name: &str) -> bool {
+pub fn is_deferred_tool_name(name: &str) -> bool {
     name.starts_with("mcp__")
+        || matches!(
+            name,
+            "AskUserQuestion"
+                | "Config"
+                | "CronCreate"
+                | "CronDelete"
+                | "CronList"
+                | "EnterPlanMode"
+                | "EnterWorktree"
+                | "ExitPlanMode"
+                | "ExitWorktree"
+                | "LSP"
+                | "ListMcpResourcesTool"
+                | "NotebookEdit"
+                | "ReadMcpResource"
+                | "RemoteTrigger"
+                | "ScheduleCron"
+                | "SendMessage"
+                | "TaskCreate"
+                | "TaskGet"
+                | "TaskList"
+                | "TaskOutput"
+                | "TaskStop"
+                | "TaskUpdate"
+                | "TeamCreate"
+                | "TeamDelete"
+                | "TodoWrite"
+                | "WebFetch"
+                | "WebSearch"
+        )
 }
 
 fn parse_tool_name(name: &str) -> ParsedToolName {
