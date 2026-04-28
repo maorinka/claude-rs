@@ -4074,6 +4074,9 @@ async fn main() -> Result<()> {
         tool_defs,
         cancel.clone(),
     );
+    if let Ok(storage) = claude_core::session::storage::SessionStorage::new(&api_session_id) {
+        query_engine.set_transcript_storage(storage);
+    }
     if let Some(max) = cli.max_turns {
         query_engine.set_max_turns(max);
     }

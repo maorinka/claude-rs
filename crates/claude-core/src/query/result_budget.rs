@@ -44,11 +44,53 @@ pub struct ContentReplacementState {
     replacements: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ContentReplacementRecord {
+    #[serde(rename = "tool-result")]
+    ToolResult {
+        #[serde(rename = "toolUseId")]
+        tool_use_id: String,
+        replacement: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudgetApplication {
+    pub messages: Vec<Value>,
+    pub newly_replaced: Vec<ContentReplacementRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolResultCandidate {
     tool_use_id: String,
     content: Value,
     size: usize,
+}
+
+impl ContentReplacementState {
+    pub fn reconstruct_from_messages_and_records(
+        messages: &[Value],
+        records: &[ContentReplacementRecord],
+    ) -> Self {
+        let mut state = Self::default();
+        for message in messages {
+            for candidate in collect_candidates_from_message(message) {
+                state.seen_ids.insert(candidate.tool_use_id);
+            }
+        }
+        for record in records {
+            let ContentReplacementRecord::ToolResult {
+                tool_use_id,
+                replacement,
+            } = record;
+            state.seen_ids.insert(tool_use_id.clone());
+            state
+                .replacements
+                .insert(tool_use_id.clone(), replacement.clone());
+        }
+        state
+    }
 }
 
 /// Same threshold rule as TS `getPersistenceThreshold` without GrowthBook
@@ -96,10 +138,11 @@ pub fn apply_tool_result_budget(
     messages: &[Value],
     state: &mut ContentReplacementState,
     skip_tool_use_ids: &HashSet<String>,
-) -> Vec<Value> {
+) -> BudgetApplication {
     let candidates_by_message = collect_candidates_by_message(messages);
     let mut replacement_map: HashMap<String, String> = HashMap::new();
     let mut to_persist: Vec<ToolResultCandidate> = Vec::new();
+    let mut newly_replaced = Vec::new();
 
     for candidates in candidates_by_message {
         let mut fresh = Vec::new();
@@ -156,13 +199,23 @@ pub fn apply_tool_result_budget(
         state
             .replacements
             .insert(candidate.tool_use_id.clone(), replacement.clone());
+        newly_replaced.push(ContentReplacementRecord::ToolResult {
+            tool_use_id: candidate.tool_use_id.clone(),
+            replacement: replacement.clone(),
+        });
         replacement_map.insert(candidate.tool_use_id, replacement);
     }
 
     if replacement_map.is_empty() {
-        return messages.to_vec();
+        return BudgetApplication {
+            messages: messages.to_vec(),
+            newly_replaced,
+        };
     }
-    replace_tool_result_contents(messages, &replacement_map)
+    BudgetApplication {
+        messages: replace_tool_result_contents(messages, &replacement_map),
+        newly_replaced,
+    }
 }
 
 pub fn persist_tool_result(
@@ -638,7 +691,7 @@ mod tests {
             let mut state = ContentReplacementState::default();
             let out =
                 apply_tool_result_budget("session_budget", &messages, &mut state, &HashSet::new());
-            let content = out[1]["content"].as_array().unwrap();
+            let content = out.messages[1]["content"].as_array().unwrap();
             let replaced = content
                 .iter()
                 .filter(|block| {
@@ -649,6 +702,7 @@ mod tests {
                 })
                 .count();
             assert_eq!(replaced, 1);
+            assert_eq!(out.newly_replaced.len(), 1);
             assert_eq!(state.seen_ids.len(), 2);
             assert_eq!(state.replacements.len(), 1);
         });
@@ -672,7 +726,8 @@ mod tests {
                 apply_tool_result_budget("session_reapply", &messages, &mut state, &HashSet::new());
             let second =
                 apply_tool_result_budget("session_reapply", &messages, &mut state, &HashSet::new());
-            assert_eq!(first, second);
+            assert_eq!(first.messages, second.messages);
+            assert_eq!(second.newly_replaced, Vec::new());
         });
     }
 
@@ -686,7 +741,8 @@ mod tests {
             let mut skip = HashSet::new();
             skip.insert("toolu_read".to_string());
             let out = apply_tool_result_budget("session_skip", &messages, &mut state, &skip);
-            assert_eq!(out, messages);
+            assert_eq!(out.messages, messages);
+            assert!(out.newly_replaced.is_empty());
             assert!(state.seen_ids.contains("toolu_read"));
             assert!(state.replacements.is_empty());
         });

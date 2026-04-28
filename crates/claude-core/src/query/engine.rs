@@ -65,6 +65,7 @@ pub struct QueryEngine {
     content_replacement_state: crate::query::result_budget::ContentReplacementState,
     content_budget_skip_tool_use_ids: HashSet<String>,
     stop_hook_active: bool,
+    transcript_storage: Option<crate::session::storage::SessionStorage>,
 }
 
 impl QueryEngine {
@@ -94,11 +95,16 @@ impl QueryEngine {
             content_replacement_state: Default::default(),
             content_budget_skip_tool_use_ids: HashSet::new(),
             stop_hook_active: false,
+            transcript_storage: None,
         }
     }
 
     pub fn set_max_turns(&mut self, max: u32) {
         self.max_turns = Some(max);
+    }
+
+    pub fn set_transcript_storage(&mut self, storage: crate::session::storage::SessionStorage) {
+        self.transcript_storage = Some(storage);
     }
 
     /// Update the model used for API requests (e.g. after /model switch).
@@ -116,9 +122,14 @@ impl QueryEngine {
     /// Applies compact boundary filtering so resumed sessions start from the correct
     /// post-compaction point (matches TS `getMessagesAfterCompactBoundary`).
     pub fn load_messages(&mut self, messages: Vec<serde_json::Value>) {
+        let (messages, replacements) = split_content_replacement_entries(messages);
         self.messages = filter_after_compact_boundary(messages);
         self.usage_anchor = None;
-        self.content_replacement_state = Default::default();
+        self.content_replacement_state =
+            crate::query::result_budget::ContentReplacementState::reconstruct_from_messages_and_records(
+                &self.messages,
+                &replacements,
+            );
         self.content_budget_skip_tool_use_ids.clear();
     }
 
@@ -506,12 +517,16 @@ impl QueryEngine {
             // separate meta user message at request time.
             let messages_for_query =
                 build_messages_for_query(&self.messages, &self.user_context_blocks);
-            let messages_for_query = crate::query::result_budget::apply_tool_result_budget(
+            let budget_result = crate::query::result_budget::apply_tool_result_budget(
                 &self.api_client.config.session_id,
                 &messages_for_query,
                 &mut self.content_replacement_state,
                 &self.content_budget_skip_tool_use_ids,
             );
+            if !budget_result.newly_replaced.is_empty() {
+                self.append_content_replacement_entry(&budget_result.newly_replaced);
+            }
+            let messages_for_query = budget_result.messages;
             match self
                 .api_client
                 .stream_request_with_events(
@@ -926,6 +941,23 @@ impl QueryEngine {
         }
     }
 
+    fn append_content_replacement_entry(
+        &self,
+        records: &[crate::query::result_budget::ContentReplacementRecord],
+    ) {
+        let Some(storage) = &self.transcript_storage else {
+            return;
+        };
+        let entry = serde_json::json!({
+            "type": "content-replacement",
+            "sessionId": self.api_client.config.session_id,
+            "replacements": records,
+        });
+        if let Ok(line) = serde_json::to_string(&entry) {
+            let _ = storage.append_transcript(&line);
+        }
+    }
+
     async fn handle_max_tokens(
         &mut self,
         event_tx: &mpsc::Sender<StreamEvent>,
@@ -1114,6 +1146,36 @@ fn filter_after_compact_boundary(messages: Vec<serde_json::Value>) -> Vec<serde_
     }
 }
 
+fn split_content_replacement_entries(
+    entries: Vec<serde_json::Value>,
+) -> (
+    Vec<serde_json::Value>,
+    Vec<crate::query::result_budget::ContentReplacementRecord>,
+) {
+    let mut messages = Vec::new();
+    let mut replacements = Vec::new();
+
+    for entry in entries {
+        if entry.get("type").and_then(|ty| ty.as_str()) == Some("content-replacement") {
+            if let Some(records) = entry.get("replacements").and_then(|value| value.as_array()) {
+                replacements.extend(records.iter().filter_map(|record| {
+                    serde_json::from_value::<crate::query::result_budget::ContentReplacementRecord>(
+                        record.clone(),
+                    )
+                    .ok()
+                }));
+            }
+            continue;
+        }
+
+        if entry.get("role").is_some() {
+            messages.push(entry);
+        }
+    }
+
+    (messages, replacements)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1201,6 +1263,27 @@ mod tests {
         smoosh_text_into_last_tool_result(&mut content, "second".to_string());
 
         assert_eq!(content[0]["content"][0]["text"], "first\n\nsecond");
+    }
+
+    #[test]
+    fn content_replacement_entries_are_split_from_resume_messages() {
+        let entries = vec![
+            serde_json::json!({"role": "user", "content": [{"type": "text", "text": "hi"}]}),
+            serde_json::json!({
+                "type": "content-replacement",
+                "sessionId": "session",
+                "replacements": [{
+                    "kind": "tool-result",
+                    "toolUseId": "toolu_1",
+                    "replacement": "<persisted-output>\npreview\n</persisted-output>"
+                }]
+            }),
+        ];
+
+        let (messages, records) = split_content_replacement_entries(entries);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(records.len(), 1);
     }
 }
 

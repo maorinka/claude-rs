@@ -253,6 +253,9 @@ Improved:
 - Rust now enforces the TS aggregate per-message tool-result budget with
   in-memory seen/replacement state, including byte-identical replacement
   reapplication and infinite-cap tool opt-outs.
+- Rust now writes TS-shaped `content-replacement` transcript entries for new
+  aggregate-budget replacements and reconstructs replacement state on resume
+  instead of treating those entries as conversation messages.
 - Rust effort handling now follows TS levels (`low`, `medium`, `high`,
   `max`), no longer accepts/sends stale `xhigh`, and downgrades `max` to
   `high` unless the model supports max effort.
@@ -260,9 +263,8 @@ Improved:
   effort set, so `xhigh` is rejected before it can become an API 400.
 
 Remaining result-budget work:
-- Serialize content-replacement records into the transcript and reconstruct
-  them on resume/fork once the Rust session log layer owns live transcript
-  writes, matching TS `ContentReplacementEntry`.
+- Extend the same transcript-backed replacement state to sidechain/forked
+  agent transcripts once Rust sidechain logging is wired like TS.
 
 ### Query user context still needs lifecycle parity
 
