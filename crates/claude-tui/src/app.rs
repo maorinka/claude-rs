@@ -1645,6 +1645,49 @@ impl App {
                     }
 
                     // Regular user message
+                    if let Some(runner) = get_global_runner() {
+                        let user_prompt_submit = runner
+                            .run_hooks(
+                                &claude_core::hooks::types::HookEvent::UserPromptSubmit,
+                                serde_json::json!({ "prompt": text.clone() }),
+                                Some(permission_mode_hook_name(&perm_ctx.mode)),
+                                None,
+                                None,
+                                None,
+                            )
+                            .await;
+                        if !user_prompt_submit.blocking_errors.is_empty() {
+                            let blocking = user_prompt_submit
+                                .blocking_errors
+                                .iter()
+                                .map(
+                                    claude_core::hooks::get_user_prompt_submit_hook_blocking_message,
+                                )
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            self.message_list.push(MessageEntry::System {
+                                text: format!("{blocking}\n\nOriginal prompt: {text}"),
+                            });
+                            continue;
+                        }
+                        if user_prompt_submit.prevent_continuation {
+                            self.message_list.push(MessageEntry::System {
+                                text: user_prompt_submit
+                                    .stop_reason
+                                    .unwrap_or_else(|| "Operation stopped by hook".to_string()),
+                            });
+                            continue;
+                        }
+                        for context in user_prompt_submit.additional_contexts {
+                            let _ = engine_tx
+                                .send(EngineCommand::AddUserContext(format!(
+                                    "<system-reminder>\nUserPromptSubmit hook additional context: {}\n</system-reminder>",
+                                    context
+                                )))
+                                .await;
+                        }
+                    }
+
                     // Add user message to display
                     self.message_list
                         .push(MessageEntry::User { text: text.clone() });
