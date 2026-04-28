@@ -238,6 +238,10 @@ Improved:
 - Rust CLI and TUI model-result mapping now apply the TS empty-result guard:
   empty strings, empty arrays, and whitespace-only text block arrays become
   `(<ToolName> completed with no output)` instead of an empty tool result.
+- Rust now has a shared model-facing tool-result formatter in
+  `claude-core::tool_result_format`; the interactive TUI uses the same
+  TS-style content mapping as print mode instead of sending raw JSON/stringified
+  tool data back to the model.
 - Rust effort handling now follows TS levels (`low`, `medium`, `high`,
   `max`), no longer accepts/sends stale `xhigh`, and downgrades `max` to
   `high` unless the model supports max effort.

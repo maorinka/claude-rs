@@ -1688,6 +1688,7 @@ fn normalize_model_display_for_stream_json(model: &str) -> String {
     model.replace("[1M]", "[1m]").replace("[2M]", "[2m]")
 }
 
+#[allow(dead_code)]
 fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
     let Some(obj) = data.as_object() else {
         return data.as_str().unwrap_or(&data.to_string()).to_string();
@@ -1744,12 +1745,10 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
 }
 
 fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {
-    ensure_non_empty_tool_result_string(
-        tool_name,
-        format_tool_result_string_for_model(tool_name, data),
-    )
+    claude_core::tool_result_format::format_tool_result_for_model(tool_name, data)
 }
 
+#[allow(dead_code)]
 fn add_line_numbers_ts(content: &str, start_line: usize) -> String {
     if content.is_empty() {
         return String::new();
@@ -1767,70 +1766,10 @@ fn format_tool_result_content_for_model(
     tool_name: &str,
     data: &serde_json::Value,
 ) -> serde_json::Value {
-    if tool_name == "Agent" || tool_name == "agent" {
-        return ensure_non_empty_tool_result_content(
-            tool_name,
-            format_agent_tool_result_content_for_model(data),
-        );
-    }
-
-    if tool_name == "ToolSearch" {
-        let matches = data
-            .get("matches")
-            .and_then(|value| value.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|value| value.as_str().map(str::to_string))
-                    .collect::<Vec<_>>()
-            })
-            .or_else(|| {
-                data.get("tools")
-                    .and_then(|value| value.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()))
-                            .map(str::to_string)
-                            .collect::<Vec<_>>()
-                    })
-            })
-            .unwrap_or_default();
-        if matches.is_empty() {
-            let mut text = "No matching deferred tools found".to_string();
-            if let Some(pending) = data
-                .get("pending_mcp_servers")
-                .and_then(|value| value.as_array())
-                .filter(|items| !items.is_empty())
-            {
-                let names = pending
-                    .iter()
-                    .filter_map(|value| value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                text.push_str(&format!(". Some MCP servers are still connecting: {names}. Their tools will become available shortly — try searching again."));
-            }
-            return ensure_non_empty_tool_result_content(
-                tool_name,
-                serde_json::Value::String(text),
-            );
-        }
-        return ensure_non_empty_tool_result_content(
-            tool_name,
-            serde_json::Value::Array(
-                matches
-                    .into_iter()
-                    .map(|name| serde_json::json!({"type": "tool_reference", "tool_name": name}))
-                    .collect(),
-            ),
-        );
-    }
-    ensure_non_empty_tool_result_content(
-        tool_name,
-        serde_json::Value::String(format_tool_result_string_for_model(tool_name, data)),
-    )
+    claude_core::tool_result_format::format_tool_result_content_for_model(tool_name, data)
 }
 
+#[allow(dead_code)]
 fn ensure_non_empty_tool_result_string(tool_name: &str, content: String) -> String {
     if content.trim().is_empty() {
         format!("({tool_name} completed with no output)")
@@ -1839,17 +1778,15 @@ fn ensure_non_empty_tool_result_string(tool_name: &str, content: String) -> Stri
     }
 }
 
+#[allow(dead_code)]
 fn ensure_non_empty_tool_result_content(
     tool_name: &str,
     content: serde_json::Value,
 ) -> serde_json::Value {
-    if is_tool_result_content_empty(&content) {
-        serde_json::Value::String(format!("({tool_name} completed with no output)"))
-    } else {
-        content
-    }
+    claude_core::tool_result_format::ensure_non_empty_tool_result_content(tool_name, content)
 }
 
+#[allow(dead_code)]
 fn is_tool_result_content_empty(content: &serde_json::Value) -> bool {
     match content {
         serde_json::Value::Null => true,
@@ -1870,6 +1807,7 @@ fn is_tool_result_content_empty(content: &serde_json::Value) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn truncate_single_line(text: &str, max_width: usize) -> String {
     let first_line = text.split('\n').next().unwrap_or("");
     let had_newline = first_line.len() != text.len();
@@ -1887,6 +1825,7 @@ fn truncate_single_line(text: &str, max_width: usize) -> String {
     truncated
 }
 
+#[allow(dead_code)]
 fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde_json::Value {
     let Some(status) = data.get("status").and_then(|value| value.as_str()) else {
         return serde_json::Value::String(data.to_string());
@@ -2011,6 +1950,7 @@ fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde
     serde_json::Value::String(data.to_string())
 }
 
+#[allow(dead_code)]
 fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value) -> String {
     if tool_name == "Bash" {
         return format_bash_tool_result_for_model(data);
@@ -2680,6 +2620,7 @@ fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value
     data.to_string()
 }
 
+#[allow(dead_code)]
 fn format_search_limit_info(data: &serde_json::Value) -> Option<String> {
     let limit = data.get("appliedLimit").and_then(|value| value.as_u64());
     let offset = data
@@ -2695,6 +2636,7 @@ fn format_search_limit_info(data: &serde_json::Value) -> Option<String> {
     })
 }
 
+#[allow(dead_code)]
 fn json_stringify_for_ts(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }

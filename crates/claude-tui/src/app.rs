@@ -205,6 +205,12 @@ enum EngineCommand {
         content: String,
         is_error: bool,
     },
+    AddToolResultContent {
+        id: String,
+        content: serde_json::Value,
+        is_error: bool,
+        include_is_error: bool,
+    },
     RunTurn(mpsc::Sender<StreamEvent>),
     LoadMessages(Vec<serde_json::Value>),
     PartialCompactFrom {
@@ -799,6 +805,19 @@ impl App {
                             is_error,
                         } => {
                             engine.add_tool_result(&id, &content, is_error);
+                        }
+                        EngineCommand::AddToolResultContent {
+                            id,
+                            content,
+                            is_error,
+                            include_is_error,
+                        } => {
+                            engine.add_tool_result_content_with_error_field(
+                                &id,
+                                content,
+                                is_error,
+                                include_is_error,
+                            );
                         }
                         EngineCommand::RunTurn(stream_tx) => {
                             let result = engine.run_turn(&stream_tx).await;
@@ -1990,10 +2009,18 @@ impl App {
                         }
                         result_text = ensure_non_empty_tool_result_text(&info.name, result_text);
                         let _ = engine_tx
-                            .send(EngineCommand::AddToolResult {
+                            .send(EngineCommand::AddToolResultContent {
                                 id: info.id.clone(),
-                                content: result_text,
+                                content: if is_error {
+                                    serde_json::Value::String(result_text)
+                                } else {
+                                    claude_core::tool_result_format::format_tool_result_content_for_model(
+                                        &info.name,
+                                        &result_json,
+                                    )
+                                },
                                 is_error,
+                                include_is_error: is_error || info.name == "Bash",
                             })
                             .await;
                         if !is_error {
