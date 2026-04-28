@@ -636,12 +636,22 @@ Rust has hook types and runner pieces, but dispatch is incomplete.
 Needs work:
 - Fire `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` from the tool
   executor.
-- Fire `Stop` and `StopFailure` from the query engine.
 - Fire `TaskCreated` / `TaskCompleted` from task tools.
 - Fire session, compact, config, cwd, file, worktree, teammate, permission,
   and elicitation hooks at the same sites as TS.
 - Implement aggregation/blocking behavior exactly.
 - Ensure hook outputs are inserted into transcript/context like TS.
+
+Improved:
+- Rust now fires `StopFailure` on non-prompt-too-long API failures.
+- Rust now fires main-thread `Stop` hooks after normal assistant turns,
+  injects blocking feedback as user messages, continues the query when a
+  Stop hook blocks, and respects `preventContinuation`.
+
+Still needs work:
+- Persist and render full Stop hook progress/summary attachment messages like
+  TS.
+- Wire `SubagentStop`, `TeammateIdle`, and `TaskCompleted` end-of-turn hooks.
 
 ## P1: Memory / Context
 
