@@ -238,6 +238,9 @@ Improved:
 - Rust CLI and TUI model-result mapping now apply the TS empty-result guard:
   empty strings, empty arrays, and whitespace-only text block arrays become
   `(<ToolName> completed with no output)` instead of an empty tool result.
+- Rust effort handling now follows TS levels (`low`, `medium`, `high`,
+  `max`), no longer accepts/sends stale `xhigh`, and downgrades `max` to
+  `high` unless the model supports max effort.
 
 ### Query user context still needs lifecycle parity
 

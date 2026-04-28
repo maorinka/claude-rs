@@ -28,7 +28,7 @@ pub struct Cli {
     pub model: Option<String>,
 
     /// Effort level for the current session
-    #[arg(long = "effort", value_parser = ["low", "medium", "high", "xhigh", "max"])]
+    #[arg(long = "effort", value_parser = ["low", "medium", "high", "max"])]
     pub effort: Option<String>,
 
     /// Verbose output
