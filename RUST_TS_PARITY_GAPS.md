@@ -6,7 +6,7 @@ Latest live proxy comparison: 2026-04-28
 
 Reference code inspected:
 - TypeScript source snapshot: `/Users/maorhadad/Downloads/src`
-- Installed TypeScript CLI: `claude` v2.1.119
+- Installed TypeScript CLI: `claude` v2.1.121
 - Rust: `/Users/maorhadad/projects/claude/claude-rs/crates`
 
 This file is a current parity checklist. It supersedes the stale parts of
@@ -38,7 +38,7 @@ The largest remaining gaps are behavioral depth, not just missing files:
 Captured through `scripts/run_parity_capture.py` on 2026-04-28:
 
 - Capture directory:
-  `/tmp/claude-rs-parity-auth-classifier-fix`
+  `/tmp/claude-rs-parity-static-prompt-fix`
 
 Now matching:
 
@@ -48,7 +48,8 @@ Now matching:
 - Message shape.
 - Prompt cache marker count.
 - Tool count: 87 vs 87.
-- Tool names, tool order, and tool schemas.
+- Tool names, tool order, and tool schemas. This now includes the installed
+  TS 2.1.121 Explore-agent description in the embedded tool contract.
 - Claude.ai MCP servers now match the TS auth flow for Cloudflare: a live
   proxy 401 is classified as `needs-auth`, the two auth shadow tools are
   exposed, and the MCP needs-auth cache short-circuits future HTTP/SSE
@@ -59,6 +60,8 @@ Now matching:
 - `system/init` scalar keys.
 - Assistant message and usage payload shapes.
 - Final result, usage, iteration, and model-usage payload shapes.
+- Static environment/context-management prompt formatting, including the
+  installed TS `# Context management` heading and environment bullet spacing.
 - Two-turn dynamic skill discovery after `Read` now follows TS shape:
   discovered skill listings are folded into the adjacent `tool_result` content
   before the next API request rather than emitted as a separate user turn.
@@ -84,9 +87,9 @@ Remaining first-turn prompt-context difference:
 
 - The available-skills block has the same entries, but plugin command/skill
   order can differ between runs.
-- Latest capture still reports `equal ignoring skill order: no`; the visible
-  first-turn differences are now ordering-only in skills/slash commands, but
-  the scrubbed-body helper does not normalize slash-command ordering yet.
+- Latest capture reports `equal ignoring skill order: yes`; the first-turn
+  API body is now equal after normalizing the plugin skill/command order that
+  TS itself emits nondeterministically.
 
 ### TS Skill And Command Ordering Rules
 

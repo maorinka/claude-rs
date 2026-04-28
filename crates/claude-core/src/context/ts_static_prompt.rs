@@ -252,7 +252,7 @@ fn environment_section(project_root: &Path, model: &str) -> String {
     out.push_str("You have been invoked in the following environment: \n");
     out.push_str(&format!(" - Primary working directory: {cwd}\n"));
     out.push_str(&format!(
-        "  - Is a git repository: {}\n",
+        " - Is a git repository: {}\n",
         if is_git_repo { "true" } else { "false" }
     ));
     out.push_str(&format!(" - Platform: {platform}\n"));
@@ -265,6 +265,7 @@ fn environment_section(project_root: &Path, model: &str) -> String {
     out.push_str(" - The most recent Claude model family is Claude 4.X. Model IDs — Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models.\n");
     out.push_str(" - Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).\n");
     out.push_str(" - Fast mode for Claude Code uses Claude Opus 4.6 with faster output (it does not downgrade to a smaller model). It can be toggled with /fast and is only available on Opus 4.6.\n\n");
+    out.push_str("# Context management\n");
     out.push_str("When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.\n\n");
     out.push_str(&git_status_section(project_root));
     out

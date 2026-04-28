@@ -962,7 +962,9 @@ fn read_dir_paths(path: &Path) -> Option<Vec<std::path::PathBuf>> {
 
 fn read_plugin_dir_entries(path: &Path) -> Option<Vec<std::path::PathBuf>> {
     let entries = std::fs::read_dir(path).ok()?;
-    Some(entries.flatten().map(|entry| entry.path()).collect())
+    let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
+    Some(paths)
 }
 
 fn newest_child_dir(path: &Path) -> Option<std::path::PathBuf> {
