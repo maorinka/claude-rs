@@ -4871,8 +4871,14 @@ async fn main() -> Result<()> {
                             }));
                             stream_tool_use_results.push(result_json.clone());
                         }
-                        query_engine.add_tool_result_content_with_error_field(
+                        let max_result_size_chars = tools
+                            .get(&tool_info.name)
+                            .map(|tool| tool.max_result_size_chars())
+                            .unwrap_or(100_000);
+                        query_engine.add_tool_result_content_with_error_field_and_name(
                             &tool_info.id,
+                            Some(&tool_info.name),
+                            Some(max_result_size_chars),
                             result_content,
                             is_error,
                             is_error || tool_info.name == "Bash",

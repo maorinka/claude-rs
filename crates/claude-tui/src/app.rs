@@ -207,6 +207,8 @@ enum EngineCommand {
     },
     AddToolResultContent {
         id: String,
+        tool_name: String,
+        max_result_size_chars: usize,
         content: serde_json::Value,
         is_error: bool,
         include_is_error: bool,
@@ -808,12 +810,16 @@ impl App {
                         }
                         EngineCommand::AddToolResultContent {
                             id,
+                            tool_name,
+                            max_result_size_chars,
                             content,
                             is_error,
                             include_is_error,
                         } => {
-                            engine.add_tool_result_content_with_error_field(
+                            engine.add_tool_result_content_with_error_field_and_name(
                                 &id,
+                                Some(&tool_name),
+                                Some(max_result_size_chars),
                                 content,
                                 is_error,
                                 include_is_error,
@@ -2008,9 +2014,15 @@ impl App {
                             }
                         }
                         result_text = ensure_non_empty_tool_result_text(&info.name, result_text);
+                        let max_result_size_chars = tools
+                            .get(&info.name)
+                            .map(|tool| tool.max_result_size_chars())
+                            .unwrap_or(100_000);
                         let _ = engine_tx
                             .send(EngineCommand::AddToolResultContent {
                                 id: info.id.clone(),
+                                tool_name: info.name.clone(),
+                                max_result_size_chars,
                                 content: if is_error {
                                     serde_json::Value::String(result_text)
                                 } else {

@@ -222,6 +222,36 @@ impl QueryEngine {
         is_error: bool,
         include_is_error: bool,
     ) {
+        self.add_tool_result_content_with_error_field_and_name(
+            tool_use_id,
+            None,
+            None,
+            content,
+            is_error,
+            include_is_error,
+        );
+    }
+
+    /// Add a tool result whose content can be either a string or structured
+    /// content blocks, preserving the originating tool metadata needed by the
+    /// TS large-result persistence threshold logic.
+    pub fn add_tool_result_content_with_error_field_and_name(
+        &mut self,
+        tool_use_id: &str,
+        tool_name: Option<&str>,
+        max_result_size_chars: Option<usize>,
+        content: serde_json::Value,
+        is_error: bool,
+        include_is_error: bool,
+    ) {
+        let tool_name = tool_name.unwrap_or("Tool");
+        let content = crate::query::result_budget::process_tool_result_content(
+            &self.api_client.config.session_id,
+            tool_use_id,
+            tool_name,
+            max_result_size_chars.unwrap_or(100_000),
+            content,
+        );
         let mut block = serde_json::json!({
             "type": "tool_result",
             "tool_use_id": tool_use_id,
