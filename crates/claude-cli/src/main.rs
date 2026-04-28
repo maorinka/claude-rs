@@ -4383,6 +4383,9 @@ async fn main() -> Result<()> {
                     // max_tokens recovery — run again immediately
                     continue;
                 }
+                TurnResult::Continue => {
+                    continue;
+                }
                 TurnResult::ToolUse(tool_uses) => {
                     // Execute each tool, check permissions, feed results back
                     let mut stream_tool_results = Vec::new();

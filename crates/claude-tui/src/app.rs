@@ -2162,6 +2162,12 @@ impl App {
                                 let _ = tx2.send(AppEvent::ContinueTurn).await;
                             });
                         }
+                        Ok(TurnResult::Continue) => {
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx2.send(AppEvent::ContinueTurn).await;
+                            });
+                        }
                         Err(e) => {
                             self.spinner.stop();
                             self.spinner.queued_count = 0;

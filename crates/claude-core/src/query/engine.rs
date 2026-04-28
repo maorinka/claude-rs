@@ -64,6 +64,7 @@ pub struct QueryEngine {
     usage_anchor: Option<UsageAnchor>,
     content_replacement_state: crate::query::result_budget::ContentReplacementState,
     content_budget_skip_tool_use_ids: HashSet<String>,
+    stop_hook_active: bool,
 }
 
 impl QueryEngine {
@@ -92,6 +93,7 @@ impl QueryEngine {
             usage_anchor: None,
             content_replacement_state: Default::default(),
             content_budget_skip_tool_use_ids: HashSet::new(),
+            stop_hook_active: false,
         }
     }
 
@@ -843,6 +845,8 @@ impl QueryEngine {
             }
         }
 
+        let last_assistant_text = assistant_text_from_content(&assistant_content);
+
         // Add assistant message to history
         if !assistant_content.is_empty() {
             if let Some(mut message) = response_message {
@@ -881,6 +885,32 @@ impl QueryEngine {
                     self.handle_max_tokens(event_tx).await
                 }
                 _ => {
+                    let stop_hook = crate::hooks::fire_stop(
+                        last_assistant_text.as_deref(),
+                        self.stop_hook_active,
+                    )
+                    .await;
+                    if stop_hook.prevent_continuation {
+                        self.stop_hook_active = false;
+                        self.state = QueryState::Terminal {
+                            stop_reason: stop_reason.clone(),
+                            transition: TransitionReason::Completed,
+                        };
+                        let _ = event_tx
+                            .send(StreamEvent::Done {
+                                stop_reason: stop_reason.clone(),
+                            })
+                            .await;
+                        return Ok(TurnResult::Done(stop_reason));
+                    }
+                    if !stop_hook.blocking_messages.is_empty() {
+                        for message in stop_hook.blocking_messages {
+                            self.add_user_message(&message);
+                        }
+                        self.stop_hook_active = true;
+                        return Ok(TurnResult::Continue);
+                    }
+                    self.stop_hook_active = false;
                     self.state = QueryState::Terminal {
                         stop_reason: stop_reason.clone(),
                         transition: TransitionReason::Completed,
@@ -1189,6 +1219,28 @@ pub enum TurnResult {
     MaxTurns { max_turns: u32, turn_count: u32 },
     /// Tools need to be executed, then continue
     ToolUse(Vec<ToolUseInfo>),
+    /// Query should immediately continue with the updated history.
+    Continue,
     /// Max tokens recovery — caller should call run_turn again
     ContinueRecovery,
+}
+
+fn assistant_text_from_content(content: &[serde_json::Value]) -> Option<String> {
+    let text = content
+        .iter()
+        .filter_map(|block| {
+            if block.get("type").and_then(|ty| ty.as_str()) == Some("text") {
+                block.get("text").and_then(|text| text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }

@@ -71,6 +71,43 @@ pub async fn fire_stop_failure(reason: &str) -> Option<String> {
     Some(msg)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StopHookDecision {
+    pub blocking_messages: Vec<String>,
+    pub prevent_continuation: bool,
+    pub stop_reason: Option<String>,
+}
+
+/// Fire `Stop` hooks at the end of a normal assistant turn.
+///
+/// Mirrors the TS `handleStopHooks` query integration for the main-thread
+/// Stop event: blocking errors are formatted as model-visible user feedback,
+/// and preventContinuation stops the loop without adding another request.
+pub async fn fire_stop(
+    last_assistant_message: Option<&str>,
+    stop_hook_active: bool,
+) -> StopHookDecision {
+    let Some(runner) = get_global_runner() else {
+        return StopHookDecision::default();
+    };
+    let extra = serde_json::json!({
+        "stop_hook_active": stop_hook_active,
+        "last_assistant_message": last_assistant_message,
+    });
+    let result = runner
+        .run_hooks(&types::HookEvent::Stop, extra, None, None, None, None)
+        .await;
+    StopHookDecision {
+        blocking_messages: result
+            .blocking_errors
+            .iter()
+            .map(runner::get_stop_hook_message)
+            .collect(),
+        prevent_continuation: result.prevent_continuation,
+        stop_reason: result.stop_reason,
+    }
+}
+
 // Re-export the most commonly used types at the module level.
 pub use aggregation::aggregate_hook_results;
 pub use compact_hooks::{
