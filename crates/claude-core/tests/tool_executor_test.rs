@@ -1,7 +1,11 @@
 use claude_core::query::tool_executor::*;
 use claude_core::types::events::ToolResultData;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_call_fn() -> ToolCallFn {
     Arc::new(|name, id, _input, _cancel| {
@@ -186,4 +190,47 @@ async fn test_exclusive_tool_blocks_later_concurrent_tools() {
         .map(|result| result.id)
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["tu_read_1", "tu_bash", "tu_read_2"]);
+}
+
+#[tokio::test]
+async fn test_concurrent_tools_respect_ts_concurrency_cap() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    std::env::set_var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "2");
+    let started = Arc::new(AtomicUsize::new(0));
+    let started_for_tool = started.clone();
+    let call_fn: ToolCallFn = Arc::new(move |name, id, _input, _cancel| {
+        let started = started_for_tool.clone();
+        tokio::spawn(async move {
+            started.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            Ok(ToolResultData {
+                data: serde_json::json!({"tool": name, "id": id}),
+                is_error: false,
+            })
+        })
+    });
+
+    let cancel = CancellationToken::new();
+    let mut exec = StreamingToolExecutor::new(cancel, call_fn);
+    std::env::remove_var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY");
+
+    for id in ["tu_1", "tu_2", "tu_3"] {
+        exec.add_tool(PendingTool {
+            id: id.into(),
+            name: "Read".into(),
+            input: serde_json::json!({}),
+            is_concurrent: true,
+        });
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        2,
+        "TS caps concurrent tool-use batches using CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY"
+    );
+
+    let results = exec.flush().await;
+    assert_eq!(results.len(), 3);
+    assert_eq!(started.load(Ordering::SeqCst), 3);
 }

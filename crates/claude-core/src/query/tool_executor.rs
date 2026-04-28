@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::env;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -56,6 +57,7 @@ pub struct StreamingToolExecutor {
     next_yield_index: usize,
     running_concurrent_count: usize,
     running_exclusive: bool,
+    max_concurrent_tools: usize,
     tool_call_fn: ToolCallFn,
 }
 
@@ -71,6 +73,7 @@ impl StreamingToolExecutor {
             next_yield_index: 0,
             running_concurrent_count: 0,
             running_exclusive: false,
+            max_concurrent_tools: get_max_tool_use_concurrency(),
             tool_call_fn,
         }
     }
@@ -151,7 +154,9 @@ impl StreamingToolExecutor {
         if self.active.is_empty() {
             return true;
         }
-        is_concurrent && self.active.values().all(|active| *active)
+        is_concurrent
+            && self.active.values().all(|active| *active)
+            && self.running_concurrent_count < self.max_concurrent_tools
     }
 
     fn take_ordered_completed(&mut self) -> Vec<CompletedTool> {
@@ -186,4 +191,12 @@ impl StreamingToolExecutor {
             (index, is_concurrent, CompletedTool { id, name, result })
         });
     }
+}
+
+fn get_max_tool_use_concurrency() -> usize {
+    env::var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(10)
 }

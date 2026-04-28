@@ -221,7 +221,6 @@ Files:
   `src/query.ts`, `src/QueryEngine.ts`
 
 Needs work:
-- Track concurrent vs exclusive tool counts correctly.
 - Stream tool progress/results with TS-equivalent events.
 - Apply tool-result budget/truncation before adding results to history.
 - Dispatch PreToolUse/PostToolUse/PostToolUseFailure hooks.
@@ -229,7 +228,13 @@ Needs work:
   checks in individual tools.
 - Normalize/cancel tool results exactly like TS, including synthetic cancel
   messages and partial tool-use repair.
-- Add tests for mixed concurrent/exclusive scheduling.
+
+Improved:
+- Rust now reads `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` and caps concurrent
+  tool execution the same way TS `runToolsConcurrently(... all(...))` does,
+  defaulting to 10.
+- Existing executor tests cover mixed concurrent/exclusive scheduling and
+  ordered result yielding; a regression test now covers the TS concurrency cap.
 
 ### Query user context still needs lifecycle parity
 
