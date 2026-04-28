@@ -628,20 +628,14 @@ impl FileReadTool {
         let end = (start + limit).min(total_lines);
         let selected = &all_lines[start..end];
 
-        // Format in cat -n style: "{1-based-line-num}\t{content}"
         let start_line = start + 1; // convert to 1-based
-        let formatted = selected
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{}\t{}", start_line + i, line))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let selected_content = selected.join("\n");
 
         let result_data = json!({
             "type": "text",
             "file": {
                 "filePath": file_path,
-                "content": formatted,
+                "content": selected_content,
                 "numLines": selected.len(),
                 "startLine": start_line,
                 "totalLines": total_lines
@@ -1099,10 +1093,7 @@ mod tests {
         assert_eq!(result.data["file"]["numLines"], 4);
         assert_eq!(result.data["file"]["startLine"], 1);
         let content_out = result.data["file"]["content"].as_str().unwrap();
-        assert!(content_out.contains("1\tline one"));
-        assert!(content_out.contains("2\tline two"));
-        assert!(content_out.contains("3\tline three"));
-        assert!(content_out.ends_with("4\t"));
+        assert_eq!(content_out, content);
     }
 
     #[tokio::test]
@@ -1121,8 +1112,7 @@ mod tests {
         assert_eq!(result.data["file"]["numLines"], 2);
         assert_eq!(result.data["file"]["startLine"], 3); // 1-based: offset 2 -> line 3
         let content_out = result.data["file"]["content"].as_str().unwrap();
-        assert!(content_out.contains("3\tc\n"));
-        assert!(content_out.ends_with("4\td"));
+        assert_eq!(content_out, "c\nd");
     }
 
     #[tokio::test]

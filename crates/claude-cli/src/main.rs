@@ -517,6 +517,26 @@ mod tests {
     }
 
     #[test]
+    fn model_tool_result_matches_ts_read_line_number_mapping() {
+        assert_eq!(
+            format_tool_result_for_model(
+                "Read",
+                &serde_json::json!({
+                    "type": "text",
+                    "file": {
+                        "filePath": "/tmp/example.txt",
+                        "content": "alpha\nbeta\n",
+                        "startLine": 7,
+                        "numLines": 3,
+                        "totalLines": 3
+                    }
+                })
+            ),
+            "7\talpha\n8\tbeta\n9\t"
+        );
+    }
+
+    #[test]
     fn model_tool_result_matches_ts_edit_mapping() {
         assert_eq!(
             format_tool_result_for_model(
@@ -1597,6 +1617,19 @@ fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> St
     format_tool_result_string_for_model(tool_name, data)
 }
 
+fn add_line_numbers_ts(content: &str, start_line: usize) -> String {
+    if content.is_empty() {
+        return String::new();
+    }
+    content
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .enumerate()
+        .map(|(index, line)| format!("{}\t{}", start_line + index, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn format_tool_result_content_for_model(
     tool_name: &str,
     data: &serde_json::Value,
@@ -2333,12 +2366,14 @@ fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value
     }
 
     if data.get("type").and_then(|value| value.as_str()) == Some("text") {
-        if let Some(content) = data
-            .get("file")
-            .and_then(|file| file.get("content"))
-            .and_then(|content| content.as_str())
-        {
-            return content.to_string();
+        if let Some(file) = data.get("file") {
+            if let Some(content) = file.get("content").and_then(|content| content.as_str()) {
+                let start_line = file
+                    .get("startLine")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(1) as usize;
+                return add_line_numbers_ts(content, start_line);
+            }
         }
         if let Some(content) = data.get("content").and_then(|content| content.as_str()) {
             return content.to_string();
@@ -2726,17 +2761,24 @@ fn split_stream_json_assistant_message(
 
 fn stream_json_user_tool_result_event(
     tool_results: Vec<serde_json::Value>,
+    tool_use_results: Vec<serde_json::Value>,
     session_id: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut event = serde_json::json!({
         "type": "user",
         "message": {
             "role": "user",
             "content": tool_results,
         },
+        "parent_tool_use_id": serde_json::Value::Null,
         "session_id": session_id,
         "uuid": uuid::Uuid::new_v4().to_string(),
-    })
+        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    if tool_use_results.len() == 1 {
+        event["tool_use_result"] = tool_use_results.into_iter().next().unwrap();
+    }
+    event
 }
 
 #[derive(Default)]
@@ -3827,6 +3869,7 @@ async fn main() -> Result<()> {
                 TurnResult::ToolUse(tool_uses) => {
                     // Execute each tool, check permissions, feed results back
                     let mut stream_tool_results = Vec::new();
+                    let mut stream_tool_use_results = Vec::new();
                     for tool_info in &tool_uses {
                         let mut tool_input = tool_info.input.clone();
                         let mut forced_permission: Option<Result<(), String>> = None;
@@ -4298,6 +4341,7 @@ async fn main() -> Result<()> {
                                 "content": result_content.clone(),
                                 "is_error": is_error,
                             }));
+                            stream_tool_use_results.push(result_json.clone());
                         }
                         query_engine.add_tool_result_content_with_error_field(
                             &tool_info.id,
@@ -4314,6 +4358,7 @@ async fn main() -> Result<()> {
                     {
                         emit_stream_json(stream_json_user_tool_result_event(
                             stream_tool_results,
+                            stream_tool_use_results,
                             &session_id,
                         ));
                     }

@@ -60,6 +60,9 @@ Now matching:
   before the next API request rather than emitted as a separate user turn.
 - `Read` line-number output now preserves TS trailing-newline behavior
   (`content.split(/\r?\n/)`), including the final numbered blank line.
+- `Read` tool result metadata now keeps raw file content like TS
+  `FileReadTool`, and model-facing tool-result text is line-numbered only
+  when the CLI maps tool data into the next model request.
 - Installed CLI identity is synced to the current TS CLI version observed in
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content

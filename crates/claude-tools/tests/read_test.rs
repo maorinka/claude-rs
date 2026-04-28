@@ -41,13 +41,7 @@ async fn test_read_text_file() {
     assert_eq!(file["totalLines"], 4);
 
     let content = file["content"].as_str().unwrap();
-    assert!(
-        content.contains("1\talpha"),
-        "line 1 should have cat-n format"
-    );
-    assert!(content.contains("2\tbeta"));
-    assert!(content.contains("3\tgamma"));
-    assert!(content.ends_with("4\t"));
+    assert_eq!(content, "alpha\nbeta\ngamma\n");
 }
 
 #[tokio::test]
@@ -76,8 +70,8 @@ async fn test_read_with_offset_and_limit() {
 
     let content = file["content"].as_str().unwrap();
     // lines returned are "three" and "four" (1-based lines 3 and 4)
-    assert!(content.contains("3\tthree"), "should contain line 3: three");
-    assert!(content.contains("4\tfour"), "should contain line 4: four");
+    assert!(content.contains("three"), "should contain line 3: three");
+    assert!(content.contains("four"), "should contain line 4: four");
     assert!(!content.contains("one"), "should not contain line 1");
     assert!(!content.contains("five"), "should not contain line 5");
 }
