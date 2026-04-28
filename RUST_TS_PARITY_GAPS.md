@@ -177,10 +177,13 @@ Improved:
   resources stay inline, but blob contents are decoded, written to the
   session `tool-results` directory, and replaced with `blobSavedTo` plus the
   TS saved-binary message instead of sending base64 into model context.
+- `ListMcpResourcesTool` and `ReadMcpResourceTool` now use the TS explicit
+  missing-server error shape (`Server "..." not found. Available servers: ...`)
+  instead of silently returning an empty resource list or a Rust manager error.
 
 Still needs work:
 - Verify pagination/cursors if applicable, resource templates, and
-  server-not-found error text against TS.
+  connected-but-resource-unsupported error text against TS.
 - Add integration tests with a real or fake MCP server exposing resources.
 
 ### Tool executor is simplified

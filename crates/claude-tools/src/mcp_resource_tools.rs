@@ -202,6 +202,22 @@ impl ToolExecutor for ListMcpResourcesTool {
 
         if let Some(manager) = &self.manager {
             let manager = manager.read().await;
+            if let Some(server) = server {
+                if !manager.is_connected(server).await {
+                    let mut available = manager.connected_server_names().await;
+                    available.sort();
+                    return Ok(ToolResultData {
+                        data: json!({
+                            "error": format!(
+                                "Server \"{}\" not found. Available servers: {}",
+                                server,
+                                available.join(", ")
+                            )
+                        }),
+                        is_error: true,
+                    });
+                }
+            }
             let mut resources = manager.list_resources().await?;
             if let Some(server) = server {
                 resources.retain(|resource| resource.server == server);
@@ -304,6 +320,20 @@ Parameters:
 
         if let Some(manager) = &self.manager {
             let manager = manager.read().await;
+            if !manager.is_connected(server).await {
+                let mut available = manager.connected_server_names().await;
+                available.sort();
+                return Ok(ToolResultData {
+                    data: json!({
+                        "error": format!(
+                            "Server \"{}\" not found. Available servers: {}",
+                            server,
+                            available.join(", ")
+                        )
+                    }),
+                    is_error: true,
+                });
+            }
             return match manager.read_resource(server, uri).await {
                 Ok(data) => {
                     let data = normalize_read_resource_result(data, server, ctx).await;
@@ -465,6 +495,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manager_backed_list_missing_server_matches_ts_error() {
+        let manager = Arc::new(RwLock::new(McpManager::new()));
+        let tool = ListMcpResourcesTool::new(manager);
+        let input = json!({ "server": "missing" });
+        let ctx = make_ctx();
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(result.is_error);
+        assert_eq!(
+            result.data["error"],
+            "Server \"missing\" not found. Available servers: "
+        );
+    }
+
+    #[tokio::test]
     async fn manager_backed_read_reports_manager_error() {
         let manager = Arc::new(RwLock::new(McpManager::new()));
         let tool = ReadMcpResourceTool::new(manager);
@@ -474,9 +520,9 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(result.is_error);
-        assert!(result.data["error"]
-            .as_str()
-            .unwrap()
-            .contains("MCP server 'missing' is not connected"));
+        assert_eq!(
+            result.data["error"],
+            "Server \"missing\" not found. Available servers: "
+        );
     }
 }
