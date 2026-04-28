@@ -54,7 +54,7 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
 
-    /// Thinking effort level (`low`, `medium`, `high`, `xhigh`, `max`, `auto`).
+    /// Thinking effort level (`low`, `medium`, `high`, `max`, `auto`).
     #[serde(rename = "effortLevel", skip_serializing_if = "Option::is_none")]
     pub effort_level: Option<String>,
 

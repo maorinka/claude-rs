@@ -251,6 +251,8 @@ Improved:
 - Rust effort handling now follows TS levels (`low`, `medium`, `high`,
   `max`), no longer accepts/sends stale `xhigh`, and downgrades `max` to
   `high` unless the model supports max effort.
+- The `/effort` command and settings comments now expose the same supported
+  effort set, so `xhigh` is rejected before it can become an API 400.
 
 ### Query user context still needs lifecycle parity
 
