@@ -2,8 +2,9 @@
 //!
 //! Mirrors the hot path of TS `utils/toolResultStorage.ts`: large textual tool
 //! results are written under the session's `tool-results` directory and the
-//! model receives a tagged preview pointing at the file. The TS aggregate
-//! per-message replacement state is separate and still needs transcript wiring.
+//! model receives a tagged preview pointing at the file. The aggregate
+//! per-message replacement state is kept in memory like TS, but transcript
+//! serialization for resume still depends on the session log layer.
 
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

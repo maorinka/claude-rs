@@ -225,7 +225,6 @@ Files:
 
 Needs work:
 - Stream tool progress/results with TS-equivalent events.
-- Apply tool-result budget/truncation before adding results to history.
 - Dispatch PreToolUse/PostToolUse/PostToolUseFailure hooks.
 - Run permission request flow from the executor rather than relying on thin
   checks in individual tools.
@@ -248,11 +247,22 @@ Improved:
   `claude-core::tool_result_format`; the interactive TUI uses the same
   TS-style content mapping as print mode instead of sending raw JSON/stringified
   tool data back to the model.
+- Rust now persists oversized textual tool results to the session
+  `tool-results` directory and returns the TS `<persisted-output>` preview
+  message instead of truncating inline content.
+- Rust now enforces the TS aggregate per-message tool-result budget with
+  in-memory seen/replacement state, including byte-identical replacement
+  reapplication and infinite-cap tool opt-outs.
 - Rust effort handling now follows TS levels (`low`, `medium`, `high`,
   `max`), no longer accepts/sends stale `xhigh`, and downgrades `max` to
   `high` unless the model supports max effort.
 - The `/effort` command and settings comments now expose the same supported
   effort set, so `xhigh` is rejected before it can become an API 400.
+
+Remaining result-budget work:
+- Serialize content-replacement records into the transcript and reconstruct
+  them on resume/fork once the Rust session log layer owns live transcript
+  writes, matching TS `ContentReplacementEntry`.
 
 ### Query user context still needs lifecycle parity
 
