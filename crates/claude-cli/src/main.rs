@@ -1111,6 +1111,34 @@ fn stream_json_skill_names(
     names
 }
 
+fn skills_reminder_block(skills: &[claude_core::plugins::types::Skill]) -> String {
+    let mut skills_text = String::from(
+        "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n",
+    );
+    for skill in skills {
+        skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
+        if let Some(ref hint) = skill.when_to_use {
+            skills_text.push_str(&format!(" (use when: {})", hint));
+        }
+        skills_text.push('\n');
+    }
+    skills_text.push_str("</system-reminder>\n");
+    skills_text
+}
+
+fn dynamic_skill_file_paths(tool_name: &str, input: &serde_json::Value) -> Vec<std::path::PathBuf> {
+    let key = match tool_name {
+        "Read" | "Edit" | "Write" => "file_path",
+        _ => return Vec::new(),
+    };
+    input
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(std::path::PathBuf::from)
+        .into_iter()
+        .collect()
+}
+
 fn stream_json_registered_skill_names(
     registered_skills: &[claude_tools::skill_tool::SkillEntry],
 ) -> Vec<String> {
@@ -3285,6 +3313,7 @@ async fn main() -> Result<()> {
                 source: claude_core::plugins::types::SkillSource::Builtin,
                 argument_hint: None,
                 when_to_use: None,
+                paths: Vec::new(),
                 allowed_tools: Vec::new(),
                 user_invocable: skill.user_invocable,
                 disable_model_invocation: skill.disable_model_invocation,
@@ -3313,6 +3342,7 @@ async fn main() -> Result<()> {
                 source: claude_core::plugins::types::SkillSource::Builtin,
                 argument_hint: None,
                 when_to_use: None,
+                paths: Vec::new(),
                 allowed_tools: Vec::new(),
                 user_invocable: skill.user_invocable,
                 disable_model_invocation: skill.disable_model_invocation,
@@ -3322,6 +3352,9 @@ async fn main() -> Result<()> {
     }
     if !skills.is_empty() {
         tracing::info!(count = skills.len(), "Discovered skills");
+    }
+    for skill in &skills {
+        claude_tools::skill_tool::register_discovered_skill(skill);
     }
 
     let configured_model = match cli.model.or_else(|| settings.model.clone()) {
@@ -3552,18 +3585,7 @@ async fn main() -> Result<()> {
 
     // Add skill descriptions as request-time user context, matching TS.
     if !skills.is_empty() {
-        let mut skills_text = String::from(
-            "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n",
-        );
-        for skill in &skills {
-            skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
-            if let Some(ref hint) = skill.when_to_use {
-                skills_text.push_str(&format!(" (use when: {})", hint));
-            }
-            skills_text.push('\n');
-        }
-        skills_text.push_str("</system-reminder>\n");
-        query_engine.append_user_context_block(skills_text);
+        query_engine.append_user_context_block(skills_reminder_block(&skills));
     }
 
     if let Some(context) =
@@ -4168,6 +4190,49 @@ async fn main() -> Result<()> {
                                         "PostToolUse hook stopped continuation".to_string()
                                     });
                                     is_error = true;
+                                }
+                            }
+                        }
+
+                        if !is_error {
+                            let touched_paths =
+                                dynamic_skill_file_paths(&tool_info.name, &tool_input);
+                            if !touched_paths.is_empty() {
+                                let skill_dirs =
+                                    claude_core::plugins::skill::discover_skill_dirs_for_paths(
+                                        &touched_paths,
+                                        &cwd,
+                                    );
+                                let mut newly_available =
+                                    claude_core::plugins::skill::add_skill_directories(&skill_dirs);
+                                newly_available.extend(
+                                    claude_core::plugins::skill::activate_conditional_skills_for_paths(
+                                        &touched_paths,
+                                        &cwd,
+                                    ),
+                                );
+                                if !newly_available.is_empty() {
+                                    let mut seen = skills
+                                        .iter()
+                                        .map(|skill| skill.name.clone())
+                                        .collect::<std::collections::HashSet<_>>();
+                                    let mut unique_new = Vec::new();
+                                    for skill in newly_available {
+                                        if !skill.disable_model_invocation
+                                            && seen.insert(skill.name.clone())
+                                        {
+                                            claude_tools::skill_tool::register_discovered_skill(
+                                                &skill,
+                                            );
+                                            unique_new.push(skill.clone());
+                                            skills.push(skill);
+                                        }
+                                    }
+                                    if !unique_new.is_empty() {
+                                        query_engine.append_user_context_block(
+                                            skills_reminder_block(&unique_new),
+                                        );
+                                    }
                                 }
                             }
                         }

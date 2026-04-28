@@ -44,6 +44,11 @@ pub struct Skill {
     /// automatically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
+    /// Optional cwd-relative path patterns that gate when this skill becomes
+    /// available. TS stores these skills and activates them after matching file
+    /// operations instead of listing them at startup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
     /// Optional list of tool names this skill is allowed to use.
     #[serde(default)]
     pub allowed_tools: Vec<String>,

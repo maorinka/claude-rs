@@ -1,8 +1,23 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::config::paths::claude_dir;
 use crate::plugins::types::{Skill, SkillSource};
+use once_cell::sync::Lazy;
+
+#[derive(Default)]
+struct DynamicSkillState {
+    checked_skill_dirs: HashSet<PathBuf>,
+    dynamic_skills: HashMap<String, Skill>,
+    dynamic_order: Vec<String>,
+    conditional_skills: HashMap<String, Skill>,
+    conditional_order: Vec<String>,
+    activated_conditional_names: HashSet<String>,
+}
+
+static DYNAMIC_SKILL_STATE: Lazy<Mutex<DynamicSkillState>> =
+    Lazy::new(|| Mutex::new(DynamicSkillState::default()));
 
 /// YAML frontmatter fields recognised in skill markdown files.
 ///
@@ -392,6 +407,219 @@ fn is_env_truthy(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn is_conditional_skill_activated(name: &str) -> bool {
+    DYNAMIC_SKILL_STATE
+        .lock()
+        .unwrap()
+        .activated_conditional_names
+        .contains(name)
+}
+
+fn record_conditional_skill(skill: Skill) {
+    let mut state = DYNAMIC_SKILL_STATE.lock().unwrap();
+    if state.activated_conditional_names.contains(&skill.name) {
+        return;
+    }
+    if !state.conditional_skills.contains_key(&skill.name) {
+        state.conditional_order.push(skill.name.clone());
+    }
+    state.conditional_skills.insert(skill.name.clone(), skill);
+}
+
+fn record_dynamic_skill(state: &mut DynamicSkillState, skill: Skill) {
+    if !state.dynamic_skills.contains_key(&skill.name) {
+        state.dynamic_order.push(skill.name.clone());
+    }
+    state.dynamic_skills.insert(skill.name.clone(), skill);
+}
+
+/// Gets all dynamically discovered or activated skills for this process.
+pub fn get_dynamic_skills() -> Vec<Skill> {
+    let state = DYNAMIC_SKILL_STATE.lock().unwrap();
+    state
+        .dynamic_order
+        .iter()
+        .filter_map(|name| state.dynamic_skills.get(name).cloned())
+        .collect()
+}
+
+/// Gets the number of pending conditional skills.
+pub fn get_conditional_skill_count() -> usize {
+    DYNAMIC_SKILL_STATE.lock().unwrap().conditional_skills.len()
+}
+
+/// Clears dynamic skill state. Intended for tests and `/clear caches` parity.
+pub fn clear_dynamic_skills() {
+    let mut state = DYNAMIC_SKILL_STATE.lock().unwrap();
+    state.checked_skill_dirs.clear();
+    state.dynamic_skills.clear();
+    state.dynamic_order.clear();
+    state.conditional_skills.clear();
+    state.conditional_order.clear();
+    state.activated_conditional_names.clear();
+}
+
+/// Discover nested `.claude/skills` directories by walking from touched file
+/// paths up to, but not including, cwd. Mirrors TS `discoverSkillDirsForPaths`.
+pub fn discover_skill_dirs_for_paths(file_paths: &[PathBuf], cwd: &Path) -> Vec<PathBuf> {
+    let resolved_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut new_dirs = Vec::new();
+    let mut state = DYNAMIC_SKILL_STATE.lock().unwrap();
+
+    for file_path in file_paths {
+        let absolute = if file_path.is_absolute() {
+            file_path.clone()
+        } else {
+            resolved_cwd.join(file_path)
+        };
+        let Some(mut current_dir) = absolute.parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        current_dir = current_dir.canonicalize().unwrap_or(current_dir);
+
+        while current_dir.starts_with(&resolved_cwd) && current_dir != resolved_cwd {
+            let skill_dir = current_dir.join(".claude").join("skills");
+            if state.checked_skill_dirs.insert(skill_dir.clone())
+                && skill_dir.is_dir()
+                && !is_path_gitignored(&current_dir, &resolved_cwd)
+            {
+                new_dirs.push(skill_dir);
+            }
+
+            let Some(parent) = current_dir.parent() else {
+                break;
+            };
+            if parent == current_dir {
+                break;
+            }
+            current_dir = parent.to_path_buf();
+        }
+    }
+
+    new_dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
+    new_dirs
+}
+
+fn is_path_gitignored(path: &Path, cwd: &Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .arg("check-ignore")
+        .arg("-q")
+        .arg("--")
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// Load newly discovered nested skill directories into the dynamic skill map.
+/// The input should be sorted deepest first; processing is reversed so deeper
+/// dirs override shallower ones, matching TS `addSkillDirectories`.
+pub fn add_skill_directories(dirs: &[PathBuf]) -> Vec<Skill> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut loaded_by_dir: Vec<Vec<Skill>> = Vec::new();
+    for dir in dirs {
+        let source = SkillSource::Directory(dir.clone());
+        loaded_by_dir.push(load_skills_from_dynamic_dir(dir, &source));
+    }
+
+    let mut added = Vec::new();
+    let mut state = DYNAMIC_SKILL_STATE.lock().unwrap();
+    for skills in loaded_by_dir.into_iter().rev() {
+        for skill in skills {
+            let is_new = !state.dynamic_skills.contains_key(&skill.name);
+            record_dynamic_skill(&mut state, skill.clone());
+            if is_new {
+                added.push(skill);
+            }
+        }
+    }
+    added
+}
+
+/// Activate pending conditional skills whose `paths` frontmatter matches any
+/// touched file path relative to cwd.
+pub fn activate_conditional_skills_for_paths(file_paths: &[PathBuf], cwd: &Path) -> Vec<Skill> {
+    let mut state = DYNAMIC_SKILL_STATE.lock().unwrap();
+    if state.conditional_skills.is_empty() {
+        return Vec::new();
+    }
+
+    let relative_paths: Vec<String> = file_paths
+        .iter()
+        .filter_map(|path| cwd_relative_path(path, cwd))
+        .collect();
+    if relative_paths.is_empty() {
+        return Vec::new();
+    }
+
+    let mut activated = Vec::new();
+    for name in state.conditional_order.clone() {
+        let Some(skill) = state.conditional_skills.get(&name).cloned() else {
+            continue;
+        };
+        if skill.paths.iter().any(|pattern| {
+            relative_paths
+                .iter()
+                .any(|path| skill_path_matches(pattern, path))
+        }) {
+            state.conditional_skills.remove(&name);
+            state.activated_conditional_names.insert(name.clone());
+            record_dynamic_skill(&mut state, skill.clone());
+            activated.push(skill);
+        }
+    }
+    let remaining = state
+        .conditional_skills
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    state
+        .conditional_order
+        .retain(|name| remaining.contains(name));
+    activated
+}
+
+fn cwd_relative_path(path: &Path, cwd: &Path) -> Option<String> {
+    let relative = if path.is_absolute() {
+        path.strip_prefix(cwd).ok()?.to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+    if relative.as_os_str().is_empty() || relative.is_absolute() {
+        return None;
+    }
+    let text = relative.to_string_lossy().replace('\\', "/");
+    if text == ".." || text.starts_with("../") {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn skill_path_matches(pattern: &str, relative_path: &str) -> bool {
+    let pattern = pattern.trim().trim_start_matches("./");
+    if pattern.is_empty() {
+        return false;
+    }
+    let path = relative_path.trim_start_matches("./");
+    if pattern == path || path.starts_with(&format!("{pattern}/")) {
+        return true;
+    }
+    glob::Pattern::new(pattern)
+        .map(|glob| glob.matches(path))
+        .unwrap_or(false)
+        || glob::Pattern::new(&format!("{pattern}/**"))
+            .map(|glob| glob.matches(path))
+            .unwrap_or(false)
+}
+
 fn load_legacy_command_skill_sources(
     project_root: &Path,
     additional_dirs: &[PathBuf],
@@ -449,7 +677,9 @@ fn read_legacy_command_job(job: PluginReadJob, source: &SkillSource) -> Option<S
             let content = std::fs::read_to_string(&skill_file).ok()?;
             let local_name = plugin_command_local_name(&skill_file, path.parent()?)?;
             let parsed = parse_skill_file(&content);
-            if is_conditional_skill(&parsed) {
+            if is_conditional_skill(&parsed) && !is_conditional_skill_activated(&local_name) {
+                let skill = skill_from_parsed(local_name, parsed, source, "Skill");
+                record_conditional_skill(skill);
                 return None;
             }
             Some(skill_from_parsed(
@@ -1263,6 +1493,7 @@ fn plugin_skill_from_parsed(
         source: source.clone(),
         argument_hint: parsed.frontmatter.argument_hint,
         when_to_use: parsed.frontmatter.when_to_use,
+        paths: parsed.frontmatter.paths,
         allowed_tools: parsed.frontmatter.allowed_tools,
         user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
         disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
@@ -1285,6 +1516,7 @@ fn skill_from_parsed(
         source: source.clone(),
         argument_hint: parsed.frontmatter.argument_hint,
         when_to_use: parsed.frontmatter.when_to_use,
+        paths: parsed.frontmatter.paths,
         allowed_tools: parsed.frontmatter.allowed_tools,
         user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
         disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
@@ -1323,6 +1555,7 @@ fn skill_from_skill_dir_parsed(
         source: source.clone(),
         argument_hint: parsed.frontmatter.argument_hint,
         when_to_use: parsed.frontmatter.when_to_use,
+        paths: parsed.frontmatter.paths,
         allowed_tools: parsed.frontmatter.allowed_tools,
         user_invocable: parsed.frontmatter.user_invocable.unwrap_or(true),
         disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
@@ -1369,17 +1602,57 @@ fn load_skills_from_dir(
         };
 
         let parsed = parse_skill_file(&content);
-        if is_conditional_skill(&parsed) {
-            continue;
-        }
         let name = parsed
             .frontmatter
             .name
             .clone()
             .unwrap_or_else(|| dir_name.clone());
 
+        if is_conditional_skill(&parsed) && !is_conditional_skill_activated(&name) {
+            record_conditional_skill(skill_from_skill_dir_parsed(name, parsed, source));
+            continue;
+        }
+
         skills.push(skill_from_skill_dir_parsed(name, parsed, source));
     }
+}
+
+fn load_skills_from_dynamic_dir(base_dir: &Path, source: &SkillSource) -> Vec<Skill> {
+    let Some(entries) = read_dir_paths(base_dir) else {
+        return Vec::new();
+    };
+    let mut state = SkillLoadState::default();
+    let mut skills = Vec::new();
+
+    for path in entries {
+        if !path.is_dir() {
+            continue;
+        }
+
+        let skill_file = path.join("SKILL.md");
+        let content = match std::fs::read_to_string(&skill_file) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !state.should_load_file(&skill_file) {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        let parsed = parse_skill_file(&content);
+        let name = parsed
+            .frontmatter
+            .name
+            .clone()
+            .unwrap_or_else(|| dir_name.clone());
+        skills.push(skill_from_skill_dir_parsed(name, parsed, source));
+    }
+
+    skills
 }
 
 /// Check whether user input matches a skill's trigger criteria.
@@ -1679,10 +1952,11 @@ Do the thing.
 
     #[test]
     fn conditional_path_skills_are_not_initially_loaded_like_ts() {
+        clear_dynamic_skills();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("skills");
         let unconditional = root.join("always");
-        let conditional = root.join("only-rust");
+        let conditional = root.join("only-rust-initial");
         std::fs::create_dir_all(&unconditional).unwrap();
         std::fs::create_dir_all(&conditional).unwrap();
         std::fs::write(
@@ -1701,7 +1975,155 @@ Do the thing.
         load_skills_from_dir(&root, &SkillSource::Builtin, &mut skills, &mut state);
 
         assert!(skills.iter().any(|skill| skill.name == "always"));
-        assert!(!skills.iter().any(|skill| skill.name == "only-rust"));
+        assert!(!skills.iter().any(|skill| skill.name == "only-rust-initial"));
+        assert_eq!(get_conditional_skill_count(), 1);
+        clear_dynamic_skills();
+    }
+
+    #[test]
+    fn conditional_path_skills_activate_once_for_matching_paths_like_ts() {
+        clear_dynamic_skills();
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        let root = project.join(".claude").join("skills");
+        let conditional = root.join("only-rust");
+        std::fs::create_dir_all(&conditional).unwrap();
+        std::fs::write(
+            conditional.join("SKILL.md"),
+            "---\ndescription: Rust only\npaths:\n  - src/**\n---\nconditional",
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        let mut state = SkillLoadState::default();
+        load_skills_from_dir(
+            &root,
+            &SkillSource::Directory(root.clone()),
+            &mut skills,
+            &mut state,
+        );
+
+        assert!(skills.is_empty());
+        assert_eq!(get_conditional_skill_count(), 1);
+
+        let activated =
+            activate_conditional_skills_for_paths(&[project.join("src/lib.rs")], project);
+        assert_eq!(
+            activated
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["only-rust"]
+        );
+        assert_eq!(get_conditional_skill_count(), 0);
+        assert_eq!(get_dynamic_skills().len(), 1);
+
+        let second = activate_conditional_skills_for_paths(&[project.join("src/main.rs")], project);
+        assert!(second.is_empty());
+        clear_dynamic_skills();
+    }
+
+    #[test]
+    fn conditional_path_skills_ignore_paths_outside_cwd_like_ts() {
+        clear_dynamic_skills();
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let outside = tmp.path().join("outside.rs");
+        let root = project.join(".claude").join("skills");
+        let conditional = root.join("only-rust");
+        std::fs::create_dir_all(&conditional).unwrap();
+        std::fs::write(&outside, "").unwrap();
+        std::fs::write(
+            conditional.join("SKILL.md"),
+            "---\ndescription: Rust only\npaths: src/**\n---\nconditional",
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        let mut state = SkillLoadState::default();
+        load_skills_from_dir(
+            &root,
+            &SkillSource::Directory(root.clone()),
+            &mut skills,
+            &mut state,
+        );
+
+        let activated = activate_conditional_skills_for_paths(&[outside], &project);
+        assert!(activated.is_empty());
+        assert_eq!(get_conditional_skill_count(), 1);
+        clear_dynamic_skills();
+    }
+
+    #[test]
+    fn nested_dynamic_skill_dirs_load_deepest_first_like_ts() {
+        clear_dynamic_skills();
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        let deep = project.join("src").join("feature");
+        let shallow_skill = project
+            .join("src")
+            .join(".claude")
+            .join("skills")
+            .join("helper");
+        let deep_skill = deep.join(".claude").join("skills").join("helper");
+        std::fs::create_dir_all(&shallow_skill).unwrap();
+        std::fs::create_dir_all(&deep_skill).unwrap();
+        std::fs::write(
+            shallow_skill.join("SKILL.md"),
+            "---\ndescription: Shallow\n---\nshallow",
+        )
+        .unwrap();
+        std::fs::write(
+            deep_skill.join("SKILL.md"),
+            "---\ndescription: Deep\n---\ndeep",
+        )
+        .unwrap();
+
+        let dirs = discover_skill_dirs_for_paths(&[deep.join("mod.rs")], project);
+        assert_eq!(
+            dirs,
+            vec![
+                canonical_file_id(&deep).join(".claude").join("skills"),
+                canonical_file_id(&project.join("src"))
+                    .join(".claude")
+                    .join("skills")
+            ]
+        );
+
+        let added = add_skill_directories(&dirs);
+        assert_eq!(added.len(), 1);
+        let dynamic = get_dynamic_skills();
+        assert_eq!(dynamic.len(), 1);
+        assert_eq!(dynamic[0].name, "helper");
+        assert_eq!(dynamic[0].description, "Deep");
+        clear_dynamic_skills();
+    }
+
+    #[test]
+    fn nested_dynamic_skill_dirs_skip_gitignored_containing_dirs_like_ts() {
+        clear_dynamic_skills();
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        let _ = std::process::Command::new("git")
+            .arg("init")
+            .arg(project)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        std::fs::write(project.join(".gitignore"), "ignored/\n").unwrap();
+        let ignored = project.join("ignored");
+        let ignored_skill = ignored.join(".claude").join("skills").join("hidden");
+        std::fs::create_dir_all(&ignored_skill).unwrap();
+        std::fs::write(
+            ignored_skill.join("SKILL.md"),
+            "---\ndescription: Hidden\n---\nhidden",
+        )
+        .unwrap();
+
+        let dirs = discover_skill_dirs_for_paths(&[ignored.join("file.rs")], project);
+        assert!(dirs.is_empty());
+        clear_dynamic_skills();
     }
 
     #[test]
@@ -1896,6 +2318,7 @@ Do the thing.
             source: SkillSource::Builtin,
             argument_hint: None,
             when_to_use: None,
+            paths: Vec::new(),
             allowed_tools: vec![],
             user_invocable: true,
             disable_model_invocation: false,
@@ -1917,6 +2340,7 @@ Do the thing.
             source: SkillSource::Builtin,
             argument_hint: None,
             when_to_use: Some("When the user wants to commit".to_string()),
+            paths: Vec::new(),
             allowed_tools: vec![],
             user_invocable: true,
             disable_model_invocation: false,

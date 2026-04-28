@@ -197,6 +197,7 @@ fn test_skill(name: &str, when_to_use: Option<&str>) -> Skill {
         source: SkillSource::Builtin,
         argument_hint: None,
         when_to_use: when_to_use.map(String::from),
+        paths: Vec::new(),
         allowed_tools: vec![],
         user_invocable: true,
         disable_model_invocation: false,

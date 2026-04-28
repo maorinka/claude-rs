@@ -169,6 +169,19 @@ pub fn register_user_only_skill(
     );
 }
 
+pub fn register_discovered_skill(skill: &claude_core::plugins::types::Skill) {
+    register_skill_full_with_phase(
+        &skill.name,
+        &skill.description,
+        &skill.content,
+        None,
+        None,
+        SkillPromptPhase::Runtime,
+        skill.user_invocable,
+        skill.disable_model_invocation,
+    );
+}
+
 fn register_skill_full_with_phase(
     name: &str,
     description: &str,
