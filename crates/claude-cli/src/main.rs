@@ -4331,12 +4331,7 @@ async fn main() -> Result<()> {
                     match &output_format {
                         OutputFormat::Text => match ev {
                             StreamEvent::TextDelta { text } => {
-                                print!("{}", text);
-                                use std::io::Write;
-                                let _ = std::io::stdout().flush();
-                            }
-                            StreamEvent::Done { .. } => {
-                                println!();
+                                state.text.push_str(&text);
                             }
                             _ => {}
                         },
@@ -5002,8 +4997,17 @@ async fn main() -> Result<()> {
                     ));
                 }
             }
-        } else if let PrintTerminalOutcome::MaxTurns { max_turns, .. } = terminal_outcome {
-            eprintln!("Error: Reached max turns ({max_turns})");
+        } else {
+            match terminal_outcome {
+                PrintTerminalOutcome::Completed { .. } => {
+                    if !final_text.is_empty() {
+                        println!("{final_text}");
+                    }
+                }
+                PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
+                    println!("Error: Reached max turns ({max_turns})");
+                }
+            }
         }
 
         // Gracefully disconnect MCP servers

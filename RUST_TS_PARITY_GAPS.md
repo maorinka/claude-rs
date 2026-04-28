@@ -82,6 +82,10 @@ Now matching:
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content
   block like TS, instead of emitting one combined thinking+tool_use message.
+- Text `--print` mode now buffers assistant text and prints only successful
+  final output like TS, so `--max-turns` errors do not leak partial assistant
+  text before `Error: Reached max turns (...)`; the text-mode max-turns error
+  is emitted on stdout like TS `claude -p`.
 - `remote-control` / `rc` is now hidden from root help like the TS Commander
   registration, accepts the installed TS bridge flags (`--name`,
   `--remote-control-session-name-prefix`, `--permission-mode`, `--debug-file`,
