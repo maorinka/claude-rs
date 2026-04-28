@@ -122,6 +122,12 @@ pub struct ToolUseContextOptions {
         skip_serializing_if = "Option::is_none"
     )]
     pub query_source: Option<String>,
+
+    /// Runtime session id. TS reads this from bootstrap state for helpers
+    /// like tool-result storage; Rust keeps it here so tools can construct
+    /// the same session-scoped paths without global UI state.
+    #[serde(rename = "sessionId", default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 impl ToolUseContextOptions {
@@ -143,6 +149,7 @@ impl ToolUseContextOptions {
             custom_system_prompt: None,
             append_system_prompt: None,
             query_source: None,
+            session_id: None,
         }
     }
 }
@@ -178,6 +185,7 @@ mod tests {
             custom_system_prompt: Some("custom".into()),
             append_system_prompt: None,
             query_source: Some("repl_main_thread".into()),
+            session_id: Some("session-1".into()),
         };
         let v = serde_json::to_value(&opts).unwrap();
         for k in [
@@ -194,6 +202,7 @@ mod tests {
             "maxBudgetUsd",
             "customSystemPrompt",
             "querySource",
+            "sessionId",
         ] {
             assert!(v.get(k).is_some(), "missing key: {k}");
         }
@@ -215,12 +224,14 @@ mod tests {
             "isNonInteractiveSession": true,
             "agentDefinitions": null,
             "customSystemPrompt": "override",
-            "appendSystemPrompt": "extra"
+            "appendSystemPrompt": "extra",
+            "sessionId": "session-2"
         });
         let opts: ToolUseContextOptions = serde_json::from_value(wire).unwrap();
         assert_eq!(opts.main_loop_model, "claude-opus-4-7");
         assert_eq!(opts.custom_system_prompt.as_deref(), Some("override"));
         assert_eq!(opts.append_system_prompt.as_deref(), Some("extra"));
+        assert_eq!(opts.session_id.as_deref(), Some("session-2"));
     }
 
     #[test]
@@ -254,6 +265,7 @@ mod tests {
         assert!(obj.get("customSystemPrompt").is_none());
         assert!(obj.get("appendSystemPrompt").is_none());
         assert!(obj.get("querySource").is_none());
+        assert!(obj.get("sessionId").is_none());
     }
 
     #[test]

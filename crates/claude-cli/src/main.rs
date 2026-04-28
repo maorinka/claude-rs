@@ -4070,10 +4070,16 @@ async fn main() -> Result<()> {
                                                         cwd.clone(),
                                                         read_file_state.clone(),
                                                         permission_mode.clone(),
+                                                        std::sync::Arc::new({
+                                                            let mut options =
+                                                                claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                            options.session_id =
+                                                                Some(api_session_id.clone());
+                                                            options
+                                                        }),
                                                         std::sync::Arc::new(
-                                                            claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model),
+                                                            claude_core::tool_host::NullToolHost,
                                                         ),
-                                                        std::sync::Arc::new(claude_core::tool_host::NullToolHost),
                                                     );
                                                     match exec
                                                         .call(
@@ -4191,10 +4197,15 @@ async fn main() -> Result<()> {
                                             cwd.clone(),
                                             read_file_state.clone(),
                                             permission_mode.clone(),
+                                            std::sync::Arc::new({
+                                                let mut options =
+                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                options.session_id = Some(api_session_id.clone());
+                                                options
+                                            }),
                                             std::sync::Arc::new(
-                                                claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model),
+                                                claude_core::tool_host::NullToolHost,
                                             ),
-                                            std::sync::Arc::new(claude_core::tool_host::NullToolHost),
                                         );
                                         match exec
                                             .call(&tool_input, &ctx, cancel.clone(), None)

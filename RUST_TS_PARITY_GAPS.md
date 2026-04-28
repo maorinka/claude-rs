@@ -173,11 +173,14 @@ Improved:
 - `ListMcpResourcesTool` now follows the TS output contract for tool data:
   an array of resources with `mimeType` casing, plus the TS empty-list
   tool-result text when mapped back into model context.
+- `ReadMcpResourceTool` now follows TS binary-resource handling: text
+  resources stay inline, but blob contents are decoded, written to the
+  session `tool-results` directory, and replaced with `blobSavedTo` plus the
+  TS saved-binary message instead of sending base64 into model context.
 
 Still needs work:
 - Verify pagination/cursors if applicable, resource templates, and
   server-not-found error text against TS.
-- Include MCP resource output in the same result shape the model expects.
 - Add integration tests with a real or fake MCP server exposing resources.
 
 ### Tool executor is simplified

@@ -1,6 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -9,6 +11,8 @@ use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::mcp::manager::McpManager;
 use claude_core::types::events::ToolResultData;
 
+const TOOL_RESULTS_SUBDIR: &str = "tool-results";
+
 // ─── ListMcpResourcesTool ────────────────────────────────────────────────────
 
 /// Verbatim port of TS ListMcpResourcesTool/prompt.ts `PROMPT`
@@ -16,6 +20,133 @@ use claude_core::types::events::ToolResultData;
 /// `DESCRIPTION` which is the short blurb). Rust port surfaces
 /// the detailed variant to the model.
 pub const LIST_MCP_RESOURCES_PROMPT: &str = include_str!("prompts/list_mcp_resources.md");
+
+fn sanitize_session_path(name: &str) -> String {
+    name.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn tool_results_dir(ctx: &ToolUseContext) -> Result<PathBuf> {
+    let session_id = ctx
+        .options
+        .session_id
+        .as_deref()
+        .unwrap_or_else(|| claude_core::api::client::get_session_id().as_str());
+    let home = dirs::home_dir().context("could not determine home directory")?;
+    Ok(home
+        .join(".claude")
+        .join("projects")
+        .join(sanitize_session_path(
+            &ctx.working_directory.display().to_string(),
+        ))
+        .join(session_id)
+        .join(TOOL_RESULTS_SUBDIR))
+}
+
+async fn persist_binary_content(
+    bytes: &[u8],
+    mime_type: Option<&str>,
+    persist_id: &str,
+    ctx: &ToolUseContext,
+) -> Result<(PathBuf, usize)> {
+    let dir = tool_results_dir(ctx)?;
+    tokio::fs::create_dir_all(&dir).await?;
+    let ext = claude_core::mcp::output_storage::extension_for_mime_type(mime_type);
+    let filepath = dir.join(format!("{persist_id}.{ext}"));
+    tokio::fs::write(&filepath, bytes).await?;
+    Ok((filepath, bytes.len()))
+}
+
+async fn normalize_read_resource_result(
+    data: Value,
+    server_name: &str,
+    ctx: &ToolUseContext,
+) -> Value {
+    let Some(contents) = data.get("contents").and_then(|value| value.as_array()) else {
+        return data;
+    };
+
+    let mut normalized = Vec::with_capacity(contents.len());
+    for (index, content) in contents.iter().enumerate() {
+        let uri = content.get("uri").cloned().unwrap_or(Value::Null);
+        let mime_type = content
+            .get("mimeType")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+
+        if let Some(text) = content.get("text").and_then(|value| value.as_str()) {
+            normalized.push(json!({
+                "uri": uri,
+                "mimeType": mime_type,
+                "text": text,
+            }));
+            continue;
+        }
+
+        let Some(blob) = content.get("blob").and_then(|value| value.as_str()) else {
+            normalized.push(json!({
+                "uri": uri,
+                "mimeType": mime_type,
+            }));
+            continue;
+        };
+
+        let persist_id = format!(
+            "mcp-resource-{}-{}-{}",
+            chrono::Utc::now().timestamp_millis(),
+            index,
+            uuid::Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(6)
+                .collect::<String>()
+        );
+        match base64::engine::general_purpose::STANDARD.decode(blob) {
+            Ok(bytes) => {
+                match persist_binary_content(&bytes, mime_type.as_deref(), &persist_id, ctx).await {
+                    Ok((filepath, size)) => {
+                        let source = format!(
+                            "[Resource from {} at {}] ",
+                            server_name,
+                            uri.as_str().unwrap_or_default()
+                        );
+                        let filepath_string = filepath.display().to_string();
+                        let text = claude_core::mcp::output_storage::get_binary_blob_saved_message(
+                            &filepath_string,
+                            mime_type.as_deref(),
+                            size,
+                            &source,
+                        );
+                        normalized.push(json!({
+                            "uri": uri,
+                            "mimeType": mime_type,
+                            "blobSavedTo": filepath_string,
+                            "text": text,
+                        }));
+                    }
+                    Err(error) => {
+                        normalized.push(json!({
+                            "uri": uri,
+                            "mimeType": mime_type,
+                            "text": format!("Binary content could not be saved to disk: {error}"),
+                        }));
+                    }
+                }
+            }
+            Err(error) => {
+                normalized.push(json!({
+                    "uri": uri,
+                    "mimeType": mime_type,
+                    "text": format!("Binary content could not be saved to disk: {error}"),
+                }));
+            }
+        }
+    }
+
+    json!({ "contents": normalized })
+}
 
 #[derive(Default)]
 pub struct ListMcpResourcesTool {
@@ -147,7 +278,7 @@ Parameters:
     async fn call(
         &self,
         input: &Value,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
@@ -174,10 +305,13 @@ Parameters:
         if let Some(manager) = &self.manager {
             let manager = manager.read().await;
             return match manager.read_resource(server, uri).await {
-                Ok(data) => Ok(ToolResultData {
-                    data,
-                    is_error: false,
-                }),
+                Ok(data) => {
+                    let data = normalize_read_resource_result(data, server, ctx).await;
+                    Ok(ToolResultData {
+                        data,
+                        is_error: false,
+                    })
+                }
                 Err(error) => Ok(ToolResultData {
                     data: json!({ "error": error.to_string() }),
                     is_error: true,
@@ -220,6 +354,36 @@ mod tests {
             Arc::new(std::sync::Mutex::new(ReadFileState::new())),
             crate::registry::PermissionMode::Default,
         )
+    }
+
+    #[test]
+    fn session_path_sanitizer_matches_ts_shape() {
+        assert_eq!(
+            sanitize_session_path("/Users/alice/work/claude-rs"),
+            "-Users-alice-work-claude-rs"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_resource_blob_is_not_inlined_when_persist_fails() {
+        let ctx = make_ctx();
+        let data = json!({
+            "contents": [{
+                "uri": "file:///tmp/blob.bin",
+                "mimeType": "application/octet-stream",
+                "blob": "not-valid-base64"
+            }]
+        });
+
+        let normalized = normalize_read_resource_result(data, "server", &ctx).await;
+        let content = &normalized["contents"][0];
+        assert_eq!(content["uri"], "file:///tmp/blob.bin");
+        assert_eq!(content["mimeType"], "application/octet-stream");
+        assert!(content.get("blob").is_none());
+        assert!(content["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Binary content could not be saved to disk:"));
     }
 
     #[tokio::test]

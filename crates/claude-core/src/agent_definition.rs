@@ -234,6 +234,7 @@ mod tests {
             custom_system_prompt: None,
             append_system_prompt: None,
             query_source: None,
+            session_id: None,
         }
     }
 
