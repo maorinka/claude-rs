@@ -1,5 +1,6 @@
 use anyhow::Result;
 use futures_util::StreamExt;
+use std::collections::HashSet;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -61,6 +62,8 @@ pub struct QueryEngine {
     /// estimates messages appended after it. This keeps post-first-turn
     /// autocompact checks cheap and aligned with server accounting.
     usage_anchor: Option<UsageAnchor>,
+    content_replacement_state: crate::query::result_budget::ContentReplacementState,
+    content_budget_skip_tool_use_ids: HashSet<String>,
 }
 
 impl QueryEngine {
@@ -87,6 +90,8 @@ impl QueryEngine {
             skip_autocompact: false,
             has_attempted_reactive_compact: false,
             usage_anchor: None,
+            content_replacement_state: Default::default(),
+            content_budget_skip_tool_use_ids: HashSet::new(),
         }
     }
 
@@ -111,6 +116,8 @@ impl QueryEngine {
     pub fn load_messages(&mut self, messages: Vec<serde_json::Value>) {
         self.messages = filter_after_compact_boundary(messages);
         self.usage_anchor = None;
+        self.content_replacement_state = Default::default();
+        self.content_budget_skip_tool_use_ids.clear();
     }
 
     /// Run prefix-preserving partial compaction from the selected message onward.
@@ -245,11 +252,16 @@ impl QueryEngine {
         include_is_error: bool,
     ) {
         let tool_name = tool_name.unwrap_or("Tool");
+        let max_result_size_chars = max_result_size_chars.unwrap_or(100_000);
+        if max_result_size_chars == usize::MAX {
+            self.content_budget_skip_tool_use_ids
+                .insert(tool_use_id.to_string());
+        }
         let content = crate::query::result_budget::process_tool_result_content(
             &self.api_client.config.session_id,
             tool_use_id,
             tool_name,
-            max_result_size_chars.unwrap_or(100_000),
+            max_result_size_chars,
             content,
         );
         let mut block = serde_json::json!({
@@ -492,6 +504,12 @@ impl QueryEngine {
             // separate meta user message at request time.
             let messages_for_query =
                 build_messages_for_query(&self.messages, &self.user_context_blocks);
+            let messages_for_query = crate::query::result_budget::apply_tool_result_budget(
+                &self.api_client.config.session_id,
+                &messages_for_query,
+                &mut self.content_replacement_state,
+                &self.content_budget_skip_tool_use_ids,
+            );
             match self
                 .api_client
                 .stream_request_with_events(

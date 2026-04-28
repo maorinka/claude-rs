@@ -6,6 +6,7 @@
 //! per-message replacement state is separate and still needs transcript wiring.
 
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ pub const DEFAULT_MAX_RESULT_SIZE_CHARS: usize = 50_000;
 pub const MAX_TOOL_RESULT_TOKENS: usize = 100_000;
 pub const BYTES_PER_TOKEN: usize = 4;
 pub const MAX_TOOL_RESULT_BYTES: usize = MAX_TOOL_RESULT_TOKENS * BYTES_PER_TOKEN;
+pub const MAX_TOOL_RESULTS_PER_MESSAGE_CHARS: usize = 200_000;
 pub const PREVIEW_SIZE_BYTES: usize = 2_000;
 pub const TOOL_RESULTS_SUBDIR: &str = "tool-results";
 pub const PERSISTED_OUTPUT_TAG: &str = "<persisted-output>";
@@ -33,6 +35,19 @@ pub struct PersistedToolResult {
 pub struct Preview {
     pub preview: String,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContentReplacementState {
+    seen_ids: HashSet<String>,
+    replacements: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolResultCandidate {
+    tool_use_id: String,
+    content: Value,
+    size: usize,
 }
 
 /// Same threshold rule as TS `getPersistenceThreshold` without GrowthBook
@@ -71,6 +86,82 @@ pub fn process_tool_result_content(
         Ok(result) => Value::String(build_large_tool_result_message(&result)),
         Err(_) => content,
     }
+}
+
+/// Enforce TS's aggregate per-message tool result budget. Previously-seen
+/// decisions are frozen to keep prompt-cache prefixes stable across turns.
+pub fn apply_tool_result_budget(
+    session_id: &str,
+    messages: &[Value],
+    state: &mut ContentReplacementState,
+    skip_tool_use_ids: &HashSet<String>,
+) -> Vec<Value> {
+    let candidates_by_message = collect_candidates_by_message(messages);
+    let mut replacement_map: HashMap<String, String> = HashMap::new();
+    let mut to_persist: Vec<ToolResultCandidate> = Vec::new();
+
+    for candidates in candidates_by_message {
+        let mut fresh = Vec::new();
+        let mut frozen_size = 0usize;
+
+        for candidate in candidates {
+            if let Some(replacement) = state.replacements.get(&candidate.tool_use_id) {
+                replacement_map.insert(candidate.tool_use_id.clone(), replacement.clone());
+            } else if state.seen_ids.contains(&candidate.tool_use_id) {
+                frozen_size += candidate.size;
+            } else if skip_tool_use_ids.contains(&candidate.tool_use_id) {
+                state.seen_ids.insert(candidate.tool_use_id.clone());
+            } else {
+                fresh.push(candidate);
+            }
+        }
+
+        if fresh.is_empty() {
+            continue;
+        }
+
+        let fresh_size: usize = fresh.iter().map(|candidate| candidate.size).sum();
+        let selected = if frozen_size + fresh_size > MAX_TOOL_RESULTS_PER_MESSAGE_CHARS {
+            select_fresh_to_replace(
+                fresh.as_slice(),
+                frozen_size,
+                MAX_TOOL_RESULTS_PER_MESSAGE_CHARS,
+            )
+        } else {
+            Vec::new()
+        };
+        let selected_ids: HashSet<String> = selected
+            .iter()
+            .map(|candidate| candidate.tool_use_id.clone())
+            .collect();
+
+        for candidate in fresh {
+            if selected_ids.contains(&candidate.tool_use_id) {
+                to_persist.push(candidate);
+            } else {
+                state.seen_ids.insert(candidate.tool_use_id);
+            }
+        }
+    }
+
+    for candidate in to_persist {
+        state.seen_ids.insert(candidate.tool_use_id.clone());
+        let Ok(result) =
+            persist_tool_result(session_id, &candidate.tool_use_id, &candidate.content)
+        else {
+            continue;
+        };
+        let replacement = build_large_tool_result_message(&result);
+        state
+            .replacements
+            .insert(candidate.tool_use_id.clone(), replacement.clone());
+        replacement_map.insert(candidate.tool_use_id, replacement);
+    }
+
+    if replacement_map.is_empty() {
+        return messages.to_vec();
+    }
+    replace_tool_result_contents(messages, &replacement_map)
 }
 
 pub fn persist_tool_result(
@@ -201,6 +292,128 @@ pub fn content_size(content: &Value) -> usize {
             .sum(),
         _ => 0,
     }
+}
+
+fn collect_candidates_by_message(messages: &[Value]) -> Vec<Vec<ToolResultCandidate>> {
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+
+    for message in messages {
+        match message.get("role").and_then(Value::as_str) {
+            Some("user") => current.extend(collect_candidates_from_message(message)),
+            Some("assistant") => {
+                if !current.is_empty() {
+                    groups.push(std::mem::take(&mut current));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
+}
+
+fn collect_candidates_from_message(message: &Value) -> Vec<ToolResultCandidate> {
+    let Some(content) = message.get("content").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter_map(|block| {
+            if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                return None;
+            }
+            let content = block.get("content")?;
+            if is_tool_result_content_empty(content)
+                || has_image_block(content)
+                || is_content_already_compacted(content)
+            {
+                return None;
+            }
+            Some(ToolResultCandidate {
+                tool_use_id: block.get("tool_use_id")?.as_str()?.to_string(),
+                content: content.clone(),
+                size: content_size(content),
+            })
+        })
+        .collect()
+}
+
+fn is_content_already_compacted(content: &Value) -> bool {
+    content
+        .as_str()
+        .map(|text| text.starts_with(PERSISTED_OUTPUT_TAG))
+        .unwrap_or(false)
+}
+
+fn select_fresh_to_replace(
+    fresh: &[ToolResultCandidate],
+    frozen_size: usize,
+    limit: usize,
+) -> Vec<ToolResultCandidate> {
+    let mut sorted = fresh.to_vec();
+    sorted.sort_by(|a, b| b.size.cmp(&a.size));
+
+    let mut selected = Vec::new();
+    let mut remaining = frozen_size + fresh.iter().map(|candidate| candidate.size).sum::<usize>();
+    for candidate in sorted {
+        if remaining <= limit {
+            break;
+        }
+        remaining = remaining.saturating_sub(candidate.size);
+        selected.push(candidate);
+    }
+    selected
+}
+
+fn replace_tool_result_contents(
+    messages: &[Value],
+    replacement_map: &HashMap<String, String>,
+) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|message| {
+            if message.get("role").and_then(Value::as_str) != Some("user") {
+                return message.clone();
+            }
+            let Some(content) = message.get("content").and_then(Value::as_array) else {
+                return message.clone();
+            };
+            let needs_replace = content.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    && block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .map(|id| replacement_map.contains_key(id))
+                        .unwrap_or(false)
+            });
+            if !needs_replace {
+                return message.clone();
+            }
+
+            let mut next = message.clone();
+            let Some(next_content) = next.get_mut("content").and_then(Value::as_array_mut) else {
+                return message.clone();
+            };
+            for block in next_content {
+                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                let replacement = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| replacement_map.get(id))
+                    .cloned();
+                if let Some(replacement) = replacement {
+                    block["content"] = Value::String(replacement);
+                }
+            }
+            next
+        })
+        .collect()
 }
 
 fn persistable_content_string(content: &Value) -> Option<(String, bool)> {
@@ -406,5 +619,75 @@ mod tests {
             ),
             content
         );
+    }
+
+    #[test]
+    fn aggregate_budget_persists_largest_fresh_results() {
+        with_temp_home_and_cwd(|| {
+            let messages = vec![
+                json!({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "Tool", "input": {}},
+                    {"type": "tool_use", "id": "toolu_b", "name": "Tool", "input": {}}
+                ]}),
+                json!({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "a".repeat(120_000)},
+                    {"type": "tool_result", "tool_use_id": "toolu_b", "content": "b".repeat(120_000)}
+                ]}),
+            ];
+            let mut state = ContentReplacementState::default();
+            let out =
+                apply_tool_result_budget("session_budget", &messages, &mut state, &HashSet::new());
+            let content = out[1]["content"].as_array().unwrap();
+            let replaced = content
+                .iter()
+                .filter(|block| {
+                    block["content"]
+                        .as_str()
+                        .map(|text| text.starts_with(PERSISTED_OUTPUT_TAG))
+                        .unwrap_or(false)
+                })
+                .count();
+            assert_eq!(replaced, 1);
+            assert_eq!(state.seen_ids.len(), 2);
+            assert_eq!(state.replacements.len(), 1);
+        });
+    }
+
+    #[test]
+    fn aggregate_budget_reapplies_existing_replacements_byte_identically() {
+        with_temp_home_and_cwd(|| {
+            let messages = vec![
+                json!({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "Tool", "input": {}},
+                    {"type": "tool_use", "id": "toolu_b", "name": "Tool", "input": {}}
+                ]}),
+                json!({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "a".repeat(120_000)},
+                    {"type": "tool_result", "tool_use_id": "toolu_b", "content": "b".repeat(120_000)}
+                ]}),
+            ];
+            let mut state = ContentReplacementState::default();
+            let first =
+                apply_tool_result_budget("session_reapply", &messages, &mut state, &HashSet::new());
+            let second =
+                apply_tool_result_budget("session_reapply", &messages, &mut state, &HashSet::new());
+            assert_eq!(first, second);
+        });
+    }
+
+    #[test]
+    fn aggregate_budget_skips_infinite_cap_tool_ids() {
+        with_temp_home_and_cwd(|| {
+            let messages = vec![json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_read", "content": "r".repeat(250_000)}
+            ]})];
+            let mut state = ContentReplacementState::default();
+            let mut skip = HashSet::new();
+            skip.insert("toolu_read".to_string());
+            let out = apply_tool_result_budget("session_skip", &messages, &mut state, &skip);
+            assert_eq!(out, messages);
+            assert!(state.seen_ids.contains("toolu_read"));
+            assert!(state.replacements.is_empty());
+        });
     }
 }
