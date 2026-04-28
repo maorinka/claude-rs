@@ -4146,6 +4146,7 @@ async fn main() -> Result<()> {
             context
         ));
     }
+    let session_start_initial_user_message = session_start.initial_user_message;
 
     // Add MCP server instructions as request-time user context, matching TS.
     {
@@ -4389,6 +4390,9 @@ async fn main() -> Result<()> {
             ));
         }
 
+        if let Some(initial) = &session_start_initial_user_message {
+            query_engine.add_user_message(initial);
+        }
         query_engine.add_user_message(&effective_prompt);
 
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done

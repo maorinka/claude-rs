@@ -685,6 +685,9 @@ Improved:
   the first model request; `UserPromptSubmit` blocking errors prevent the
   prompt from reaching the model, and additional context is injected into the
   request-time user context lane.
+- Rust print mode now applies `SessionStart.initialUserMessage` as an initial
+  user turn before the submitted prompt, matching TS headless orchestrator
+  startup.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like
