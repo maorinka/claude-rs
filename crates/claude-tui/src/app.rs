@@ -1988,6 +1988,7 @@ impl App {
                                 }
                             }
                         }
+                        result_text = ensure_non_empty_tool_result_text(&info.name, result_text);
                         let _ = engine_tx
                             .send(EngineCommand::AddToolResult {
                                 id: info.id.clone(),
@@ -3113,6 +3114,14 @@ fn truncate_result(s: &str) -> String {
     }
 }
 
+fn ensure_non_empty_tool_result_text(tool_name: &str, content: String) -> String {
+    if content.trim().is_empty() {
+        format!("({tool_name} completed with no output)")
+    } else {
+        content
+    }
+}
+
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
@@ -3338,6 +3347,18 @@ mod tests {
     #[test]
     fn truncate_chars_preserves_utf8_boundaries() {
         assert_eq!(truncate_chars("éééabc", 4), "éééa");
+    }
+
+    #[test]
+    fn empty_tool_result_text_matches_ts_guard() {
+        assert_eq!(
+            ensure_non_empty_tool_result_text("Bash", "  \n".to_string()),
+            "(Bash completed with no output)"
+        );
+        assert_eq!(
+            ensure_non_empty_tool_result_text("Bash", "ok".to_string()),
+            "ok"
+        );
     }
 
     #[test]
