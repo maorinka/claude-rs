@@ -109,14 +109,15 @@ def normalize_skill_line_order(body: dict[str, Any]) -> dict[str, Any]:
             text = block.get("text", "") if isinstance(block, dict) else ""
             if "The following skills are available" not in text:
                 continue
-            prefix = []
-            skills = []
-            for line in text.splitlines():
-                if line.startswith("- "):
-                    skills.append(line)
-                else:
-                    prefix.append(line)
-            block["text"] = "\n".join(prefix + sorted(skills))
+            lines = text.splitlines()
+            skill_indexes = [i for i, line in enumerate(lines) if line.startswith("- ")]
+            if not skill_indexes:
+                continue
+            first = skill_indexes[0]
+            last = skill_indexes[-1]
+            block["text"] = "\n".join(
+                lines[:first] + sorted(lines[i] for i in skill_indexes) + lines[last + 1 :]
+            )
     return result
 
 

@@ -261,7 +261,9 @@ fn environment_section(project_root: &Path, model: &str) -> String {
     out.push_str(&format!(
         " - You are powered by the model named {model_name}. The exact model ID is {model_id}.\n"
     ));
-    out.push_str(" - Assistant knowledge cutoff is January 2026.\n");
+    if let Some(cutoff) = knowledge_cutoff(model) {
+        out.push_str(&format!(" - Assistant knowledge cutoff is {cutoff}.\n"));
+    }
     out.push_str(" - The most recent Claude model family is Claude 4.X. Model IDs — Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models.\n");
     out.push_str(" - Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).\n");
     out.push_str(" - Fast mode for Claude Code uses Claude Opus 4.6 with faster output (it does not downgrade to a smaller model). It can be toggled with /fast and is only available on Opus 4.6.\n\n");
@@ -314,16 +316,22 @@ fn os_version() -> String {
 
 fn model_display(model: &str) -> (&'static str, String) {
     let has_1m = model.contains("[1m]") || model.contains("[1M]");
-    if model.contains("opus-4-7") || model == "opus" {
+    if model.contains("opus-4-7") {
         if has_1m {
             ("Opus 4.7 (1M context)", "claude-opus-4-7[1m]".to_string())
         } else {
             ("Opus 4.7", "claude-opus-4-7".to_string())
         }
+    } else if model.contains("opus-4-6") || model == "opus" {
+        if has_1m {
+            ("Opus 4.6 (1M context)", "claude-opus-4-6[1m]".to_string())
+        } else {
+            ("Opus 4.6", "claude-opus-4-6".to_string())
+        }
     } else if model.contains("sonnet-4-6") {
         if has_1m {
             (
-                "Sonnet 4.6 (1M context)",
+                "Sonnet 4.6 (with 1M context)",
                 "claude-sonnet-4-6[1m]".to_string(),
             )
         } else {
@@ -340,5 +348,20 @@ fn model_display(model: &str) -> (&'static str, String) {
         }
     } else {
         ("Claude", model.to_string())
+    }
+}
+
+fn knowledge_cutoff(model: &str) -> Option<&'static str> {
+    let canonical = model.to_ascii_lowercase();
+    if canonical.contains("claude-sonnet-4-6") {
+        Some("August 2025")
+    } else if canonical.contains("claude-opus-4-6") || canonical.contains("claude-opus-4-5") {
+        Some("May 2025")
+    } else if canonical.contains("claude-haiku-4") {
+        Some("February 2025")
+    } else if canonical.contains("claude-opus-4") || canonical.contains("claude-sonnet-4") {
+        Some("January 2025")
+    } else {
+        None
     }
 }

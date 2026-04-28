@@ -49,7 +49,8 @@ Now matching:
 - Prompt cache marker count.
 - Tool count: 87 vs 87.
 - Tool names, tool order, and tool schemas. This now includes the installed
-  TS 2.1.121 Explore-agent description in the embedded tool contract.
+  TS 2.1.121 Explore-agent description and current MCP connector schemas in
+  the embedded/live tool contracts.
 - Request-time ToolSearch defaults now follow TS for the live debug-proxy
   path: with `ENABLE_TOOL_SEARCH` unset and a first-party provider pointed at
   a non-first-party base URL, both TS and Rust strip `ToolSearch`, send MCP
@@ -66,6 +67,9 @@ Now matching:
 - Final result, usage, iteration, and model-usage payload shapes.
 - Static environment/context-management prompt formatting, including the
   installed TS `# Context management` heading and environment bullet spacing.
+- Environment model display and knowledge-cutoff text now follow the installed
+  TS `getMarketingNameForModel` / `getKnowledgeCutoff` behavior for the Opus
+  4.6 1M path.
 - Two-turn dynamic skill discovery after `Read` now follows TS shape:
   discovered skill listings are folded into the adjacent `tool_result` content
   before the next API request rather than emitted as a separate user turn.
@@ -261,6 +265,10 @@ Improved:
   `high` unless the model supports max effort.
 - The `/effort` command and settings comments now expose the same supported
   effort set, so `xhigh` is rejected before it can become an API 400.
+- The embedded TS tool-contract snapshot now matches the installed TS Bash
+  co-author model label for the current Opus 4.6 path.
+- MCP shadow contracts no longer override non-empty live MCP schemas, so
+  connected Claude.ai/plugin servers keep the same live tool contracts TS sends.
 - Rust now has a TS-style system-context lane in the query engine:
   `gitStatus: ...` is appended after the static system prompt via
   `appendSystemContext` formatting, rather than being mixed into user context.

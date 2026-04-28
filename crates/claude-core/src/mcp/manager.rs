@@ -705,8 +705,11 @@ impl McpManager {
                 {
                     known.description = tool.description.clone();
                 }
-                if schema_score(tool.input_schema.as_ref())
-                    > schema_score(known.input_schema.as_ref())
+                let known_has_live_shape =
+                    schema_has_non_empty_properties(known.input_schema.as_ref());
+                if !known_has_live_shape
+                    && schema_score(tool.input_schema.as_ref())
+                        > schema_score(known.input_schema.as_ref())
                 {
                     known.input_schema = tool.input_schema;
                 }
@@ -882,6 +885,14 @@ fn schema_score(schema: Option<&Value>) -> usize {
     let schema_metadata = usize::from(object.contains_key("$schema"))
         + usize::from(object.contains_key("additionalProperties"));
     property_count * 100 + required_count * 10 + schema_metadata + object.len()
+}
+
+fn schema_has_non_empty_properties(schema: Option<&Value>) -> bool {
+    schema
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("properties"))
+        .and_then(Value::as_object)
+        .is_some_and(|properties| !properties.is_empty())
 }
 
 /// Does this connect error look like an authentication failure
