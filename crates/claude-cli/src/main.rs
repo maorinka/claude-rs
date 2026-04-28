@@ -4191,6 +4191,18 @@ async fn main() -> Result<()> {
         query_engine.append_user_context_block(context);
     }
 
+    // TS getSystemContext() appends gitStatus to the system prompt, gated by
+    // CLAUDE_CODE_REMOTE and includeGitInstructions.
+    if !claude_core::errors_util::is_env_truthy("CLAUDE_CODE_REMOTE")
+        && claude_core::context::git_settings::should_include_git_instructions(&project_root)
+    {
+        if let Ok(Some(git_status)) =
+            claude_core::context::git::get_git_context(&project_root).await
+        {
+            query_engine.append_system_context("gitStatus", git_status);
+        }
+    }
+
     // Append --append-system-prompt text (M2: was parsed but never applied)
     if let Some(ref extra) = cli.append_system_prompt {
         query_engine.append_system_prompt(extra.clone());

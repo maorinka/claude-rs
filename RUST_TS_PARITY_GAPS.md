@@ -261,6 +261,15 @@ Improved:
   `high` unless the model supports max effort.
 - The `/effort` command and settings comments now expose the same supported
   effort set, so `xhigh` is rejected before it can become an API 400.
+- Rust now has a TS-style system-context lane in the query engine:
+  `gitStatus: ...` is appended after the static system prompt via
+  `appendSystemContext` formatting, rather than being mixed into user context.
+- CLI startup now gates git status the same way TS does:
+  `CLAUDE_CODE_REMOTE` disables it, `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS`
+  truthy disables, explicitly falsy enables, and `includeGitInstructions`
+  settings default to enabled.
+- Rust git status now uses the TS recent-commit command shape
+  `git --no-optional-locks log --oneline -n 5`.
 
 Remaining result-budget work:
 - Extend the same transcript-backed replacement state to sidechain/forked
@@ -286,8 +295,8 @@ Improved:
 
 Needs work:
 - Cache context at the same lifecycle points as TS.
-- Ensure git status appears where TS places it and with the same truncation
-  behavior.
+- Verify remote/CCR resume behavior against live TS captures now that
+  system-context injection is request-time instead of a static prompt mutation.
 
 ## P0: Missing Core TS Behavior
 
@@ -916,7 +925,8 @@ Needs work:
 1. Fix tool registry gating and deny-rule filtering.
 2. Wire MCP resource tools to `McpManager`.
 3. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
-4. Move rich user/system context into query execution.
+4. Verify rich user/system context lifecycle against resumed sessions and
+   remote-control captures.
 5. Complete hook dispatch from tool/query/task flows.
 6. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
 7. Decide scope for bridge/direct-connect/upstream proxy before porting more

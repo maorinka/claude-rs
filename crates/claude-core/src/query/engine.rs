@@ -35,6 +35,7 @@ pub struct QueryEngine {
     api_client: ApiClient,
     messages: Vec<serde_json::Value>,
     system_prompt: Vec<ContentBlock>,
+    system_context_blocks: Vec<ContentBlock>,
     user_context_blocks: Vec<serde_json::Value>,
     tool_schemas: Vec<ToolDefinition>,
     state: QueryState,
@@ -79,6 +80,7 @@ impl QueryEngine {
             api_client,
             messages: Vec::new(),
             system_prompt,
+            system_context_blocks: Vec::new(),
             user_context_blocks: Vec::new(),
             tool_schemas,
             state: QueryState::Querying,
@@ -156,6 +158,25 @@ impl QueryEngine {
     /// Append a text block to the system prompt.
     pub fn append_system_prompt(&mut self, text: String) {
         self.system_prompt.push(ContentBlock::Text { text });
+    }
+
+    /// Append request-time system context using TS appendSystemContext() formatting:
+    /// `${key}: ${value}` appended after the static system prompt.
+    pub fn append_system_context(&mut self, key: &str, value: String) {
+        if value.trim().is_empty() {
+            return;
+        }
+        self.system_context_blocks.push(ContentBlock::Text {
+            text: format!("{key}: {value}"),
+        });
+    }
+
+    fn system_prompt_for_request(&self) -> Vec<ContentBlock> {
+        let mut blocks =
+            Vec::with_capacity(self.system_prompt.len() + self.system_context_blocks.len());
+        blocks.extend(self.system_prompt.iter().cloned());
+        blocks.extend(self.system_context_blocks.iter().cloned());
+        blocks
     }
 
     /// Append a request-time user context block.
@@ -461,6 +482,7 @@ impl QueryEngine {
         // Auto-compact guard: skip if we just compacted (prevents re-entry).
         // Mirrors TS: querySource !== 'compact' check in query.ts:630.
         if !self.skip_autocompact && self.should_compact_now() {
+            let system_prompt_for_request = self.system_prompt_for_request();
             let _ = event_tx
                 .send(StreamEvent::Compacted {
                     summary: "Compacting conversation...".into(),
@@ -469,7 +491,7 @@ impl QueryEngine {
             match crate::compact::compactor::compact_conversation(
                 &self.api_client,
                 &self.messages,
-                &self.system_prompt,
+                &system_prompt_for_request,
             )
             .await
             {
@@ -512,6 +534,7 @@ impl QueryEngine {
         // We use a loop with at most 2 iterations: the first attempt, and optionally a
         // single retry after reactive compaction (avoids async recursion / Box::pin).
         let response = 'api_call: loop {
+            let system_prompt_for_request = self.system_prompt_for_request();
             // Build dynamic user context prepend (Issue 25).
             // Mirrors TS prependUserContext() — injects currentDate as a
             // separate meta user message at request time.
@@ -531,7 +554,7 @@ impl QueryEngine {
                 .api_client
                 .stream_request_with_events(
                     &messages_for_query,
-                    &self.system_prompt,
+                    &system_prompt_for_request,
                     &self.tool_schemas,
                     Some(event_tx),
                 )
@@ -553,7 +576,7 @@ impl QueryEngine {
                         if let Ok(compacted) = crate::compact::compactor::compact_conversation(
                             &self.api_client,
                             &self.messages,
-                            &self.system_prompt,
+                            &system_prompt_for_request,
                         )
                         .await
                         {
@@ -1284,6 +1307,32 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn system_context_is_appended_after_static_prompt_like_ts() {
+        let api_client = crate::api::client::ApiClient::new(
+            crate::api::client::ApiConfig::default(),
+            crate::api::client::AuthMethod::ApiKey("test".into()),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut engine = QueryEngine::new(
+            api_client,
+            vec![ContentBlock::Text {
+                text: "static prompt".into(),
+            }],
+            vec![],
+            cancel,
+        );
+
+        engine.append_system_context("gitStatus", "Current branch: main".into());
+        let full = engine.system_prompt_for_request();
+
+        assert_eq!(full.len(), 2);
+        assert!(matches!(&full[0], ContentBlock::Text { text } if text == "static prompt"));
+        assert!(
+            matches!(&full[1], ContentBlock::Text { text } if text == "gitStatus: Current branch: main")
+        );
     }
 }
 

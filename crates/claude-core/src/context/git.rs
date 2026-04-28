@@ -79,13 +79,7 @@ pub async fn get_git_context(project_root: &Path) -> Result<Option<String>> {
     // Recent commits
     if let Ok(log) = git_output(
         project_root,
-        &[
-            "--no-optional-locks",
-            "log",
-            "--oneline",
-            "-5",
-            "--no-decorate",
-        ],
+        &["--no-optional-locks", "log", "--oneline", "-n", "5"],
     )
     .await
     {
