@@ -199,6 +199,7 @@ pub enum AppEvent {
 enum EngineCommand {
     AddUserMessage(String),
     AddUserContext(String),
+    AddUserContextMessage(String),
     AddToolResult {
         id: String,
         content: String,
@@ -222,6 +223,34 @@ enum EngineCommand {
 struct PendingTool {
     info: ToolUseInfo,
     permission_updates_on_allow: Vec<PermissionUpdate>,
+}
+
+fn skills_reminder_block(skills: &[Skill]) -> String {
+    let mut skills_text = String::from(
+        "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n",
+    );
+    for skill in skills {
+        skills_text.push_str(&format!("- {}: {}", skill.name, skill.description));
+        if let Some(ref hint) = skill.when_to_use {
+            skills_text.push_str(&format!(" (use when: {})", hint));
+        }
+        skills_text.push('\n');
+    }
+    skills_text.push_str("</system-reminder>\n");
+    skills_text
+}
+
+fn dynamic_skill_file_paths(tool_name: &str, input: &serde_json::Value) -> Vec<PathBuf> {
+    let key = match tool_name {
+        "Read" | "Edit" | "Write" => "file_path",
+        _ => return Vec::new(),
+    };
+    input
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect()
 }
 
 fn fallback_allow_update_for_tool(tool_name: &str) -> PermissionUpdate {
@@ -760,6 +789,9 @@ impl App {
                         }
                         EngineCommand::AddUserContext(text) => {
                             engine.append_user_context_block(text);
+                        }
+                        EngineCommand::AddUserContextMessage(text) => {
+                            engine.add_user_context_message(text);
                         }
                         EngineCommand::AddToolResult {
                             id,
@@ -1963,6 +1995,46 @@ impl App {
                                 is_error,
                             })
                             .await;
+                        if !is_error {
+                            let touched_paths = dynamic_skill_file_paths(&info.name, &info.input);
+                            if !touched_paths.is_empty() {
+                                let skill_dirs =
+                                    skill::discover_skill_dirs_for_paths(&touched_paths, &cwd);
+                                let mut newly_available = skill::add_skill_directories(&skill_dirs);
+                                newly_available.extend(
+                                    skill::activate_conditional_skills_for_paths(
+                                        &touched_paths,
+                                        &cwd,
+                                    ),
+                                );
+                                if !newly_available.is_empty() {
+                                    let mut seen = self
+                                        .skills
+                                        .iter()
+                                        .map(|skill| skill.name.clone())
+                                        .collect::<std::collections::HashSet<_>>();
+                                    let mut unique_new = Vec::new();
+                                    for skill in newly_available {
+                                        if !skill.disable_model_invocation
+                                            && seen.insert(skill.name.clone())
+                                        {
+                                            claude_tools::skill_tool::register_discovered_skill(
+                                                &skill,
+                                            );
+                                            unique_new.push(skill.clone());
+                                            self.skills.push(skill);
+                                        }
+                                    }
+                                    if !unique_new.is_empty() {
+                                        let _ = engine_tx
+                                            .send(EngineCommand::AddUserContextMessage(
+                                                skills_reminder_block(&unique_new),
+                                            ))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
                         self.message_list.push(MessageEntry::ToolResult {
                             name: info.name.clone(),
                             output: truncate_result(&display_text),
