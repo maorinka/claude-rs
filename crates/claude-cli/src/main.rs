@@ -135,10 +135,35 @@ pub enum SubCommand {
         port: Option<u16>,
     },
     /// Connect your local environment for remote-control sessions via claude.ai/code
-    #[command(alias = "rc", aliases = ["remote", "sync", "bridge"])]
+    #[command(hide = true, alias = "rc", aliases = ["remote", "sync", "bridge"])]
     RemoteControl {
-        /// Optional session name
+        /// Name for the session (shown in claude.ai/code)
+        #[arg(long)]
         name: Option<String>,
+        /// Prefix for auto-generated session names
+        #[arg(long = "remote-control-session-name-prefix")]
+        remote_control_session_name_prefix: Option<String>,
+        /// Permission mode for spawned sessions
+        #[arg(long = "permission-mode")]
+        permission_mode: Option<String>,
+        /// Write debug logs to file
+        #[arg(long = "debug-file")]
+        debug_file: Option<PathBuf>,
+        /// Enable verbose output
+        #[arg(short, long)]
+        verbose: bool,
+        /// Spawn mode: same-dir, worktree, session
+        #[arg(long)]
+        spawn: Option<String>,
+        /// Max concurrent sessions in worktree or same-dir mode
+        #[arg(long)]
+        capacity: Option<u32>,
+        /// Pre-create a session in the current directory
+        #[arg(long = "create-session-in-dir")]
+        create_session_in_dir: bool,
+        /// Do not pre-create a session in the current directory
+        #[arg(long = "no-create-session-in-dir")]
+        no_create_session_in_dir: bool,
     },
 }
 
@@ -3134,8 +3159,72 @@ fn emit_stream_json_hook_events(result: &claude_core::hooks::types::HookResult, 
     }));
 }
 
+fn is_remote_control_command(arg: &str) -> bool {
+    matches!(arg, "remote-control" | "rc" | "remote" | "sync" | "bridge")
+}
+
+fn remote_control_help_text() -> &'static str {
+    "\
+Remote Control - Connect your local environment to claude.ai/code
+
+USAGE
+  claude remote-control [options]
+OPTIONS
+  --name <name>                    Name for the session (shown in claude.ai/code)
+  --remote-control-session-name-prefix <prefix>
+                                   Prefix for auto-generated session names
+                                   (default: hostname; env:
+                                   CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX)
+  --permission-mode <mode>         Permission mode for spawned sessions
+                                   (acceptEdits, auto, bypassPermissions, default, dontAsk, plan)
+  --debug-file <path>              Write debug logs to file
+  -v, --verbose                    Enable verbose output
+  -h, --help                       Show this help
+  --spawn <mode>                   Spawn mode: same-dir, worktree, session
+                                   (default: same-dir)
+  --capacity <N>                   Max concurrent sessions in worktree or
+                                   same-dir mode (default: 32)
+  --[no-]create-session-in-dir     Pre-create a session in the current
+                                   directory; in worktree mode this session
+                                   stays in cwd while on-demand sessions get
+                                   isolated worktrees (default: on)
+
+DESCRIPTION
+  Remote Control allows you to control sessions on your local device from
+  claude.ai/code (https://claude.ai/code). Run this command in the
+  directory you want to work in, then connect from the Claude app or web.
+
+  Remote Control runs as a persistent server that accepts multiple concurrent
+  sessions in the current directory. One session is pre-created on start so
+  you have somewhere to type immediately. Use --spawn=worktree to isolate
+  each on-demand session in its own git worktree, or --spawn=session for
+  the classic single-session mode (exits when that session ends). Press 'w'
+  during runtime to toggle between same-dir and worktree.
+
+NOTES
+  - You must be logged in with a Claude account that has a subscription
+  - Run `claude` first in the directory to accept the workspace trust dialog
+  - Worktree mode requires a git repository or WorktreeCreate/WorktreeRemove hooks
+"
+}
+
+fn maybe_handle_remote_control_help() {
+    let mut args = std::env::args().skip(1);
+    let Some(first) = args.next() else {
+        return;
+    };
+    if !is_remote_control_command(&first) {
+        return;
+    }
+    if args.any(|arg| arg == "-h" || arg == "--help") {
+        println!("{}", remote_control_help_text());
+        std::process::exit(0);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    maybe_handle_remote_control_help();
     let cli = Cli::parse();
     let mut prompt_arg = cli.prompt.clone();
     if cli.print && prompt_arg.is_none() {
@@ -3223,14 +3312,57 @@ async fn main() -> Result<()> {
             server.start().await?;
             return Ok(());
         }
-        Some(SubCommand::RemoteControl { name }) => {
+        Some(SubCommand::RemoteControl {
+            name,
+            remote_control_session_name_prefix,
+            permission_mode,
+            debug_file,
+            verbose,
+            spawn,
+            capacity,
+            create_session_in_dir,
+            no_create_session_in_dir,
+        }) => {
             let name_suffix = name
                 .as_deref()
                 .filter(|value| !value.is_empty())
                 .map(|value| format!(" for `{value}`"))
                 .unwrap_or_default();
+            let mut accepted_options = Vec::new();
+            if remote_control_session_name_prefix.is_some() {
+                accepted_options.push("--remote-control-session-name-prefix");
+            }
+            if permission_mode.is_some() {
+                accepted_options.push("--permission-mode");
+            }
+            if debug_file.is_some() {
+                accepted_options.push("--debug-file");
+            }
+            if *verbose {
+                accepted_options.push("--verbose");
+            }
+            if spawn.is_some() {
+                accepted_options.push("--spawn");
+            }
+            if capacity.is_some() {
+                accepted_options.push("--capacity");
+            }
+            if *create_session_in_dir {
+                accepted_options.push("--create-session-in-dir");
+            }
+            if *no_create_session_in_dir {
+                accepted_options.push("--no-create-session-in-dir");
+            }
+            let option_suffix = if accepted_options.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nAccepted TS bridge option(s): {}",
+                    accepted_options.join(", ")
+                )
+            };
             eprintln!(
-                "Remote Control{name_suffix} is not fully ported in claude-rs yet.\n\n\
+                "Remote Control{name_suffix} is not fully ported in claude-rs yet.{option_suffix}\n\n\
                  The original TS path starts a Claude.ai bridge runtime here: \
                  entitlement/policy checks, environment registration, session creation, \
                  session-ingress WebSocket forwarding, and inbound prompt queueing.\n\n\
@@ -4687,5 +4819,80 @@ fn initialize_entrypoint(is_interactive_session: bool) {
                 "sdk-cli"
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod remote_control_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn remote_control_help_matches_ts_fast_path_shape() {
+        let help = remote_control_help_text();
+        assert!(help.contains("Remote Control - Connect your local environment to claude.ai/code"));
+        assert!(help.contains("USAGE\n  claude remote-control [options]"));
+        assert!(help.contains("--name <name>"));
+        assert!(help.contains("--spawn <mode>"));
+        assert!(help.contains("--[no-]create-session-in-dir"));
+        assert!(help.contains("claude.ai/code (https://claude.ai/code)"));
+    }
+
+    #[test]
+    fn remote_control_subcommand_accepts_ts_bridge_options() {
+        let cli = Cli::parse_from([
+            "claude-rs",
+            "remote-control",
+            "--name",
+            "demo",
+            "--remote-control-session-name-prefix",
+            "host",
+            "--permission-mode",
+            "default",
+            "--debug-file",
+            "/tmp/bridge.log",
+            "--verbose",
+            "--spawn",
+            "same-dir",
+            "--capacity",
+            "2",
+            "--no-create-session-in-dir",
+        ]);
+
+        match cli.command {
+            Some(SubCommand::RemoteControl {
+                name,
+                remote_control_session_name_prefix,
+                permission_mode,
+                debug_file,
+                verbose,
+                spawn,
+                capacity,
+                create_session_in_dir,
+                no_create_session_in_dir,
+            }) => {
+                assert_eq!(name.as_deref(), Some("demo"));
+                assert_eq!(remote_control_session_name_prefix.as_deref(), Some("host"));
+                assert_eq!(permission_mode.as_deref(), Some("default"));
+                assert_eq!(
+                    debug_file.as_deref(),
+                    Some(std::path::Path::new("/tmp/bridge.log"))
+                );
+                assert!(verbose);
+                assert_eq!(spawn.as_deref(), Some("same-dir"));
+                assert_eq!(capacity, Some(2));
+                assert!(!create_session_in_dir);
+                assert!(no_create_session_in_dir);
+            }
+            _ => panic!("expected remote-control command"),
+        }
+    }
+
+    #[test]
+    fn remote_control_is_hidden_from_root_help_like_ts_commander_registration() {
+        let mut command = Cli::command();
+        let help = command.render_help().to_string();
+        assert!(!help.contains("remote-control"));
+        assert!(!help.contains("Connect your local environment for remote-control"));
     }
 }
