@@ -267,31 +267,7 @@ fn environment_section(project_root: &Path, model: &str) -> String {
     out.push_str(" - Fast mode for Claude Code uses Claude Opus 4.6 with faster output (it does not downgrade to a smaller model). It can be toggled with /fast and is only available on Opus 4.6.\n\n");
     out.push_str("# Context management\n");
     out.push_str("When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.\n\n");
-    out.push_str(&git_status_section(project_root));
     out
-}
-
-fn git_status_section(project_root: &Path) -> String {
-    let branch = run_git(project_root, &["branch", "--show-current"])
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
-    let status = run_git(project_root, &["status", "--short"])
-        .map(|s| {
-            if s.trim().is_empty() {
-                "(clean)".to_string()
-            } else {
-                s.trim().to_string()
-            }
-        })
-        .unwrap_or_else(|| "unknown".to_string());
-    let commits = run_git(project_root, &["log", "--oneline", "-5"])
-        .map(|s| s.trim_end().to_string())
-        .unwrap_or_default();
-
-    format!(
-        "gitStatus: This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.\n\nCurrent branch: {branch}\n\nMain branch (you will usually use this for PRs): main\n\nStatus:\n{status}\n\nRecent commits:\n{commits}"
-    )
 }
 
 fn run_git(project_root: &Path, args: &[&str]) -> Option<String> {

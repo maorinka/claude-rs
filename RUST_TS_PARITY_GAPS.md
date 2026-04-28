@@ -264,6 +264,8 @@ Improved:
 - Rust now has a TS-style system-context lane in the query engine:
   `gitStatus: ...` is appended after the static system prompt via
   `appendSystemContext` formatting, rather than being mixed into user context.
+- The old Rust static-prompt git-status helper was removed, so git status is
+  no longer duplicated and no longer bypasses TS gates/truncation.
 - CLI startup now gates git status the same way TS does:
   `CLAUDE_CODE_REMOTE` disables it, `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS`
   truthy disables, explicitly falsy enables, and `includeGitInstructions`

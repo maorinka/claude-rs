@@ -172,10 +172,32 @@ impl QueryEngine {
     }
 
     fn system_prompt_for_request(&self) -> Vec<ContentBlock> {
-        let mut blocks =
-            Vec::with_capacity(self.system_prompt.len() + self.system_context_blocks.len());
-        blocks.extend(self.system_prompt.iter().cloned());
-        blocks.extend(self.system_context_blocks.iter().cloned());
+        let mut blocks = self.system_prompt.clone();
+        if self.system_context_blocks.is_empty() {
+            return blocks;
+        }
+
+        let context_text = self
+            .system_context_blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } if !text.is_empty() => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if context_text.is_empty() {
+            return blocks;
+        }
+
+        if let Some(ContentBlock::Text { text }) = blocks.last_mut() {
+            if !text.ends_with("\n\n") {
+                text.push_str("\n\n");
+            }
+            text.push_str(&context_text);
+        } else {
+            blocks.push(ContentBlock::Text { text: context_text });
+        }
         blocks
     }
 
@@ -1328,10 +1350,9 @@ mod tests {
         engine.append_system_context("gitStatus", "Current branch: main".into());
         let full = engine.system_prompt_for_request();
 
-        assert_eq!(full.len(), 2);
-        assert!(matches!(&full[0], ContentBlock::Text { text } if text == "static prompt"));
+        assert_eq!(full.len(), 1);
         assert!(
-            matches!(&full[1], ContentBlock::Text { text } if text == "gitStatus: Current branch: main")
+            matches!(&full[0], ContentBlock::Text { text } if text == "static prompt\n\ngitStatus: Current branch: main")
         );
     }
 }
