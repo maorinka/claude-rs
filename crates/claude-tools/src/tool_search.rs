@@ -39,7 +39,7 @@ pub fn get_tool_search_mode() -> ToolSearchMode {
                 _ => ToolSearchMode::ToolSearchAuto,
             };
         }
-        if value == "auto" {
+        if value == "auto" || value.starts_with("auto:") {
             return ToolSearchMode::ToolSearchAuto;
         }
         if is_truthy_value(value) {
@@ -290,4 +290,67 @@ fn camel_to_words(name: &str) -> String {
         }
     }
     words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_tool_search_env(value: Option<&str>, f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_enable = std::env::var("ENABLE_TOOL_SEARCH").ok();
+        let old_disable = std::env::var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS").ok();
+
+        match value {
+            Some(value) => std::env::set_var("ENABLE_TOOL_SEARCH", value),
+            None => std::env::remove_var("ENABLE_TOOL_SEARCH"),
+        }
+        std::env::remove_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
+
+        f();
+
+        match old_enable {
+            Some(value) => std::env::set_var("ENABLE_TOOL_SEARCH", value),
+            None => std::env::remove_var("ENABLE_TOOL_SEARCH"),
+        }
+        match old_disable {
+            Some(value) => std::env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", value),
+            None => std::env::remove_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"),
+        }
+    }
+
+    #[test]
+    fn tool_search_mode_matches_ts_auto_variants() {
+        with_tool_search_env(Some("auto"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearchAuto);
+        });
+        with_tool_search_env(Some("auto:1"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearchAuto);
+        });
+        with_tool_search_env(Some("auto:99"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearchAuto);
+        });
+        with_tool_search_env(Some("auto:not-a-number"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearchAuto);
+        });
+    }
+
+    #[test]
+    fn tool_search_mode_matches_ts_auto_edges() {
+        with_tool_search_env(Some("auto:0"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearch);
+        });
+        with_tool_search_env(Some("auto:-5"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::ToolSearch);
+        });
+        with_tool_search_env(Some("auto:100"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::Standard);
+        });
+        with_tool_search_env(Some("auto:500"), || {
+            assert_eq!(get_tool_search_mode(), ToolSearchMode::Standard);
+        });
+    }
 }
