@@ -630,6 +630,28 @@ fn auto_tool_search_char_threshold(model: &str) -> usize {
 fn extract_discovered_tool_names(messages: &[Value]) -> std::collections::HashSet<&str> {
     let mut names = std::collections::HashSet::new();
     for msg in messages {
+        if msg.get("type").and_then(Value::as_str) == Some("compact_boundary")
+            || msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+        {
+            for metadata in [
+                msg.get("compactMetadata"),
+                msg.get("message")
+                    .and_then(|message| message.get("compactMetadata")),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(carried) = metadata
+                    .get("preCompactDiscoveredTools")
+                    .and_then(Value::as_array)
+                {
+                    for name in carried.iter().filter_map(Value::as_str) {
+                        names.insert(name);
+                    }
+                }
+            }
+        }
+
         let Some(content) = msg.get("content").and_then(Value::as_array) else {
             continue;
         };
@@ -1350,6 +1372,47 @@ mod tests {
             .find(|tool| tool["name"] == "TodoWrite")
             .unwrap();
         assert_eq!(todo["defer_loading"], true);
+        clear_tool_search_env();
+    }
+
+    #[test]
+    fn tool_search_carries_discovered_tools_from_compact_boundary_match_ts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            deferred_tool_def("TodoWrite"),
+            tool_def("mcp__jira__search"),
+        ];
+        let messages = vec![json!({
+            "type": "system",
+            "subtype": "compact_boundary",
+            "compactMetadata": {
+                "preCompactDiscoveredTools": ["TodoWrite", "mcp__jira__search"]
+            },
+            "message": {"summary": "old conversation compacted"}
+        })];
+
+        let body = build_request_body(&config, &messages, &[], &tools, false);
+        let names = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec!["Read", "ToolSearch", "TodoWrite", "mcp__jira__search"]
+        );
         clear_tool_search_env();
     }
 

@@ -167,6 +167,9 @@ Improved:
   `auto:N` character fallback threshold, discovered `tool_reference` scan,
   deferred MCP and `shouldDefer` built-in tool filtering, and beta-header
   insertion only when ToolSearch/defer-loading is actually used.
+- Rust now also reads TS compact-boundary
+  `compactMetadata.preCompactDiscoveredTools`, so deferred tools loaded before
+  compaction remain available afterward without hardcoding private tool names.
 - Worktree tools remain visible by default because the inspected TS reference
   now returns `true` from `isWorktreeModeEnabled()`.
 - REPL mode now hides the same primitive tools as TS when the `REPL` tool is
