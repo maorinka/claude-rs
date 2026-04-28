@@ -334,14 +334,47 @@ impl ToolExecutor for TaskUpdateTool {
             None => return Ok(error_result("missing required parameter: taskId")),
         };
 
+        let requested_status = input["status"].as_str().map(str::to_string);
+        let task_before_update = {
+            let store = TASK_STORE.lock().unwrap();
+            match store.get(&task_id) {
+                Some(entry) => entry.clone(),
+                None => return Ok(error_result(format!("task not found: {}", task_id))),
+            }
+        };
+
+        if requested_status.as_deref() == Some("completed")
+            && task_before_update.status != "completed"
+        {
+            if let Some(runner) = get_global_runner() {
+                let extra = json!({
+                    "task_id": task_id,
+                    "task_subject": task_before_update.subject,
+                    "task_description": task_before_update.description,
+                });
+                let aggregated = runner
+                    .run_hooks(&HookEvent::TaskCompleted, extra, None, None, None, None)
+                    .await;
+                if !aggregated.blocking_errors.is_empty() {
+                    let msg = aggregated
+                        .blocking_errors
+                        .iter()
+                        .map(claude_core::hooks::get_task_completed_hook_message)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Ok(error_result(msg));
+                }
+            }
+        }
+
         let mut store = TASK_STORE.lock().unwrap();
         let entry = match store.get_mut(&task_id) {
             Some(e) => e,
             None => return Ok(error_result(format!("task not found: {}", task_id))),
         };
 
-        if let Some(status) = input["status"].as_str() {
-            entry.status = status.to_string();
+        if let Some(status) = requested_status {
+            entry.status = status;
         }
         if let Some(subject) = input["subject"].as_str() {
             entry.subject = subject.to_string();
