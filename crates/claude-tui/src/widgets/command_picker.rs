@@ -94,6 +94,30 @@ impl CommandPicker {
         self.filtered.len()
     }
 
+    /// Return visible entries around the current selection.
+    pub fn visible_entries(&self, max_visible: usize) -> Vec<(usize, &CommandPickerEntry)> {
+        if max_visible == 0 {
+            return Vec::new();
+        }
+        let scroll_offset = if self.selected >= max_visible {
+            self.selected - max_visible + 1
+        } else {
+            0
+        };
+        self.filtered
+            .iter()
+            .skip(scroll_offset)
+            .take(max_visible)
+            .enumerate()
+            .map(|(row, &entry_idx)| (row + scroll_offset, &self.entries[entry_idx]))
+            .collect()
+    }
+
+    /// Index of the selected filtered entry.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     fn refilter(&mut self) {
         let q = self.query.to_lowercase();
         self.filtered = self

@@ -2696,8 +2696,8 @@ impl App {
             }
 
             if rewind_picker.visible {
-                let picker_height = ((rewind_picker.filtered_count() as u16) + 2)
-                    .max(3)
+                let picker_height = ((rewind_picker.filtered_count() as u16 * 2) + 7)
+                    .max(7)
                     .min(area.height * 2 / 3);
                 let picker_area = Rect::new(
                     area.x + 1,
@@ -2705,8 +2705,7 @@ impl App {
                     area.width.saturating_sub(2),
                     picker_height,
                 );
-                let picker_widget = CommandPickerWidget::new(rewind_picker).titled("Rewind", "");
-                frame.render_widget(picker_widget, picker_area);
+                render_rewind_picker(frame, picker_area, rewind_picker, theme);
             }
 
             if let Some(confirm) = rewind_confirmation {
@@ -3258,6 +3257,80 @@ fn render_rewind_confirmation(
     frame.render_widget(paragraph, area);
 }
 
+fn render_rewind_picker(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    picker: &CommandPicker,
+    theme: &Theme,
+) {
+    if area.width == 0 || area.height < 3 {
+        return;
+    }
+
+    let max_entries = area.height.saturating_sub(7) as usize / 2;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Rewind",
+            Style::default()
+                .fg(theme.permission)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Restore the code and/or conversation to the point before…"),
+        Line::from(""),
+    ];
+
+    if picker.filtered_count() == 0 {
+        lines.push(Line::from("Nothing to rewind to yet."));
+    } else {
+        for (filtered_index, entry) in picker.visible_entries(max_entries.max(1)) {
+            let selected = filtered_index == picker.selected_index();
+            let pointer = if selected { "\u{276F} " } else { "  " };
+            let message_style = if selected {
+                Style::default()
+                    .fg(theme.permission)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(pointer, message_style),
+                Span::styled(
+                    entry
+                        .display_name
+                        .as_deref()
+                        .unwrap_or(&entry.name)
+                        .to_string(),
+                    message_style,
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    entry.description.clone(),
+                    Style::default().fg(theme.inactive),
+                ),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter to continue · Esc to exit",
+        Style::default()
+            .fg(theme.inactive)
+            .add_modifier(Modifier::ITALIC),
+    )));
+
+    frame.render_widget(Clear, area);
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme.permission)),
+    );
+    frame.render_widget(paragraph, area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3330,5 +3403,37 @@ mod tests {
         let engine_messages = reconstruct_engine_messages(app.message_list.messages());
         assert_eq!(engine_messages.len(), 3);
         assert_eq!(engine_messages[2]["role"], "user");
+    }
+
+    #[test]
+    fn rewind_picker_renders_ts_style_panel() {
+        let mut picker = CommandPicker::new();
+        picker.open(vec![CommandPickerEntry {
+            name: "#1".to_string(),
+            description: "No code changes".to_string(),
+            display_name: Some("who are you?".to_string()),
+        }]);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let theme = crate::theme::dark_theme();
+
+        terminal
+            .draw(|frame| {
+                render_rewind_picker(frame, frame.area(), &picker, &theme);
+            })
+            .unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Rewind"));
+        assert!(rendered.contains("Restore the code and/or conversation to the point before"));
+        assert!(rendered.contains("who are you?"));
+        assert!(rendered.contains("No code changes"));
+        assert!(rendered.contains("Enter to continue · Esc to exit"));
     }
 }
