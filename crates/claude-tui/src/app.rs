@@ -2078,6 +2078,21 @@ impl App {
                                 });
                             }
                         }
+                        Ok(TurnResult::MaxTurns { max_turns, .. }) => {
+                            self.spinner.stop();
+                            self.spinner.queued_count = 0;
+                            self.engine_busy = false;
+                            self.message_list.push(MessageEntry::System {
+                                text: format!("Reached maximum number of turns ({max_turns})"),
+                            });
+
+                            if let Some(queued) = self.pop_queued_message() {
+                                let tx2 = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                                });
+                            }
+                        }
                         Ok(TurnResult::ToolUse(tool_uses)) => {
                             pending_tools = tool_uses
                                 .into_iter()

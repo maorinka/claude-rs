@@ -397,19 +397,6 @@ impl QueryEngine {
             return Ok(TurnResult::Done(StopReason::EndTurn));
         }
 
-        // Check max turns — uses turns_since_compact to match TS turnCounter behavior
-        // (counter resets after each compaction so users don't burn their budget on
-        // compaction turns).
-        if let Some(max) = self.max_turns {
-            if self.turns_since_compact >= max {
-                self.state = QueryState::Terminal {
-                    stop_reason: StopReason::EndTurn,
-                    transition: TransitionReason::MaxTurns,
-                };
-                return Ok(TurnResult::Done(StopReason::EndTurn));
-            }
-        }
-
         self.turn_count += 1;
         self.turns_since_compact += 1;
         self.state = QueryState::Querying;
@@ -1150,6 +1137,8 @@ pub struct ToolUseInfo {
 pub enum TurnResult {
     /// Query complete
     Done(StopReason),
+    /// Maximum agentic turn count reached before another model request
+    MaxTurns { max_turns: u32, turn_count: u32 },
     /// Tools need to be executed, then continue
     ToolUse(Vec<ToolUseInfo>),
     /// Max tokens recovery — caller should call run_turn again

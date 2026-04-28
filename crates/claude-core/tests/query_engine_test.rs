@@ -105,22 +105,6 @@ async fn test_query_engine_cancel_before_run() {
     assert!(matches!(engine.state(), QueryState::Terminal { .. }));
 }
 
-#[tokio::test]
-async fn test_query_engine_max_turns() {
-    let config = ApiConfig::default();
-    let auth = AuthMethod::ApiKey("test".into());
-    let client = ApiClient::new(config, auth);
-    let cancel = CancellationToken::new();
-
-    let mut engine = QueryEngine::new(client, vec![], vec![], cancel);
-    engine.set_max_turns(0); // Zero turns allowed
-    engine.add_user_message("hello");
-
-    let (tx, _rx) = mpsc::channel(100);
-    let result = engine.run_turn(&tx).await.unwrap();
-    assert!(matches!(result, TurnResult::Done(_)));
-}
-
 #[test]
 fn test_tool_use_info() {
     let info = ToolUseInfo {

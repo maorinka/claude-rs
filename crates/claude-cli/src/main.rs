@@ -2840,15 +2840,42 @@ fn merge_stream_usage(
     }
 }
 
+fn accumulate_stream_usage(
+    current: &mut Option<claude_core::types::usage::Usage>,
+    update: &claude_core::types::usage::Usage,
+) {
+    match current {
+        Some(existing) => {
+            existing.input_tokens += update.input_tokens;
+            existing.output_tokens += update.output_tokens;
+            existing.cache_creation_input_tokens = Some(
+                existing.cache_creation_input_tokens.unwrap_or(0)
+                    + update.cache_creation_input_tokens.unwrap_or(0),
+            );
+            existing.cache_read_input_tokens = Some(
+                existing.cache_read_input_tokens.unwrap_or(0)
+                    + update.cache_read_input_tokens.unwrap_or(0),
+            );
+        }
+        None => *current = Some(update.clone()),
+    }
+}
+
 struct StreamJsonResultMeta<'a> {
     duration_ms: u128,
     num_turns: u32,
     stop_reason: &'a str,
-    usage: Option<&'a claude_core::types::usage::Usage>,
+    total_usage: Option<&'a claude_core::types::usage::Usage>,
+    latest_usage: Option<&'a claude_core::types::usage::Usage>,
     model_display: &'a str,
     max_tokens: u64,
     context_window: u64,
     total_cost_usd: f64,
+}
+
+enum PrintTerminalOutcome {
+    Completed { stop_reason: String },
+    MaxTurns { max_turns: u32, turn_count: u32 },
 }
 
 fn stream_json_result_event_with_meta(
@@ -2856,9 +2883,10 @@ fn stream_json_result_event_with_meta(
     session_id: &str,
     meta: StreamJsonResultMeta<'_>,
 ) -> serde_json::Value {
-    let usage = meta.usage.map(|usage| {
-        let iteration = stream_json_usage_value(usage, "", false);
-        let mut usage_value = stream_json_usage_value(usage, "", true);
+    let usage = meta.total_usage.map(|total_usage| {
+        let iteration_usage = meta.latest_usage.unwrap_or(total_usage);
+        let iteration = stream_json_usage_value(iteration_usage, "", false);
+        let mut usage_value = stream_json_usage_value(total_usage, "", true);
         usage_value["server_tool_use"] = serde_json::json!({
             "web_search_requests": 0,
             "web_fetch_requests": 0,
@@ -2873,7 +2901,7 @@ fn stream_json_result_event_with_meta(
         }]);
         usage_value
     });
-    let model_usage = meta.usage.map(|usage| {
+    let model_usage = meta.total_usage.map(|usage| {
         let mut map = serde_json::Map::new();
         map.insert(
             normalize_model_display_for_stream_json(meta.model_display),
@@ -2909,6 +2937,67 @@ fn stream_json_result_event_with_meta(
         "terminal_reason": "completed",
         "fast_mode_state": "off",
         "uuid": uuid::Uuid::new_v4().to_string(),
+    })
+}
+
+fn stream_json_max_turns_event_with_meta(
+    max_turns: u32,
+    session_id: &str,
+    meta: StreamJsonResultMeta<'_>,
+) -> serde_json::Value {
+    let usage = meta.total_usage.map(|total_usage| {
+        let iteration_usage = meta.latest_usage.unwrap_or(total_usage);
+        let iteration = stream_json_usage_value(iteration_usage, "", false);
+        let mut usage_value = stream_json_usage_value(total_usage, "", true);
+        usage_value["server_tool_use"] = serde_json::json!({
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+        });
+        usage_value["iterations"] = serde_json::json!([{
+            "input_tokens": iteration["input_tokens"].clone(),
+            "output_tokens": iteration["output_tokens"].clone(),
+            "cache_creation_input_tokens": iteration["cache_creation_input_tokens"].clone(),
+            "cache_read_input_tokens": iteration["cache_read_input_tokens"].clone(),
+            "cache_creation": iteration["cache_creation"].clone(),
+            "type": "message",
+        }]);
+        usage_value
+    });
+    let model_usage = meta.total_usage.map(|usage| {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            normalize_model_display_for_stream_json(meta.model_display),
+            serde_json::json!({
+                "inputTokens": usage.input_tokens,
+                "outputTokens": usage.output_tokens,
+                "cacheReadInputTokens": usage.cache_read_input_tokens.unwrap_or(0),
+                "cacheCreationInputTokens": usage.cache_creation_input_tokens.unwrap_or(0),
+                "webSearchRequests": 0,
+                "costUSD": meta.total_cost_usd,
+                "contextWindow": meta.context_window,
+                "maxOutputTokens": meta.max_tokens,
+            }),
+        );
+        serde_json::Value::Object(map)
+    });
+
+    serde_json::json!({
+        "type": "result",
+        "subtype": "error_max_turns",
+        "is_error": true,
+        "duration_ms": meta.duration_ms,
+        "duration_api_ms": meta.duration_ms,
+        "num_turns": meta.num_turns,
+        "stop_reason": meta.stop_reason,
+        "session_id": session_id,
+        "total_cost_usd": meta.total_cost_usd,
+        "usage": usage,
+        "modelUsage": model_usage,
+        "permission_denials": [],
+        "terminal_reason": "max_turns",
+        "fast_mode_state": "off",
+        "uuid": uuid::Uuid::new_v4().to_string(),
+        "errors": [format!("Reached maximum number of turns ({max_turns})")],
     })
 }
 
@@ -3833,8 +3922,10 @@ async fn main() -> Result<()> {
         let session_id = api_session_id.clone();
         let started_at = std::time::Instant::now();
         let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
+        let mut total_usage: Option<claude_core::types::usage::Usage> = None;
+        let mut emitted_rate_limit_event = false;
         let mut num_turns: u32 = 0;
-        let final_stop_reason = loop {
+        let terminal_outcome = loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
             let output_format = cli.output_format.clone();
             let stream_session_id = session_id.clone();
@@ -3882,17 +3973,32 @@ async fn main() -> Result<()> {
             drop(stream_tx);
             if let Ok(state) = print_handle.await {
                 final_text.push_str(&state.text);
-                if state.latest_usage.is_some() {
-                    latest_usage = state.latest_usage;
+                if let Some(usage) = state.latest_usage {
+                    if cli.output_format == OutputFormat::StreamJson && !emitted_rate_limit_event {
+                        emit_stream_json(stream_json_rate_limit_event(&session_id));
+                        emitted_rate_limit_event = true;
+                    }
+                    accumulate_stream_usage(&mut total_usage, &usage);
+                    latest_usage = Some(usage);
                 }
             }
 
             match result {
                 TurnResult::Done(stop_reason) => {
-                    break serde_json::to_string(&stop_reason)
+                    let stop_reason = serde_json::to_string(&stop_reason)
                         .ok()
                         .and_then(|value| serde_json::from_str::<String>(&value).ok())
                         .unwrap_or_else(|| "end_turn".to_string());
+                    break PrintTerminalOutcome::Completed { stop_reason };
+                }
+                TurnResult::MaxTurns {
+                    max_turns,
+                    turn_count,
+                } => {
+                    break PrintTerminalOutcome::MaxTurns {
+                        max_turns,
+                        turn_count,
+                    };
                 }
                 TurnResult::ContinueRecovery => {
                     // max_tokens recovery — run again immediately
@@ -4405,6 +4511,14 @@ async fn main() -> Result<()> {
                             &session_id,
                         ));
                     }
+                    if let Some(max_turns) = cli.max_turns.filter(|max_turns| *max_turns > 0) {
+                        if num_turns >= max_turns {
+                            break PrintTerminalOutcome::MaxTurns {
+                                max_turns,
+                                turn_count: num_turns + 1,
+                            };
+                        }
+                    }
                     // Continue the loop to call run_turn again with the tool results
                 }
             }
@@ -4413,16 +4527,26 @@ async fn main() -> Result<()> {
         if cli.output_format == OutputFormat::Json {
             println!(
                 "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "type": "result",
-                    "subtype": "success",
-                    "is_error": false,
-                    "result": final_text,
-                }))?
+                match terminal_outcome {
+                    PrintTerminalOutcome::Completed { .. } =>
+                        serde_json::to_string(&serde_json::json!({
+                            "type": "result",
+                            "subtype": "success",
+                            "is_error": false,
+                            "result": final_text,
+                        }))?,
+                    PrintTerminalOutcome::MaxTurns { max_turns, .. } =>
+                        serde_json::to_string(&serde_json::json!({
+                            "type": "result",
+                            "subtype": "error_max_turns",
+                            "is_error": true,
+                            "errors": [format!("Reached maximum number of turns ({max_turns})")],
+                        }))?,
+                }
             );
         } else if cli.output_format == OutputFormat::StreamJson {
             let mut cost_tracker = claude_core::cost::tracker::CostTracker::new(&model);
-            if let Some(ref usage) = latest_usage {
+            if let Some(ref usage) = total_usage {
                 cost_tracker.add_usage(usage);
             }
             let context_window = if model_display.contains("[1M]") || model_display.contains("[1m]")
@@ -4431,21 +4555,43 @@ async fn main() -> Result<()> {
             } else {
                 claude_core::compact::compactor::default_context_window()
             };
-            emit_stream_json(stream_json_rate_limit_event(&session_id));
-            emit_stream_json(stream_json_result_event_with_meta(
-                &final_text,
-                &session_id,
-                StreamJsonResultMeta {
-                    duration_ms: started_at.elapsed().as_millis(),
-                    num_turns,
-                    stop_reason: &final_stop_reason,
-                    usage: latest_usage.as_ref(),
-                    model_display: &model_display,
-                    max_tokens: resolve_max_output_tokens(&model, &settings),
-                    context_window,
-                    total_cost_usd: cost_tracker.total_cost_usd(),
+            let duration_ms = started_at.elapsed().as_millis();
+            let meta_num_turns = match terminal_outcome {
+                PrintTerminalOutcome::Completed { .. } => num_turns,
+                PrintTerminalOutcome::MaxTurns { turn_count, .. } => turn_count,
+            };
+            let meta = StreamJsonResultMeta {
+                duration_ms,
+                num_turns: meta_num_turns,
+                stop_reason: match &terminal_outcome {
+                    PrintTerminalOutcome::Completed { stop_reason } => stop_reason,
+                    PrintTerminalOutcome::MaxTurns { .. } => "tool_use",
                 },
-            ));
+                total_usage: total_usage.as_ref(),
+                latest_usage: latest_usage.as_ref(),
+                model_display: &model_display,
+                max_tokens: resolve_max_output_tokens(&model, &settings),
+                context_window,
+                total_cost_usd: cost_tracker.total_cost_usd(),
+            };
+            match terminal_outcome {
+                PrintTerminalOutcome::Completed { .. } => {
+                    emit_stream_json(stream_json_result_event_with_meta(
+                        &final_text,
+                        &session_id,
+                        meta,
+                    ));
+                }
+                PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
+                    emit_stream_json(stream_json_max_turns_event_with_meta(
+                        max_turns,
+                        &session_id,
+                        meta,
+                    ));
+                }
+            }
+        } else if let PrintTerminalOutcome::MaxTurns { max_turns, .. } = terminal_outcome {
+            eprintln!("Error: Reached max turns ({max_turns})");
         }
 
         // Gracefully disconnect MCP servers

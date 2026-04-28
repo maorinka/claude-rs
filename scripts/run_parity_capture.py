@@ -382,6 +382,7 @@ def main() -> int:
     parser.add_argument("--ts-command", default="claude")
     parser.add_argument("--rust-command", default="cargo run -q -p claude-cli --")
     parser.add_argument("--no-clean", action="store_true", help="append to output dir instead of recreating it")
+    parser.add_argument("--keep-going-on-error", action="store_true", help="run both CLIs and print a diff even if one exits nonzero")
     args = parser.parse_args()
 
     if not args.no_clean and args.output_dir.exists():
@@ -440,7 +441,8 @@ def main() -> int:
         print(ts_result.stdout.strip())
         if ts_result.returncode != 0:
             print(ts_result.stderr, file=sys.stderr)
-            return ts_result.returncode
+            if not args.keep_going_on_error:
+                return ts_result.returncode
 
         print(f"running RS: {' '.join(shlex.quote(p) for p in rs_cmd)}")
         rs_result = run(rs_cmd, rs_env, args.timeout)
@@ -449,7 +451,8 @@ def main() -> int:
         print(rs_result.stdout.strip())
         if rs_result.returncode != 0:
             print(rs_result.stderr, file=sys.stderr)
-            return rs_result.returncode
+            if not args.keep_going_on_error:
+                return rs_result.returncode
     finally:
         if proxy.poll() is None:
             proxy.send_signal(signal.SIGINT)
