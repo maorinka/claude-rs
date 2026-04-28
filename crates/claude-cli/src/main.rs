@@ -2580,10 +2580,10 @@ fn hook_blocking_errors_text(errors: &[claude_core::hooks::HookBlockingError]) -
     }
 }
 
-fn stream_event_to_stream_json(
+fn stream_event_to_stream_json_events(
     ev: &claude_core::types::events::StreamEvent,
     session_id: &str,
-) -> Option<serde_json::Value> {
+) -> Vec<serde_json::Value> {
     use claude_core::types::events::StreamEvent;
     use serde_json::json;
 
@@ -2598,18 +2598,16 @@ fn stream_event_to_stream_json(
         | StreamEvent::ThinkingDelta { .. }
         | StreamEvent::TextDelta { .. }
         | StreamEvent::UsageUpdate(_)
-        | StreamEvent::Done { .. } => return None,
+        | StreamEvent::Done { .. } => return Vec::new(),
         StreamEvent::AssistantMessage(message) => {
             let mut sdk_message =
                 serde_json::to_value(&message.message).unwrap_or(serde_json::Value::Null);
             normalize_stream_json_assistant_message(&mut sdk_message);
-            json!({
-                "type": "assistant",
-                "message": sdk_message,
-                "parent_tool_use_id": serde_json::Value::Null,
-                "session_id": session_id,
-                "uuid": message.uuid.to_string(),
-            })
+            return split_stream_json_assistant_message(
+                sdk_message,
+                session_id,
+                message.uuid.to_string(),
+            );
         }
         StreamEvent::Compacted { summary } => json!({
             "type": "system",
@@ -2621,7 +2619,7 @@ fn stream_event_to_stream_json(
         }),
         StreamEvent::Error(error) => json!({"type": "error", "error": format!("{:?}", error)}),
     };
-    Some(value)
+    vec![value]
 }
 
 fn stream_json_usage_value(
@@ -2673,6 +2671,57 @@ fn normalize_stream_json_assistant_message(message: &mut serde_json::Value) {
             );
         }
     }
+}
+
+fn split_stream_json_assistant_message(
+    message: serde_json::Value,
+    session_id: &str,
+    fallback_uuid: String,
+) -> Vec<serde_json::Value> {
+    let Some(content) = message.get("content").and_then(|value| value.as_array()) else {
+        return vec![serde_json::json!({
+            "type": "assistant",
+            "message": message,
+            "parent_tool_use_id": serde_json::Value::Null,
+            "session_id": session_id,
+            "uuid": fallback_uuid,
+        })];
+    };
+
+    if content.len() <= 1 {
+        let mut single = message;
+        if let Some(object) = single.as_object_mut() {
+            object.insert("stop_reason".to_string(), serde_json::Value::Null);
+        }
+        return vec![serde_json::json!({
+            "type": "assistant",
+            "message": single,
+            "parent_tool_use_id": serde_json::Value::Null,
+            "session_id": session_id,
+            "uuid": fallback_uuid,
+        })];
+    }
+
+    content
+        .iter()
+        .map(|block| {
+            let mut split = message.clone();
+            if let Some(object) = split.as_object_mut() {
+                object.insert(
+                    "content".to_string(),
+                    serde_json::Value::Array(vec![block.clone()]),
+                );
+                object.insert("stop_reason".to_string(), serde_json::Value::Null);
+            }
+            serde_json::json!({
+                "type": "assistant",
+                "message": split,
+                "parent_tool_use_id": serde_json::Value::Null,
+                "session_id": session_id,
+                "uuid": uuid::Uuid::new_v4().to_string(),
+            })
+        })
+        .collect()
 }
 
 fn stream_json_user_tool_result_event(
@@ -3744,8 +3793,7 @@ async fn main() -> Result<()> {
                             if let StreamEvent::UsageUpdate(usage) = &ev {
                                 merge_stream_usage(&mut state.latest_usage, usage.clone());
                             }
-                            if let Some(value) =
-                                stream_event_to_stream_json(&ev, &stream_session_id)
+                            for value in stream_event_to_stream_json_events(&ev, &stream_session_id)
                             {
                                 emit_stream_json(value);
                             }
