@@ -231,7 +231,7 @@ Needs work:
   messages and partial tool-use repair.
 - Add tests for mixed concurrent/exclusive scheduling.
 
-### Query user context is date-only
+### Query user context still needs lifecycle parity
 
 Files:
 - `crates/claude-core/src/query/engine.rs`
@@ -239,15 +239,17 @@ Files:
 - TS reference: `src/context.ts`, `src/utils/api.ts`,
   `src/utils/claudemd.ts`, `src/memdir/*`
 
-Rust prepends a `<system-reminder>` with only `currentDate` during query.
-TS builds richer cached user/system context, including CLAUDE.md aggregation,
-memory files, git status, injected extra directories, cache-breaker injection,
-and bare/disable flags.
+Improved:
+- CLI startup now appends request-time user context blocks for MCP server
+  instructions, available skills, CLAUDE.md/rules aggregation, auto-memory,
+  user email, and current date.
+- CLAUDE.md loading honors `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, bare mode, and
+  additional-directory loading through the same gates as the TS flow.
+- Dynamic context is prepended to the first user message or smooshed into the
+  adjacent tool-result content, matching the TS message shape used in live
+  proxy captures.
 
 Needs work:
-- Reuse Rust context builders in the actual query prepend path.
-- Match TS behavior for `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, bare mode, and
-  additional directories.
 - Cache context at the same lifecycle points as TS.
 - Ensure git status appears where TS places it and with the same truncation
   behavior.
