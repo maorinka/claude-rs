@@ -4309,6 +4309,86 @@ async fn main() -> Result<()> {
             }));
         }
 
+        let user_prompt_submit = hook_runner
+            .run_hooks(
+                &claude_core::hooks::types::HookEvent::UserPromptSubmit,
+                serde_json::json!({ "prompt": effective_prompt.clone() }),
+                Some(permission_mode_hook_name(&permission_mode)),
+                None,
+                None,
+                None,
+            )
+            .await;
+        if cli.output_format == OutputFormat::StreamJson {
+            for result in &user_prompt_submit.individual_results {
+                emit_stream_json_hook_events(result, &api_session_id);
+            }
+        }
+        if !user_prompt_submit.blocking_errors.is_empty() {
+            let blocking = user_prompt_submit
+                .blocking_errors
+                .iter()
+                .map(claude_core::hooks::get_user_prompt_submit_hook_blocking_message)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let message = format!("{blocking}\n\nOriginal prompt: {effective_prompt}");
+            match cli.output_format {
+                OutputFormat::Text => println!("{message}"),
+                OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "type": "result",
+                        "subtype": "error",
+                        "is_error": true,
+                        "errors": [message],
+                    }))?
+                ),
+                OutputFormat::StreamJson => emit_stream_json(serde_json::json!({
+                    "type": "result",
+                    "subtype": "error",
+                    "is_error": true,
+                    "errors": [message],
+                    "session_id": api_session_id,
+                })),
+            }
+            let mgr = mcp_manager.read().await;
+            mgr.disconnect_all().await;
+            return Ok(());
+        }
+        if user_prompt_submit.prevent_continuation {
+            let message = user_prompt_submit
+                .stop_reason
+                .unwrap_or_else(|| "Operation stopped by hook".to_string());
+            match cli.output_format {
+                OutputFormat::Text => println!("{message}"),
+                OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "type": "result",
+                        "subtype": "error",
+                        "is_error": true,
+                        "errors": [message],
+                    }))?
+                ),
+                OutputFormat::StreamJson => emit_stream_json(serde_json::json!({
+                    "type": "result",
+                    "subtype": "error",
+                    "is_error": true,
+                    "errors": [message],
+                    "session_id": api_session_id,
+                })),
+            }
+            let mgr = mcp_manager.read().await;
+            mgr.disconnect_all().await;
+            return Ok(());
+        }
+        for context in user_prompt_submit.additional_contexts {
+            query_engine.append_user_context_block(format!(
+                "<system-reminder>\nUserPromptSubmit hook additional context: {}\n</system-reminder>",
+                context
+            ));
+        }
+
         query_engine.add_user_message(&effective_prompt);
 
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done

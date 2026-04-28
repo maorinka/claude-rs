@@ -667,11 +667,10 @@ Files:
 Rust has hook types and runner pieces, but dispatch is incomplete.
 
 Needs work:
-- Fire `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` from the tool
-  executor.
-- Fire `TaskCreated` / `TaskCompleted` from task tools.
-- Fire session, compact, config, cwd, file, worktree, teammate, permission,
-  and elicitation hooks at the same sites as TS.
+- Move `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` dispatch into
+  the shared tool executor instead of duplicating it in CLI/TUI loops.
+- Fire compact, config, cwd, file, worktree, teammate, permission, and
+  elicitation hooks at the same sites as TS.
 - Implement aggregation/blocking behavior exactly.
 - Ensure hook outputs are inserted into transcript/context like TS.
 
@@ -680,6 +679,12 @@ Improved:
 - Rust now fires main-thread `Stop` hooks after normal assistant turns,
   injects blocking feedback as user messages, continues the query when a
   Stop hook blocks, and respects `preventContinuation`.
+- Rust task tools now fire `TaskCreated` and `TaskCompleted` hooks around task
+  create/update.
+- Rust print mode now fires `SessionStart` and `UserPromptSubmit` hooks before
+  the first model request; `UserPromptSubmit` blocking errors prevent the
+  prompt from reaching the model, and additional context is injected into the
+  request-time user context lane.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like
