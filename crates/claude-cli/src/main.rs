@@ -3567,7 +3567,10 @@ async fn main() -> Result<()> {
     }
 
     if let Some(context) =
-        claude_core::context::system_prompt::build_project_user_context_block(&project_root)
+        claude_core::context::system_prompt::build_project_user_context_block_with_additional(
+            &project_root,
+            &skill_additional_dirs,
+        )
     {
         query_engine.append_user_context_block(context);
     }

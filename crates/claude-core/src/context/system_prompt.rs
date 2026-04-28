@@ -120,13 +120,53 @@ pub async fn build_system_prompt(
     Ok(blocks)
 }
 
+#[derive(Clone, Debug, Default)]
+struct ProjectUserContextOptions {
+    additional_dirs: Vec<PathBuf>,
+    bare_mode: bool,
+    disable_claude_mds: bool,
+    include_additional_dirs_claude_md: bool,
+}
+
 /// Build TS-style request-time context blocks for the first user message.
 pub fn build_project_user_context_block(project_root: &Path) -> Option<String> {
+    build_project_user_context_block_with_additional(project_root, &[])
+}
+
+/// Build TS-style request-time context blocks, including explicit `--add-dir`
+/// memory sources when the same TS environment gate is enabled.
+pub fn build_project_user_context_block_with_additional(
+    project_root: &Path,
+    additional_dirs: &[PathBuf],
+) -> Option<String> {
+    build_project_user_context_block_inner(
+        project_root,
+        &ProjectUserContextOptions {
+            additional_dirs: additional_dirs.to_vec(),
+            bare_mode: crate::errors_util::is_bare_mode(),
+            disable_claude_mds: crate::errors_util::is_env_truthy("CLAUDE_CODE_DISABLE_CLAUDE_MDS"),
+            include_additional_dirs_claude_md: crate::errors_util::is_env_truthy(
+                "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD",
+            ),
+        },
+    )
+}
+
+fn build_project_user_context_block_inner(
+    project_root: &Path,
+    options: &ProjectUserContextOptions,
+) -> Option<String> {
     let mut body = String::from(
         "<system-reminder>\nAs you answer the user's questions, you can use the following context:",
     );
 
-    let claude_md_contents = load_claude_md_files(project_root);
+    let should_disable_claude_md =
+        options.disable_claude_mds || (options.bare_mode && options.additional_dirs.is_empty());
+    let claude_md_contents = if should_disable_claude_md {
+        Vec::new()
+    } else {
+        load_claude_md_files_with_options(project_root, options)
+    };
     if !claude_md_contents.is_empty() {
         body.push_str("\n# claudeMd\n");
         body.push_str(MEMORY_INSTRUCTION_PROMPT);
@@ -626,92 +666,145 @@ fn base_system_prompt() -> String {
 /// Returns a list of `(source_label, content)` pairs in priority order
 /// (lowest priority first, highest last).
 pub fn load_claude_md_files(project_root: &Path) -> Vec<(String, String)> {
+    load_claude_md_files_with_options(project_root, &ProjectUserContextOptions::default())
+}
+
+fn load_claude_md_files_with_options(
+    project_root: &Path,
+    options: &ProjectUserContextOptions,
+) -> Vec<(String, String)> {
     let mut results: Vec<(String, String)> = Vec::new();
+    let mut processed_paths = std::collections::HashSet::new();
 
-    // 1. User-level CLAUDE.md (~/.claude/CLAUDE.md)
-    if let Some(home) = dirs::home_dir() {
-        let user_claude_md = home.join(".claude").join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&user_claude_md) {
-            if !content.trim().is_empty() {
-                results.push(("~/.claude/CLAUDE.md".to_string(), content));
-            }
-        }
-    }
+    if !options.bare_mode {
+        // 1. Managed memory (policy settings), then managed rules.
+        let managed_dir = crate::managed_path::get_managed_file_path();
+        push_memory_file(
+            &mut results,
+            &mut processed_paths,
+            managed_dir.join("CLAUDE.md"),
+            None,
+        );
+        push_rules_dir(
+            &mut results,
+            &mut processed_paths,
+            &managed_dir.join(".claude").join("rules"),
+        );
 
-    // 2. Collect parent directories between filesystem root and project root
-    //    (excluding the project root itself, which is handled in step 3).
-    let mut parent_dirs: Vec<PathBuf> = Vec::new();
-    {
-        let mut current = project_root.parent();
+        // 2. User memory, then user rules.
+        let user_dir = crate::errors_util::get_claude_config_home_dir();
+        push_memory_file(
+            &mut results,
+            &mut processed_paths,
+            user_dir.join("CLAUDE.md"),
+            Some("~/.claude/CLAUDE.md"),
+        );
+        push_rules_dir(&mut results, &mut processed_paths, &user_dir.join("rules"));
+
+        // 3. Project and local memory. TS walks from cwd up to root, then
+        // processes root downward so closer files appear later.
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut current = Some(project_root);
         while let Some(dir) = current {
-            parent_dirs.push(dir.to_path_buf());
+            dirs.push(dir.to_path_buf());
             current = dir.parent();
         }
-    }
-    // Reverse so we go from furthest ancestor to closest parent
-    // (furthest = lowest priority, closest = higher priority)
-    parent_dirs.reverse();
+        dirs.reverse();
 
-    for dir in &parent_dirs {
-        // CLAUDE.md in the directory itself
-        let claude_md = dir.join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&claude_md) {
-            if !content.trim().is_empty() {
-                results.push((claude_md.display().to_string(), content));
-            }
-        }
-        // .claude/CLAUDE.md in the directory
-        let dotclaude_md = dir.join(".claude").join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&dotclaude_md) {
-            if !content.trim().is_empty() {
-                results.push((dotclaude_md.display().to_string(), content));
-            }
-        }
-    }
-
-    // 3. Project root: CLAUDE.md, .claude/CLAUDE.md, .claude/rules/*.md
-    let project_claude_md = project_root.join("CLAUDE.md");
-    if let Ok(content) = std::fs::read_to_string(&project_claude_md) {
-        if !content.trim().is_empty() {
-            results.push((project_claude_md.display().to_string(), content));
-        }
-    }
-
-    let project_dotclaude_md = project_root.join(".claude").join("CLAUDE.md");
-    if let Ok(content) = std::fs::read_to_string(&project_dotclaude_md) {
-        if !content.trim().is_empty() {
-            results.push((project_dotclaude_md.display().to_string(), content));
+        for dir in &dirs {
+            push_memory_file(
+                &mut results,
+                &mut processed_paths,
+                dir.join("CLAUDE.md"),
+                None,
+            );
+            push_memory_file(
+                &mut results,
+                &mut processed_paths,
+                dir.join(".claude").join("CLAUDE.md"),
+                None,
+            );
+            push_rules_dir(
+                &mut results,
+                &mut processed_paths,
+                &dir.join(".claude").join("rules"),
+            );
+            push_memory_file(
+                &mut results,
+                &mut processed_paths,
+                dir.join("CLAUDE.local.md"),
+                None,
+            );
         }
     }
 
-    // .claude/rules/*.md files
-    let rules_dir = project_root.join(".claude").join("rules");
-    if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-        let mut rule_files: Vec<_> = entries
-            .flatten()
-            .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
-            .collect();
-        // Sort by filename for deterministic ordering
-        rule_files.sort_by_key(|e| e.file_name());
-        for entry in rule_files {
-            let path = entry.path();
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if !content.trim().is_empty() {
-                    results.push((path.display().to_string(), content));
-                }
-            }
-        }
-    }
-
-    // 4. Local: CLAUDE.local.md in project root
-    let local_claude_md = project_root.join("CLAUDE.local.md");
-    if let Ok(content) = std::fs::read_to_string(&local_claude_md) {
-        if !content.trim().is_empty() {
-            results.push((local_claude_md.display().to_string(), content));
+    // 4. Explicit --add-dir memory sources. TS only includes these when
+    // CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD is truthy.
+    if options.include_additional_dirs_claude_md {
+        for dir in &options.additional_dirs {
+            push_memory_file(
+                &mut results,
+                &mut processed_paths,
+                dir.join("CLAUDE.md"),
+                None,
+            );
+            push_memory_file(
+                &mut results,
+                &mut processed_paths,
+                dir.join(".claude").join("CLAUDE.md"),
+                None,
+            );
+            push_rules_dir(
+                &mut results,
+                &mut processed_paths,
+                &dir.join(".claude").join("rules"),
+            );
         }
     }
 
     results
+}
+
+fn push_memory_file(
+    results: &mut Vec<(String, String)>,
+    processed_paths: &mut std::collections::HashSet<PathBuf>,
+    path: PathBuf,
+    display_override: Option<&str>,
+) {
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    if content.trim().is_empty() {
+        return;
+    }
+    let dedupe_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    if !processed_paths.insert(dedupe_path) {
+        return;
+    }
+    results.push((
+        display_override
+            .map(str::to_string)
+            .unwrap_or_else(|| path.display().to_string()),
+        content,
+    ));
+}
+
+fn push_rules_dir(
+    results: &mut Vec<(String, String)>,
+    processed_paths: &mut std::collections::HashSet<PathBuf>,
+    rules_dir: &Path,
+) {
+    let Ok(entries) = std::fs::read_dir(rules_dir) else {
+        return;
+    };
+    let mut rule_files: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
+        .collect();
+    rule_files.sort_by_key(|e| e.file_name());
+    for entry in rule_files {
+        push_memory_file(results, processed_paths, entry.path(), None);
+    }
 }
 
 #[cfg(test)]
@@ -818,6 +911,73 @@ mod tests {
         let last = results.last().unwrap();
         assert!(last.0.contains("CLAUDE.local.md"));
         assert_eq!(last.1, "Local overrides");
+    }
+
+    #[test]
+    fn build_project_user_context_hard_disables_claude_md_like_ts() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("CLAUDE.md"), "Project instructions").unwrap();
+
+        let context = build_project_user_context_block_inner(
+            root,
+            &ProjectUserContextOptions {
+                disable_claude_mds: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!context.contains("# claudeMd"));
+        assert!(!context.contains("Project instructions"));
+        assert!(context.contains("# currentDate"));
+    }
+
+    #[test]
+    fn bare_mode_keeps_only_explicit_add_dir_claude_md_like_ts() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("project");
+        let extra = tmp.path().join("extra");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&extra).unwrap();
+        fs::write(root.join("CLAUDE.md"), "Project instructions").unwrap();
+        fs::write(extra.join("CLAUDE.md"), "Extra instructions").unwrap();
+
+        let context = build_project_user_context_block_inner(
+            &root,
+            &ProjectUserContextOptions {
+                additional_dirs: vec![extra],
+                bare_mode: true,
+                include_additional_dirs_claude_md: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(context.contains("Extra instructions"));
+        assert!(!context.contains("Project instructions"));
+    }
+
+    #[test]
+    fn additional_dir_claude_md_requires_ts_env_gate() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("project");
+        let extra = tmp.path().join("extra");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&extra).unwrap();
+        fs::write(extra.join("CLAUDE.md"), "Extra instructions").unwrap();
+
+        let context = build_project_user_context_block_inner(
+            &root,
+            &ProjectUserContextOptions {
+                additional_dirs: vec![extra],
+                include_additional_dirs_claude_md: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!context.contains("Extra instructions"));
     }
 
     // Auto-memory is governed by process-wide env vars; serialize the
