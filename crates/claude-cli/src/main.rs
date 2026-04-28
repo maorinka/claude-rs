@@ -4637,9 +4637,13 @@ async fn main() -> Result<()> {
                                                 }
                                                 None => {
                                                     let message =
-                                                        format!("Unknown tool: {}", tool_info.name);
+                                                        claude_core::tool_result_format::unknown_tool_error_text(
+                                                            &tool_info.name,
+                                                        );
                                                     (
-                                                        message.clone(),
+                                                        claude_core::tool_result_format::unknown_tool_error_content(
+                                                            &tool_info.name,
+                                                        ),
                                                         true,
                                                         serde_json::json!({"error": message}),
                                                     )
@@ -4756,9 +4760,14 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     None => {
-                                        let message = format!("Unknown tool: {}", tool_info.name);
+                                        let message =
+                                            claude_core::tool_result_format::unknown_tool_error_text(
+                                                &tool_info.name,
+                                            );
                                         (
-                                            message.clone(),
+                                            claude_core::tool_result_format::unknown_tool_error_content(
+                                                &tool_info.name,
+                                            ),
                                             true,
                                             serde_json::json!({"error": message}),
                                         )

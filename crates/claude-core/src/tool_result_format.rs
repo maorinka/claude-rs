@@ -1,5 +1,16 @@
 use serde_json::Value;
 
+pub fn unknown_tool_error_text(tool_name: &str) -> String {
+    format!("Error: No such tool available: {tool_name}")
+}
+
+pub fn unknown_tool_error_content(tool_name: &str) -> String {
+    format!(
+        "<tool_use_error>{}</tool_use_error>",
+        unknown_tool_error_text(tool_name)
+    )
+}
+
 pub fn format_tool_result_for_model(tool_name: &str, data: &Value) -> String {
     ensure_non_empty_tool_result_string(
         tool_name,
@@ -887,4 +898,21 @@ fn format_search_limit_info(data: &Value) -> Option<String> {
 
 fn json_stringify_for_ts(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_tool_error_matches_ts_model_content() {
+        assert_eq!(
+            unknown_tool_error_text("MissingTool"),
+            "Error: No such tool available: MissingTool"
+        );
+        assert_eq!(
+            unknown_tool_error_content("MissingTool"),
+            "<tool_use_error>Error: No such tool available: MissingTool</tool_use_error>"
+        );
+    }
 }

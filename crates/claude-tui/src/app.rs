@@ -2871,9 +2871,14 @@ async fn execute_tool(
     use claude_core::tool_host::NullToolHost;
     use claude_core::tool_use_context_options::ToolUseContextOptions;
 
-    let executor = tools
-        .get(name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
+    let Some(executor) = tools.get(name) else {
+        return Ok(ToolResultData {
+            data: serde_json::Value::String(
+                claude_core::tool_result_format::unknown_tool_error_content(name),
+            ),
+            is_error: true,
+        });
+    };
     let options = Arc::new(ToolUseContextOptions::minimal(model));
     let host = Arc::new(NullToolHost);
     let ctx = ToolUseContext::new(

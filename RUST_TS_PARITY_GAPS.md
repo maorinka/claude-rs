@@ -229,13 +229,15 @@ Files:
 
 Needs work:
 - Stream tool progress/results with TS-equivalent events.
-- Dispatch PreToolUse/PostToolUse/PostToolUseFailure hooks.
-- Run permission request flow from the executor rather than relying on thin
-  checks in individual tools.
+- Move the duplicated CLI/TUI PreToolUse/PostToolUse/PostToolUseFailure hook
+  and permission flow into the shared executor so there is one TS-equivalent
+  execution path.
 - Normalize/cancel tool results exactly like TS, including synthetic cancel
   messages and partial tool-use repair.
 
 Improved:
+- Rust CLI and TUI now both dispatch PreToolUse, PostToolUse, and
+  PostToolUseFailure hooks around tool execution.
 - Rust now reads `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` and caps concurrent
   tool execution the same way TS `runToolsConcurrently(... all(...))` does,
   defaulting to 10.
@@ -280,6 +282,9 @@ Improved:
   settings default to enabled.
 - Rust git status now uses the TS recent-commit command shape
   `git --no-optional-locks log --oneline -n 5`.
+- Unknown tool calls now use the TS model-facing error shape
+  `<tool_use_error>Error: No such tool available: ...</tool_use_error>`
+  instead of Rust-only `Unknown tool: ...` text.
 
 Remaining result-budget work:
 - Extend the same transcript-backed replacement state to sidechain/forked
@@ -322,7 +327,6 @@ Missing or partial:
 - Context collapse flow.
 - Attachment message prefetch.
 - Relevant-memory prefetch.
-- StopFailure hook execution.
 - Tool-use summarization.
 - Structured-output enforcement.
 - Full max-turn and compaction edge-case parity.
@@ -335,6 +339,10 @@ Needs work:
 - Build a TS/Rust behavior matrix for each query transition.
 - Add transcript-level tests for tool-use, cancel, compact, max-token recovery,
   stop hooks, and resumed sessions.
+
+Improved:
+- StopFailure hooks now fire for request errors, streamed API error events,
+  and stream idle timeout failures instead of only the initial API send path.
 
 ### Bridge / direct-connect / upstream proxy
 

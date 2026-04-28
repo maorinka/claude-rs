@@ -679,6 +679,7 @@ impl QueryEngine {
                         "Streaming idle timeout: no chunks received for {}s, aborting stream",
                         idle_timeout_ms / 1000
                     );
+                    let _ = crate::hooks::fire_stop_failure("Streaming idle timeout").await;
                     self.state = QueryState::Terminal {
                         stop_reason: StopReason::EndTurn,
                         transition: TransitionReason::Error(
@@ -882,6 +883,7 @@ impl QueryEngine {
                                 }
                                 SseEvent::Error { message } => {
                                     tracing::error!("Streaming API error mid-stream: {}", message);
+                                    let _ = crate::hooks::fire_stop_failure(&message).await;
                                     let error =
                                         crate::types::error::QueryError::Api { status: 0, message };
                                     let _ = event_tx.send(StreamEvent::Error(error.clone())).await;
