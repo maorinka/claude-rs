@@ -157,7 +157,7 @@ pub enum SubCommand {
         spawn: Option<String>,
         /// Max concurrent sessions in worktree or same-dir mode
         #[arg(long)]
-        capacity: Option<u32>,
+        capacity: Option<String>,
         /// Pre-create a session in the current directory
         #[arg(long = "create-session-in-dir")]
         create_session_in_dir: bool,
@@ -3208,6 +3208,47 @@ NOTES
 "
 }
 
+fn normalize_remote_control_spawn(raw: Option<&str>) -> Result<Option<&'static str>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    match raw {
+        "session" => Ok(Some("single-session")),
+        "same-dir" => Ok(Some("same-dir")),
+        "worktree" => Ok(Some("worktree")),
+        value => Err(format!(
+            "--spawn requires one of: session, same-dir, worktree (got: {value})"
+        )),
+    }
+}
+
+fn parse_remote_control_capacity(raw: Option<&str>) -> Result<Option<u32>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    match raw.parse::<u32>() {
+        Ok(value) if value >= 1 => Ok(Some(value)),
+        _ => Err(format!(
+            "--capacity requires a positive integer (got: {raw})"
+        )),
+    }
+}
+
+fn validate_remote_control_bridge_options(
+    spawn: Option<&str>,
+    capacity: Option<&str>,
+) -> Result<(Option<&'static str>, Option<u32>), String> {
+    let spawn = normalize_remote_control_spawn(spawn)?;
+    let capacity = parse_remote_control_capacity(capacity)?;
+    if spawn == Some("single-session") && capacity.is_some() {
+        return Err(
+            "--capacity cannot be used with --spawn=session (single-session mode has fixed capacity 1)."
+                .to_string(),
+        );
+    }
+    Ok((spawn, capacity))
+}
+
 fn maybe_handle_remote_control_help() {
     let mut args = std::env::args().skip(1);
     let Some(first) = args.next() else {
@@ -3323,6 +3364,15 @@ async fn main() -> Result<()> {
             create_session_in_dir,
             no_create_session_in_dir,
         }) => {
+            let (_spawn_mode, _capacity) =
+                match validate_remote_control_bridge_options(spawn.as_deref(), capacity.as_deref())
+                {
+                    Ok(validated) => validated,
+                    Err(message) => {
+                        eprintln!("Error: {message}");
+                        std::process::exit(1);
+                    }
+                };
             let name_suffix = name
                 .as_deref()
                 .filter(|value| !value.is_empty())
@@ -4880,12 +4930,41 @@ mod remote_control_tests {
                 );
                 assert!(verbose);
                 assert_eq!(spawn.as_deref(), Some("same-dir"));
-                assert_eq!(capacity, Some(2));
+                assert_eq!(capacity.as_deref(), Some("2"));
                 assert!(!create_session_in_dir);
                 assert!(no_create_session_in_dir);
             }
             _ => panic!("expected remote-control command"),
         }
+    }
+
+    #[test]
+    fn remote_control_bridge_option_validation_matches_ts() {
+        assert_eq!(
+            validate_remote_control_bridge_options(Some("session"), None).unwrap(),
+            (Some("single-session"), None)
+        );
+        assert_eq!(
+            validate_remote_control_bridge_options(Some("same-dir"), Some("2")).unwrap(),
+            (Some("same-dir"), Some(2))
+        );
+        assert_eq!(
+            validate_remote_control_bridge_options(Some("worktree"), Some("32")).unwrap(),
+            (Some("worktree"), Some(32))
+        );
+
+        assert_eq!(
+            validate_remote_control_bridge_options(Some("bad"), None).unwrap_err(),
+            "--spawn requires one of: session, same-dir, worktree (got: bad)"
+        );
+        assert_eq!(
+            validate_remote_control_bridge_options(None, Some("0")).unwrap_err(),
+            "--capacity requires a positive integer (got: 0)"
+        );
+        assert_eq!(
+            validate_remote_control_bridge_options(Some("session"), Some("2")).unwrap_err(),
+            "--capacity cannot be used with --spawn=session (single-session mode has fixed capacity 1)."
+        );
     }
 
     #[test]
