@@ -692,9 +692,7 @@ impl McpManager {
     pub async fn add_tool_definitions(&self, tools: Vec<McpToolInfo>) {
         let mut existing = self.tool_definitions.write().await;
         for tool in tools {
-            if let Some(known) = existing.iter_mut().find(|known| known.name == tool.name) {
-                *known = tool;
-            } else {
+            if !existing.iter().any(|known| known.name == tool.name) {
                 existing.push(tool);
             }
         }
@@ -908,7 +906,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_tool_definitions_replaces_existing_contract() {
+    async fn add_tool_definitions_preserves_live_contract() {
         let manager = McpManager::new();
         manager
             .add_tool_definitions(vec![McpToolInfo {
@@ -935,12 +933,12 @@ mod tests {
 
         let definitions = manager.tool_definitions().await;
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].description.as_deref(), Some("ts"));
+        assert_eq!(definitions[0].description.as_deref(), Some("live"));
         assert!(definitions[0]
             .input_schema
             .as_ref()
             .unwrap()
-            .pointer("/properties/b")
+            .pointer("/properties/a")
             .is_some());
     }
 

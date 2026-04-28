@@ -380,6 +380,10 @@ static TS_TOOL_CONTRACTS: Lazy<HashMap<String, (String, Value)>> = Lazy::new(|| 
 });
 
 fn apply_ts_tool_contract(definition: &mut claude_core::api::client::ToolDefinition) {
+    if definition.name.starts_with("mcp__") {
+        return;
+    }
+
     if let Some((description, input_schema)) = TS_TOOL_CONTRACTS.get(definition.name.as_str()) {
         definition.description = description.clone();
         definition.input_schema = input_schema.clone();
