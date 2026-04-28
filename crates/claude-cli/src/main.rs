@@ -4229,7 +4229,7 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     if !unique_new.is_empty() {
-                                        query_engine.append_user_context_block(
+                                        query_engine.add_user_context_message(
                                             skills_reminder_block(&unique_new),
                                         );
                                     }

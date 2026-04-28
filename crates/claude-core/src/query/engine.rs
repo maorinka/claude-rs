@@ -144,6 +144,16 @@ impl QueryEngine {
             .push(serde_json::json!({"type": "text", "text": text}));
     }
 
+    /// Add a meta user message carrying attachment-style context. TS dynamic
+    /// attachments are emitted after tool results as user messages rather than
+    /// being prepended to the next request's first user turn.
+    pub fn add_user_context_message(&mut self, text: String) {
+        self.messages.push(serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": text}],
+        }));
+    }
+
     /// Add additional tool schemas (e.g. from MCP servers discovered at runtime).
     pub fn extend_tool_schemas(&mut self, extra: Vec<ToolDefinition>) {
         self.tool_schemas.extend(extra);
