@@ -38,7 +38,7 @@ The largest remaining gaps are behavioral depth, not just missing files:
 Captured through `scripts/run_parity_capture.py` on 2026-04-28:
 
 - Capture directory:
-  `/var/folders/nt/rq0yxr_d6m5g2_r3c23flfqw0000gn/T/claude-rs-context-proxy-live`
+  `/tmp/claude-rs-parity-auth-classifier-fix`
 
 Now matching:
 
@@ -49,6 +49,10 @@ Now matching:
 - Prompt cache marker count.
 - Tool count: 87 vs 87.
 - Tool names, tool order, and tool schemas.
+- Claude.ai MCP servers now match the TS auth flow for Cloudflare: a live
+  proxy 401 is classified as `needs-auth`, the two auth shadow tools are
+  exposed, and the MCP needs-auth cache short-circuits future HTTP/SSE
+  connection attempts.
 - MCP instruction block ordering after sorting connected instruction deltas by
   server name.
 - Stream-json event sequence and event key shapes.
@@ -80,7 +84,9 @@ Remaining first-turn prompt-context difference:
 
 - The available-skills block has the same entries, but plugin command/skill
   order can differ between runs.
-- `equal ignoring skill order: yes`.
+- Latest capture still reports `equal ignoring skill order: no`; the visible
+  first-turn differences are now ordering-only in skills/slash commands, but
+  the scrubbed-body helper does not normalize slash-command ordering yet.
 
 ### TS Skill And Command Ordering Rules
 

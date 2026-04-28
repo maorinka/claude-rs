@@ -178,6 +178,14 @@ impl McpManager {
     ) -> McpServerConnection {
         debug!(server = name, "Connecting to MCP server");
 
+        if let Some(transport) = cached_remote_auth_transport(name, &scoped_config) {
+            let conn =
+                super::auth_failure::handle_remote_auth_failure(name, &scoped_config, transport);
+            let mut connections = self.connections.write().await;
+            connections.insert(name.to_string(), conn.clone());
+            return conn;
+        }
+
         // Set pending status
         let pending = McpServerConnection {
             name: name.to_string(),
@@ -288,7 +296,7 @@ impl McpManager {
                         // `handleRemoteAuthFailure` branch at
                         // `client.ts:340-361`.
                         let conn = if looks_like_auth_failure(&error_msg)
-                            || cached_claude_ai_auth_failure(name, &scoped_config)
+                            || cached_remote_auth_transport(name, &scoped_config).is_some()
                         {
                             super::auth_failure::handle_remote_auth_failure(
                                 name,
@@ -351,7 +359,7 @@ impl McpManager {
                     Err(e) => {
                         let error_msg = format!("{:#}", e);
                         let conn = if looks_like_auth_failure(&error_msg)
-                            || cached_claude_ai_auth_failure(name, &scoped_config)
+                            || cached_remote_auth_transport(name, &scoped_config).is_some()
                         {
                             super::auth_failure::handle_remote_auth_failure(
                                 name,
@@ -848,14 +856,28 @@ impl Default for McpManager {
 /// transport connect failures into `NeedsAuth` status via G16's
 /// `handle_remote_auth_failure`.
 fn looks_like_auth_failure(msg: &str) -> bool {
-    msg.contains("HTTP 401") || msg.to_ascii_lowercase().contains("unauthorized")
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("http 401")
+        || lower.contains("error 401")
+        || lower.contains("status 401")
+        || lower.contains("code: 401")
+        || lower.contains("unauthorized")
 }
 
-fn cached_claude_ai_auth_failure(name: &str, scoped_config: &ScopedMcpServerConfig) -> bool {
-    matches!(
-        scoped_config.scope,
-        crate::mcp::types::ConfigScope::ClaudeAi
-    ) && super::auth_cache::is_mcp_auth_cached(name)
+fn cached_remote_auth_transport(
+    name: &str,
+    scoped_config: &ScopedMcpServerConfig,
+) -> Option<super::auth_failure::RemoteTransportKind> {
+    if !super::auth_cache::is_mcp_auth_cached(name) {
+        return None;
+    }
+    match scoped_config.config {
+        McpServerConfig::Sse(_) | McpServerConfig::SseIde(_) => {
+            Some(super::auth_failure::RemoteTransportKind::Sse)
+        }
+        McpServerConfig::Http(_) => Some(super::auth_failure::RemoteTransportKind::Http),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -870,6 +892,19 @@ mod tests {
         assert_eq!(manager.connected_count().await, 0);
         assert!(manager.connections().await.is_empty());
         assert!(manager.tool_definitions().await.is_empty());
+    }
+
+    #[test]
+    fn auth_failure_classifier_accepts_status_code_shapes() {
+        assert!(looks_like_auth_failure("Failed to POST: HTTP 401 body: no"));
+        assert!(looks_like_auth_failure(
+            "MCP HTTP server 'srv' error 401: {}"
+        ));
+        assert!(looks_like_auth_failure("StreamableHTTPError code: 401"));
+        assert!(looks_like_auth_failure("Unauthorized"));
+        assert!(!looks_like_auth_failure(
+            "MCP HTTP server 'srv' error 500: {}"
+        ));
     }
 
     #[tokio::test]
@@ -1059,6 +1094,45 @@ mod tests {
         assert!(
             matches!(results[0].status, McpConnectionStatus::Failed { .. }),
             "stdio must attempt connect despite cached-auth entry, got {:?}",
+            results[0].status
+        );
+
+        clear_mcp_auth_cache();
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
+    }
+
+    /// Remote HTTP/SSE servers with a fresh needs-auth cache entry
+    /// short-circuit before transport connect, matching TS
+    /// `isMcpAuthCached` handling in `getMcpToolsCommandsAndResources`.
+    #[tokio::test]
+    async fn connect_all_respecting_auth_cache_http_short_circuits() {
+        use crate::mcp::auth_cache::{
+            clear_mcp_auth_cache, set_mcp_auth_cache_entry, shared_test_lock,
+        };
+        let _g = shared_test_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path());
+        clear_mcp_auth_cache();
+        set_mcp_auth_cache_entry("http-srv");
+
+        let manager = McpManager::new();
+        let mut configs = HashMap::new();
+        configs.insert(
+            "http-srv".to_string(),
+            ScopedMcpServerConfig {
+                config: McpServerConfig::Http(McpHttpServerConfig {
+                    url: "http://127.0.0.1:9/mcp".into(),
+                    headers: None,
+                }),
+                scope: ConfigScope::User,
+            },
+        );
+
+        let results = manager.connect_all_respecting_auth_cache(configs).await;
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0].status, McpConnectionStatus::NeedsAuth),
+            "remote cached-auth entry must short-circuit to NeedsAuth, got {:?}",
             results[0].status
         );
 
