@@ -77,16 +77,13 @@ impl ToolExecutor for ListMcpResourcesTool {
             }
 
             return Ok(ToolResultData {
-                data: json!({ "resources": resources }),
+                data: json!(resources),
                 is_error: false,
             });
         }
 
         Ok(ToolResultData {
-            data: json!({
-                "resources": [],
-                "message": "No MCP resources found. MCP servers may still provide tools even if they have no resources."
-            }),
+            data: json!([]),
             is_error: false,
         })
     }
@@ -234,7 +231,7 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(!result.is_error);
-        assert!(result.data["resources"].as_array().unwrap().is_empty());
+        assert!(result.data.as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -300,8 +297,7 @@ mod tests {
 
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(!result.is_error);
-        assert!(result.data["resources"].as_array().unwrap().is_empty());
-        assert!(result.data.get("message").is_none());
+        assert!(result.data.as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

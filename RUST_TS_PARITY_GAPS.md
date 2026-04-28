@@ -170,6 +170,9 @@ Improved:
   server filtering.
 - `ReadMcpResourceTool` reads from the requested connected MCP server and
   returns manager errors when the server/resource is unavailable.
+- `ListMcpResourcesTool` now follows the TS output contract for tool data:
+  an array of resources with `mimeType` casing, plus the TS empty-list
+  tool-result text when mapped back into model context.
 
 Still needs work:
 - Verify pagination/cursors if applicable, resource templates, and

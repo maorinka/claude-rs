@@ -275,6 +275,7 @@ pub struct ServerResource {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(rename = "mimeType")]
     #[serde(default)]
     pub mime_type: Option<String>,
     pub server: String,

@@ -537,6 +537,28 @@ mod tests {
     }
 
     #[test]
+    fn model_tool_result_matches_ts_mcp_resource_mapping() {
+        assert_eq!(
+            format_tool_result_for_model("ListMcpResourcesTool", &serde_json::json!([])),
+            "No resources found. MCP servers may still provide tools even if they have no resources."
+        );
+        assert_eq!(
+            format_tool_result_for_model(
+                "ListMcpResourcesTool",
+                &serde_json::json!([
+                    {
+                        "uri": "file:///tmp/a.txt",
+                        "name": "a.txt",
+                        "mimeType": "text/plain",
+                        "server": "example"
+                    }
+                ])
+            ),
+            r#"[{"mimeType":"text/plain","name":"a.txt","server":"example","uri":"file:///tmp/a.txt"}]"#
+        );
+    }
+
+    #[test]
     fn model_tool_result_matches_ts_edit_mapping() {
         assert_eq!(
             format_tool_result_for_model(
@@ -2359,6 +2381,16 @@ fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value
                 return format!("Set {setting} to {}", json_stringify_for_ts(value));
             }
         }
+    }
+
+    if tool_name == "ListMcpResourcesTool" {
+        if data
+            .as_array()
+            .is_some_and(|resources| resources.is_empty())
+        {
+            return "No resources found. MCP servers may still provide tools even if they have no resources.".to_string();
+        }
+        return json_stringify_for_ts(data);
     }
 
     if let Some(text) = data.as_str() {
