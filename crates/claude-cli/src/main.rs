@@ -1290,6 +1290,45 @@ fn stream_json_mcp_servers_in_order(
     out
 }
 
+async fn wait_for_headless_mcp_prewait(
+    manager: &Arc<RwLock<claude_core::mcp::manager::McpManager>>,
+    expected_names: &[String],
+) {
+    if expected_names.is_empty() {
+        return;
+    }
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(2_000);
+    loop {
+        let connections = {
+            let mgr = manager.read().await;
+            mgr.connections().await
+        };
+        let by_name = connections
+            .iter()
+            .map(|conn| (conn.name.as_str(), conn))
+            .collect::<std::collections::HashMap<_, _>>();
+        let has_unsettled = expected_names.iter().any(|name| {
+            by_name.get(name.as_str()).is_none_or(|conn| {
+                matches!(
+                    conn.status,
+                    claude_core::mcp::types::McpConnectionStatus::Pending { .. }
+                )
+            })
+        });
+
+        if !has_unsettled || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let mgr = manager.read().await;
+    if let Err(err) = mgr.refresh_tools().await {
+        tracing::warn!(error = %err, "Failed to refresh MCP tools after startup prewait");
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaudeAiMcpServersResponse {
     data: Vec<ClaudeAiMcpServer>,
@@ -3392,8 +3431,31 @@ async fn main() -> Result<()> {
                 }
             });
         } else {
+            let expected_names = configs.keys().cloned().collect::<Vec<_>>();
+            let manager = mcp_manager.clone();
+            let _connect_handle = tokio::spawn(async move {
+                let mgr = manager.read().await;
+                let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+                drop(mgr);
+                for conn in &connections {
+                    match &conn.status {
+                        claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
+                            tracing::info!(server = %conn.name, "MCP server connected");
+                        }
+                        claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
+                            tracing::warn!(
+                                server = %conn.name,
+                                error = ?error,
+                                "MCP server failed to connect"
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            wait_for_headless_mcp_prewait(&mcp_manager, &expected_names).await;
             let mgr = mcp_manager.read().await;
-            let connections = mgr.connect_all_respecting_auth_cache(configs).await;
+            let connections = mgr.connections().await;
             let connected = connections
                 .iter()
                 .filter(|conn| {
@@ -3424,23 +3486,6 @@ async fn main() -> Result<()> {
                 }),
             ));
             drop(mgr);
-
-            // Report connection results
-            for conn in &connections {
-                match &conn.status {
-                    claude_core::mcp::types::McpConnectionStatus::Connected { .. } => {
-                        tracing::info!(server = %conn.name, "MCP server connected");
-                    }
-                    claude_core::mcp::types::McpConnectionStatus::Failed { error } => {
-                        tracing::warn!(
-                            server = %conn.name,
-                            error = ?error,
-                            "MCP server failed to connect"
-                        );
-                    }
-                    _ => {}
-                }
-            }
         }
 
         if !claude_ai_shadow_tools.is_empty() {
