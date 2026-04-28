@@ -327,7 +327,7 @@ impl ToolRegistry {
     pub fn tool_definitions(&self) -> Vec<claude_core::api::client::ToolDefinition> {
         let mut built_in = Vec::new();
         let mut mcp = Vec::new();
-        for tool in self.all().into_iter().filter(|t| t.name() != "ToolSearch") {
+        for tool in self.all() {
             if tool.name().starts_with("mcp__") {
                 mcp.push(tool);
             } else {

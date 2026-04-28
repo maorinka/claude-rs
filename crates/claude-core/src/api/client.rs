@@ -48,6 +48,17 @@ fn anthropic_beta_header_value(is_oauth: bool, model: &str) -> String {
     betas.join(",")
 }
 
+fn add_tool_search_beta_header(header: &str) -> String {
+    let beta = crate::constants::betas::TOOL_SEARCH_1P;
+    if header.split(',').any(|part| part.trim() == beta) {
+        header.to_string()
+    } else if header.is_empty() {
+        beta.to_string()
+    } else {
+        format!("{header},{beta}")
+    }
+}
+
 fn oauth_billing_header() -> String {
     let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
     format!(
@@ -318,9 +329,11 @@ pub fn build_request_body(
         add_system_cache_markers(&mut body, is_oauth);
     }
 
-    // Tools (only include if non-empty).
-    if !tools.is_empty() {
-        body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
+    // Tools (only include if non-empty). TS decides ToolSearch/defer_loading
+    // at request time, after model/env/discovered-tool state is known.
+    let tools_for_request = prepare_tool_definitions_for_request(config, messages, tools);
+    if !tools_for_request.is_empty() {
+        body["tools"] = Value::Array(tools_for_request);
     }
 
     // metadata: mirrors TS getAPIMetadata() — user_id is a JSON-encoded string
@@ -429,6 +442,204 @@ fn cache_control_json() -> Value {
     value
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolSearchRequestMode {
+    ToolSearch,
+    ToolSearchAuto,
+    Standard,
+}
+
+fn tool_search_request_mode() -> ToolSearchRequestMode {
+    if crate::errors_util::is_env_truthy("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") {
+        return ToolSearchRequestMode::Standard;
+    }
+
+    let value = std::env::var("ENABLE_TOOL_SEARCH").ok();
+    if let Some(value) = value.as_deref() {
+        if let Some(percent) = parse_auto_tool_search_percentage(value) {
+            return match percent {
+                0 => ToolSearchRequestMode::ToolSearch,
+                100 => ToolSearchRequestMode::Standard,
+                _ => ToolSearchRequestMode::ToolSearchAuto,
+            };
+        }
+        if value == "auto" || value.starts_with("auto:") {
+            return ToolSearchRequestMode::ToolSearchAuto;
+        }
+        if is_truthy_value(value) {
+            return ToolSearchRequestMode::ToolSearch;
+        }
+    }
+
+    if crate::errors_util::is_env_definitely_falsy("ENABLE_TOOL_SEARCH") {
+        return ToolSearchRequestMode::Standard;
+    }
+
+    ToolSearchRequestMode::ToolSearch
+}
+
+fn is_truthy_value(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn parse_auto_tool_search_percentage(value: &str) -> Option<u8> {
+    let percent = value.strip_prefix("auto:")?.parse::<i32>().ok()?;
+    Some(percent.clamp(0, 100) as u8)
+}
+
+fn model_supports_tool_reference(model: &str) -> bool {
+    !normalize_model_for_api(model)
+        .to_ascii_lowercase()
+        .contains("haiku")
+}
+
+fn is_deferred_tool(tool: &ToolDefinition) -> bool {
+    tool.name.starts_with("mcp__")
+}
+
+fn prepare_tool_definitions_for_request(
+    config: &ApiConfig,
+    messages: &[Value],
+    tools: &[ToolDefinition],
+) -> Vec<Value> {
+    if tools.is_empty() {
+        return Vec::new();
+    }
+
+    let deferred_names = tools
+        .iter()
+        .filter(|tool| is_deferred_tool(tool))
+        .map(|tool| tool.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    let use_tool_search = tool_search_allowed_for_request(config)
+        && model_supports_tool_reference(&config.model)
+        && tools.iter().any(|tool| tool.name == "ToolSearch")
+        && !deferred_names.is_empty()
+        && match tool_search_request_mode() {
+            ToolSearchRequestMode::ToolSearch => true,
+            ToolSearchRequestMode::ToolSearchAuto => {
+                deferred_tool_description_chars(tools)
+                    >= auto_tool_search_char_threshold(&config.model)
+            }
+            ToolSearchRequestMode::Standard => false,
+        };
+
+    let discovered = if use_tool_search {
+        extract_discovered_tool_names(messages)
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    tools
+        .iter()
+        .filter_map(|tool| {
+            if !use_tool_search && tool.name == "ToolSearch" {
+                return None;
+            }
+
+            let is_deferred = deferred_names.contains(tool.name.as_str());
+            if use_tool_search && is_deferred && !discovered.contains(tool.name.as_str()) {
+                return None;
+            }
+
+            let mut value = serde_json::to_value(tool).unwrap_or(Value::Null);
+            if use_tool_search && is_deferred {
+                value["defer_loading"] = Value::Bool(true);
+            }
+            Some(value)
+        })
+        .collect()
+}
+
+fn tool_search_allowed_for_request(config: &ApiConfig) -> bool {
+    if std::env::var("ENABLE_TOOL_SEARCH")
+        .ok()
+        .is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+
+    if crate::privacy_level::get_api_provider() == crate::privacy_level::ApiProvider::FirstParty {
+        return is_first_party_anthropic_base_url_value(&config.base_url);
+    }
+
+    true
+}
+
+fn is_first_party_anthropic_base_url_value(raw: &str) -> bool {
+    crate::privacy_level::is_first_party_anthropic_url(raw)
+}
+
+fn deferred_tool_description_chars(tools: &[ToolDefinition]) -> usize {
+    tools
+        .iter()
+        .filter(|tool| is_deferred_tool(tool))
+        .map(|tool| {
+            tool.name.len()
+                + tool.description.len()
+                + serde_json::to_string(&tool.input_schema)
+                    .map(|schema| schema.len())
+                    .unwrap_or_default()
+        })
+        .sum()
+}
+
+fn auto_tool_search_char_threshold(model: &str) -> usize {
+    let percentage = match std::env::var("ENABLE_TOOL_SEARCH").ok().as_deref() {
+        Some("auto") | None => 10,
+        Some(value) => parse_auto_tool_search_percentage(value).unwrap_or(10),
+    } as f64
+        / 100.0;
+    let context_window_tokens = if has_1m_context(model) {
+        1_000_000
+    } else {
+        200_000
+    };
+    (context_window_tokens as f64 * percentage * 2.5).floor() as usize
+}
+
+fn extract_discovered_tool_names(messages: &[Value]) -> std::collections::HashSet<&str> {
+    let mut names = std::collections::HashSet::new();
+    for msg in messages {
+        let Some(content) = msg.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for block in content {
+            if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            let Some(items) = block.get("content").and_then(Value::as_array) else {
+                continue;
+            };
+            for item in items {
+                if item.get("type").and_then(Value::as_str) == Some("tool_reference") {
+                    if let Some(name) = item.get("tool_name").and_then(Value::as_str) {
+                        names.insert(name);
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+fn body_uses_tool_search(body: &Value) -> bool {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool.get("name").and_then(Value::as_str) == Some("ToolSearch"))
+                || tools
+                    .iter()
+                    .any(|tool| tool.get("defer_loading").and_then(Value::as_bool) == Some(true))
+        })
+}
+
 fn build_minimal_request_body(
     config: &ApiConfig,
     messages: &[Value],
@@ -460,8 +671,9 @@ fn build_minimal_request_body(
         add_system_cache_markers(&mut body, is_oauth);
     }
 
-    if !tools.is_empty() {
-        body["tools"] = serde_json::to_value(tools).unwrap_or(Value::Null);
+    let tools_for_request = prepare_tool_definitions_for_request(config, messages, tools);
+    if !tools_for_request.is_empty() {
+        body["tools"] = Value::Array(tools_for_request);
     }
 
     add_message_cache_markers(&mut body);
@@ -640,11 +852,13 @@ impl ApiClient {
                 .header("x-stainless-runtime", "node")
                 .header("x-stainless-retry-count", "0");
 
+            let mut beta_header = anthropic_beta_header_value(auth.is_oauth(), &self.config.model);
+            if body_uses_tool_search(&body) {
+                beta_header = add_tool_search_beta_header(&beta_header);
+            }
+
             request = request
-                .header(
-                    "anthropic-beta",
-                    anthropic_beta_header_value(auth.is_oauth(), &self.config.model),
-                )
+                .header("anthropic-beta", beta_header)
                 .header("anthropic-dangerous-direct-browser-access", "true")
                 .header("x-app", "cli");
         }
@@ -701,6 +915,23 @@ mod tests {
         std::env::remove_var("CLAUDE_RS_MINIMAL_TRANSPORT");
         std::env::remove_var("CLAUDE_RS_CACHE_TTL");
         std::env::remove_var("CLAUDE_RS_CACHE_SCOPE");
+    }
+
+    fn clear_tool_search_env() {
+        std::env::remove_var("ENABLE_TOOL_SEARCH");
+        std::env::remove_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
+        std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
+        std::env::remove_var("CLAUDE_CODE_USE_VERTEX");
+        std::env::remove_var("CLAUDE_CODE_USE_FOUNDRY");
+        std::env::remove_var("USER_TYPE");
+    }
+
+    fn tool_def(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            description: format!("{name} description"),
+            input_schema: json!({"type": "object", "properties": {}}),
+        }
     }
 
     #[test]
@@ -920,6 +1151,164 @@ mod tests {
             last.get("cache_control").is_none(),
             "tool definitions should not have cache_control"
         );
+    }
+
+    #[test]
+    fn tool_search_stripped_when_no_deferred_tools_match_ts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![tool_def("Read"), tool_def("ToolSearch")];
+
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        let names = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Read"]);
+        assert!(!body_uses_tool_search(&body));
+    }
+
+    #[test]
+    fn tool_search_default_disabled_for_non_first_party_base_url_match_ts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        let config = ApiConfig {
+            base_url: "http://127.0.0.1:8787".into(),
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            tool_def("mcp__jira__search"),
+        ];
+
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        let names = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Read", "mcp__jira__search"]);
+        assert!(!body_uses_tool_search(&body));
+    }
+
+    #[test]
+    fn tool_search_keeps_only_discovered_deferred_tools_match_ts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            tool_def("mcp__jira__search"),
+            tool_def("mcp__slack__send"),
+        ];
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [{"type": "tool_reference", "tool_name": "mcp__jira__search"}]
+            }]
+        })];
+
+        let body = build_request_body(&config, &messages, &[], &tools, false);
+        let tools_arr = body["tools"].as_array().unwrap();
+        let names = tools_arr
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Read", "ToolSearch", "mcp__jira__search"]);
+        let jira = tools_arr
+            .iter()
+            .find(|tool| tool["name"] == "mcp__jira__search")
+            .unwrap();
+        assert_eq!(jira["defer_loading"], true);
+        assert!(body_uses_tool_search(&body));
+        clear_tool_search_env();
+    }
+
+    #[test]
+    fn tool_search_disabled_for_haiku_match_ts_model_gate() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+        let config = ApiConfig {
+            model: "claude-haiku-4-5".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            tool_def("mcp__jira__search"),
+        ];
+
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        let names = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Read", "mcp__jira__search"]);
+        assert!(!body_uses_tool_search(&body));
+        clear_tool_search_env();
+    }
+
+    #[test]
+    fn tool_search_auto_threshold_matches_ts_char_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "auto:100");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            tool_def("mcp__big__tool"),
+        ];
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        assert!(!body_uses_tool_search(&body));
+
+        std::env::set_var("ENABLE_TOOL_SEARCH", "auto:0");
+        let body = build_request_body(&config, &[], &[], &tools, false);
+        let names = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["Read", "ToolSearch"]);
+        assert!(body_uses_tool_search(&body));
+        clear_tool_search_env();
     }
 
     #[test]

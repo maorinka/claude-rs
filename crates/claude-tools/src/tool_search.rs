@@ -65,12 +65,25 @@ pub fn is_tool_search_enabled_optimistic() -> bool {
     if !explicitly_configured
         && claude_core::privacy_level::get_api_provider()
             == claude_core::privacy_level::ApiProvider::FirstParty
-        && !claude_core::privacy_level::is_first_party_anthropic_base_url()
+        && !is_effective_first_party_anthropic_base_url()
     {
         return false;
     }
 
     true
+}
+
+fn is_effective_first_party_anthropic_base_url() -> bool {
+    if let Ok(proxy_base) = std::env::var("CLAUDE_DEBUG_PROXY_BASE") {
+        if !proxy_base.is_empty() {
+            return is_first_party_anthropic_url(&proxy_base);
+        }
+    }
+    claude_core::privacy_level::is_first_party_anthropic_base_url()
+}
+
+fn is_first_party_anthropic_url(raw: &str) -> bool {
+    claude_core::privacy_level::is_first_party_anthropic_url(raw)
 }
 
 /// Fallback list used by direct tests or embedders that construct the tool

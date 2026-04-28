@@ -38,7 +38,7 @@ The largest remaining gaps are behavioral depth, not just missing files:
 Captured through `scripts/run_parity_capture.py` on 2026-04-28:
 
 - Capture directory:
-  `/tmp/claude-rs-parity-after-remote-entry`
+  `/tmp/claude-rs-parity-toolsearch-request-fixed`
 
 Now matching:
 
@@ -50,6 +50,10 @@ Now matching:
 - Tool count: 87 vs 87.
 - Tool names, tool order, and tool schemas. This now includes the installed
   TS 2.1.121 Explore-agent description in the embedded tool contract.
+- Request-time ToolSearch defaults now follow TS for the live debug-proxy
+  path: with `ENABLE_TOOL_SEARCH` unset and a first-party provider pointed at
+  a non-first-party base URL, both TS and Rust strip `ToolSearch`, send MCP
+  tools inline, omit `defer_loading`, and omit the tool-search beta header.
 - Claude.ai MCP servers now match the TS auth flow for Cloudflare: a live
   proxy 401 is classified as `needs-auth`, the two auth shadow tools are
   exposed, and the MCP needs-auth cache short-circuits future HTTP/SSE
@@ -158,14 +162,20 @@ Improved:
   `ENABLE_TOOL_SEARCH` or the experimental-beta kill switch.
 - CLI startup now filters blanket-denied tools before exposing them to the
   model, including the refreshed ToolSearch snapshot.
+- Rust now applies the TS request-time ToolSearch gate in the API layer:
+  model support, explicit/env mode, non-first-party proxy default-disable,
+  `auto:N` character fallback threshold, discovered `tool_reference` scan,
+  deferred MCP tool filtering, and beta-header insertion only when
+  ToolSearch/defer-loading is actually used.
 - Worktree tools remain visible by default because the inspected TS reference
   now returns `true` from `isWorktreeModeEnabled()`.
 
 Needs work:
 - Hide REPL-only primitive tools when REPL mode is active.
 - Keep tool ordering stable for prompt-cache compatibility.
-- Implement the model/provider/threshold parts of ToolSearch enablement and
-  request-time deferral.
+- Replace the request-time ToolSearch `auto` character fallback with the TS
+  preferred token-counting path when the count-tokens API is wired into this
+  layer.
 - Broaden deny-rule filtering to all registry construction paths and add MCP
   integration coverage with real connected tools.
 - Revisit MCP auth/resource tool visibility against TS `specialTools` and MCP
@@ -515,9 +525,10 @@ Files:
 - TS reference: `src/utils/toolSearch.ts`, `src/tools/ToolSearchTool/*`
 
 Needs work:
-- Gate optimistically the same way TS does.
-- Integrate request-time tool deferral threshold.
-- Include MCP tools in counting/search where TS does.
+- Replace fallback-only request-time `auto` threshold with TS's preferred
+  count-token path.
+- Add integration coverage for `ToolSearch select:*` with live/fake MCP tool
+  references across multiple turns.
 
 ## P1: Slash Commands
 

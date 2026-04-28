@@ -108,6 +108,10 @@ pub fn is_first_party_anthropic_base_url() -> bool {
     let Ok(raw) = std::env::var("ANTHROPIC_BASE_URL") else {
         return true;
     };
+    is_first_party_anthropic_url(&raw)
+}
+
+pub fn is_first_party_anthropic_url(raw: &str) -> bool {
     let Ok(url) = url::Url::parse(&raw) else {
         return false;
     };
