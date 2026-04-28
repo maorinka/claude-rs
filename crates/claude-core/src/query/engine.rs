@@ -148,6 +148,23 @@ impl QueryEngine {
     /// attachments are emitted after tool results as user messages rather than
     /// being prepended to the next request's first user turn.
     pub fn add_user_context_message(&mut self, text: String) {
+        if let Some(last) = self.messages.last_mut() {
+            if last.get("role").and_then(|role| role.as_str()) == Some("user") {
+                if let Some(content) = last
+                    .get_mut("content")
+                    .and_then(|content| content.as_array_mut())
+                {
+                    if content.iter().any(|block| {
+                        block.get("type").and_then(|ty| ty.as_str()) == Some("tool_result")
+                    }) {
+                        smoosh_text_into_last_tool_result(content, text);
+                        return;
+                    }
+                    content.push(serde_json::json!({"type": "text", "text": text}));
+                    return;
+                }
+            }
+        }
         self.messages.push(serde_json::json!({
             "role": "user",
             "content": [{"type": "text", "text": text}],
@@ -896,6 +913,50 @@ impl QueryEngine {
     }
 }
 
+fn smoosh_text_into_last_tool_result(content: &mut [serde_json::Value], text: String) {
+    let Some(index) = content
+        .iter()
+        .rposition(|block| block.get("type").and_then(|ty| ty.as_str()) == Some("tool_result"))
+    else {
+        return;
+    };
+
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+
+    let tool_result = &mut content[index];
+    match tool_result.get_mut("content") {
+        Some(serde_json::Value::String(existing)) => {
+            let existing_trimmed = existing.trim();
+            *existing = if existing_trimmed.is_empty() {
+                text
+            } else {
+                format!("{}\n\n{}", existing_trimmed, text)
+            };
+        }
+        Some(serde_json::Value::Array(blocks)) => match blocks.last_mut() {
+            Some(last) if last.get("type").and_then(|ty| ty.as_str()) == Some("text") => {
+                let existing = last
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let merged = if existing.trim().is_empty() {
+                    text
+                } else {
+                    format!("{}\n\n{}", existing.trim(), text)
+                };
+                last["text"] = serde_json::Value::String(merged);
+            }
+            _ => blocks.push(serde_json::json!({"type": "text", "text": text})),
+        },
+        _ => {
+            tool_result["content"] = serde_json::Value::String(text);
+        }
+    }
+}
+
 /// Build a `<system-reminder>` prepend content block containing dynamic context.
 /// Mirrors TS prependUserContext() in src/utils/api.ts.
 /// Injects the current date so the model always has up-to-date temporal context.
@@ -1043,6 +1104,38 @@ mod tests {
         assert_eq!(content[0]["text"], "first");
         assert_eq!(content[1]["text"], "second");
         assert_eq!(content[2]["text"], "hi");
+    }
+
+    #[test]
+    fn user_context_after_tool_result_smooshes_into_tool_result_string() {
+        let mut content = vec![serde_json::json!({
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": "file output",
+        })];
+
+        smoosh_text_into_last_tool_result(
+            &mut content,
+            "<system-reminder>\nnew skill\n</system-reminder>".to_string(),
+        );
+
+        assert_eq!(
+            content[0]["content"],
+            "file output\n\n<system-reminder>\nnew skill\n</system-reminder>"
+        );
+    }
+
+    #[test]
+    fn user_context_after_tool_result_smooshes_into_tool_result_array() {
+        let mut content = vec![serde_json::json!({
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [{"type": "text", "text": "first"}],
+        })];
+
+        smoosh_text_into_last_tool_result(&mut content, "second".to_string());
+
+        assert_eq!(content[0]["content"][0]["text"], "first\n\nsecond");
     }
 }
 

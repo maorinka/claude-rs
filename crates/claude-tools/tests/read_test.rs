@@ -36,9 +36,9 @@ async fn test_read_text_file() {
     assert!(!result.is_error, "should not be an error");
 
     let file = &result.data["file"];
-    assert_eq!(file["numLines"], 3);
+    assert_eq!(file["numLines"], 4);
     assert_eq!(file["startLine"], 1);
-    assert_eq!(file["totalLines"], 3);
+    assert_eq!(file["totalLines"], 4);
 
     let content = file["content"].as_str().unwrap();
     assert!(
@@ -47,6 +47,7 @@ async fn test_read_text_file() {
     );
     assert!(content.contains("2\tbeta"));
     assert!(content.contains("3\tgamma"));
+    assert!(content.ends_with("4\t"));
 }
 
 #[tokio::test]
@@ -69,8 +70,8 @@ async fn test_read_with_offset_and_limit() {
         "startLine should be 1-based (offset 2 => line 3)"
     );
     assert_eq!(
-        file["totalLines"], 5,
-        "totalLines is the full file line count"
+        file["totalLines"], 6,
+        "totalLines is the full file line count including trailing blank"
     );
 
     let content = file["content"].as_str().unwrap();

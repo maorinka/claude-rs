@@ -4194,6 +4194,7 @@ async fn main() -> Result<()> {
                             }
                         }
 
+                        let mut pending_skill_reminder = None;
                         if !is_error {
                             let touched_paths =
                                 dynamic_skill_file_paths(&tool_info.name, &tool_input);
@@ -4229,9 +4230,8 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     if !unique_new.is_empty() {
-                                        query_engine.add_user_context_message(
-                                            skills_reminder_block(&unique_new),
-                                        );
+                                        pending_skill_reminder =
+                                            Some(skills_reminder_block(&unique_new));
                                     }
                                 }
                             }
@@ -4257,6 +4257,9 @@ async fn main() -> Result<()> {
                             is_error,
                             is_error || tool_info.name == "Bash",
                         );
+                        if let Some(reminder) = pending_skill_reminder {
+                            query_engine.add_user_context_message(reminder);
+                        }
                     }
                     if cli.output_format == OutputFormat::StreamJson
                         && !stream_tool_results.is_empty()

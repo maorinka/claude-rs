@@ -614,8 +614,13 @@ impl FileReadTool {
             state.record_read(file_path, is_partial, stored_content);
         }
 
-        // Split into lines.
-        let all_lines: Vec<&str> = raw.lines().collect();
+        // Split exactly like TS addLineNumbers/read bookkeeping:
+        // content.split(/\r?\n/) preserves the trailing empty line for files
+        // ending in a newline, unlike str::lines().
+        let all_lines: Vec<String> = raw
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+            .collect();
         let total_lines = all_lines.len();
 
         // Apply offset and limit.
@@ -625,11 +630,12 @@ impl FileReadTool {
 
         // Format in cat -n style: "{1-based-line-num}\t{content}"
         let start_line = start + 1; // convert to 1-based
-        let mut formatted = String::new();
-        for (i, line) in selected.iter().enumerate() {
-            let line_num = start_line + i;
-            formatted.push_str(&format!("{}\t{}\n", line_num, line));
-        }
+        let formatted = selected
+            .iter()
+            .enumerate()
+            .map(|(i, line)| format!("{}\t{}", start_line + i, line))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let result_data = json!({
             "type": "text",
@@ -1089,13 +1095,14 @@ mod tests {
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(!result.is_error);
         assert_eq!(result.data["type"], "text");
-        assert_eq!(result.data["file"]["totalLines"], 3);
-        assert_eq!(result.data["file"]["numLines"], 3);
+        assert_eq!(result.data["file"]["totalLines"], 4);
+        assert_eq!(result.data["file"]["numLines"], 4);
         assert_eq!(result.data["file"]["startLine"], 1);
         let content_out = result.data["file"]["content"].as_str().unwrap();
         assert!(content_out.contains("1\tline one"));
         assert!(content_out.contains("2\tline two"));
         assert!(content_out.contains("3\tline three"));
+        assert!(content_out.ends_with("4\t"));
     }
 
     #[tokio::test]
@@ -1115,7 +1122,7 @@ mod tests {
         assert_eq!(result.data["file"]["startLine"], 3); // 1-based: offset 2 -> line 3
         let content_out = result.data["file"]["content"].as_str().unwrap();
         assert!(content_out.contains("3\tc\n"));
-        assert!(content_out.contains("4\td\n"));
+        assert!(content_out.ends_with("4\td"));
     }
 
     #[tokio::test]
