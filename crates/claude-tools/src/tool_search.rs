@@ -117,12 +117,32 @@ const FALLBACK_TOOLS: &[(&str, &str)] = &[
 ];
 
 #[derive(Clone, Debug)]
+struct ToolSearchEntry {
+    name: String,
+    description: String,
+    deferred: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct ToolSearchTool {
-    tools: Vec<(String, String)>,
+    tools: Vec<ToolSearchEntry>,
 }
 
 impl ToolSearchTool {
     pub fn new(tools: Vec<(String, String)>) -> Self {
+        Self {
+            tools: tools
+                .into_iter()
+                .map(|(name, description)| ToolSearchEntry {
+                    deferred: is_deferred_tool_name(&name),
+                    name,
+                    description,
+                })
+                .collect(),
+        }
+    }
+
+    fn with_entries(tools: Vec<ToolSearchEntry>) -> Self {
         Self { tools }
     }
 }
@@ -132,7 +152,11 @@ impl Default for ToolSearchTool {
         Self {
             tools: FALLBACK_TOOLS
                 .iter()
-                .map(|(name, desc)| ((*name).to_string(), (*desc).to_string()))
+                .map(|(name, desc)| ToolSearchEntry {
+                    name: (*name).to_string(),
+                    description: (*desc).to_string(),
+                    deferred: is_deferred_tool_name(name),
+                })
                 .collect(),
         }
     }
@@ -199,53 +223,116 @@ Query forms:
 
         let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
         let query_lower = query.to_lowercase();
+        let total_deferred_tools = self.tools.iter().filter(|tool| tool.deferred).count();
 
-        if let Some(names) = query_lower.strip_prefix("select:") {
+        if let Some(names) = query.strip_prefix_case_insensitive("select:") {
             let selected: Vec<&str> = names
                 .split(',')
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .collect();
-            let matched: Vec<Value> = self
-                .tools
-                .iter()
-                .filter(|(name, _)| {
-                    selected
-                        .iter()
-                        .any(|selected_name| selected_name.eq_ignore_ascii_case(name))
-                })
-                .take(max_results)
-                .map(|(name, desc)| json!({ "name": name, "description": desc }))
-                .collect();
+            let mut matches: Vec<String> = Vec::new();
+            for selected_name in selected {
+                let found = self
+                    .tools
+                    .iter()
+                    .find(|tool| tool.deferred && selected_name.eq_ignore_ascii_case(&tool.name))
+                    .or_else(|| {
+                        self.tools
+                            .iter()
+                            .find(|tool| selected_name.eq_ignore_ascii_case(&tool.name))
+                    });
+                if let Some(tool) = found {
+                    if !matches.iter().any(|name| name == &tool.name) {
+                        matches.push(tool.name.clone());
+                    }
+                }
+            }
 
             return Ok(ToolResultData {
                 data: json!({
-                    "matches": matched.iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>(),
-                    "tools": matched,
+                    "matches": matches,
+                    "query": query,
+                    "total_deferred_tools": total_deferred_tools,
                 }),
                 is_error: false,
             });
         }
 
-        let (required_name_terms, query_terms) = split_query_terms(&query_lower);
-
-        let matched: Vec<Value> = self
+        if let Some(exact) = self
             .tools
             .iter()
-            .filter(|(name, desc)| {
-                let haystack = searchable_text(name, desc);
-                required_name_terms.iter().all(|term| {
-                    name.to_lowercase().contains(term) || camel_to_words(name).contains(term)
-                }) && query_terms.iter().all(|term| haystack.contains(term))
+            .find(|tool| tool.deferred && tool.name.eq_ignore_ascii_case(query))
+            .or_else(|| {
+                self.tools
+                    .iter()
+                    .find(|tool| tool.name.eq_ignore_ascii_case(query))
             })
+        {
+            return Ok(ToolResultData {
+                data: json!({
+                    "matches": [exact.name.clone()],
+                    "query": query,
+                    "total_deferred_tools": total_deferred_tools,
+                }),
+                is_error: false,
+            });
+        }
+
+        if query_lower.starts_with("mcp__") && query_lower.len() > 5 {
+            let matches = self
+                .tools
+                .iter()
+                .filter(|tool| tool.deferred && tool.name.to_lowercase().starts_with(&query_lower))
+                .take(max_results)
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                return Ok(ToolResultData {
+                    data: json!({
+                        "matches": matches,
+                        "query": query,
+                        "total_deferred_tools": total_deferred_tools,
+                    }),
+                    is_error: false,
+                });
+            }
+        }
+
+        let (required_terms, query_terms) = split_query_terms(&query_lower);
+
+        let mut scored = self
+            .tools
+            .iter()
+            .filter(|tool| tool.deferred)
+            .filter_map(|tool| {
+                let parsed = parse_tool_name(&tool.name);
+                let haystack = searchable_text(&tool.name, &tool.description);
+                if !required_terms.iter().all(|term| {
+                    parsed.parts.iter().any(|part| part.contains(term))
+                        || description_has_word(&tool.description, term)
+                }) {
+                    return None;
+                }
+                let score = query_terms
+                    .iter()
+                    .map(|term| score_term(&parsed, &haystack, &tool.description, term))
+                    .sum::<usize>();
+                (score > 0).then_some((tool.name.clone(), score))
+            })
+            .collect::<Vec<_>>();
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        let matched: Vec<String> = scored
+            .into_iter()
             .take(max_results)
-            .map(|(name, desc)| json!({ "name": name, "description": desc }))
+            .map(|(name, _)| name)
             .collect();
 
         Ok(ToolResultData {
             data: json!({
-                "matches": matched.iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>(),
-                "tools": matched,
+                "matches": matched,
+                "query": query,
+                "total_deferred_tools": total_deferred_tools,
             }),
             is_error: false,
         })
@@ -260,9 +347,92 @@ pub fn register_tool_search_snapshot(registry: &mut crate::registry::ToolRegistr
     let tools = registry
         .all()
         .iter()
-        .map(|tool| (tool.name().to_string(), tool.description()))
+        .map(|tool| ToolSearchEntry {
+            name: tool.name().to_string(),
+            description: tool.description(),
+            deferred: is_deferred_tool_name(tool.name()),
+        })
         .collect();
-    registry.register(std::sync::Arc::new(ToolSearchTool::new(tools)));
+    registry.register(std::sync::Arc::new(ToolSearchTool::with_entries(tools)));
+}
+
+trait StripPrefixCaseInsensitive {
+    fn strip_prefix_case_insensitive<'a>(&'a self, prefix: &str) -> Option<&'a str>;
+}
+
+impl StripPrefixCaseInsensitive for str {
+    fn strip_prefix_case_insensitive<'a>(&'a self, prefix: &str) -> Option<&'a str> {
+        self.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            .then(|| &self[prefix.len()..])
+    }
+}
+
+#[derive(Debug)]
+struct ParsedToolName {
+    parts: Vec<String>,
+    full: String,
+    is_mcp: bool,
+}
+
+fn is_deferred_tool_name(name: &str) -> bool {
+    name.starts_with("mcp__")
+}
+
+fn parse_tool_name(name: &str) -> ParsedToolName {
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        let full = rest.replace("__", " ").replace('_', " ").to_lowercase();
+        let parts = rest
+            .to_lowercase()
+            .split("__")
+            .flat_map(|part| part.split('_'))
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect();
+        return ParsedToolName {
+            parts,
+            full,
+            is_mcp: true,
+        };
+    }
+
+    let full = camel_to_words(name);
+    let parts = full
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect();
+    ParsedToolName {
+        parts,
+        full,
+        is_mcp: false,
+    }
+}
+
+fn score_term(parsed: &ParsedToolName, haystack: &str, description: &str, term: &str) -> usize {
+    let mut score = 0;
+    if parsed.parts.iter().any(|part| part == term) {
+        score += if parsed.is_mcp { 12 } else { 10 };
+    } else if parsed.parts.iter().any(|part| part.contains(term)) {
+        score += if parsed.is_mcp { 6 } else { 5 };
+    }
+    if parsed.full.contains(term) && score == 0 {
+        score += 3;
+    }
+    if description_has_word(description, term) {
+        score += 2;
+    }
+    if score == 0 && haystack.contains(term) {
+        score += 1;
+    }
+    score
+}
+
+fn description_has_word(description: &str, term: &str) -> bool {
+    description
+        .to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .any(|word| word == term)
 }
 
 fn split_query_terms(query: &str) -> (Vec<String>, Vec<String>) {

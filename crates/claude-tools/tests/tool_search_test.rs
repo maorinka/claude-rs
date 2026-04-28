@@ -45,43 +45,41 @@ async fn search(query: &str) -> claude_core::types::events::ToolResultData {
     .expect("call should not fail")
 }
 
-#[tokio::test]
-async fn test_search_bash_finds_bash() {
-    let result = search("bash").await;
-    assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
-    assert!(
-        !tools.is_empty(),
-        "should find at least one tool matching 'bash'"
-    );
-    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-    assert!(names.contains(&"Bash"), "Bash tool should be in results");
+fn matches(result: &claude_core::types::events::ToolResultData) -> Vec<String> {
+    result.data["matches"]
+        .as_array()
+        .expect("matches array")
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect()
 }
 
 #[tokio::test]
-async fn test_search_file_finds_read_write() {
+async fn test_exact_search_bash_finds_loaded_bash() {
+    let result = search("bash").await;
+    assert!(!result.is_error);
+    assert_eq!(matches(&result), vec!["Bash"]);
+    assert_eq!(result.data["query"], "bash");
+}
+
+#[tokio::test]
+async fn test_keyword_search_only_searches_deferred_tools() {
     let result = search("file").await;
     assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
-    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-    // "Read", "Write", "Edit" all mention "file" in their descriptions
-    let has_read_or_write = names
-        .iter()
-        .any(|n| *n == "Read" || *n == "Write" || *n == "Edit");
-    assert!(
-        has_read_or_write,
-        "should find file-related tools, got: {:?}",
-        names
-    );
+    assert!(matches(&result).is_empty());
+    assert_eq!(result.data["total_deferred_tools"], 0);
 }
 
 #[tokio::test]
 async fn test_search_max_results_respected() {
-    let tool = ToolSearchTool::default();
-    // "a" is likely to match many tools
+    let tool = ToolSearchTool::new(vec![
+        ("mcp__alpha__create".to_string(), "create item".to_string()),
+        ("mcp__alpha__delete".to_string(), "delete item".to_string()),
+        ("mcp__alpha__list".to_string(), "list items".to_string()),
+    ]);
     let result = tool
         .call(
-            &json!({ "query": "a", "max_results": 3 }),
+            &json!({ "query": "alpha", "max_results": 2 }),
             &make_ctx(),
             CancellationToken::new(),
             None,
@@ -90,21 +88,21 @@ async fn test_search_max_results_respected() {
         .expect("call should not fail");
 
     assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
+    let names = matches(&result);
     assert!(
-        tools.len() <= 3,
+        names.len() <= 2,
         "should return at most 3 results, got {}",
-        tools.len()
+        names.len()
     );
+    assert_eq!(result.data["total_deferred_tools"], 3);
 }
 
 #[tokio::test]
 async fn test_search_no_results_for_gibberish() {
     let result = search("xyzzy_gibberish_42").await;
     assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
     assert!(
-        tools.is_empty(),
+        matches(&result).is_empty(),
         "should return no results for nonsense query"
     );
 }
@@ -182,15 +180,15 @@ async fn test_select_query_matches_exact_names() {
         .expect("call should not fail");
 
     assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "CustomTwo");
+    assert_eq!(matches(&result), vec!["CustomTwo"]);
+    assert_eq!(result.data["query"], "select:customtwo");
+    assert_eq!(result.data["total_deferred_tools"], 0);
 }
 
 #[tokio::test]
-async fn test_search_uses_dynamic_snapshot_and_camel_case() {
+async fn test_search_uses_deferred_mcp_snapshot_and_camel_case() {
     let tool = ToolSearchTool::new(vec![(
-        "CustomMcpFetcher".to_string(),
+        "mcp__custom_mcp__fetcher".to_string(),
         "Fetches resources from a runtime server".to_string(),
     )]);
     let result = tool
@@ -204,21 +202,16 @@ async fn test_search_uses_dynamic_snapshot_and_camel_case() {
         .expect("call should not fail");
 
     assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "CustomMcpFetcher");
+    assert_eq!(matches(&result), vec!["mcp__custom_mcp__fetcher"]);
+    assert_eq!(result.data["total_deferred_tools"], 1);
 }
 
 #[tokio::test]
-async fn test_search_results_have_name_and_description() {
+async fn test_search_result_matches_ts_output_contract() {
     let result = search("glob").await;
     assert!(!result.is_error);
-    let tools = result.data["tools"].as_array().expect("tools array");
-    for tool in tools {
-        assert!(tool.get("name").is_some(), "each result should have a name");
-        assert!(
-            tool.get("description").is_some(),
-            "each result should have a description"
-        );
-    }
+    assert!(result.data.get("matches").is_some());
+    assert!(result.data.get("query").is_some());
+    assert!(result.data.get("total_deferred_tools").is_some());
+    assert!(result.data.get("tools").is_none());
 }

@@ -524,11 +524,22 @@ Files:
 - `crates/claude-tools/src/tool_search.rs`
 - TS reference: `src/utils/toolSearch.ts`, `src/tools/ToolSearchTool/*`
 
+Improved:
+- Rust `ToolSearchTool` now returns the TS tool data shape
+  `{matches, query, total_deferred_tools, pending_mcp_servers?}` instead of
+  the older Rust-only `{matches, tools}` shape.
+- Keyword search now searches deferred MCP tools rather than all loaded tools,
+  while exact-name and `select:` queries can still return already-loaded tools
+  as the TS no-op selection path does.
+- Direct `mcp__server` prefix matching, case-insensitive `select:`, deferred
+  count reporting, and model-facing `tool_reference` mapping are covered by
+  focused tests.
+
 Needs work:
 - Replace fallback-only request-time `auto` threshold with TS's preferred
   count-token path.
-- Add integration coverage for `ToolSearch select:*` with live/fake MCP tool
-  references across multiple turns.
+- Add integration coverage for `ToolSearch select:*` with a live/fake MCP
+  server across multiple turns.
 
 ## P1: Slash Commands
 
