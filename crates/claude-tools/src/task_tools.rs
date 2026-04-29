@@ -58,6 +58,7 @@ impl TaskEntry {
 static TASK_STORE: Lazy<Mutex<HashMap<String, TaskEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
+const HIGH_WATER_MARK_FILE: &str = ".highwatermark";
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
@@ -69,7 +70,7 @@ fn new_task_id() -> String {
         .filter_map(|task| task.id.parse::<u64>().ok())
         .max()
         .unwrap_or(0);
-    let minimum = disk_max + 1;
+    let minimum = disk_max.max(read_high_water_mark()) + 1;
     let candidate = NEXT_TASK_ID
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
             let next = current.max(minimum);
@@ -77,6 +78,7 @@ fn new_task_id() -> String {
         })
         .unwrap_or(minimum)
         .max(minimum);
+    write_high_water_mark(candidate);
     candidate.to_string()
 }
 
@@ -130,6 +132,24 @@ fn tasks_dir() -> PathBuf {
 
 fn task_path(task_id: &str) -> PathBuf {
     tasks_dir().join(format!("{}.json", sanitize_path_component(task_id)))
+}
+
+fn high_water_mark_path() -> PathBuf {
+    tasks_dir().join(HIGH_WATER_MARK_FILE)
+}
+
+fn read_high_water_mark() -> u64 {
+    std::fs::read_to_string(high_water_mark_path())
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+fn write_high_water_mark(value: u64) {
+    let dir = tasks_dir();
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(high_water_mark_path(), value.to_string());
+    }
 }
 
 fn read_task_file(path: &Path) -> Option<TaskEntry> {
@@ -896,5 +916,16 @@ mod tests {
         let loaded = load_task_entry("1").expect("task should load from disk");
         assert_eq!(loaded.subject, "Persisted");
         assert!(task_path("1").ends_with("task-test/1.json"));
+    }
+
+    #[test]
+    fn task_ids_do_not_reuse_deleted_high_water_values() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (_dir, _guard) = set_task_test_env();
+        NEXT_TASK_ID.store(1, Ordering::SeqCst);
+
+        assert_eq!(new_task_id(), "1");
+        delete_task_entry("1");
+        assert_eq!(new_task_id(), "2");
     }
 }
