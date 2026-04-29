@@ -268,6 +268,12 @@ Usage:
         false
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        let file_path = input["file_path"].as_str().unwrap_or_default();
+        let content = input["content"].as_str().unwrap_or_default();
+        Some(format!("{file_path}: {content}"))
+    }
+
     fn check_permissions(
         &self,
         input: &Value,

@@ -387,6 +387,10 @@ impl ToolExecutor for TaskCreateTool {
         false
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(input["subject"].as_str().unwrap_or_default().to_string())
+    }
+
     async fn call(
         &self,
         input: &Value,
@@ -593,6 +597,20 @@ impl ToolExecutor for TaskUpdateTool {
     }
     fn is_read_only(&self, _input: &Value) -> bool {
         false
+    }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(task_id) = input["taskId"].as_str() {
+            parts.push(task_id);
+        }
+        if let Some(status) = input["status"].as_str() {
+            parts.push(status);
+        }
+        if let Some(subject) = input["subject"].as_str() {
+            parts.push(subject);
+        }
+        Some(parts.join(" "))
     }
 
     async fn call(
@@ -834,6 +852,10 @@ impl ToolExecutor for TaskGetTool {
         true
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(input["taskId"].as_str().unwrap_or_default().to_string())
+    }
+
     async fn call(
         &self,
         input: &Value,
@@ -901,6 +923,17 @@ impl ToolExecutor for TaskStopTool {
     }
     fn is_read_only(&self, _input: &Value) -> bool {
         false
+    }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(
+            input["taskId"]
+                .as_str()
+                .or_else(|| input["task_id"].as_str())
+                .or_else(|| input["shell_id"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+        )
     }
 
     async fn call(
@@ -1021,6 +1054,16 @@ impl ToolExecutor for TaskOutputTool {
     }
     fn is_read_only(&self, _input: &Value) -> bool {
         true
+    }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(
+            input["taskId"]
+                .as_str()
+                .or_else(|| input["task_id"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+        )
     }
 
     async fn call(

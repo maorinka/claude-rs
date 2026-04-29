@@ -349,6 +349,10 @@ Improved:
 - Unknown tool calls now use the TS model-facing error shape
   `<tool_use_error>Error: No such tool available: ...</tool_use_error>`
   instead of Rust-only `Unknown tool: ...` text.
+- Core built-in tools now expose TS-style `toAutoClassifierInput`
+  projections through the Rust tool trait for Bash, PowerShell, Read, Edit,
+  Write, Glob, Grep, WebFetch, and Task tools instead of relying on raw JSON
+  classifier input.
 
 Remaining result-budget work:
 - Extend the same transcript-backed replacement state to sidechain/forked
@@ -690,7 +694,6 @@ Needs work:
 - TS file-lock task mutation serialization.
 - Full owner/team mailbox behavior and automatic teammate owner assignment.
 - Active spinner UI behavior using task `activeForm`.
-- Auto-classifier input integration.
 - Cross-session task behavior.
 
 Improved:
@@ -719,6 +722,8 @@ Improved:
   from `blockedBy`, matching TS list output behavior.
 - Task deletion now removes dependency references from other tasks and updates
   the high-water mark, matching TS delete cleanup semantics.
+- Task tool auto-classifier projections now match TS (`subject`, task id, and
+  update id/status/subject summaries).
 
 ### MCPAuthTool
 

@@ -131,6 +131,10 @@ impl ToolExecutor for PowerShellTool {
             }),
         }
     }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(input["command"].as_str().unwrap_or_default().to_string())
+    }
 }
 
 #[cfg(test)]

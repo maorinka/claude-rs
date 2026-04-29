@@ -416,6 +416,10 @@ impl ToolExecutor for FileReadTool {
         true
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(input["file_path"].as_str().unwrap_or_default().to_string())
+    }
+
     fn check_permissions(
         &self,
         input: &Value,

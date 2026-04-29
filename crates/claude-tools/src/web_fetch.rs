@@ -560,6 +560,14 @@ impl ToolExecutor for WebFetchTool {
         true
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        let url = input["url"].as_str().unwrap_or_default();
+        match input["prompt"].as_str().filter(|prompt| !prompt.is_empty()) {
+            Some(prompt) => Some(format!("{url}: {prompt}")),
+            None => Some(url.to_string()),
+        }
+    }
+
     fn check_permissions(
         &self,
         input: &Value,

@@ -113,6 +113,14 @@ impl ToolExecutor for GrepTool {
         true
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        let pattern = input["pattern"].as_str().unwrap_or_default();
+        match input["path"].as_str().filter(|path| !path.is_empty()) {
+            Some(path) => Some(format!("{pattern} in {path}")),
+            None => Some(pattern.to_string()),
+        }
+    }
+
     fn max_result_size_chars(&self) -> usize {
         MAX_RESULT_SIZE_CHARS
     }

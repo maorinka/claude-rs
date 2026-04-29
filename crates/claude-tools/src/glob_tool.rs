@@ -53,6 +53,10 @@ impl ToolExecutor for GlobTool {
         true
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(input["pattern"].as_str().unwrap_or_default().to_string())
+    }
+
     fn max_result_size_chars(&self) -> usize {
         100_000
     }

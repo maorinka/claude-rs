@@ -924,6 +924,10 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             .is_some_and(|command| classify_command(command) == Classification::ReadOnly)
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(input["command"].as_str().unwrap_or_default().to_string())
+    }
+
     fn check_permissions(
         &self,
         input: &Value,
