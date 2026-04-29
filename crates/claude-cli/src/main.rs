@@ -20,6 +20,10 @@ pub struct Cli {
     #[arg(short = 'p', long = "print")]
     pub print: bool,
 
+    /// Minimal mode: skip unrequested startup systems and set CLAUDE_CODE_SIMPLE=1
+    #[arg(long = "bare")]
+    pub bare: bool,
+
     /// Output format for non-interactive mode
     #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
     pub output_format: OutputFormat,
@@ -991,6 +995,12 @@ mod tests {
         .unwrap();
         assert_eq!(cli.model.as_deref(), Some("opus"));
         assert_eq!(cli.fallback_model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn bare_cli_flag_is_accepted() {
+        let cli = Cli::try_parse_from(["claude-rs", "--bare", "-p", "hi"]).unwrap();
+        assert!(cli.bare);
     }
 
     #[test]
@@ -3998,6 +4008,9 @@ fn maybe_handle_remote_control_fast_path_args() {
 async fn main() -> Result<()> {
     maybe_handle_remote_control_fast_path_args();
     let mut cli = Cli::parse();
+    if cli.bare {
+        std::env::set_var("CLAUDE_CODE_SIMPLE", "1");
+    }
     if cli.input_format == InputFormat::StreamJson && cli.output_format != OutputFormat::StreamJson
     {
         eprintln!("Error: --input-format=stream-json requires output-format=stream-json.");
@@ -4315,7 +4328,7 @@ async fn main() -> Result<()> {
     } else {
         settings.mcp_servers.clone()
     };
-    let (plugin_mcp_servers, plugin_mcp_order) = if cli.strict_mcp_config {
+    let (plugin_mcp_servers, plugin_mcp_order) = if cli.strict_mcp_config || cli.bare {
         (std::collections::HashMap::new(), Vec::new())
     } else {
         load_enabled_plugin_mcp_servers(&project_root)

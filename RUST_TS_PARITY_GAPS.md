@@ -748,6 +748,10 @@ Improved:
   to the active main model, threads it into API config, and switches the
   outgoing model after repeated 529 overload responses using the same retry
   budget constant as TS.
+- Rust startup now accepts TS `--bare` and sets `CLAUDE_CODE_SIMPLE=1` before
+  runtime loading, so existing simple-mode gates apply to memory, skill
+  discovery, background work, hooks, and plugin MCP auto-loading while explicit
+  CLI inputs such as `--mcp-config`, `--settings`, and `--add-dir` still work.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

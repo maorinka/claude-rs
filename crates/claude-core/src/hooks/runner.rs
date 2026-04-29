@@ -222,6 +222,9 @@ impl HookRunner {
         agent_type: Option<&str>,
         timeout_ms: Option<u64>,
     ) -> AggregatedHookResult {
+        if crate::errors_util::is_bare_mode() {
+            return AggregatedHookResult::default();
+        }
         let hook_input =
             self.build_hook_input(event, extra_fields, permission_mode, agent_id, agent_type);
 
@@ -302,6 +305,9 @@ impl HookRunner {
         permission_mode: Option<&str>,
         timeout_ms: Option<u64>,
     ) -> Vec<HookOutsideReplResult> {
+        if crate::errors_util::is_bare_mode() {
+            return Vec::new();
+        }
         let hook_input = self.build_hook_input(event, extra_fields, permission_mode, None, None);
 
         let timeout = timeout_ms.unwrap_or(TOOL_HOOK_EXECUTION_TIMEOUT_MS);
