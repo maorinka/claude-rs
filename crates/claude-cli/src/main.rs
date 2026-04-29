@@ -3869,6 +3869,40 @@ fn stream_json_user_tool_result_event(
     event
 }
 
+fn stream_json_assistant_tool_use_event(
+    tool_info: &claude_core::query::engine::ToolUseInfo,
+    session_id: &str,
+    model: &str,
+    usage: Option<&claude_core::types::usage::Usage>,
+) -> serde_json::Value {
+    let api_model = model.replace("[1m]", "").replace("[1M]", "");
+    serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+            "type": "message",
+            "role": "assistant",
+            "model": api_model,
+            "content": [{
+                "type": "tool_use",
+                "id": tool_info.id,
+                "name": tool_info.name,
+                "input": tool_info.input,
+            }],
+            "stop_reason": serde_json::Value::Null,
+            "stop_sequence": serde_json::Value::Null,
+            "stop_details": serde_json::Value::Null,
+            "context_management": serde_json::Value::Null,
+            "usage": usage
+                .map(|usage| stream_json_usage_value(usage, "not_available", false))
+                .unwrap_or_else(|| stream_json_usage_value(&claude_core::types::usage::Usage::default(), "not_available", false)),
+        },
+        "parent_tool_use_id": serde_json::Value::Null,
+        "session_id": session_id,
+        "uuid": uuid::Uuid::new_v4().to_string(),
+    })
+}
+
 #[derive(Default)]
 struct StreamJsonPrintState {
     text: String,
@@ -5648,10 +5682,6 @@ async fn main() -> Result<()> {
             if let Ok(state) = print_handle.await {
                 final_text.push_str(&state.text);
                 if let Some(usage) = state.latest_usage {
-                    if cli.output_format == OutputFormat::StreamJson && !emitted_rate_limit_event {
-                        emit_stream_json(stream_json_rate_limit_event(&session_id));
-                        emitted_rate_limit_event = true;
-                    }
                     accumulate_stream_usage(&mut total_usage, &usage);
                     latest_usage = Some(usage);
                 }
@@ -5664,6 +5694,10 @@ async fn main() -> Result<()> {
 
             match result {
                 TurnResult::Done(stop_reason) => {
+                    if cli.output_format == OutputFormat::StreamJson && !emitted_rate_limit_event {
+                        emit_stream_json(stream_json_rate_limit_event(&session_id));
+                        emitted_rate_limit_event = true;
+                    }
                     if cli.json_schema.is_some() && structured_output.is_none() {
                         if structured_output_retry_count >= max_structured_output_retries {
                             break PrintTerminalOutcome::StructuredOutputRetries {
@@ -5687,6 +5721,9 @@ async fn main() -> Result<()> {
                     max_turns,
                     turn_count,
                 } => {
+                    if cli.output_format == OutputFormat::StreamJson && !emitted_rate_limit_event {
+                        emit_stream_json(stream_json_rate_limit_event(&session_id));
+                    }
                     break PrintTerminalOutcome::MaxTurns {
                         max_turns,
                         turn_count,
@@ -5701,9 +5738,16 @@ async fn main() -> Result<()> {
                 }
                 TurnResult::ToolUse(tool_uses) => {
                     // Execute each tool, check permissions, feed results back
-                    let mut stream_tool_results = Vec::new();
-                    let mut stream_tool_use_results = Vec::new();
-                    for tool_info in &tool_uses {
+                    let tool_count = tool_uses.len();
+                    for (tool_index, tool_info) in tool_uses.iter().enumerate() {
+                        if cli.output_format == OutputFormat::StreamJson {
+                            emit_stream_json(stream_json_assistant_tool_use_event(
+                                tool_info,
+                                &session_id,
+                                &model,
+                                latest_usage.as_ref(),
+                            ));
+                        }
                         let mut tool_input = tool_info.input.clone();
                         let mut forced_permission: Option<Result<(), String>> = None;
                         if let Some(runner) = get_global_runner() {
@@ -6221,13 +6265,20 @@ async fn main() -> Result<()> {
                         }
 
                         if cli.output_format == OutputFormat::StreamJson {
-                            stream_tool_results.push(serde_json::json!({
+                            if !emitted_rate_limit_event && tool_index + 1 == tool_count {
+                                emit_stream_json(stream_json_rate_limit_event(&session_id));
+                                emitted_rate_limit_event = true;
+                            }
+                            emit_stream_json(stream_json_user_tool_result_event(
+                                vec![serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": tool_info.id,
                                 "content": result_content.clone(),
                                 "is_error": is_error,
-                            }));
-                            stream_tool_use_results.push(result_json.clone());
+                                })],
+                                vec![result_json.clone()],
+                                &session_id,
+                            ));
                         }
                         let max_result_size_chars = tools
                             .get(&tool_info.name)
@@ -6244,15 +6295,6 @@ async fn main() -> Result<()> {
                         if let Some(reminder) = pending_skill_reminder {
                             query_engine.add_user_context_message(reminder);
                         }
-                    }
-                    if cli.output_format == OutputFormat::StreamJson
-                        && !stream_tool_results.is_empty()
-                    {
-                        emit_stream_json(stream_json_user_tool_result_event(
-                            stream_tool_results,
-                            stream_tool_use_results,
-                            &session_id,
-                        ));
                     }
                     if let Some(max_turns) = cli.max_turns.filter(|max_turns| *max_turns > 0) {
                         if num_turns >= max_turns {

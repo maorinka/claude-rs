@@ -667,7 +667,6 @@ impl QueryEngine {
         let mut needs_follow_up = false;
         let mut stop_reason = StopReason::EndTurn;
         let mut assistant_content: Vec<serde_json::Value> = Vec::new();
-        let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
         let mut response_message: Option<ApiMessage> = None;
         let mut response_usage: Option<Usage> = None;
         'stream: loop {
@@ -784,7 +783,6 @@ impl QueryEngine {
                                 }
                                 SseEvent::ContentBlockStop { index } => {
                                     if let Ok(block) = accumulator.on_stop(index) {
-                                        assistant_blocks.push(block.clone());
                                         match &block {
                                             ContentBlock::ToolUse { id, name, input } => {
                                                 let _ = event_tx
@@ -835,6 +833,26 @@ impl QueryEngine {
                                                 }));
                                             }
                                             _ => {}
+                                        }
+                                        if !matches!(block, ContentBlock::ToolUse { .. }) {
+                                            if let Some(message) = response_message.clone() {
+                                                let mut partial = message;
+                                                partial.content = vec![block.clone()];
+                                                partial.stop_reason = None;
+                                                if let Some(usage) = response_usage.clone() {
+                                                    partial.usage = usage;
+                                                }
+                                                let _ = event_tx
+                                                    .send(StreamEvent::AssistantMessage(
+                                                        AssistantMessage {
+                                                            uuid: uuid::Uuid::new_v4(),
+                                                            message: partial,
+                                                            request_id: None,
+                                                            timestamp: chrono::Utc::now(),
+                                                        },
+                                                    ))
+                                                    .await;
+                                            }
                                         }
                                     }
                                 }
@@ -911,21 +929,6 @@ impl QueryEngine {
 
         // Add assistant message to history
         if !assistant_content.is_empty() {
-            if let Some(mut message) = response_message {
-                message.content = assistant_blocks;
-                message.stop_reason = Some(stop_reason.clone());
-                if let Some(usage) = response_usage.clone() {
-                    message.usage = usage;
-                }
-                let _ = event_tx
-                    .send(StreamEvent::AssistantMessage(AssistantMessage {
-                        uuid: uuid::Uuid::new_v4(),
-                        message,
-                        request_id: None,
-                        timestamp: chrono::Utc::now(),
-                    }))
-                    .await;
-            }
             self.add_assistant_message(assistant_content);
             if let Some(usage) = response_usage {
                 self.usage_anchor = Some(UsageAnchor {
