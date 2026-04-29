@@ -305,6 +305,80 @@ fn is_claude_config_file_path(file_path: &str, cwd: &Path) -> bool {
         || path_in_working_path(file_path, &skills_dir.to_string_lossy())
 }
 
+fn claude_skill_scope_for_path(file_path: &str, cwd: &Path) -> Option<(String, String)> {
+    fn match_under_base(
+        absolute_path: &str,
+        absolute_path_lower: &str,
+        base: &Path,
+        pattern_prefix: &str,
+    ) -> Option<(String, String)> {
+        let base_str = expand_path(&base.to_string_lossy())
+            .to_string_lossy()
+            .to_string();
+        let base_lower = normalize_case_for_comparison(&base_str);
+
+        for sep in ['/', '\\'] {
+            let prefix = format!("{base_lower}{sep}");
+            if !absolute_path_lower.starts_with(&prefix) {
+                continue;
+            }
+
+            let rest = &absolute_path[base_str.len() + sep.len_utf8()..];
+            let slash = rest.find('/');
+            let backslash = rest.find('\\');
+            let cut = match (slash, backslash) {
+                (Some(a), Some(b)) => a.min(b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => return None,
+            };
+            if cut == 0 {
+                return None;
+            }
+
+            let skill_name = &rest[..cut];
+            if skill_name.is_empty()
+                || skill_name == "."
+                || skill_name.contains("..")
+                || skill_name
+                    .chars()
+                    .any(|ch| matches!(ch, '*' | '?' | '[' | ']'))
+            {
+                return None;
+            }
+
+            return Some((
+                skill_name.to_string(),
+                format!("{pattern_prefix}{skill_name}/**"),
+            ));
+        }
+
+        None
+    }
+
+    let absolute_path = expand_path(file_path).to_string_lossy().to_string();
+    let absolute_path_lower = normalize_case_for_comparison(&absolute_path);
+
+    let project_skills_dir = cwd.join(".claude").join("skills");
+    if let Some(scope) = match_under_base(
+        &absolute_path,
+        &absolute_path_lower,
+        &project_skills_dir,
+        "/.claude/skills/",
+    ) {
+        return Some(scope);
+    }
+
+    let home = dirs::home_dir()?;
+    let global_skills_dir = home.join(".claude").join("skills");
+    match_under_base(
+        &absolute_path,
+        &absolute_path_lower,
+        &global_skills_dir,
+        "~/.claude/skills/",
+    )
+}
+
 // ============================================================================
 // checkPathSafetyForAutoEdit
 // ============================================================================
@@ -930,6 +1004,20 @@ pub fn check_write_permission_for_tool(
         classifier_approvable,
     } = safety
     {
+        let suggestions =
+            if let Some((_skill_name, pattern)) = claude_skill_scope_for_path(path, cwd) {
+                vec![PermissionUpdate::AddRules {
+                    destination: PermissionRuleSource::Session,
+                    rules: vec![PermissionRuleValue {
+                        tool_name: "Edit".to_string(),
+                        rule_content: Some(pattern),
+                    }],
+                    behavior: PermissionBehavior::Allow,
+                }]
+            } else {
+                generate_suggestions(path, "write", context)
+            };
+
         return PermissionDecision::Ask(PermissionAskDecision {
             message: message.clone(),
             updated_input: None,
@@ -937,7 +1025,7 @@ pub fn check_write_permission_for_tool(
                 reason: message,
                 classifier_approvable,
             }),
-            suggestions: Some(generate_suggestions(path, "write", context)),
+            suggestions: Some(suggestions),
             blocked_path: None,
             is_bash_security_check_for_misparsing: None,
         });
@@ -1205,5 +1293,65 @@ mod tests {
         assert!(contains_path_traversal("foo/../../bar"));
         assert!(!contains_path_traversal("foo/bar"));
         assert!(!contains_path_traversal("foo/bar/baz"));
+    }
+
+    #[test]
+    fn write_to_project_skill_suggests_narrow_session_rule() {
+        let cwd = tempfile::tempdir().unwrap();
+        let skill_file = cwd
+            .path()
+            .join(".claude/skills/reviewer/SKILL.md")
+            .to_string_lossy()
+            .to_string();
+        let context = ToolPermissionContext {
+            working_directory: cwd.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let decision = check_write_permission_for_tool(&skill_file, &context);
+        let PermissionDecision::Ask(ask) = decision else {
+            panic!("skill writes should ask with a scoped suggestion");
+        };
+        let suggestions = ask.suggestions.expect("suggestions must be present");
+        assert_eq!(suggestions.len(), 1);
+        let PermissionUpdate::AddRules {
+            destination,
+            behavior,
+            rules,
+        } = &suggestions[0]
+        else {
+            panic!("expected AddRules suggestion");
+        };
+        assert_eq!(*destination, PermissionRuleSource::Session);
+        assert_eq!(*behavior, PermissionBehavior::Allow);
+        assert_eq!(rules[0].tool_name, "Edit");
+        assert_eq!(
+            rules[0].rule_content.as_deref(),
+            Some("/.claude/skills/reviewer/**")
+        );
+    }
+
+    #[test]
+    fn write_to_skill_like_glob_name_uses_generic_suggestions() {
+        let cwd = tempfile::tempdir().unwrap();
+        let skill_file = cwd
+            .path()
+            .join(".claude/skills/*/SKILL.md")
+            .to_string_lossy()
+            .to_string();
+        let context = ToolPermissionContext {
+            working_directory: cwd.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let decision = check_write_permission_for_tool(&skill_file, &context);
+        let PermissionDecision::Ask(ask) = decision else {
+            panic!("dangerous .claude writes should ask");
+        };
+        let suggestions = ask.suggestions.expect("suggestions must be present");
+        assert!(
+            !matches!(&suggestions[0], PermissionUpdate::AddRules { .. }),
+            "glob-like skill names must not produce a broad allow rule"
+        );
     }
 }

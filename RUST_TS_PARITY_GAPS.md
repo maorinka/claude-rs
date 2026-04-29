@@ -519,9 +519,11 @@ Improved:
   lines; creates return `structuredPatch: []`.
 - Existing empty files now follow TS's current truthiness behavior in the
   result shape: the write is reported as `create` with `originalFile: null`.
+- Write permission safety prompts now mirror TS's narrow `.claude/skills/<name>`
+  suggestion: Rust offers a session-scoped `Edit(/.claude/skills/<name>/**)`
+  allow rule instead of a broad generic write-mode suggestion.
 
 Needs work:
-- Permission validation parity.
 - File-history integration.
 - Conditional `gitDiff` output behind TS's remote/feature gate.
 - Staleness atomicity and encoding/LSP/VSCode side effects in the exact TS
