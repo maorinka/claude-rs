@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use claude_core::mcp::helpers::mcp_tool_input_to_auto_classifier_input;
 use claude_core::mcp::manager::McpManager;
 use claude_core::types::events::ToolResultData;
 
@@ -121,6 +122,13 @@ impl ToolExecutor for McpTool {
         // MCP tools are unknown in their side effects - assume not read-only
         false
     }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        let Some(map) = input.as_object() else {
+            return Some(self.name.clone());
+        };
+        Some(mcp_tool_input_to_auto_classifier_input(map, &self.name))
+    }
 }
 
 /// Register all MCP tools from the manager into a tool registry.
@@ -150,5 +158,45 @@ pub async fn register_mcp_tools(
         );
 
         registry.register(Arc::new(mcp_tool));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_tool() -> McpTool {
+        McpTool::new(
+            "mcp__svc__search".to_string(),
+            "search".to_string(),
+            "svc".to_string(),
+            "Search".to_string(),
+            json!({"type": "object"}),
+            Arc::new(RwLock::new(McpManager::new())),
+        )
+    }
+
+    #[test]
+    fn classifier_input_uses_ts_mcp_projection() {
+        let tool = test_tool();
+        let input = json!({
+            "query": "rust",
+            "opts": {"limit": 3},
+            "items": [1, 2, 3]
+        });
+        assert_eq!(
+            tool.to_auto_classifier_input(&input).as_deref(),
+            Some("query=rust opts=[object Object] items=1,2,3")
+        );
+    }
+
+    #[test]
+    fn classifier_input_empty_mcp_input_uses_tool_name() {
+        let tool = test_tool();
+        assert_eq!(
+            tool.to_auto_classifier_input(&json!({})).as_deref(),
+            Some("mcp__svc__search")
+        );
     }
 }

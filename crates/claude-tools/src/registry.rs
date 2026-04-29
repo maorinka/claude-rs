@@ -245,6 +245,9 @@ pub trait ToolExecutor: Send + Sync {
     fn is_read_only(&self, _input: &Value) -> bool {
         false
     }
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(serde_json::to_string(input).unwrap_or_else(|_| input.to_string()))
+    }
     fn check_permissions(
         &self,
         input: &Value,
@@ -301,6 +304,10 @@ impl claude_core::permissions::ToolPermissions for ExecutorToolPermissions {
 
     fn is_read_only(&self) -> bool {
         self.tool.is_read_only(&self.input)
+    }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        self.tool.to_auto_classifier_input(input)
     }
 }
 

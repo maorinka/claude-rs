@@ -480,6 +480,9 @@ Improved:
 - MCP auto-mode classifier input encoding now follows the TS
   `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
   keys and JavaScript `String(value)` coercion for arrays and nested objects.
+- The Rust permission/classifier bridge now has a tool-level
+  `to_auto_classifier_input` hook and MCP tools route through the TS-style MCP
+  projection instead of sending raw JSON to the classifier.
 
 ## P1: Tools Needing Further Work
 

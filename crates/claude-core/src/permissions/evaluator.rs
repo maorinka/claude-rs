@@ -44,6 +44,15 @@ pub trait ToolPermissions {
         false
     }
 
+    /// Compact tool input projected for the auto-mode classifier.
+    ///
+    /// TS routes classifier input through each tool's `toAutoClassifierInput`.
+    /// The Rust default preserves the previous raw-JSON behavior while tool
+    /// implementations port their TS projection one by one.
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        Some(serde_json::to_string(input).unwrap_or_else(|_| input.to_string()))
+    }
+
     /// Get the file path this tool operates on, if applicable.
     fn get_path(&self, input: &Value) -> Option<String> {
         let _ = input;
@@ -972,10 +981,20 @@ pub async fn evaluate_permission_async<T: ToolPermissions>(
         return sync;
     }
 
-    let input_json = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+    let Some(classifier_input) = tool.to_auto_classifier_input(input) else {
+        return PermissionDecision::Allow(PermissionAllowDecision {
+            updated_input: None,
+            user_modified: None,
+            decision_reason: Some(PermissionDecisionReason::AsyncAgent {
+                reason: "Tool declares no classifier-relevant input".to_string(),
+            }),
+            tool_use_id: None,
+            accept_feedback: None,
+        });
+    };
     let verdict = match classify_action(
         tool.name(),
-        &input_json,
+        &classifier_input,
         recent_transcript,
         CancellationToken::new(),
     )
