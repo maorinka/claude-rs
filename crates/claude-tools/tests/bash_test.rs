@@ -39,9 +39,50 @@ async fn test_bash_exit_code() {
     let cancel = CancellationToken::new();
     let input = json!({ "command": "exit 42" });
     let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
-    assert!(!result.is_error);
+    assert!(result.is_error);
     let code = result.data["code"].as_i64().unwrap();
     assert_eq!(code, 42);
+    assert_eq!(
+        result.data["returnCodeInterpretation"],
+        "Command failed with exit code 42"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_grep_no_match_is_not_error() {
+    let tool = BashTool::new();
+    let ctx = make_ctx(tmpdir());
+    let result = tool
+        .call(
+            &json!({ "command": "printf 'abc\\n' | grep zzz" }),
+            &ctx,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    assert_eq!(result.data["code"], 1);
+    assert_eq!(result.data["returnCodeInterpretation"], "No matches found");
+}
+
+#[tokio::test]
+async fn test_bash_silent_command_sets_no_output_expected() {
+    let tool = BashTool::new();
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = make_ctx(temp.path().to_path_buf());
+    let result = tool
+        .call(
+            &json!({ "command": "mkdir quiet_dir" }),
+            &ctx,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    assert_eq!(result.data["noOutputExpected"], true);
+    assert_eq!(result.data["stdout"], "");
 }
 
 #[tokio::test]

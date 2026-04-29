@@ -7,6 +7,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::MutexGuard;
 use tokio_util::sync::CancellationToken;
 
+use crate::command_semantics::interpret_command_result;
 use crate::read_only_validation::{classify_command, Classification};
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::sandbox::SandboxExecutor;
@@ -43,6 +44,118 @@ fn is_background_tasks_disabled() -> bool {
             v == "1" || v == "true" || v == "yes"
         })
         .unwrap_or(false)
+}
+
+const BASH_SEMANTIC_NEUTRAL_COMMANDS: &[&str] = &["echo", "printf", "true", "false", ":"];
+const BASH_SILENT_COMMANDS: &[&str] = &[
+    "mv", "cp", "rm", "mkdir", "rmdir", "chmod", "chown", "chgrp", "touch", "ln", "cd", "export",
+    "unset", "wait",
+];
+
+fn is_silent_bash_command(command: &str) -> bool {
+    let parts = split_command_for_semantics(command);
+    if parts.is_empty() {
+        return false;
+    }
+
+    let mut has_non_fallback_command = false;
+    let mut last_operator: Option<&str> = None;
+    let mut skip_next_as_redirect_target = false;
+
+    for part in parts {
+        if skip_next_as_redirect_target {
+            skip_next_as_redirect_target = false;
+            continue;
+        }
+        if matches!(part.as_str(), ">" | ">>" | ">&") {
+            skip_next_as_redirect_target = true;
+            continue;
+        }
+        if matches!(part.as_str(), "||" | "&&" | "|" | ";") {
+            last_operator = Some(match part.as_str() {
+                "||" => "||",
+                "&&" => "&&",
+                "|" => "|",
+                _ => ";",
+            });
+            continue;
+        }
+        let base_command = part.split_whitespace().next().unwrap_or("");
+        if base_command.is_empty() {
+            continue;
+        }
+        if last_operator == Some("||") && BASH_SEMANTIC_NEUTRAL_COMMANDS.contains(&base_command) {
+            continue;
+        }
+        has_non_fallback_command = true;
+        if !BASH_SILENT_COMMANDS.contains(&base_command) {
+            return false;
+        }
+    }
+
+    has_non_fallback_command
+}
+
+fn split_command_for_semantics(command: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut chars = command.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                current.push(ch);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                current.push(ch);
+            }
+            '|' | '&' | ';' | '>' if !in_single && !in_double => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+                current.clear();
+
+                let op = match (ch, chars.peek().copied()) {
+                    ('|', Some('|')) => {
+                        chars.next();
+                        "||"
+                    }
+                    ('&', Some('&')) => {
+                        chars.next();
+                        "&&"
+                    }
+                    ('>', Some('>')) => {
+                        chars.next();
+                        ">>"
+                    }
+                    ('>', Some('&')) => {
+                        chars.next();
+                        ">&"
+                    }
+                    ('|', _) => "|",
+                    (';', _) => ";",
+                    ('>', _) => ">",
+                    _ => {
+                        current.push(ch);
+                        continue;
+                    }
+                };
+                parts.push(op.to_string());
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        parts.push(trimmed.to_string());
+    }
+    parts
 }
 
 /// Get the maximum bash timeout, respecting the `BASH_MAX_TIMEOUT_MS`
@@ -780,15 +893,21 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                 } else {
                     final_stderr
                 };
+                let interpretation =
+                    interpret_command_result(&command, code, &stdout, &final_stderr);
+                let return_code_interpretation = interpretation.message.clone();
+                let no_output_expected = is_silent_bash_command(&command);
 
                 Ok(ToolResultData {
                     data: json!({
                         "stdout": stdout,
                         "stderr": final_stderr,
                         "code": code,
-                        "interrupted": false
+                        "interrupted": false,
+                        "returnCodeInterpretation": return_code_interpretation,
+                        "noOutputExpected": no_output_expected
                     }),
-                    is_error: false,
+                    is_error: interpretation.is_error,
                 })
             }
         }

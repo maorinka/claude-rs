@@ -512,6 +512,10 @@ Improved:
   outside the allowed working directories, and appends `Shell cwd was reset to
   ...` to stderr like TS. `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` forces the
   reset without the warning suffix, matching TS.
+- Foreground Bash results now use the shared TS command-semantics classifier:
+  non-error informational exit codes such as `grep` no-match stay successful
+  with `returnCodeInterpretation`, real non-zero failures become error tool
+  results, and silent commands set `noOutputExpected`.
 
 ### FileEditTool
 
