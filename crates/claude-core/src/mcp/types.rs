@@ -317,7 +317,7 @@ pub struct McpToolDefinition {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "inputSchema")]
     pub input_schema: Option<serde_json::Value>,
     /// Server-provided side-effect hints. Populated by G7 so the
     /// Rust tool layer can propagate `readOnly` / `destructive`

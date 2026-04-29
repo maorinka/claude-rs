@@ -470,6 +470,28 @@ fn test_parse_tool_with_no_schema() {
 }
 
 #[test]
+fn test_parse_tool_accepts_mcp_input_schema_field() {
+    let json = r#"{
+        "name": "query-docs",
+        "description": "Query docs",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "libraryId": {"type": "string"},
+                "query": {"type": "string"},
+                "researchMode": {"type": "boolean"}
+            },
+            "required": ["libraryId", "query"]
+        }
+    }"#;
+
+    let tool: McpToolDefinition = serde_json::from_str(json).unwrap();
+    let schema = tool.input_schema.unwrap();
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["researchMode"]["type"], "boolean");
+}
+
+#[test]
 fn test_parse_tool_complex_schema() {
     let json = r#"{
         "name": "search",
