@@ -38,6 +38,53 @@ pub fn get_global_runner() -> Option<Arc<runner::HookRunner>> {
         .and_then(|lock| lock.read().ok().and_then(|guard| guard.clone()))
 }
 
+/// Update the process-wide HookRunner cwd while preserving its loaded config.
+pub fn set_global_runner_cwd(cwd: String) {
+    let lock = GLOBAL_RUNNER.get_or_init(|| RwLock::new(None));
+    if let Ok(mut guard) = lock.write() {
+        if let Some(runner) = guard.as_ref() {
+            *guard = Some(Arc::new(runner.with_cwd(cwd)));
+        }
+    }
+}
+
+/// Fire `CwdChanged` hooks after the session working directory changes.
+///
+/// TS updates its cwd watcher and executes these hooks from the new cwd. Rust
+/// mirrors that by cloning the global runner with `new_cwd`, running the hook,
+/// and then storing that cwd for future hook execution.
+pub async fn fire_cwd_changed(old_cwd: &str, new_cwd: &str) -> Vec<String> {
+    if old_cwd == new_cwd {
+        return Vec::new();
+    }
+    let Some(runner) = get_global_runner() else {
+        return Vec::new();
+    };
+    let runner = runner.with_cwd(new_cwd.to_string());
+    let extra = serde_json::json!({
+        "old_cwd": old_cwd,
+        "new_cwd": new_cwd,
+    });
+    let results = runner
+        .run_hooks(&types::HookEvent::CwdChanged, extra, None, None, None, None)
+        .await;
+    set_global_runner_cwd(new_cwd.to_string());
+    results
+        .individual_results
+        .iter()
+        .filter(|result| result.outcome != types::HookOutcome::Success)
+        .filter_map(|result| {
+            if !result.stdout.is_empty() {
+                Some(result.stdout.clone())
+            } else if !result.stderr.is_empty() {
+                Some(result.stderr.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Fire a `StopFailure` hook via the global runner, if one is installed.
 /// Logs blocking errors via tracing and returns the joined error message.
 /// Returns `None` if no runner is installed, no hooks matched, or no hook

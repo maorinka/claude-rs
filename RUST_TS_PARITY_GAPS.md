@@ -698,6 +698,9 @@ Improved:
 - Rust TUI regular prompt submission now fires `UserPromptSubmit` before
   sending the message to the model, with blocking/prevent-continuation handling
   and additional-context injection.
+- Rust now fires `CwdChanged` hooks and updates the process hook runner cwd
+  when CLI or TUI worktree tools move the session between the original cwd and
+  a worktree, following the TS cwd-watcher hook path.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

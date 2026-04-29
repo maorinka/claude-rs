@@ -4675,8 +4675,16 @@ async fn main() -> Result<()> {
                                                                             .data["worktreePath"]
                                                                             .as_str()
                                                                         {
-                                                                            cwd =
+                                                                            let old_cwd =
+                                                                                cwd.clone();
+                                                                            let new_cwd =
                                                                                 PathBuf::from(path);
+                                                                            claude_core::hooks::fire_cwd_changed(
+                                                                                &old_cwd.display().to_string(),
+                                                                                &new_cwd.display().to_string(),
+                                                                            )
+                                                                            .await;
+                                                                            cwd = new_cwd;
                                                                             tracing::info!(
                                                                                 "Session cwd switched to worktree: {}",
                                                                                 path
@@ -4684,7 +4692,15 @@ async fn main() -> Result<()> {
                                                                         }
                                                                     }
                                                                     "ExitWorktree" => {
-                                                                        cwd = original_cwd.clone();
+                                                                        let old_cwd = cwd.clone();
+                                                                        let new_cwd =
+                                                                            original_cwd.clone();
+                                                                        claude_core::hooks::fire_cwd_changed(
+                                                                            &old_cwd.display().to_string(),
+                                                                            &new_cwd.display().to_string(),
+                                                                        )
+                                                                        .await;
+                                                                        cwd = new_cwd;
                                                                         tracing::info!(
                                                                             "Session cwd restored to: {}",
                                                                             original_cwd.display()
@@ -4800,7 +4816,14 @@ async fn main() -> Result<()> {
                                                             if let Some(path) =
                                                                 data.data["worktreePath"].as_str()
                                                             {
-                                                                cwd = PathBuf::from(path);
+                                                                let old_cwd = cwd.clone();
+                                                                let new_cwd = PathBuf::from(path);
+                                                                claude_core::hooks::fire_cwd_changed(
+                                                                    &old_cwd.display().to_string(),
+                                                                    &new_cwd.display().to_string(),
+                                                                )
+                                                                .await;
+                                                                cwd = new_cwd;
                                                                 tracing::info!(
                                                                     "Session cwd switched to worktree: {}",
                                                                     path
@@ -4808,7 +4831,14 @@ async fn main() -> Result<()> {
                                                             }
                                                         }
                                                         "ExitWorktree" => {
-                                                            cwd = original_cwd.clone();
+                                                            let old_cwd = cwd.clone();
+                                                            let new_cwd = original_cwd.clone();
+                                                            claude_core::hooks::fire_cwd_changed(
+                                                                &old_cwd.display().to_string(),
+                                                                &new_cwd.display().to_string(),
+                                                            )
+                                                            .await;
+                                                            cwd = new_cwd;
                                                             tracing::info!(
                                                                 "Session cwd restored to: {}",
                                                                 original_cwd.display()

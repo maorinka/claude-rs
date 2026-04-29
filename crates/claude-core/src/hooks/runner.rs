@@ -138,6 +138,17 @@ impl HookRunner {
         self.cwd = cwd;
     }
 
+    /// Return a copy of this runner with a different current working directory.
+    pub fn with_cwd(&self, cwd: String) -> Self {
+        Self {
+            settings: self.settings.clone(),
+            http_policy: self.http_policy.clone(),
+            cwd,
+            session_id: self.session_id.clone(),
+            transcript_path: self.transcript_path.clone(),
+        }
+    }
+
     /// Get the SessionEnd hook timeout in milliseconds.
     /// Honors the CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS env var.
     pub fn session_end_hook_timeout_ms() -> u64 {

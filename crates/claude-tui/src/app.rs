@@ -19,9 +19,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use claude_core::hooks::{
-    get_global_runner, resolve_hook_permission_decision, run_post_tool_use_failure_hooks,
-    run_post_tool_use_hooks, run_pre_tool_use_hooks, set_global_runner, HookRunner,
-    ResolvedPermission,
+    fire_cwd_changed, get_global_runner, resolve_hook_permission_decision,
+    run_post_tool_use_failure_hooks, run_post_tool_use_hooks, run_pre_tool_use_hooks,
+    set_global_runner, HookRunner, ResolvedPermission,
 };
 use claude_core::permissions::evaluator::{
     apply_permission_updates, evaluate_permission, persist_permission_updates,
@@ -1916,11 +1916,33 @@ impl App {
                             match info.name.as_str() {
                                 "EnterWorktree" => {
                                     if let Some(path) = data.data["worktreePath"].as_str() {
-                                        cwd = PathBuf::from(path);
+                                        let old_cwd = cwd.clone();
+                                        let new_cwd = PathBuf::from(path);
+                                        for message in fire_cwd_changed(
+                                            &old_cwd.display().to_string(),
+                                            &new_cwd.display().to_string(),
+                                        )
+                                        .await
+                                        {
+                                            self.message_list
+                                                .push(MessageEntry::System { text: message });
+                                        }
+                                        cwd = new_cwd;
                                     }
                                 }
                                 "ExitWorktree" => {
-                                    cwd = original_cwd.clone();
+                                    let old_cwd = cwd.clone();
+                                    let new_cwd = original_cwd.clone();
+                                    for message in fire_cwd_changed(
+                                        &old_cwd.display().to_string(),
+                                        &new_cwd.display().to_string(),
+                                    )
+                                    .await
+                                    {
+                                        self.message_list
+                                            .push(MessageEntry::System { text: message });
+                                    }
+                                    cwd = new_cwd;
                                 }
                                 _ => {}
                             }
