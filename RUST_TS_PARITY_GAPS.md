@@ -91,10 +91,22 @@ Now matching:
   only when enabled, ping events are suppressed, the completed assistant block
   appears before `content_block_stop`, `message_stop` is preserved, and the SDK
   `system/status` requesting event is emitted before the request stream.
+- Hook lifecycle stream-json events now go through a TS-style process-wide
+  hook event bus with the same default allowlist (`SessionStart`, `Setup`) and
+  all-events switch for `--include-hook-events` / `CLAUDE_CODE_REMOTE`.
+- Print-mode stream-json now emits `UserPromptSubmit` hook events before
+  `system/init`, matching TS startup flow, and tool hook events use the SDK
+  `hook_started` / `hook_progress` / `hook_response` system-event shape.
+- Hook settings merging now appends hook event arrays across settings and
+  enabled plugin hook files instead of overwriting earlier arrays, so user
+  hooks and plugin hooks both run. The `run pwd --include-hook-events` smoke
+  now matches TS on three Stop hook starts and three Stop hook responses.
 - Latest normal stream-json smoke:
   `/tmp/claude-rs-parity-stream-normal-after-partial`.
 - Latest partial-message stream-json smoke:
   `/tmp/claude-rs-parity-partial-messages-2`.
+- Latest hook-event stream-json smoke:
+  `/tmp/claude-rs-parity-hook-events-4`.
 - Text `--print` mode now buffers assistant text and prints only successful
   final output like TS, so `--max-turns` errors do not leak partial assistant
   text before `Error: Reached max turns (...)`; the text-mode max-turns error
@@ -1033,8 +1045,9 @@ Needs work:
 3. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
 4. Verify rich user/system context lifecycle against resumed sessions and
    remote-control captures.
-5. Complete hook dispatch from tool/query/task flows, including SDK hook event
-   emission for non-SessionStart hooks when TS enables all hook events.
+5. Complete the remaining hook timing/concurrency parity, especially the
+   race between very fast `PreToolUse` hook responses and `rate_limit_event`
+   emission, plus progress-interval streaming for long-running hooks.
 6. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
 7. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.

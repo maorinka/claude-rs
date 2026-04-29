@@ -8,8 +8,17 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 use super::aggregation::aggregate_hook_results;
+use super::hook_events::{emit_hook_response, emit_hook_started, HookResponseData};
 use super::matching::{get_matching_hooks, resolve_match_query, MatchedHook};
 use super::types::*;
+
+fn hook_event_outcome(outcome: &HookOutcome) -> &'static str {
+    match outcome {
+        HookOutcome::Success => "success",
+        HookOutcome::Cancelled => "cancelled",
+        HookOutcome::Blocking | HookOutcome::NonBlockingError => "error",
+    }
+}
 
 // ============================================================================
 // Constants
@@ -388,6 +397,11 @@ async fn exec_hook(
     let start = Instant::now();
     let hook_id = uuid::Uuid::new_v4().to_string();
     let command_display = matched.hook.display_text();
+    emit_hook_started(
+        hook_id.clone(),
+        hook_name.to_string(),
+        event.as_str().to_string(),
+    );
 
     // Per-hook timeout overrides the batch timeout
     let effective_timeout_ms = matched
@@ -423,6 +437,19 @@ async fn exec_hook(
 
     match result {
         Ok(mut r) => {
+            let stdout = r.stdout.clone();
+            let stderr = r.stderr.clone();
+            let output = format!("{stdout}{stderr}");
+            emit_hook_response(HookResponseData {
+                hook_id: hook_id.clone(),
+                hook_name: hook_name.to_string(),
+                hook_event: event.as_str().to_string(),
+                output,
+                stdout,
+                stderr,
+                exit_code: r.exit_code,
+                outcome: hook_event_outcome(&r.outcome).to_string(),
+            });
             r.hook_id = Some(hook_id);
             r.hook_name = Some(hook_name.to_string());
             r.hook_event = Some(event.to_string());
@@ -432,12 +459,23 @@ async fn exec_hook(
         }
         Err(e) => {
             warn!("Hook {} failed: {}", hook_name, e);
+            let stderr = format!("Failed to run: {}", e);
+            emit_hook_response(HookResponseData {
+                hook_id: hook_id.clone(),
+                hook_name: hook_name.to_string(),
+                hook_event: event.as_str().to_string(),
+                output: stderr.clone(),
+                stdout: String::new(),
+                stderr: stderr.clone(),
+                exit_code: None,
+                outcome: hook_event_outcome(&HookOutcome::NonBlockingError).to_string(),
+            });
             HookResult {
                 hook_id: Some(hook_id),
                 hook_name: Some(hook_name.to_string()),
                 hook_event: Some(event.to_string()),
                 outcome: HookOutcome::NonBlockingError,
-                stderr: format!("Failed to run: {}", e),
+                stderr,
                 duration_ms: Some(duration_ms),
                 command_display,
                 ..Default::default()

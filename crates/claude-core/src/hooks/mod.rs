@@ -1,5 +1,6 @@
 pub mod aggregation;
 pub mod compact_hooks;
+pub mod hook_events;
 pub mod matching;
 pub mod runner;
 pub mod ssrf;
@@ -159,6 +160,10 @@ pub async fn fire_stop(
 pub use aggregation::aggregate_hook_results;
 pub use compact_hooks::{
     run_post_compact_hooks, run_pre_compact_hooks, PostCompactHookOutput, PreCompactHookOutput,
+};
+pub use hook_events::{
+    clear_hook_event_state, emit_hook_progress, emit_hook_response, emit_hook_started,
+    register_hook_event_handler, set_all_hook_events_enabled, HookExecutionEvent, HookResponseData,
 };
 pub use matching::{get_matching_hooks, matches_pattern, resolve_match_query, MatchedHook};
 pub use runner::{

@@ -37,14 +37,29 @@ impl SettingSource {
 }
 
 fn merge_json_objects(base: &mut Value, overlay: Value) {
+    merge_json_objects_at_path(base, overlay, &[]);
+}
+
+fn merge_json_objects_at_path(base: &mut Value, overlay: Value, path: &[String]) {
     let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) else {
         *base = overlay;
         return;
     };
     for (key, value) in overlay_obj {
+        let mut child_path = path.to_vec();
+        child_path.push(key.clone());
         match (base_obj.get_mut(key), value) {
+            (Some(existing), Value::Array(incoming))
+                if child_path.first().is_some_and(|segment| segment == "hooks")
+                    && child_path.len() == 2
+                    && existing.is_array() =>
+            {
+                if let Some(existing_items) = existing.as_array_mut() {
+                    existing_items.extend(incoming.iter().cloned());
+                }
+            }
             (Some(existing), Value::Object(_)) if existing.is_object() => {
-                merge_json_objects(existing, value.clone());
+                merge_json_objects_at_path(existing, value.clone(), &child_path);
             }
             _ => {
                 base_obj.insert(key.clone(), value.clone());
@@ -410,6 +425,32 @@ mod tests {
         assert_eq!(base["permissions"]["allow"], serde_json::json!(["Bash"]));
         assert_eq!(base["permissions"]["deny"], serde_json::json!(["Write"]));
         assert_eq!(base["model"], serde_json::json!("x"));
+    }
+
+    #[test]
+    fn raw_settings_merge_appends_hook_event_arrays() {
+        let mut base = serde_json::json!({
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": "a"}]}],
+                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "b"}]}]
+            }
+        });
+        merge_json_objects(
+            &mut base,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "c"}]}],
+                    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "d"}]}]
+                }
+            }),
+        );
+
+        assert_eq!(base["hooks"]["Stop"].as_array().unwrap().len(), 2);
+        assert_eq!(base["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            base["hooks"]["UserPromptSubmit"].as_array().unwrap().len(),
+            1
+        );
     }
 
     #[test]

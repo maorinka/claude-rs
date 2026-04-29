@@ -1160,6 +1160,36 @@ mod tests {
     }
 
     #[test]
+    fn stream_json_hook_execution_events_match_sdk_shape() {
+        let event = hook_execution_event_to_stream_json(
+            claude_core::hooks::HookExecutionEvent::Response {
+                hook_id: "hook-1".into(),
+                hook_name: "PreToolUse:Bash".into(),
+                hook_event: "PreToolUse".into(),
+                output: "out".into(),
+                stdout: "out".into(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                outcome: "success".into(),
+            },
+            "session-1",
+        );
+
+        assert_eq!(event["type"], "system");
+        assert_eq!(event["subtype"], "hook_response");
+        assert_eq!(event["hook_id"], "hook-1");
+        assert_eq!(event["hook_name"], "PreToolUse:Bash");
+        assert_eq!(event["hook_event"], "PreToolUse");
+        assert_eq!(event["output"], "out");
+        assert_eq!(event["stdout"], "out");
+        assert_eq!(event["stderr"], "");
+        assert_eq!(event["exit_code"], 0);
+        assert_eq!(event["outcome"], "success");
+        assert_eq!(event["session_id"], "session-1");
+        assert!(event["uuid"].as_str().is_some_and(|uuid| !uuid.is_empty()));
+    }
+
+    #[test]
     fn stream_json_partial_messages_gate_raw_sse_events() {
         let raw = claude_core::types::events::StreamEvent::RawSse {
             event: serde_json::json!({
@@ -4264,43 +4294,74 @@ fn stream_json_init_event(meta: StreamJsonInitMeta<'_>) -> serde_json::Value {
     })
 }
 
-fn emit_stream_json_hook_events(result: &claude_core::hooks::types::HookResult, session_id: &str) {
-    let hook_id = result
-        .hook_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let hook_name = result.hook_name.as_deref().unwrap_or("Hook");
-    let hook_event = result.hook_event.as_deref().unwrap_or("Hook");
+fn hook_execution_event_to_stream_json(
+    event: claude_core::hooks::HookExecutionEvent,
+    session_id: &str,
+) -> serde_json::Value {
+    match event {
+        claude_core::hooks::HookExecutionEvent::Started {
+            hook_id,
+            hook_name,
+            hook_event,
+        } => serde_json::json!({
+            "type": "system",
+            "subtype": "hook_started",
+            "hook_id": hook_id,
+            "hook_name": hook_name,
+            "hook_event": hook_event,
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "session_id": session_id,
+        }),
+        claude_core::hooks::HookExecutionEvent::Progress {
+            hook_id,
+            hook_name,
+            hook_event,
+            stdout,
+            stderr,
+            output,
+        } => serde_json::json!({
+            "type": "system",
+            "subtype": "hook_progress",
+            "hook_id": hook_id,
+            "hook_name": hook_name,
+            "hook_event": hook_event,
+            "stdout": stdout,
+            "stderr": stderr,
+            "output": output,
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "session_id": session_id,
+        }),
+        claude_core::hooks::HookExecutionEvent::Response {
+            hook_id,
+            hook_name,
+            hook_event,
+            output,
+            stdout,
+            stderr,
+            exit_code,
+            outcome,
+        } => serde_json::json!({
+            "type": "system",
+            "subtype": "hook_response",
+            "hook_id": hook_id,
+            "hook_name": hook_name,
+            "hook_event": hook_event,
+            "output": output,
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": exit_code,
+            "outcome": outcome,
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "session_id": session_id,
+        }),
+    }
+}
 
-    emit_stream_json(serde_json::json!({
-        "type": "system",
-        "subtype": "hook_started",
-        "hook_id": hook_id,
-        "hook_name": hook_name,
-        "hook_event": hook_event,
-        "uuid": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-    }));
-
-    let output = if !result.stdout.is_empty() {
-        result.stdout.as_str()
-    } else {
-        result.stderr.as_str()
-    };
-    emit_stream_json(serde_json::json!({
-        "type": "system",
-        "subtype": "hook_response",
-        "hook_id": hook_id,
-        "hook_name": hook_name,
-        "hook_event": hook_event,
-        "output": output,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "exit_code": result.exit_code,
-        "outcome": result.outcome.to_string(),
-        "uuid": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-    }));
+fn emit_stream_json_hook_execution_event(
+    event: claude_core::hooks::HookExecutionEvent,
+    session_id: &str,
+) {
+    emit_stream_json(hook_execution_event_to_stream_json(event, session_id));
 }
 
 fn is_remote_control_command(arg: &str) -> bool {
@@ -5336,6 +5397,28 @@ async fn main() -> Result<()> {
     };
 
     let api_session_id = api_config.session_id.clone();
+    let stream_json_rate_limit_emitted =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    claude_core::hooks::clear_hook_event_state();
+    claude_core::hooks::set_all_hook_events_enabled(
+        cli.include_hook_events || claude_core::errors_util::is_env_truthy("CLAUDE_CODE_REMOTE"),
+    );
+    if cli.output_format == OutputFormat::StreamJson {
+        let hook_session_id = api_session_id.clone();
+        let hook_rate_limit_emitted = stream_json_rate_limit_emitted.clone();
+        claude_core::hooks::register_hook_event_handler(Some(std::sync::Arc::new(move |event| {
+            let should_emit_rate_limit = matches!(
+                &event,
+                claude_core::hooks::HookExecutionEvent::Started { hook_event, .. }
+                    if hook_event == "PreToolUse"
+            ) && !hook_rate_limit_emitted
+                .swap(true, std::sync::atomic::Ordering::SeqCst);
+            emit_stream_json_hook_execution_event(event, &hook_session_id);
+            if should_emit_rate_limit {
+                emit_stream_json(stream_json_rate_limit_event(&hook_session_id));
+            }
+        })));
+    }
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth.clone());
 
     // Create cancellation token
@@ -5422,11 +5505,6 @@ async fn main() -> Result<()> {
             None,
         )
         .await;
-    if cli.output_format == OutputFormat::StreamJson {
-        for result in &session_start.individual_results {
-            emit_stream_json_hook_events(result, &api_session_id);
-        }
-    }
     for context in session_start.additional_contexts {
         query_engine.append_user_context_block(format!(
             "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
@@ -5573,30 +5651,6 @@ async fn main() -> Result<()> {
             }
         }
 
-        if cli.output_format == OutputFormat::StreamJson {
-            let (mcp_servers, mcp_prompt_commands) = {
-                let mgr = mcp_manager.read().await;
-                (
-                    stream_json_mcp_servers_in_order(mgr.connections().await, &mcp_server_order),
-                    mgr.prompt_command_names_in_order(&mcp_server_order).await,
-                )
-            };
-            emit_stream_json(stream_json_init_event(StreamJsonInitMeta {
-                cwd: &cwd,
-                session_id: &api_session_id,
-                tool_names: stream_json_tool_names.clone(),
-                mcp_servers,
-                model_display: &model_display,
-                permission_mode: &permission_mode,
-                registered_skills: &registered_skills,
-                discovered_skills: &discovered_skills,
-                stream_skill_names: &stream_skill_names,
-                mcp_prompt_commands: &mcp_prompt_commands,
-                output_style: settings.output_style.as_deref(),
-                auth: &auth,
-            }));
-        }
-
         let user_prompt_submit = hook_runner
             .run_hooks(
                 &claude_core::hooks::types::HookEvent::UserPromptSubmit,
@@ -5672,6 +5726,30 @@ async fn main() -> Result<()> {
             ));
         }
 
+        if cli.output_format == OutputFormat::StreamJson {
+            let (mcp_servers, mcp_prompt_commands) = {
+                let mgr = mcp_manager.read().await;
+                (
+                    stream_json_mcp_servers_in_order(mgr.connections().await, &mcp_server_order),
+                    mgr.prompt_command_names_in_order(&mcp_server_order).await,
+                )
+            };
+            emit_stream_json(stream_json_init_event(StreamJsonInitMeta {
+                cwd: &cwd,
+                session_id: &api_session_id,
+                tool_names: stream_json_tool_names.clone(),
+                mcp_servers,
+                model_display: &model_display,
+                permission_mode: &permission_mode,
+                registered_skills: &registered_skills,
+                discovered_skills: &discovered_skills,
+                stream_skill_names: &stream_skill_names,
+                mcp_prompt_commands: &mcp_prompt_commands,
+                output_style: settings.output_style.as_deref(),
+                auth: &auth,
+            }));
+        }
+
         if let Some(initial) = &session_start_initial_user_message {
             query_engine.add_user_message(initial);
         }
@@ -5689,7 +5767,7 @@ async fn main() -> Result<()> {
         let started_at = std::time::Instant::now();
         let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
         let mut total_usage: Option<claude_core::types::usage::Usage> = None;
-        let mut emitted_rate_limit_event = false;
+        let rate_limit_emitted = stream_json_rate_limit_emitted.clone();
         let mut num_turns: u32 = 0;
         let terminal_outcome = loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
@@ -5754,9 +5832,10 @@ async fn main() -> Result<()> {
 
             match result {
                 TurnResult::Done(stop_reason) => {
-                    if cli.output_format == OutputFormat::StreamJson && !emitted_rate_limit_event {
+                    if cli.output_format == OutputFormat::StreamJson
+                        && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
                         emit_stream_json(stream_json_rate_limit_event(&session_id));
-                        emitted_rate_limit_event = true;
                     }
                     if cli.json_schema.is_some() && structured_output.is_none() {
                         if structured_output_retry_count >= max_structured_output_retries {
@@ -5781,7 +5860,9 @@ async fn main() -> Result<()> {
                     max_turns,
                     turn_count,
                 } => {
-                    if cli.output_format == OutputFormat::StreamJson && !emitted_rate_limit_event {
+                    if cli.output_format == OutputFormat::StreamJson
+                        && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
                         emit_stream_json(stream_json_rate_limit_event(&session_id));
                     }
                     break PrintTerminalOutcome::MaxTurns {
@@ -5897,6 +5978,12 @@ async fn main() -> Result<()> {
                                     }
                                 }
                             }
+                        }
+                        if cli.output_format == OutputFormat::StreamJson
+                            && tool_index + 1 == tool_count
+                            && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
+                        {
+                            emit_stream_json(stream_json_rate_limit_event(&session_id));
                         }
 
                         let decision = if let Some(forced) = forced_permission {
@@ -6325,10 +6412,6 @@ async fn main() -> Result<()> {
                         }
 
                         if cli.output_format == OutputFormat::StreamJson {
-                            if !emitted_rate_limit_event && tool_index + 1 == tool_count {
-                                emit_stream_json(stream_json_rate_limit_event(&session_id));
-                                emitted_rate_limit_event = true;
-                            }
                             emit_stream_json(stream_json_user_tool_result_event(
                                 vec![serde_json::json!({
                                 "type": "tool_result",
