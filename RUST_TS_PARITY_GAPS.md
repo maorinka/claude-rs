@@ -601,11 +601,12 @@ Improved since the stale report:
   `EGRESS_BLOCKED` JSON error payload.
 - Preapproved-host permission and prompt-path behavior has been checked against
   TS and uses the same host/path-prefix mechanism.
+- WebFetch URL caching now follows TS's 15-minute, 50MB processed-content LRU
+  behavior instead of an unbounded TTL-only map.
 
 Still needs work:
 - Exact Turndown formatting parity for edge-case HTML.
-- Content-type/encoding details, cache size/eviction, and size-limit behavior
-  parity.
+- Content-type/encoding details and size-limit behavior parity.
 - Copyright/quote-limit behavior exactly matching TS.
 - Better fallback when no secondary model is registered.
 

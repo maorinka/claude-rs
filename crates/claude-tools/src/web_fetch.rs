@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -25,9 +25,9 @@ const FETCH_TIMEOUT_SECS: u64 = 60;
 const DOMAIN_CHECK_TIMEOUT_SECS: u64 = 10;
 const MAX_REDIRECTS: usize = 10;
 const CACHE_TTL_SECS: u64 = 15 * 60;
+const MAX_CACHE_SIZE_BYTES: usize = 50 * 1024 * 1024;
 static DOMAIN_CHECK_CACHE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-static URL_CACHE: Lazy<Mutex<HashMap<String, CachedFetch>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static URL_CACHE: Lazy<Mutex<UrlCache>> = Lazy::new(|| Mutex::new(UrlCache::default()));
 
 #[derive(Clone)]
 struct CachedFetch {
@@ -39,6 +39,58 @@ struct CachedFetch {
     content: String,
     persisted_path: Option<String>,
     persisted_size: Option<u64>,
+    cache_size: usize,
+}
+
+#[derive(Default)]
+struct UrlCache {
+    entries: HashMap<String, CachedFetch>,
+    order: VecDeque<String>,
+    total_size: usize,
+}
+
+impl UrlCache {
+    fn get(&mut self, url: &str) -> Option<CachedFetch> {
+        let entry = self.entries.get(url)?;
+        if entry.inserted_at.elapsed() > std::time::Duration::from_secs(CACHE_TTL_SECS) {
+            self.remove(url);
+            return None;
+        }
+        let cloned = entry.clone();
+        self.touch(url);
+        Some(cloned)
+    }
+
+    fn insert(&mut self, url: String, entry: CachedFetch) {
+        self.remove(&url);
+        self.total_size = self.total_size.saturating_add(entry.cache_size);
+        self.order.push_back(url.clone());
+        self.entries.insert(url, entry);
+        self.evict_oversize();
+    }
+
+    fn remove(&mut self, url: &str) {
+        if let Some(entry) = self.entries.remove(url) {
+            self.total_size = self.total_size.saturating_sub(entry.cache_size);
+        }
+        self.order.retain(|candidate| candidate != url);
+    }
+
+    fn touch(&mut self, url: &str) {
+        self.order.retain(|candidate| candidate != url);
+        self.order.push_back(url.to_string());
+    }
+
+    fn evict_oversize(&mut self) {
+        while self.total_size > MAX_CACHE_SIZE_BYTES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&oldest) {
+                self.total_size = self.total_size.saturating_sub(entry.cache_size);
+            }
+        }
+    }
 }
 
 /// Max characters sent to the secondary model.
@@ -311,15 +363,17 @@ fn web_fetch_permission_suggestions(rule_content: &str) -> Vec<PermissionUpdate>
 
 fn get_cached_url(url: &str) -> Option<CachedFetch> {
     let mut cache = URL_CACHE.lock().ok()?;
-    let entry = cache.get(url)?;
-    if entry.inserted_at.elapsed() > std::time::Duration::from_secs(CACHE_TTL_SECS) {
-        cache.remove(url);
-        return None;
-    }
-    Some(entry.clone())
+    cache.get(url)
 }
 
-fn put_cached_url(
+#[cfg(test)]
+fn clear_url_cache() {
+    if let Ok(mut cache) = URL_CACHE.lock() {
+        *cache = UrlCache::default();
+    }
+}
+
+fn put_cached_url_with_cache_size(
     url: &str,
     bytes: u64,
     code: u16,
@@ -328,6 +382,7 @@ fn put_cached_url(
     content: &str,
     persisted_path: Option<String>,
     persisted_size: Option<u64>,
+    cache_size: usize,
 ) {
     if let Ok(mut cache) = URL_CACHE.lock() {
         cache.insert(
@@ -341,6 +396,7 @@ fn put_cached_url(
                 content: content.to_string(),
                 persisted_path,
                 persisted_size,
+                cache_size: cache_size.max(1),
             },
         );
     }
@@ -714,7 +770,12 @@ impl ToolExecutor for WebFetchTool {
 
                 let (persisted_path, persisted_size) =
                     persisted.map_or((None, None), |(path, size)| (Some(path), Some(size)));
-                put_cached_url(
+                let cache_size = if content_type.contains("text/html") {
+                    result_text.len()
+                } else {
+                    bytes as usize
+                };
+                put_cached_url_with_cache_size(
                     &url,
                     bytes,
                     code,
@@ -723,6 +784,7 @@ impl ToolExecutor for WebFetchTool {
                     &result_text,
                     persisted_path.clone(),
                     persisted_size,
+                    cache_size,
                 );
                 (
                     bytes,
@@ -908,7 +970,8 @@ mod tests {
 
     #[test]
     fn url_cache_keeps_processed_content_by_original_url() {
-        put_cached_url(
+        clear_url_cache();
+        put_cached_url_with_cache_size(
             "https://example.com/a",
             42,
             200,
@@ -917,6 +980,7 @@ mod tests {
             "# Cached",
             None,
             None,
+            "# Cached".len(),
         );
         let cached = get_cached_url("https://example.com/a").unwrap();
         assert_eq!(cached.bytes, 42);
@@ -927,6 +991,37 @@ mod tests {
         assert!(cached.persisted_path.is_none());
         assert!(cached.persisted_size.is_none());
         assert!(get_cached_url("https://example.com/b").is_none());
+    }
+
+    #[test]
+    fn url_cache_evicts_oldest_over_ts_size_limit() {
+        clear_url_cache();
+        put_cached_url_with_cache_size(
+            "https://example.com/first",
+            1,
+            200,
+            "OK",
+            "text/plain",
+            "first",
+            None,
+            None,
+            MAX_CACHE_SIZE_BYTES - 1,
+        );
+        assert!(get_cached_url("https://example.com/first").is_some());
+
+        put_cached_url_with_cache_size(
+            "https://example.com/second",
+            1,
+            200,
+            "OK",
+            "text/plain",
+            "second",
+            None,
+            None,
+            2,
+        );
+        assert!(get_cached_url("https://example.com/first").is_none());
+        assert!(get_cached_url("https://example.com/second").is_some());
     }
 
     #[test]
