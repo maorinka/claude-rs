@@ -2802,9 +2802,10 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
     };
     let stdout = obj.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
     let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let stdout = process_bash_stdout_for_model(stdout);
     let mut parts = Vec::new();
     match (stdout.is_empty(), stderr.is_empty()) {
-        (false, true) => parts.push(stdout.trim_end_matches('\n').to_string()),
+        (false, true) => parts.push(stdout),
         (true, false) => parts.push(stderr.trim_end_matches('\n').to_string()),
         (false, false) => parts.push(
             format!("{stdout}\n{stderr}")
@@ -2849,6 +2850,23 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
 
     parts.retain(|part| !part.is_empty());
     parts.join("\n")
+}
+
+#[allow(dead_code)]
+fn process_bash_stdout_for_model(stdout: &str) -> String {
+    let mut rest = stdout;
+    loop {
+        let Some(index) = rest.find('\n') else {
+            break;
+        };
+        let line_with_newline = &rest[..=index];
+        if line_with_newline.trim().is_empty() {
+            rest = &rest[index + 1..];
+        } else {
+            break;
+        }
+    }
+    rest.trim_end_matches('\n').to_string()
 }
 
 fn format_tool_result_for_model(tool_name: &str, data: &serde_json::Value) -> String {

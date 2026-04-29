@@ -518,6 +518,8 @@ Improved:
   results, and silent commands set `noOutputExpected`.
 - Bash assistant auto-background model-facing text now uses the TS 15-second
   blocking budget wording.
+- Bash model-facing stdout now removes leading blank/whitespace-only lines and
+  trims trailing newlines like TS `mapToolResultToToolResultBlockParam`.
 
 ### FileEditTool
 

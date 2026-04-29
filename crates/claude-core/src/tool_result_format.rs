@@ -121,9 +121,10 @@ fn format_bash_tool_result_for_model(data: &Value) -> String {
     };
     let stdout = obj.get("stdout").and_then(Value::as_str).unwrap_or("");
     let stderr = obj.get("stderr").and_then(Value::as_str).unwrap_or("");
+    let stdout = process_bash_stdout_for_model(stdout);
     let mut parts = Vec::new();
     match (stdout.is_empty(), stderr.is_empty()) {
-        (false, true) => parts.push(stdout.trim_end_matches('\n').to_string()),
+        (false, true) => parts.push(stdout),
         (true, false) => parts.push(stderr.trim_end_matches('\n').to_string()),
         (false, false) => parts.push(
             format!("{stdout}\n{stderr}")
@@ -164,6 +165,22 @@ fn format_bash_tool_result_for_model(data: &Value) -> String {
 
     parts.retain(|part| !part.is_empty());
     parts.join("\n")
+}
+
+fn process_bash_stdout_for_model(stdout: &str) -> String {
+    let mut rest = stdout;
+    loop {
+        let Some(index) = rest.find('\n') else {
+            break;
+        };
+        let line_with_newline = &rest[..=index];
+        if line_with_newline.trim().is_empty() {
+            rest = &rest[index + 1..];
+        } else {
+            break;
+        }
+    }
+    rest.trim_end_matches('\n').to_string()
 }
 
 fn add_line_numbers_ts(content: &str, start_line: usize) -> String {
@@ -932,5 +949,17 @@ mod tests {
             text,
             "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."
         );
+    }
+
+    #[test]
+    fn bash_stdout_strips_leading_blank_lines_like_ts() {
+        let text = format_tool_result_for_model(
+            "Bash",
+            &serde_json::json!({
+                "stdout": "\n\n  \nhello\n",
+                "stderr": ""
+            }),
+        );
+        assert_eq!(text, "hello");
     }
 }
