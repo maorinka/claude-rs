@@ -1204,6 +1204,20 @@ mod tests {
     }
 
     #[test]
+    fn shadow_tool_descriptions_refresh_knowledge_date() {
+        let description =
+            "Search docs. Knowledge up-to-date as at 28 April 2026. Combine results.".to_string();
+        let refreshed = refresh_shadow_tool_description_for_date(
+            description,
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 29).unwrap(),
+        );
+        assert_eq!(
+            refreshed,
+            "Search docs. Knowledge up-to-date as at 29 April 2026. Combine results."
+        );
+    }
+
+    #[test]
     fn stream_json_hook_execution_events_match_sdk_shape() {
         let event = hook_execution_event_to_stream_json(
             claude_core::hooks::HookExecutionEvent::Response {
@@ -2622,11 +2636,58 @@ fn mcp_contract_shadow_tools(
             name: contract.name,
             original_name: original_name.to_string(),
             server_name: server.name.clone(),
-            description: Some(contract.description),
+            description: Some(refresh_shadow_tool_description(contract.description)),
             input_schema: contract.input_schema,
         })
     }));
     tools
+}
+
+fn refresh_shadow_tool_description(description: String) -> String {
+    refresh_shadow_tool_description_for_date(description, chrono::Local::now().date_naive())
+}
+
+fn refresh_shadow_tool_description_for_date(
+    description: String,
+    date: chrono::NaiveDate,
+) -> String {
+    let marker = "Knowledge up-to-date as at ";
+    let Some(marker_start) = description.find(marker) else {
+        return description;
+    };
+    let date_start = marker_start + marker.len();
+    let Some(relative_end) = description[date_start..].find('.') else {
+        return description;
+    };
+    let date_end = date_start + relative_end;
+    let current = format_long_english_date(date);
+    format!(
+        "{}{}{}",
+        &description[..date_start],
+        current,
+        &description[date_end..]
+    )
+}
+
+fn format_long_english_date(date: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+
+    let month = match date.month() {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => unreachable!("chrono month is always 1..=12"),
+    };
+    format!("{} {} {}", date.day(), month, date.year())
 }
 
 fn mcp_auth_shadow_tools(server: &ShadowMcpServer) -> Vec<claude_core::mcp::manager::McpToolInfo> {
@@ -5911,8 +5972,7 @@ async fn main() -> Result<()> {
                 }
                 TurnResult::ToolUse(tool_uses) => {
                     // Execute each tool, check permissions, feed results back
-                    let tool_count = tool_uses.len();
-                    for (tool_index, tool_info) in tool_uses.iter().enumerate() {
+                    for tool_info in &tool_uses {
                         if cli.output_format == OutputFormat::StreamJson {
                             emit_stream_json(stream_json_assistant_tool_use_event(
                                 tool_info,
@@ -6011,13 +6071,6 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                        if cli.output_format == OutputFormat::StreamJson
-                            && tool_index + 1 == tool_count
-                            && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
-                        {
-                            emit_stream_json(stream_json_rate_limit_event(&session_id));
-                        }
-
                         let decision = if let Some(forced) = forced_permission {
                             match forced {
                                 Ok(()) => PermissionDecision::allow(),
@@ -6470,6 +6523,11 @@ async fn main() -> Result<()> {
                         if let Some(reminder) = pending_skill_reminder {
                             query_engine.add_user_context_message(reminder);
                         }
+                    }
+                    if cli.output_format == OutputFormat::StreamJson
+                        && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        emit_stream_json(stream_json_rate_limit_event(&session_id));
                     }
                     if let Some(max_turns) = cli.max_turns.filter(|max_turns| *max_turns > 0) {
                         if num_turns >= max_turns {
