@@ -85,6 +85,9 @@ Now matching:
 - `Read` now blocks the same stdio/device aliases as TS, including
   `/dev/full`, `/dev/stdout`, `/dev/stderr`, `/dev/fd/{0,1,2}`, and
   `/proc/.../fd/{0,1,2}`.
+- `Read` now uses TS's macOS screenshot fallback that swaps regular space and
+  narrow no-break space before `AM`/`PM` when the requested screenshot path is
+  missing.
 - Installed CLI identity is synced to the current TS CLI version observed in
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content

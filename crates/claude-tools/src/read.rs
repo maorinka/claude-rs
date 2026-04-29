@@ -26,6 +26,7 @@ const BLOCKED_PATHS: &[&str] = &[
 ];
 
 const DEFAULT_LINE_LIMIT: u64 = 2000;
+const THIN_SPACE: char = '\u{202f}';
 
 /// Verbatim port of TS FileReadTool/prompt.ts
 /// `renderPromptTemplate(...)` with the default runtime flags
@@ -113,6 +114,45 @@ fn is_blocked_device_path(file_path: &str) -> bool {
         && (file_path.ends_with("/fd/0")
             || file_path.ends_with("/fd/1")
             || file_path.ends_with("/fd/2"))
+}
+
+fn alternate_screenshot_path(file_path: &str) -> Option<String> {
+    let path = std::path::Path::new(file_path);
+    let filename = path.file_name()?.to_str()?;
+    if !filename.ends_with(".png") {
+        return None;
+    }
+
+    let marker = if filename.contains(" AM.png") {
+        " AM.png"
+    } else if filename.contains(" PM.png") {
+        " PM.png"
+    } else if filename.contains(&format!("{THIN_SPACE}AM.png")) {
+        return Some(file_path.replace(&format!("{THIN_SPACE}AM.png"), " AM.png"));
+    } else if filename.contains(&format!("{THIN_SPACE}PM.png")) {
+        return Some(file_path.replace(&format!("{THIN_SPACE}PM.png"), " PM.png"));
+    } else {
+        return None;
+    };
+
+    Some(file_path.replace(marker, &marker.replace(' ', &THIN_SPACE.to_string())))
+}
+
+async fn read_bytes_with_screenshot_fallback(file_path: &str) -> std::io::Result<Vec<u8>> {
+    match tokio::fs::read(file_path).await {
+        Ok(bytes) => Ok(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let Some(alt_path) = alternate_screenshot_path(file_path) else {
+                return Err(err);
+            };
+            match tokio::fs::read(&alt_path).await {
+                Ok(bytes) => Ok(bytes),
+                Err(alt_err) if alt_err.kind() == std::io::ErrorKind::NotFound => Err(err),
+                Err(alt_err) => Err(alt_err),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Check if binary content is detected in a buffer by looking for null bytes
@@ -487,7 +527,7 @@ impl ToolExecutor for FileReadTool {
 impl FileReadTool {
     /// Read an image file and return base64-encoded data with metadata.
     async fn read_image(&self, file_path: &str, ext: &str) -> Result<ToolResultData> {
-        let raw = match tokio::fs::read(file_path).await {
+        let raw = match read_bytes_with_screenshot_fallback(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
@@ -516,7 +556,7 @@ impl FileReadTool {
 
     /// Read a PDF file and return base64-encoded document block.
     async fn read_pdf(&self, file_path: &str, _pages: Option<&str>) -> Result<ToolResultData> {
-        let raw = match tokio::fs::read(file_path).await {
+        let raw = match read_bytes_with_screenshot_fallback(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
@@ -554,7 +594,7 @@ impl FileReadTool {
 
     /// Read a Jupyter notebook file and return structured cell data.
     async fn read_notebook(&self, file_path: &str) -> Result<ToolResultData> {
-        let raw = match tokio::fs::read(file_path).await {
+        let raw = match read_bytes_with_screenshot_fallback(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
@@ -581,7 +621,7 @@ impl FileReadTool {
         let limit = input["limit"].as_u64().unwrap_or(DEFAULT_LINE_LIMIT) as usize;
 
         // Read the file as raw bytes first for binary detection and size check.
-        let raw_bytes = match tokio::fs::read(file_path).await {
+        let raw_bytes = match read_bytes_with_screenshot_fallback(file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(error_result(&format!("cannot read '{}': {}", file_path, e)));
@@ -817,6 +857,19 @@ mod tests {
         assert!(!is_blocked_device_path("/dev/shm/file.txt"));
     }
 
+    #[test]
+    fn test_alternate_screenshot_path_swaps_regular_and_thin_space() {
+        assert_eq!(
+            alternate_screenshot_path("/tmp/Screenshot 2026-04-29 at 10.30.00 AM.png").as_deref(),
+            Some("/tmp/Screenshot 2026-04-29 at 10.30.00 AM.png")
+        );
+        assert_eq!(
+            alternate_screenshot_path("/tmp/Screenshot 2026-04-29 at 10.30.00 PM.png").as_deref(),
+            Some("/tmp/Screenshot 2026-04-29 at 10.30.00 PM.png")
+        );
+        assert!(alternate_screenshot_path("/tmp/not-a-screenshot.txt").is_none());
+    }
+
     // ---- Integration tests (async, using the tool) ----
 
     fn make_tool_context() -> ToolUseContext {
@@ -883,6 +936,28 @@ mod tests {
             file_path.to_string_lossy().as_ref()
         );
         assert_eq!(result.data["file"]["content"], "hello\n");
+    }
+
+    #[tokio::test]
+    async fn test_read_uses_alternate_screenshot_space_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let actual_name = format!("Screenshot 2026-04-29 at 10.30.00{THIN_SPACE}AM.png");
+        let requested_name = "Screenshot 2026-04-29 at 10.30.00 AM.png";
+        let actual_path = dir.path().join(actual_name);
+        std::fs::write(&actual_path, b"not really png").unwrap();
+
+        let tool = FileReadTool;
+        let input = json!({ "file_path": requested_name });
+        let ctx = ToolUseContext::for_test(
+            dir.path().to_path_buf(),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        );
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.data["type"], "image");
     }
 
     #[tokio::test]
