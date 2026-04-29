@@ -83,6 +83,18 @@ Now matching:
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content
   block like TS, instead of emitting one combined thinking+tool_use message.
+- Stream-json tool-use assistant events now preserve the real API message id,
+  model, and usage captured from the SSE stream instead of synthesizing a local
+  message envelope.
+- `--include-partial-messages` and `CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES` now
+  follow TS stream-json flow: raw SSE records are emitted as `stream_event`
+  only when enabled, ping events are suppressed, the completed assistant block
+  appears before `content_block_stop`, `message_stop` is preserved, and the SDK
+  `system/status` requesting event is emitted before the request stream.
+- Latest normal stream-json smoke:
+  `/tmp/claude-rs-parity-stream-normal-after-partial`.
+- Latest partial-message stream-json smoke:
+  `/tmp/claude-rs-parity-partial-messages-2`.
 - Text `--print` mode now buffers assistant text and prints only successful
   final output like TS, so `--max-turns` errors do not leak partial assistant
   text before `Error: Reached max turns (...)`; the text-mode max-turns error
@@ -1021,7 +1033,8 @@ Needs work:
 3. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
 4. Verify rich user/system context lifecycle against resumed sessions and
    remote-control captures.
-5. Complete hook dispatch from tool/query/task flows.
+5. Complete hook dispatch from tool/query/task flows, including SDK hook event
+   emission for non-SessionStart hooks when TS enables all hook events.
 6. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
 7. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
