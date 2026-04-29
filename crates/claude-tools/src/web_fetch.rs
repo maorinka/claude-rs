@@ -1,6 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
@@ -17,7 +20,9 @@ pub struct WebFetchTool;
 const MAX_URL_LENGTH: usize = 2000;
 const MAX_HTTP_CONTENT_LENGTH: u64 = 10 * 1024 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 60;
+const DOMAIN_CHECK_TIMEOUT_SECS: u64 = 10;
 const MAX_REDIRECTS: usize = 10;
+static DOMAIN_CHECK_CACHE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// Max characters sent to the secondary model.
 /// Mirrors TS `MAX_MARKDOWN_LENGTH` in `tools/WebFetchTool/utils.ts`.
@@ -259,6 +264,64 @@ fn web_fetch_permission_suggestions(rule_content: &str) -> Vec<PermissionUpdate>
         }],
         behavior: PermissionBehavior::Allow,
     }]
+}
+
+enum DomainCheckResult {
+    Allowed,
+    Blocked,
+    CheckFailed,
+}
+
+fn skip_web_fetch_preflight(project_root: &std::path::Path) -> bool {
+    let user = dirs::home_dir()
+        .map(|home| {
+            claude_core::config::settings::Settings::load_from_file(
+                &home.join(".claude").join("settings.json"),
+            )
+        })
+        .unwrap_or_default();
+    let project = claude_core::config::settings::Settings::load_from_file(
+        &project_root.join(".claude").join("settings.json"),
+    );
+    user.merge(&project).skip_web_fetch_preflight == Some(true)
+}
+
+async fn check_domain_blocklist(client: &reqwest::Client, domain: &str) -> DomainCheckResult {
+    if DOMAIN_CHECK_CACHE
+        .lock()
+        .map(|cache| cache.contains(domain))
+        .unwrap_or(false)
+    {
+        return DomainCheckResult::Allowed;
+    }
+
+    let mut url =
+        reqwest::Url::parse("https://api.anthropic.com/api/web/domain_info").expect("valid URL");
+    url.query_pairs_mut().append_pair("domain", domain);
+    let response = match client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(DOMAIN_CHECK_TIMEOUT_SECS))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_error) => return DomainCheckResult::CheckFailed,
+    };
+
+    if response.status().as_u16() != 200 {
+        return DomainCheckResult::CheckFailed;
+    }
+
+    match response.json::<Value>().await {
+        Ok(value) if value.get("can_fetch").and_then(Value::as_bool) == Some(true) => {
+            if let Ok(mut cache) = DOMAIN_CHECK_CACHE.lock() {
+                cache.insert(domain.to_string());
+            }
+            DomainCheckResult::Allowed
+        }
+        Ok(_) => DomainCheckResult::Blocked,
+        Err(_error) => DomainCheckResult::CheckFailed,
+    }
 }
 
 /// Strip HTML tags from a string, returning plain text.
@@ -526,6 +589,27 @@ impl ToolExecutor for WebFetchTool {
             Ok(c) => c,
             Err(e) => return Ok(error_result(format!("failed to build HTTP client: {}", e))),
         };
+
+        if !skip_web_fetch_preflight(&_ctx.working_directory) {
+            let domain = reqwest::Url::parse(&upgraded_url)
+                .ok()
+                .and_then(|url| url.host_str().map(ToString::to_string));
+            if let Some(domain) = domain {
+                match check_domain_blocklist(&client, &domain).await {
+                    DomainCheckResult::Allowed => {}
+                    DomainCheckResult::Blocked => {
+                        return Ok(error_result(format!(
+                            "Claude Code is unable to fetch from {domain}"
+                        )));
+                    }
+                    DomainCheckResult::CheckFailed => {
+                        return Ok(error_result(format!(
+                            "Unable to verify if domain {domain} is safe to fetch. This may be due to network restrictions or enterprise security policies blocking claude.ai."
+                        )));
+                    }
+                }
+            }
+        }
 
         let response = match fetch_with_permitted_redirects(&client, upgraded_url, &cancel, 0).await
         {

@@ -532,6 +532,9 @@ Improved since the stale report:
   and returns the TS redirect instruction message, and emits the TS output
   keys (`bytes`, `code`, `codeText`, `result`, `durationMs`, `url`) without
   Rust-only prompt/debug fields.
+- Rust now runs the TS domain-info preflight before fetching, with the same
+  `skipWebFetchPreflight` settings escape hatch and domain-blocked/check-failed
+  user-facing error text.
 - WebFetch permission checks now use TS-style `domain:<hostname>` rule
   content, preapproved-host auto-allow, allow/ask/deny rule matching, and
   local-settings allow suggestions instead of inheriting blanket read-only
@@ -540,7 +543,8 @@ Improved since the stale report:
 Still needs work:
 - Preapproved-host behavior parity.
 - HTML to Markdown conversion parity. Rust currently strips HTML manually.
-- Redirect, content-type, encoding, and size-limit behavior parity.
+- Content-type, encoding, binary persistence, cache, and size-limit behavior
+  parity.
 - Copyright/quote-limit behavior exactly matching TS.
 - Better fallback when no secondary model is registered.
 

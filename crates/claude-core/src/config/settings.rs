@@ -143,6 +143,14 @@ pub struct Settings {
     /// Agent type for the current session. Matches TS `agent` setting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+
+    /// Skip WebFetch domain-info preflight checks. Matches TS
+    /// `skipWebFetchPreflight`.
+    #[serde(
+        rename = "skipWebFetchPreflight",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub skip_web_fetch_preflight: Option<bool>,
 }
 
 impl Settings {
@@ -225,6 +233,39 @@ impl Settings {
                 &overlay.http_hook_allowed_env_vars,
             ),
             agent: overlay.agent.clone().or_else(|| self.agent.clone()),
+            skip_web_fetch_preflight: overlay
+                .skip_web_fetch_preflight
+                .or(self.skip_web_fetch_preflight),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skip_web_fetch_preflight_uses_ts_camel_case_key() {
+        let settings: Settings = serde_json::from_str(r#"{"skipWebFetchPreflight":true}"#).unwrap();
+        assert_eq!(settings.skip_web_fetch_preflight, Some(true));
+
+        let serialized = serde_json::to_string(&settings).unwrap();
+        assert!(serialized.contains("skipWebFetchPreflight"));
+    }
+
+    #[test]
+    fn skip_web_fetch_preflight_merges_like_other_scalar_settings() {
+        let base = Settings {
+            skip_web_fetch_preflight: Some(true),
+            ..Default::default()
+        };
+        let overlay = Settings::default();
+        assert_eq!(base.merge(&overlay).skip_web_fetch_preflight, Some(true));
+
+        let overlay = Settings {
+            skip_web_fetch_preflight: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(base.merge(&overlay).skip_web_fetch_preflight, Some(false));
     }
 }
