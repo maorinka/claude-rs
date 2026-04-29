@@ -502,6 +502,8 @@ Improved:
   concurrency safety instead of a separate stale allowlist. This fixes the
   observed `cargo build 2>&1 | tail -5` mismatch: default mode now prompts
   like TS instead of treating the build as read-only.
+- Foreground Bash commands now persist cwd across calls by capturing `pwd -P`
+  after command completion, matching TS `runShellCommand` cwd tracking.
 
 ### FileEditTool
 

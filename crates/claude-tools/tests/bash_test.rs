@@ -80,6 +80,43 @@ async fn test_bash_cwd() {
 }
 
 #[tokio::test]
+async fn test_bash_cwd_persists_between_foreground_commands() {
+    let tool = BashTool::new();
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().join("base");
+    let nested = base.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let ctx = make_ctx(base);
+
+    let cd_result = tool
+        .call(
+            &json!({ "command": format!("cd {}", nested.display()) }),
+            &ctx,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!cd_result.is_error);
+    assert_eq!(cd_result.data["code"], 0);
+
+    let pwd_result = tool
+        .call(
+            &json!({ "command": "pwd" }),
+            &ctx,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!pwd_result.is_error);
+    let stdout = pwd_result.data["stdout"].as_str().unwrap().trim();
+    let actual = std::fs::canonicalize(stdout).unwrap();
+    let expected = std::fs::canonicalize(nested).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
 async fn test_bash_cancellation() {
     let tool = BashTool::new();
     let ctx = make_ctx(tmpdir());

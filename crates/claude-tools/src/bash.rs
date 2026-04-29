@@ -95,19 +95,37 @@ fn format_duration_ms(ms: u64) -> String {
 pub struct BashTool {
     /// Optional sandbox executor for OS-level command isolation.
     sandbox: Option<Arc<tokio::sync::Mutex<SandboxExecutor>>>,
+    /// Current shell working directory for foreground commands.
+    cwd: Arc<tokio::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl BashTool {
     /// Create a BashTool without sandbox support.
     pub fn new() -> Self {
-        Self { sandbox: None }
+        Self {
+            sandbox: None,
+            cwd: Arc::new(tokio::sync::Mutex::new(None)),
+        }
     }
 
     /// Create a BashTool with sandbox support.
     pub fn with_sandbox(executor: Arc<tokio::sync::Mutex<SandboxExecutor>>) -> Self {
         Self {
             sandbox: Some(executor),
+            cwd: Arc::new(tokio::sync::Mutex::new(None)),
         }
+    }
+
+    async fn update_cwd_from_capture(&self, cwd_file: &std::path::Path) {
+        let Ok(raw) = tokio::fs::read_to_string(cwd_file).await else {
+            return;
+        };
+        let next = std::path::PathBuf::from(raw.trim());
+        if next.is_dir() {
+            let mut cwd = self.cwd.lock().await;
+            *cwd = Some(next);
+        }
+        let _ = tokio::fs::remove_file(cwd_file).await;
     }
 }
 
@@ -124,6 +142,23 @@ fn truncate(s: String) -> String {
         None => s, // fewer than MAX_OUTPUT_CHARS chars — return as-is
         Some((byte_offset, _)) => s[..byte_offset].to_string(),
     }
+}
+
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn cwd_capture_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "claude-rs-bash-cwd-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ))
+}
+
+fn command_with_cwd_capture(command: &str, cwd_file: &std::path::Path) -> String {
+    let quoted = shell_single_quote(&cwd_file.display().to_string());
+    format!("trap 'pwd -P > {quoted}' EXIT\n{command}")
 }
 
 // ---------------------------------------------------------------------------
@@ -472,19 +507,32 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let current_cwd = {
+            let cwd = self.cwd.lock().await;
+            cwd.clone()
+                .filter(|path| path.is_dir())
+                .unwrap_or_else(|| ctx.working_directory.clone())
+        };
+        let cwd_file = cwd_capture_path();
+        let command_to_run = if run_in_background {
+            command.clone()
+        } else {
+            command_with_cwd_capture(&command, &cwd_file)
+        };
+
         // Determine whether to sandbox this command and wrap it
         let (effective_command, is_sandboxed) = if let Some(ref sandbox) = self.sandbox {
             let executor: MutexGuard<'_, SandboxExecutor> = sandbox.lock().await;
             if executor.should_sandbox_command(&command, dangerously_disable_sandbox) {
-                match executor.wrap_command(&command) {
+                match executor.wrap_command(&command_to_run) {
                     Some(wrapped) => (wrapped, true),
-                    None => (command.clone(), false),
+                    None => (command_to_run.clone(), false),
                 }
             } else {
-                (command.clone(), false)
+                (command_to_run.clone(), false)
             }
         } else {
-            (command.clone(), false)
+            (command_to_run.clone(), false)
         };
 
         // If already cancelled before we even start, return immediately
@@ -503,7 +551,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
         let mut child = tokio::process::Command::new("bash")
             .arg("-c")
             .arg(&effective_command)
-            .current_dir(&ctx.working_directory)
+            .current_dir(&current_cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
@@ -619,6 +667,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                 // Kill the child process on cancellation
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+                let _ = tokio::fs::remove_file(&cwd_file).await;
                 Ok(ToolResultData {
                     data: json!({
                         "stdout": "",
@@ -638,6 +687,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                 // The timeout message is prepended to stderr.
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+                let _ = tokio::fs::remove_file(&cwd_file).await;
 
                 // Read any partial output produced before timeout
                 let mut stdout_bytes = Vec::new();
@@ -670,6 +720,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
             }
             status = child.wait() => {
                 let exit_status = status?;
+                self.update_cwd_from_capture(&cwd_file).await;
                 // Read remaining output after process has exited
                 let mut stdout_bytes = Vec::new();
                 let mut stderr_bytes = Vec::new();
