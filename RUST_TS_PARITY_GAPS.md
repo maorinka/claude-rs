@@ -537,6 +537,9 @@ Improved since the stale report:
   user-facing error text.
 - Rust now sends the TS WebFetch request headers: `Accept: text/markdown,
   text/html, */*` and the `Claude-User (...)` WebFetch user agent.
+- Rust now caches processed WebFetch content by original URL for 15 minutes
+  before applying the current prompt, matching TS's URL cache placement before
+  preflight/network fetch.
 - WebFetch permission checks now use TS-style `domain:<hostname>` rule
   content, preapproved-host auto-allow, allow/ask/deny rule matching, and
   local-settings allow suggestions instead of inheriting blanket read-only
@@ -545,8 +548,8 @@ Improved since the stale report:
 Still needs work:
 - Preapproved-host behavior parity.
 - HTML to Markdown conversion parity. Rust currently strips HTML manually.
-- Content-type, encoding, binary persistence, cache, and size-limit behavior
-  parity.
+- Content-type, encoding, binary persistence, cache size/eviction, and
+  size-limit behavior parity.
 - Copyright/quote-limit behavior exactly matching TS.
 - Better fallback when no secondary model is registered.
 

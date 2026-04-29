@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +22,20 @@ const MAX_HTTP_CONTENT_LENGTH: u64 = 10 * 1024 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 60;
 const DOMAIN_CHECK_TIMEOUT_SECS: u64 = 10;
 const MAX_REDIRECTS: usize = 10;
+const CACHE_TTL_SECS: u64 = 15 * 60;
 static DOMAIN_CHECK_CACHE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static URL_CACHE: Lazy<Mutex<HashMap<String, CachedFetch>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone)]
+struct CachedFetch {
+    inserted_at: std::time::Instant,
+    bytes: u64,
+    code: u16,
+    code_text: String,
+    content_type: String,
+    content: String,
+}
 
 /// Max characters sent to the secondary model.
 /// Mirrors TS `MAX_MARKDOWN_LENGTH` in `tools/WebFetchTool/utils.ts`.
@@ -267,6 +280,39 @@ fn web_fetch_permission_suggestions(rule_content: &str) -> Vec<PermissionUpdate>
         }],
         behavior: PermissionBehavior::Allow,
     }]
+}
+
+fn get_cached_url(url: &str) -> Option<CachedFetch> {
+    let mut cache = URL_CACHE.lock().ok()?;
+    let entry = cache.get(url)?;
+    if entry.inserted_at.elapsed() > std::time::Duration::from_secs(CACHE_TTL_SECS) {
+        cache.remove(url);
+        return None;
+    }
+    Some(entry.clone())
+}
+
+fn put_cached_url(
+    url: &str,
+    bytes: u64,
+    code: u16,
+    code_text: &str,
+    content_type: &str,
+    content: &str,
+) {
+    if let Ok(mut cache) = URL_CACHE.lock() {
+        cache.insert(
+            url.to_string(),
+            CachedFetch {
+                inserted_at: std::time::Instant::now(),
+                bytes,
+                code,
+                code_text: code_text.to_string(),
+                content_type: content_type.to_string(),
+                content: content.to_string(),
+            },
+        );
+    }
 }
 
 enum DomainCheckResult {
@@ -577,107 +623,119 @@ impl ToolExecutor for WebFetchTool {
         }
 
         let start = std::time::Instant::now();
-        let upgraded_url = match upgrade_http_to_https(&url) {
-            Ok(url) => url,
-            Err(_) => return Ok(error_result("Invalid URL")),
-        };
-
-        // Build reqwest client
-        let client = match reqwest::Client::builder()
-            .user_agent(claude_core::user_agent::get_web_fetch_user_agent())
-            .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
+        let (bytes, code, code_text, content_type, result_text) = if let Some(cached) =
+            get_cached_url(&url)
         {
-            Ok(c) => c,
-            Err(e) => return Ok(error_result(format!("failed to build HTTP client: {}", e))),
-        };
+            (
+                cached.bytes,
+                cached.code,
+                cached.code_text,
+                cached.content_type,
+                cached.content,
+            )
+        } else {
+            let upgraded_url = match upgrade_http_to_https(&url) {
+                Ok(url) => url,
+                Err(_) => return Ok(error_result("Invalid URL")),
+            };
 
-        if !skip_web_fetch_preflight(&_ctx.working_directory) {
-            let domain = reqwest::Url::parse(&upgraded_url)
-                .ok()
-                .and_then(|url| url.host_str().map(ToString::to_string));
-            if let Some(domain) = domain {
-                match check_domain_blocklist(&client, &domain).await {
-                    DomainCheckResult::Allowed => {}
-                    DomainCheckResult::Blocked => {
-                        return Ok(error_result(format!(
-                            "Claude Code is unable to fetch from {domain}"
-                        )));
-                    }
-                    DomainCheckResult::CheckFailed => {
-                        return Ok(error_result(format!(
-                            "Unable to verify if domain {domain} is safe to fetch. This may be due to network restrictions or enterprise security policies blocking claude.ai."
-                        )));
+            let client = match reqwest::Client::builder()
+                .user_agent(claude_core::user_agent::get_web_fetch_user_agent())
+                .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(error_result(format!("failed to build HTTP client: {}", e)));
+                }
+            };
+
+            if !skip_web_fetch_preflight(&_ctx.working_directory) {
+                let domain = reqwest::Url::parse(&upgraded_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(ToString::to_string));
+                if let Some(domain) = domain {
+                    match check_domain_blocklist(&client, &domain).await {
+                        DomainCheckResult::Allowed => {}
+                        DomainCheckResult::Blocked => {
+                            return Ok(error_result(format!(
+                                "Claude Code is unable to fetch from {domain}"
+                            )));
+                        }
+                        DomainCheckResult::CheckFailed => {
+                            return Ok(error_result(format!(
+                                    "Unable to verify if domain {domain} is safe to fetch. This may be due to network restrictions or enterprise security policies blocking claude.ai."
+                                )));
+                        }
                     }
                 }
             }
-        }
 
-        let response = match fetch_with_permitted_redirects(&client, upgraded_url, &cancel, 0).await
-        {
-            Ok(response) => response,
-            Err(e) => return Ok(error_result(format!("HTTP request failed: {}", e))),
-        };
+            let response =
+                match fetch_with_permitted_redirects(&client, upgraded_url, &cancel, 0).await {
+                    Ok(response) => response,
+                    Err(e) => return Ok(error_result(format!("HTTP request failed: {}", e))),
+                };
 
-        let (body, code, code_text, content_type) = match response {
-            FetchResponse::Content {
-                body,
-                code,
-                code_text,
-                content_type,
-            } => (body, code, code_text, content_type),
-            FetchResponse::Redirect {
-                original_url,
-                redirect_url,
-                status_code,
-            } => {
-                let message = redirect_message(&original_url, &redirect_url, status_code, &prompt);
-                return Ok(ToolResultData {
-                    data: json!({
-                        "bytes": message.len() as u64,
-                        "code": status_code,
-                        "codeText": redirect_status_text(status_code),
-                        "result": message,
-                        "durationMs": start.elapsed().as_millis() as u64,
-                        "url": url,
-                    }),
-                    is_error: false,
-                });
-            }
-        };
-
-        let bytes = body.len() as u64;
-        if bytes > MAX_HTTP_CONTENT_LENGTH {
-            return Ok(error_result(format!(
-                "HTTP response exceeded maximum content length of {} bytes",
-                MAX_HTTP_CONTENT_LENGTH
-            )));
-        }
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        // Convert body to string
-        let body_text = String::from_utf8_lossy(&body).into_owned();
-
-        // Strip HTML if it looks like HTML
-        let result_text =
-            if content_type.contains("text/html") || body_text.trim_start().starts_with('<') {
-                strip_html(&body_text)
-            } else {
-                body_text
+            let (body, code, code_text, content_type) = match response {
+                FetchResponse::Content {
+                    body,
+                    code,
+                    code_text,
+                    content_type,
+                } => (body, code, code_text, content_type),
+                FetchResponse::Redirect {
+                    original_url,
+                    redirect_url,
+                    status_code,
+                } => {
+                    let message =
+                        redirect_message(&original_url, &redirect_url, status_code, &prompt);
+                    return Ok(ToolResultData {
+                        data: json!({
+                            "bytes": message.len() as u64,
+                            "code": status_code,
+                            "codeText": redirect_status_text(status_code),
+                            "result": message,
+                            "durationMs": start.elapsed().as_millis() as u64,
+                            "url": url,
+                        }),
+                        is_error: false,
+                    });
+                }
             };
 
-        // Truncate to reasonable size before sending anything downstream.
-        const MAX_CHARS: usize = 50_000;
-        let result_text = if result_text.len() > MAX_CHARS {
-            let mut cut = MAX_CHARS;
-            while !result_text.is_char_boundary(cut) {
-                cut -= 1;
+            let bytes = body.len() as u64;
+            if bytes > MAX_HTTP_CONTENT_LENGTH {
+                return Ok(error_result(format!(
+                    "HTTP response exceeded maximum content length of {} bytes",
+                    MAX_HTTP_CONTENT_LENGTH
+                )));
             }
-            format!("{}...[truncated]", &result_text[..cut])
-        } else {
-            result_text
+
+            let body_text = String::from_utf8_lossy(&body).into_owned();
+            let result_text =
+                if content_type.contains("text/html") || body_text.trim_start().starts_with('<') {
+                    strip_html(&body_text)
+                } else {
+                    body_text
+                };
+
+            const MAX_CHARS: usize = 50_000;
+            let result_text = if result_text.len() > MAX_CHARS {
+                let mut cut = MAX_CHARS;
+                while !result_text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                format!("{}...[truncated]", &result_text[..cut])
+            } else {
+                result_text
+            };
+            put_cached_url(&url, bytes, code, &code_text, &content_type, &result_text);
+            (bytes, code, code_text, content_type, result_text)
         };
+        let duration_ms = start.elapsed().as_millis() as u64;
 
         // Apply the user's prompt via the secondary model (TS parity). If
         // no secondary model is registered, return the fetched content in
@@ -792,6 +850,25 @@ mod tests {
                 .as_str(),
             "https://example.com/a"
         );
+    }
+
+    #[test]
+    fn url_cache_keeps_processed_content_by_original_url() {
+        put_cached_url(
+            "https://example.com/a",
+            42,
+            200,
+            "OK",
+            "text/markdown",
+            "# Cached",
+        );
+        let cached = get_cached_url("https://example.com/a").unwrap();
+        assert_eq!(cached.bytes, 42);
+        assert_eq!(cached.code, 200);
+        assert_eq!(cached.code_text, "OK");
+        assert_eq!(cached.content_type, "text/markdown");
+        assert_eq!(cached.content, "# Cached");
+        assert!(get_cached_url("https://example.com/b").is_none());
     }
 
     #[test]
