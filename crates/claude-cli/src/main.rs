@@ -118,6 +118,10 @@ pub struct Cli {
     #[arg(long = "setting-sources")]
     pub setting_sources: Option<String>,
 
+    /// JSON object defining additional agents
+    #[arg(long = "agents", hide = true)]
+    pub agents: Option<String>,
+
     /// MCP tool to use for permission prompts in print mode
     #[arg(long = "permission-prompt-tool", hide = true)]
     pub permission_prompt_tool: Option<String>,
@@ -868,6 +872,59 @@ mod tests {
 
         assert_eq!(denials, vec!["Write".to_string(), "Agent".to_string()]);
         assert!(base_tool_denials_from_cli_tools(&["default".to_string()], &all_tools).is_empty());
+    }
+
+    #[test]
+    fn parses_cli_agents_like_ts_flag_settings() {
+        let agents = parse_cli_agents_json(
+            r#"{
+                "reviewer": {
+                    "description": "Review code changes",
+                    "tools": ["Read", "Write", "Bash(git status, git diff)"],
+                    "disallowedTools": ["Write"],
+                    "prompt": "Review the code.",
+                    "model": "inherit"
+                }
+            }"#,
+        );
+
+        assert_eq!(agents.len(), 1);
+        let agent = &agents[0];
+        assert_eq!(agent.agent_type, "reviewer");
+        assert_eq!(agent.when_to_use, "Review code changes");
+        assert_eq!(
+            agent.source,
+            claude_tools::agent_tool::AgentSource::FlagSettings
+        );
+        assert_eq!(
+            agent.tools.as_ref().unwrap(),
+            &vec![
+                "Read".to_string(),
+                "Write".to_string(),
+                "Bash(git status, git diff)".to_string()
+            ]
+        );
+        assert_eq!(
+            agent.disallowed_tools.as_ref().unwrap(),
+            &vec!["Write".to_string()]
+        );
+        assert_eq!(agent.model.as_deref(), Some("inherit"));
+    }
+
+    #[test]
+    fn cli_agent_wildcard_tools_mean_all_tools() {
+        let agents = parse_cli_agents_json(
+            r#"{
+                "runner": {
+                    "description": "Run everything",
+                    "tools": ["*"],
+                    "prompt": "Run all checks."
+                }
+            }"#,
+        );
+
+        assert_eq!(agents.len(), 1);
+        assert!(agents[0].tools.is_none());
     }
 
     #[test]
@@ -1657,15 +1714,98 @@ fn plugin_markdown_stems(project_root: &std::path::Path, dir_name: &str) -> Vec<
     names
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CliAgentJson {
+    description: String,
+    tools: Option<Value>,
+    disallowed_tools: Option<Value>,
+    prompt: String,
+    model: Option<String>,
+}
+
+fn parse_agent_tool_list(value: Option<&Value>) -> Option<Vec<String>> {
+    let Some(value) = value else {
+        return None;
+    };
+    if value.is_null() {
+        return None;
+    }
+    if value.as_str() == Some("") {
+        return Some(Vec::new());
+    }
+
+    let raw = match value {
+        Value::String(s) => vec![s.clone()],
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+
+    if raw.is_empty() {
+        return Some(Vec::new());
+    }
+    let parsed = claude_core::permissions::parse_tool_list_from_cli(&raw);
+    if parsed.iter().any(|tool| tool == "*") {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+fn parse_cli_agents_json(raw: &str) -> Vec<claude_tools::agent_tool::RuntimeAgentDefinition> {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    let Value::Object(map) = value else {
+        return Vec::new();
+    };
+
+    map.into_iter()
+        .filter_map(|(name, definition)| {
+            let parsed = serde_json::from_value::<CliAgentJson>(definition).ok()?;
+            let description = parsed.description.trim();
+            let prompt = parsed.prompt.trim();
+            if description.is_empty() || prompt.is_empty() {
+                return None;
+            }
+            let model = parsed.model.and_then(|model| {
+                let trimmed = model.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.eq_ignore_ascii_case("inherit") {
+                    Some("inherit".to_string())
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+            Some(
+                claude_tools::agent_tool::RuntimeAgentDefinition::flag_agent(
+                    name,
+                    description.to_string(),
+                    parse_agent_tool_list(parsed.tools.as_ref()),
+                    parse_agent_tool_list(parsed.disallowed_tools.as_ref()),
+                    prompt.to_string(),
+                    model,
+                ),
+            )
+        })
+        .collect()
+}
+
 fn stream_json_agent_names(project_root: &std::path::Path) -> Vec<String> {
-    let mut agents = Vec::new();
-    agents.extend(
-        claude_tools::agents::definitions::builtin_agents()
-            .into_iter()
-            .map(|agent| agent.name),
-    );
-    agents.extend(plugin_markdown_stems(project_root, "agents"));
-    agents.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b)));
+    let mut agents = claude_tools::agent_tool::active_agent_names();
+    let builtin_len = claude_tools::agents::definitions::builtin_agents().len();
+    let plugin_names = plugin_markdown_stems(project_root, "agents");
+    for (offset, name) in plugin_names.into_iter().enumerate() {
+        if agents.iter().any(|agent| agent == &name) {
+            continue;
+        }
+        let index = (builtin_len + offset).min(agents.len());
+        agents.insert(index, name);
+    }
     agents
 }
 
@@ -2440,8 +2580,8 @@ fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde
             .unwrap_or_default();
         if content.is_empty() {
             content.push(serde_json::json!({
-                "type": "text",
-                "text": "(Subagent completed but returned no output.)"
+                    "type": "text",
+                    "text": "(Subagent completed but returned no output.)"
             }));
         }
 
@@ -4292,6 +4432,12 @@ async fn main() -> Result<()> {
         merge_json_values(&mut raw_settings, overlay_value.clone());
         merge_json_values(&mut permission_settings, overlay_value);
     }
+    let cli_agents = cli
+        .agents
+        .as_deref()
+        .map(parse_cli_agents_json)
+        .unwrap_or_default();
+    claude_tools::agent_tool::set_runtime_agents(cli_agents);
 
     // Build tool registry
     let mut tools =

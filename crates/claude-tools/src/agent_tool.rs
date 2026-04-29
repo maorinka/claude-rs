@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::{OnceLock, RwLock};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -13,6 +14,161 @@ use claude_core::types::events::ToolResultData;
 // ---------------------------------------------------------------------------
 // Full Agent tool prompt assembly (mirrors TS tools/AgentTool/prompt.ts)
 // ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentSource {
+    BuiltIn,
+    Plugin,
+    UserSettings,
+    ProjectSettings,
+    FlagSettings,
+    PolicySettings,
+}
+
+impl AgentSource {
+    fn rank(&self) -> u8 {
+        match self {
+            AgentSource::BuiltIn => 0,
+            AgentSource::Plugin => 1,
+            AgentSource::UserSettings => 2,
+            AgentSource::ProjectSettings => 3,
+            AgentSource::FlagSettings => 4,
+            AgentSource::PolicySettings => 5,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeAgentDefinition {
+    pub agent_type: String,
+    pub when_to_use: String,
+    pub source: AgentSource,
+    pub tools: Option<Vec<String>>,
+    pub disallowed_tools: Option<Vec<String>>,
+    pub system_prompt: Option<String>,
+    pub model: Option<String>,
+}
+
+impl RuntimeAgentDefinition {
+    pub fn flag_agent(
+        agent_type: String,
+        when_to_use: String,
+        tools: Option<Vec<String>>,
+        disallowed_tools: Option<Vec<String>>,
+        system_prompt: String,
+        model: Option<String>,
+    ) -> Self {
+        Self {
+            agent_type,
+            when_to_use,
+            source: AgentSource::FlagSettings,
+            tools,
+            disallowed_tools,
+            system_prompt: Some(system_prompt),
+            model,
+        }
+    }
+}
+
+static RUNTIME_AGENTS: OnceLock<RwLock<Vec<RuntimeAgentDefinition>>> = OnceLock::new();
+
+fn runtime_agents_cell() -> &'static RwLock<Vec<RuntimeAgentDefinition>> {
+    RUNTIME_AGENTS.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+pub fn set_runtime_agents(agents: Vec<RuntimeAgentDefinition>) {
+    if let Ok(mut guard) = runtime_agents_cell().write() {
+        *guard = agents;
+    }
+}
+
+pub fn runtime_agents() -> Vec<RuntimeAgentDefinition> {
+    runtime_agents_cell()
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+fn builtin_agent_summaries() -> Vec<RuntimeAgentDefinition> {
+    builtin_agents()
+        .into_iter()
+        .map(|agent| RuntimeAgentDefinition {
+            agent_type: agent.name,
+            when_to_use: agent.when_to_use,
+            source: AgentSource::BuiltIn,
+            tools: None,
+            disallowed_tools: match agent.description.as_str() {
+                "Fast codebase explorer" | "Architecture planner" => Some(vec![
+                    "Agent".into(),
+                    "ExitPlanMode".into(),
+                    "Edit".into(),
+                    "Write".into(),
+                    "NotebookEdit".into(),
+                ]),
+                _ => None,
+            },
+            system_prompt: Some(agent.system_prompt),
+            model: agent.model,
+        })
+        .collect()
+}
+
+pub fn active_agent_definitions() -> Vec<RuntimeAgentDefinition> {
+    let mut all = builtin_agent_summaries();
+    all.extend(runtime_agents());
+    all.sort_by_key(|agent| agent.source.rank());
+
+    let mut active: Vec<RuntimeAgentDefinition> = Vec::new();
+    for agent in all {
+        if let Some(existing) = active
+            .iter_mut()
+            .find(|existing| existing.agent_type == agent.agent_type)
+        {
+            *existing = agent;
+        } else {
+            active.push(agent);
+        }
+    }
+    active
+}
+
+pub fn active_agent_names() -> Vec<String> {
+    active_agent_definitions()
+        .into_iter()
+        .map(|agent| agent.agent_type)
+        .collect()
+}
+
+fn get_tools_description(agent: &RuntimeAgentDefinition) -> String {
+    let has_allowlist = agent.tools.as_ref().is_some_and(|tools| !tools.is_empty());
+    let has_denylist = agent
+        .disallowed_tools
+        .as_ref()
+        .is_some_and(|tools| !tools.is_empty());
+
+    match (
+        has_allowlist,
+        has_denylist,
+        agent.tools.as_ref(),
+        agent.disallowed_tools.as_ref(),
+    ) {
+        (true, true, Some(tools), Some(disallowed)) => {
+            let effective_tools = tools
+                .iter()
+                .filter(|tool| !disallowed.contains(*tool))
+                .cloned()
+                .collect::<Vec<_>>();
+            if effective_tools.is_empty() {
+                "None".to_string()
+            } else {
+                effective_tools.join(", ")
+            }
+        }
+        (true, _, Some(tools), _) => tools.join(", "),
+        (_, true, _, Some(disallowed)) => format!("All tools except {}", disallowed.join(", ")),
+        _ => "All tools".to_string(),
+    }
+}
 
 /// Format a single agent definition as a line for the agent list section.
 fn format_agent_line(name: &str, when_to_use: &str, tools_desc: &str) -> String {
@@ -31,21 +187,14 @@ fn format_agent_line(name: &str, when_to_use: &str, tools_desc: &str) -> String 
 /// context in the sub-agent prompt. The optional `isolation: "worktree"`
 /// parameter layers filesystem isolation on top (temporary git worktree).
 fn build_agent_prompt() -> String {
-    // Build the agent list section from built-in agent definitions
-    let agents = builtin_agents();
+    // Build the agent list section from the active agent set using TS override
+    // order: built-in, plugin, user, project, flag, managed.
+    let agents = active_agent_definitions();
     let agent_lines: Vec<String> = agents
         .iter()
         .map(|a| {
-            // Map agent types to their available tool sets
-            let tools = match a.name.as_str() {
-                "general-purpose" => "*",
-                "Explore" => "All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit",
-                "Plan" => "All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit",
-                "Verification" => "All tools",
-                "code-reviewer" => "All tools",
-                _ => "*",
-            };
-            format_agent_line(&a.name, &a.when_to_use, tools)
+            let tools = get_tools_description(a);
+            format_agent_line(&a.agent_type, &a.when_to_use, &tools)
         })
         .collect();
 
@@ -480,6 +629,50 @@ async fn cleanup_worktree(worktree_path: &std::path::Path) {
 mod tests {
     use super::*;
     use crate::task_tools::get_task_entry;
+    use std::sync::Mutex;
+
+    static AGENT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn runtime_agents_override_builtins_using_ts_group_order() {
+        let _guard = AGENT_TEST_LOCK.lock().unwrap();
+        set_runtime_agents(vec![RuntimeAgentDefinition::flag_agent(
+            "general-purpose".into(),
+            "flag override".into(),
+            Some(vec!["Read".into(), "Write".into()]),
+            Some(vec!["Write".into()]),
+            "prompt".into(),
+            None,
+        )]);
+
+        let active = active_agent_definitions();
+        let general = active
+            .iter()
+            .find(|agent| agent.agent_type == "general-purpose")
+            .expect("general-purpose agent should exist");
+        assert_eq!(general.when_to_use, "flag override");
+        assert_eq!(get_tools_description(general), "Read");
+
+        set_runtime_agents(Vec::new());
+    }
+
+    #[test]
+    fn agent_prompt_includes_runtime_agents() {
+        let _guard = AGENT_TEST_LOCK.lock().unwrap();
+        set_runtime_agents(vec![RuntimeAgentDefinition::flag_agent(
+            "audit-runner".into(),
+            "Use for release audits".into(),
+            None,
+            None,
+            "prompt".into(),
+            None,
+        )]);
+
+        let prompt = build_agent_prompt();
+        assert!(prompt.contains("- audit-runner: Use for release audits (Tools: All tools)"));
+
+        set_runtime_agents(Vec::new());
+    }
 
     #[test]
     fn test_background_agent_registers_in_task_store() {
