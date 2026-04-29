@@ -47,6 +47,9 @@ pub struct RuntimeAgentDefinition {
     pub disallowed_tools: Option<Vec<String>>,
     pub system_prompt: Option<String>,
     pub model: Option<String>,
+    pub permission_mode: Option<String>,
+    pub background: Option<bool>,
+    pub isolation: Option<String>,
 }
 
 impl RuntimeAgentDefinition {
@@ -66,6 +69,9 @@ impl RuntimeAgentDefinition {
             disallowed_tools,
             system_prompt: Some(system_prompt),
             model,
+            permission_mode: None,
+            background: None,
+            isolation: None,
         }
     }
 }
@@ -109,8 +115,17 @@ fn builtin_agent_summaries() -> Vec<RuntimeAgentDefinition> {
             },
             system_prompt: Some(agent.system_prompt),
             model: agent.model,
+            permission_mode: None,
+            background: None,
+            isolation: None,
         })
         .collect()
+}
+
+fn find_active_agent(agent_type: &str) -> Option<RuntimeAgentDefinition> {
+    active_agent_definitions()
+        .into_iter()
+        .find(|agent| agent.agent_type == agent_type)
 }
 
 pub fn active_agent_definitions() -> Vec<RuntimeAgentDefinition> {
@@ -369,22 +384,52 @@ impl ToolExecutor for AgentTool {
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
         let prompt = input["prompt"].as_str().unwrap_or("");
-        let model = input.get("model").and_then(|v| v.as_str());
-        let isolation = input.get("isolation").and_then(|v| v.as_str());
+        let agent_type = input
+            .get("subagent_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("general-purpose");
+        let selected_agent = match find_active_agent(agent_type) {
+            Some(agent) => agent,
+            None => {
+                let available = active_agent_names().join(", ");
+                return Ok(ToolResultData {
+                    data: json!(format!(
+                        "Agent type '{}' not found. Available agents: {}",
+                        agent_type, available
+                    )),
+                    is_error: true,
+                });
+            }
+        };
+        let model = input
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                selected_agent.model.as_ref().and_then(|model| {
+                    if model == "inherit" {
+                        None
+                    } else {
+                        Some(model.clone())
+                    }
+                })
+            });
+        let isolation = input
+            .get("isolation")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| selected_agent.isolation.clone());
         let agent_name = input.get("name").and_then(|v| v.as_str());
         let team_name = input.get("team_name").and_then(|v| v.as_str());
         let agent_id = agent_name
             .map(str::to_string)
             .unwrap_or_else(|| format!("agent-{}", uuid::Uuid::new_v4()));
-        let agent_type = input
-            .get("subagent_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("general-purpose");
         let start_time = Instant::now();
         let run_in_background = input
             .get("run_in_background")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || selected_agent.background == Some(true);
 
         // Log team association if provided
         if let Some(team) = team_name {
@@ -392,7 +437,7 @@ impl ToolExecutor for AgentTool {
         }
 
         // Determine working directory (potentially in a worktree)
-        let (work_dir, worktree_path) = if isolation == Some("worktree") {
+        let (work_dir, worktree_path) = if isolation.as_deref() == Some("worktree") {
             match create_agent_worktree(&ctx.working_directory).await {
                 Ok(wt_path) => {
                     info!(worktree = %wt_path.display(), "Created worktree for agent");
@@ -422,13 +467,12 @@ impl ToolExecutor for AgentTool {
             PermissionMode::AcceptEdits => PermissionMode::AcceptEdits,
             // For all other parent modes, check the tool `mode` input param first,
             // then fall back to inheriting the parent mode.
-            parent_mode => {
-                if let Some(mode_str) = input.get("mode").and_then(|v| v.as_str()) {
-                    PermissionMode::from_string(mode_str)
-                } else {
-                    parent_mode.clone()
-                }
-            }
+            parent_mode => input
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .or(selected_agent.permission_mode.as_deref())
+                .map(PermissionMode::from_string)
+                .unwrap_or_else(|| parent_mode.clone()),
         };
 
         match &effective_mode {
@@ -445,8 +489,17 @@ impl ToolExecutor for AgentTool {
             _ => {}
         }
 
-        if let Some(m) = model {
+        if let Some(m) = model.as_deref() {
             cmd.arg("--model").arg(m);
+        }
+        if let Some(system_prompt) = selected_agent.system_prompt.as_deref() {
+            cmd.arg("--system-prompt").arg(system_prompt);
+        }
+        if let Some(tools) = selected_agent.tools.as_ref() {
+            cmd.arg("--tools").arg(tools.join(","));
+        }
+        if let Some(disallowed_tools) = selected_agent.disallowed_tools.as_ref() {
+            cmd.arg("--disallowedTools").arg(disallowed_tools.join(","));
         }
         cmd.current_dir(&work_dir);
 

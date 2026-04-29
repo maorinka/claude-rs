@@ -883,7 +883,10 @@ mod tests {
                     "tools": ["Read", "Write", "Bash(git status, git diff)"],
                     "disallowedTools": ["Write"],
                     "prompt": "Review the code.",
-                    "model": "inherit"
+                    "model": "inherit",
+                    "permissionMode": "acceptEdits",
+                    "background": true,
+                    "isolation": "worktree"
                 }
             }"#,
         );
@@ -909,6 +912,9 @@ mod tests {
             &vec!["Write".to_string()]
         );
         assert_eq!(agent.model.as_deref(), Some("inherit"));
+        assert_eq!(agent.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(agent.background, Some(true));
+        assert_eq!(agent.isolation.as_deref(), Some("worktree"));
     }
 
     #[test]
@@ -1722,6 +1728,9 @@ struct CliAgentJson {
     disallowed_tools: Option<Value>,
     prompt: String,
     model: Option<String>,
+    permission_mode: Option<String>,
+    background: Option<bool>,
+    isolation: Option<String>,
 }
 
 fn parse_agent_tool_list(value: Option<&Value>) -> Option<Vec<String>> {
@@ -1781,16 +1790,18 @@ fn parse_cli_agents_json(raw: &str) -> Vec<claude_tools::agent_tool::RuntimeAgen
                     Some(trimmed.to_string())
                 }
             });
-            Some(
-                claude_tools::agent_tool::RuntimeAgentDefinition::flag_agent(
-                    name,
-                    description.to_string(),
-                    parse_agent_tool_list(parsed.tools.as_ref()),
-                    parse_agent_tool_list(parsed.disallowed_tools.as_ref()),
-                    prompt.to_string(),
-                    model,
-                ),
-            )
+            let mut agent = claude_tools::agent_tool::RuntimeAgentDefinition::flag_agent(
+                name,
+                description.to_string(),
+                parse_agent_tool_list(parsed.tools.as_ref()),
+                parse_agent_tool_list(parsed.disallowed_tools.as_ref()),
+                prompt.to_string(),
+                model,
+            );
+            agent.permission_mode = parsed.permission_mode;
+            agent.background = parsed.background;
+            agent.isolation = parsed.isolation;
+            Some(agent)
         })
         .collect()
 }
