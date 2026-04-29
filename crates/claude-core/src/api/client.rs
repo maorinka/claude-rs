@@ -945,12 +945,8 @@ impl ApiClient {
                     .header("x-stainless-runtime", "node")
                     .header("x-stainless-retry-count", retry_attempt.to_string());
 
-                let model_for_header = body
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&self.config.model);
                 let mut beta_header =
-                    anthropic_beta_header_value(auth.is_oauth(), model_for_header);
+                    anthropic_beta_header_value(auth.is_oauth(), &self.config.model);
                 if !auth.is_oauth() {
                     for beta in &self.config.sdk_betas {
                         beta_header = add_beta_header(&beta_header, beta);

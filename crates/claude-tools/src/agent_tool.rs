@@ -131,6 +131,53 @@ fn find_active_agent(agent_type: &str) -> Option<RuntimeAgentDefinition> {
         .find(|agent| agent.agent_type == agent_type)
 }
 
+fn ts_agent_contract_order() -> Vec<String> {
+    let raw: Value = match serde_json::from_str(include_str!("ts_tool_contracts_2_1_119.json")) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let Some(agent_description) = raw
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name") == Some(&json!("Agent")))
+        })
+        .and_then(|tool| tool.get("description"))
+        .and_then(Value::as_str)
+    else {
+        return Vec::new();
+    };
+
+    agent_description
+        .lines()
+        .filter_map(|line| {
+            let line = line.strip_prefix("- ")?;
+            line.split_once(':')
+                .map(|(agent_type, _)| agent_type.to_string())
+        })
+        .collect()
+}
+
+fn order_like_ts_contract(mut agents: Vec<RuntimeAgentDefinition>) -> Vec<RuntimeAgentDefinition> {
+    let order = ts_agent_contract_order();
+    if order.is_empty() {
+        return agents;
+    }
+
+    let mut ordered = Vec::new();
+    for agent_type in order {
+        if let Some(index) = agents
+            .iter()
+            .position(|agent| agent.agent_type == agent_type)
+        {
+            ordered.push(agents.remove(index));
+        }
+    }
+    ordered.extend(agents);
+    ordered
+}
+
 pub fn active_agent_definitions() -> Vec<RuntimeAgentDefinition> {
     let mut all = builtin_agent_summaries();
     all.extend(runtime_agents());
@@ -147,7 +194,7 @@ pub fn active_agent_definitions() -> Vec<RuntimeAgentDefinition> {
             active.push(agent);
         }
     }
-    active
+    order_like_ts_contract(active)
 }
 
 pub fn active_agent_names() -> Vec<String> {
@@ -728,6 +775,24 @@ mod tests {
         assert!(prompt.contains("- audit-runner: Use for release audits (Tools: All tools)"));
 
         set_runtime_agents(Vec::new());
+    }
+
+    #[test]
+    fn active_agent_names_follow_embedded_ts_contract_order() {
+        let _guard = AGENT_TEST_LOCK.lock().unwrap();
+        set_runtime_agents(Vec::new());
+
+        let names = active_agent_names();
+        let explore = names.iter().position(|name| name == "Explore").unwrap();
+        let general = names
+            .iter()
+            .position(|name| name == "general-purpose")
+            .unwrap();
+
+        assert!(
+            explore < general,
+            "TS contract lists Explore before general-purpose"
+        );
     }
 
     #[test]
