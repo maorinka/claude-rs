@@ -50,6 +50,7 @@ pub struct RuntimeAgentDefinition {
     pub permission_mode: Option<String>,
     pub background: Option<bool>,
     pub isolation: Option<String>,
+    pub initial_prompt: Option<String>,
 }
 
 impl RuntimeAgentDefinition {
@@ -72,6 +73,7 @@ impl RuntimeAgentDefinition {
             permission_mode: None,
             background: None,
             isolation: None,
+            initial_prompt: None,
         }
     }
 }
@@ -118,6 +120,7 @@ fn builtin_agent_summaries() -> Vec<RuntimeAgentDefinition> {
             permission_mode: None,
             background: None,
             isolation: None,
+            initial_prompt: None,
         })
         .collect()
 }

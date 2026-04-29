@@ -139,6 +139,10 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub http_hook_allowed_env_vars: Option<Vec<String>>,
+
+    /// Agent type for the current session. Matches TS `agent` setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 impl Settings {
@@ -220,6 +224,7 @@ impl Settings {
                 &self.http_hook_allowed_env_vars,
                 &overlay.http_hook_allowed_env_vars,
             ),
+            agent: overlay.agent.clone().or_else(|| self.agent.clone()),
         }
     }
 }

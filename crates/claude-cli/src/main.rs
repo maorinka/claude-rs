@@ -122,6 +122,10 @@ pub struct Cli {
     #[arg(long = "agents", hide = true)]
     pub agents: Option<String>,
 
+    /// Agent for the current session. Overrides the 'agent' setting.
+    #[arg(long = "agent")]
+    pub agent: Option<String>,
+
     /// MCP tool to use for permission prompts in print mode
     #[arg(long = "permission-prompt-tool", hide = true)]
     pub permission_prompt_tool: Option<String>,
@@ -886,7 +890,8 @@ mod tests {
                     "model": "inherit",
                     "permissionMode": "acceptEdits",
                     "background": true,
-                    "isolation": "worktree"
+                    "isolation": "worktree",
+                    "initialPrompt": "/status"
                 }
             }"#,
         );
@@ -915,6 +920,7 @@ mod tests {
         assert_eq!(agent.permission_mode.as_deref(), Some("acceptEdits"));
         assert_eq!(agent.background, Some(true));
         assert_eq!(agent.isolation.as_deref(), Some("worktree"));
+        assert_eq!(agent.initial_prompt.as_deref(), Some("/status"));
     }
 
     #[test]
@@ -959,6 +965,10 @@ mod tests {
             "permissionMode".into(),
             claude_core::frontmatter::FrontmatterValue::String("acceptEdits".into()),
         );
+        frontmatter.insert(
+            "initialPrompt".into(),
+            claude_core::frontmatter::FrontmatterValue::String("/check".into()),
+        );
 
         let file = claude_core::markdown_config_loader::MarkdownFile {
             file_path: std::path::PathBuf::from("/tmp/reviewer.md"),
@@ -982,6 +992,7 @@ mod tests {
         assert_eq!(agent.system_prompt.as_deref(), Some("System prompt body"));
         assert_eq!(agent.background, Some(true));
         assert_eq!(agent.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(agent.initial_prompt.as_deref(), Some("/check"));
     }
 
     #[test]
@@ -1753,6 +1764,7 @@ struct CliAgentJson {
     permission_mode: Option<String>,
     background: Option<bool>,
     isolation: Option<String>,
+    initial_prompt: Option<String>,
 }
 
 fn parse_agent_tool_list(value: Option<&Value>) -> Option<Vec<String>> {
@@ -1823,6 +1835,7 @@ fn parse_cli_agents_json(raw: &str) -> Vec<claude_tools::agent_tool::RuntimeAgen
             agent.permission_mode = parsed.permission_mode;
             agent.background = parsed.background;
             agent.isolation = parsed.isolation;
+            agent.initial_prompt = parsed.initial_prompt;
             Some(agent)
         })
         .collect()
@@ -1903,6 +1916,7 @@ fn parse_markdown_agent(
             .map(str::to_string),
         background: frontmatter_bool(&file.frontmatter, "background"),
         isolation: frontmatter_string(&file.frontmatter, "isolation").map(str::to_string),
+        initial_prompt: frontmatter_string(&file.frontmatter, "initialPrompt").map(str::to_string),
     })
 }
 
@@ -2056,6 +2070,7 @@ fn load_plugin_agents(
                 isolation: frontmatter_string(&parsed.frontmatter, "isolation")
                     .filter(|value| *value == "worktree")
                     .map(str::to_string),
+                initial_prompt: None,
             });
         }
     }
@@ -4699,6 +4714,24 @@ async fn main() -> Result<()> {
         .unwrap_or_default();
     runtime_agents.extend(cli_agents);
     claude_tools::agent_tool::set_runtime_agents(runtime_agents);
+    let main_thread_agent = cli
+        .agent
+        .as_ref()
+        .or(settings.agent.as_ref())
+        .and_then(|agent_type| {
+            claude_tools::agent_tool::active_agent_definitions()
+                .into_iter()
+                .find(|agent| &agent.agent_type == agent_type)
+        });
+    if let Some(initial_prompt) = main_thread_agent
+        .as_ref()
+        .and_then(|agent| agent.initial_prompt.as_ref())
+    {
+        prompt_arg = Some(match prompt_arg {
+            Some(prompt) if !prompt.is_empty() => format!("{initial_prompt}\n\n{prompt}"),
+            _ => initial_prompt.clone(),
+        });
+    }
 
     // Build tool registry
     let mut tools =
@@ -5053,7 +5086,16 @@ async fn main() -> Result<()> {
         claude_tools::skill_tool::register_discovered_skill(skill);
     }
 
-    let configured_model = match cli.model.or_else(|| settings.model.clone()) {
+    let agent_model = main_thread_agent.as_ref().and_then(|agent| {
+        agent.model.as_ref().and_then(|model| {
+            if model == "inherit" {
+                None
+            } else {
+                Some(model.clone())
+            }
+        })
+    });
+    let configured_model = match cli.model.or(agent_model).or_else(|| settings.model.clone()) {
         Some(model) => model,
         None => default_main_loop_model_setting().await,
     };
@@ -5081,13 +5123,23 @@ async fn main() -> Result<()> {
         project_root.display(),
     );
 
-    let custom_system_prompt = resolve_prompt_file_option(
+    let mut custom_system_prompt = resolve_prompt_file_option(
         &cli.system_prompt,
         &cli.system_prompt_file,
         "Cannot use both --system-prompt and --system-prompt-file. Please use only one.",
         "System prompt file not found",
         "Error reading system prompt file",
     )?;
+    if custom_system_prompt.is_none()
+        && prompt_arg.is_some()
+        && main_thread_agent
+            .as_ref()
+            .is_some_and(|agent| agent.source != claude_tools::agent_tool::AgentSource::BuiltIn)
+    {
+        custom_system_prompt = main_thread_agent
+            .as_ref()
+            .and_then(|agent| agent.system_prompt.clone());
+    }
     let append_system_prompt = resolve_prompt_file_option(
         &cli.append_system_prompt,
         &cli.append_system_prompt_file,
