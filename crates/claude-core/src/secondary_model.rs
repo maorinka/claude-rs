@@ -72,6 +72,7 @@ impl HaikuSecondaryModel {
         let config = ApiConfig {
             base_url: base_url.clone(),
             model: "claude-haiku-4-5".into(),
+            fallback_model: None,
             max_tokens: 2048,
             thinking: ThinkingConfig::Disabled,
             speed: None,
@@ -86,6 +87,7 @@ impl HaikuSecondaryModel {
         let web_search_config = ApiConfig {
             base_url,
             model: main_model,
+            fallback_model: None,
             max_tokens: 64_000,
             thinking: ThinkingConfig::Disabled,
             speed: None,

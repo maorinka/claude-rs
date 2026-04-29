@@ -5,6 +5,7 @@ use reqwest::Response;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+use crate::api::retry::RetryPolicy;
 use crate::auth::login::{debug_http_client, proxy_url};
 use crate::auth::resolve::resolve_stored_oauth_token;
 use crate::types::content::ContentBlock;
@@ -146,6 +147,8 @@ pub struct ApiConfig {
     pub base_url: String,
     /// Model identifier.
     pub model: String,
+    /// Optional fallback model used after repeated overload responses.
+    pub fallback_model: Option<String>,
     /// Maximum number of output tokens.
     pub max_tokens: u64,
     /// Thinking / extended-reasoning configuration.
@@ -173,6 +176,7 @@ impl Default for ApiConfig {
         Self {
             base_url: "https://api.anthropic.com".into(),
             model: "claude-opus-4-6".into(),
+            fallback_model: None,
             max_tokens: get_max_output_tokens_for_model("claude-opus-4-6"),
             thinking: ThinkingConfig::Adaptive,
             speed: None,
@@ -900,90 +904,125 @@ impl ApiClient {
         self.send_streaming_body(body).await
     }
 
-    async fn send_streaming_body(&self, body: Value) -> Result<Response> {
+    async fn send_streaming_body(&self, mut body: Value) -> Result<Response> {
         let url = format!("{}/v1/messages", self.config.base_url);
         let minimal_transport = minimal_transport_enabled();
+        let retry_policy = RetryPolicy::default();
+        let mut retry_attempt = 0_u32;
+        let mut consecutive_529 = 0_u32;
+        let mut switched_to_fallback = false;
 
-        // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
-        if std::env::var("CLAUDE_RS_DEBUG").as_deref() == Ok("1") {
-            if let Ok(pretty) = serde_json::to_string_pretty(&body) {
-                let _ = std::fs::write("/tmp/claude-rs-request.json", &pretty);
-                tracing::debug!("Request body written to /tmp/claude-rs-request.json");
-            }
-        }
-
-        let auth = self.current_request_auth().await?;
-        let (header_name, header_value) = auth.to_header();
-
-        let mut request = self
-            .http
-            .post(&url)
-            .header("anthropic-version", &self.config.api_version)
-            .header("content-type", "application/json")
-            .header(header_name, header_value);
-
-        if minimal_transport {
-            if auth.is_oauth() {
-                request = request.header("anthropic-beta", "oauth-2025-04-20");
-            }
-        } else {
-            request = request
-                .header("accept", "application/json")
-                .header("user-agent", crate::user_agent::get_user_agent(None))
-                .header("x-claude-code-session-id", &self.config.session_id)
-                .header("x-stainless-lang", "js")
-                .header("x-stainless-package-version", "2.2.0")
-                .header("x-stainless-runtime", "node")
-                .header("x-stainless-retry-count", "0");
-
-            let mut beta_header = anthropic_beta_header_value(auth.is_oauth(), &self.config.model);
-            if !auth.is_oauth() {
-                for beta in &self.config.sdk_betas {
-                    beta_header = add_beta_header(&beta_header, beta);
+        loop {
+            // Debug mode: dump the full request body when CLAUDE_RS_DEBUG=1
+            if std::env::var("CLAUDE_RS_DEBUG").as_deref() == Ok("1") {
+                if let Ok(pretty) = serde_json::to_string_pretty(&body) {
+                    let _ = std::fs::write("/tmp/claude-rs-request.json", &pretty);
+                    tracing::debug!("Request body written to /tmp/claude-rs-request.json");
                 }
             }
-            if body_uses_tool_search(&body) {
-                beta_header = add_tool_search_beta_header(&beta_header);
+
+            let auth = self.current_request_auth().await?;
+            let (header_name, header_value) = auth.to_header();
+
+            let mut request = self
+                .http
+                .post(&url)
+                .header("anthropic-version", &self.config.api_version)
+                .header("content-type", "application/json")
+                .header(header_name, header_value);
+
+            if minimal_transport {
+                if auth.is_oauth() {
+                    request = request.header("anthropic-beta", "oauth-2025-04-20");
+                }
+            } else {
+                request = request
+                    .header("accept", "application/json")
+                    .header("user-agent", crate::user_agent::get_user_agent(None))
+                    .header("x-claude-code-session-id", &self.config.session_id)
+                    .header("x-stainless-lang", "js")
+                    .header("x-stainless-package-version", "2.2.0")
+                    .header("x-stainless-runtime", "node")
+                    .header("x-stainless-retry-count", retry_attempt.to_string());
+
+                let model_for_header = body
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&self.config.model);
+                let mut beta_header =
+                    anthropic_beta_header_value(auth.is_oauth(), model_for_header);
+                if !auth.is_oauth() {
+                    for beta in &self.config.sdk_betas {
+                        beta_header = add_beta_header(&beta_header, beta);
+                    }
+                }
+                if body_uses_tool_search(&body) {
+                    beta_header = add_tool_search_beta_header(&beta_header);
+                }
+                if body
+                    .get("output_config")
+                    .and_then(|value| value.get("task_budget"))
+                    .is_some()
+                    && !beta_header
+                        .split(',')
+                        .any(|part| part.trim() == crate::constants::betas::TASK_BUDGETS)
+                {
+                    beta_header =
+                        add_beta_header(&beta_header, crate::constants::betas::TASK_BUDGETS);
+                }
+
+                request = request
+                    .header("anthropic-beta", beta_header)
+                    .header("anthropic-dangerous-direct-browser-access", "true")
+                    .header("x-app", "cli");
             }
-            if body
-                .get("output_config")
-                .and_then(|value| value.get("task_budget"))
-                .is_some()
-                && !beta_header
-                    .split(',')
-                    .any(|part| part.trim() == crate::constants::betas::TASK_BUDGETS)
+
+            let response = request.json(&body).send().await?;
+
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
+            let status = response.status().as_u16();
+            let err_body = response.text().await.unwrap_or_default();
+
+            // Return a typed error for prompt-too-long so the engine can
+            // attempt reactive compaction before surfacing the error.
+            if status == 413 || err_body.contains("prompt_too_long") {
+                return Err(anyhow::Error::new(
+                    crate::types::error::PromptTooLongError { body: err_body },
+                ));
+            }
+
+            if status == 529 {
+                consecutive_529 += 1;
+                if consecutive_529 >= retry_policy.max_529_retries && !switched_to_fallback {
+                    if let Some(fallback_model) = &self.config.fallback_model {
+                        body["model"] = Value::String(normalize_model_for_api(fallback_model));
+                        switched_to_fallback = true;
+                        consecutive_529 = 0;
+                        retry_attempt += 1;
+                        continue;
+                    }
+                }
+            } else {
+                consecutive_529 = 0;
+            }
+
+            if matches!(status, 429 | 500 | 502 | 503 | 504 | 529)
+                && retry_attempt < retry_policy.max_retries
             {
-                beta_header = add_beta_header(&beta_header, crate::constants::betas::TASK_BUDGETS);
+                retry_attempt += 1;
+                tokio::time::sleep(retry_policy.backoff_delay(retry_attempt)).await;
+                continue;
             }
 
-            request = request
-                .header("anthropic-beta", beta_header)
-                .header("anthropic-dangerous-direct-browser-access", "true")
-                .header("x-app", "cli");
+            anyhow::bail!(
+                "API error {}: {}",
+                status,
+                &err_body[..err_body.len().min(500)]
+            );
         }
-
-        let response = request.json(&body).send().await?;
-
-        if response.status().is_success() {
-            return Ok(response);
-        }
-
-        let status = response.status().as_u16();
-        let err_body = response.text().await.unwrap_or_default();
-
-        // Return a typed error for prompt-too-long so the engine can
-        // attempt reactive compaction before surfacing the error.
-        if status == 413 || err_body.contains("prompt_too_long") {
-            return Err(anyhow::Error::new(
-                crate::types::error::PromptTooLongError { body: err_body },
-            ));
-        }
-
-        anyhow::bail!(
-            "API error {}: {}",
-            status,
-            &err_body[..err_body.len().min(500)]
-        );
     }
 
     async fn current_request_auth(&self) -> Result<AuthMethod> {

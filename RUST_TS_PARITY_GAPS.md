@@ -744,6 +744,10 @@ Improved:
 - Rust print mode now accepts TS `--max-budget-usd`, validates positive
   numeric input, checks accumulated request cost after turns, and emits the
   TS `error_max_budget_usd` result shape/text when the cap is reached.
+- Rust print mode now accepts TS `--fallback-model`, rejects a fallback equal
+  to the active main model, threads it into API config, and switches the
+  outgoing model after repeated 529 overload responses using the same retry
+  budget constant as TS.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

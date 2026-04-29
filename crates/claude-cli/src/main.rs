@@ -56,6 +56,10 @@ pub struct Cli {
     #[arg(long = "betas", num_args = 1.., value_delimiter = ',')]
     pub betas: Vec<String>,
 
+    /// Enable automatic fallback to the specified model when the main model is overloaded
+    #[arg(long = "fallback-model")]
+    pub fallback_model: Option<String>,
+
     /// Verbose output
     #[arg(short, long)]
     pub verbose: bool,
@@ -971,6 +975,22 @@ mod tests {
             event["errors"],
             serde_json::json!(["Reached maximum budget ($0.25)"])
         );
+    }
+
+    #[test]
+    fn fallback_model_cli_flag_is_accepted() {
+        let cli = Cli::try_parse_from([
+            "claude-rs",
+            "-p",
+            "--model",
+            "opus",
+            "--fallback-model",
+            "sonnet",
+            "hi",
+        ])
+        .unwrap();
+        assert_eq!(cli.model.as_deref(), Some("opus"));
+        assert_eq!(cli.fallback_model.as_deref(), Some("sonnet"));
     }
 
     #[test]
@@ -4618,6 +4638,19 @@ async fn main() -> Result<()> {
         None => default_main_loop_model_setting().await,
     };
     let model = normalize_model_name(&configured_model);
+    let fallback_model = match cli
+        .fallback_model
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) if value == "default" => Some(default_main_loop_model_setting().await),
+        Some(value) => Some(normalize_model_name(&value)),
+        None => None,
+    };
+    if fallback_model.as_deref() == Some(model.as_str()) {
+        eprintln!("Error: Fallback model cannot be the same as the main model. Please specify a different model for --fallback-model.");
+        std::process::exit(1);
+    }
 
     tracing::info!(
         "claude-rs initialized: model={}, tools={}, mcp_servers={}, skills={}, project={}",
@@ -4696,6 +4729,7 @@ async fn main() -> Result<()> {
             .or_else(|| settings.effort_level.clone())
             .filter(|value| !value.trim().is_empty()),
         task_budget_total: cli.task_budget,
+        fallback_model: fallback_model.clone(),
         workload: cli
             .workload
             .clone()

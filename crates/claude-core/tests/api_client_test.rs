@@ -4,6 +4,7 @@ use claude_core::api::client::*;
 fn test_api_config_default() {
     let config = ApiConfig::default();
     assert_eq!(config.base_url, "https://api.anthropic.com");
+    assert!(config.fallback_model.is_none());
     assert!(config.max_tokens > 0);
 }
 
