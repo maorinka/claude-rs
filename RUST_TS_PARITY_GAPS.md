@@ -535,6 +535,8 @@ Improved since the stale report:
 - Rust now runs the TS domain-info preflight before fetching, with the same
   `skipWebFetchPreflight` settings escape hatch and domain-blocked/check-failed
   user-facing error text.
+- Rust now sends the TS WebFetch request headers: `Accept: text/markdown,
+  text/html, */*` and the `Claude-User (...)` WebFetch user agent.
 - WebFetch permission checks now use TS-style `domain:<hostname>` rule
   content, preapproved-host auto-allow, allow/ask/deny rule matching, and
   local-settings allow suggestions instead of inheriting blanket read-only

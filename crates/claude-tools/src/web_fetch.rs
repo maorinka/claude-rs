@@ -180,7 +180,10 @@ async fn fetch_with_permitted_redirects(
         _ = cancel.cancelled() => {
             anyhow::bail!("request cancelled");
         }
-        res = client.get(&url).send() => res?,
+        res = client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "text/markdown, text/html, */*")
+            .send() => res?,
     };
 
     let status = response.status();
@@ -581,7 +584,7 @@ impl ToolExecutor for WebFetchTool {
 
         // Build reqwest client
         let client = match reqwest::Client::builder()
-            .user_agent("claude-rs/0.1")
+            .user_agent(claude_core::user_agent::get_web_fetch_user_agent())
             .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
             .redirect(reqwest::redirect::Policy::none())
             .build()
