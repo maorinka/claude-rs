@@ -82,6 +82,9 @@ Now matching:
 - `Read`, `Edit`, and `Write` now expand relative paths against the
   request-scoped cwd before permission checks and filesystem access, matching the TS
   `backfillObservableInput` / `expandPath` flow.
+- `Read` now blocks the same stdio/device aliases as TS, including
+  `/dev/full`, `/dev/stdout`, `/dev/stderr`, `/dev/fd/{0,1,2}`, and
+  `/proc/.../fd/{0,1,2}`.
 - Installed CLI identity is synced to the current TS CLI version observed in
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content

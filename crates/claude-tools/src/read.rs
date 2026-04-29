@@ -13,8 +13,15 @@ const BLOCKED_PATHS: &[&str] = &[
     "/dev/zero",
     "/dev/random",
     "/dev/urandom",
+    "/dev/full",
     "/dev/stdin",
     "/dev/tty",
+    "/dev/console",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/fd/0",
+    "/dev/fd/1",
+    "/dev/fd/2",
     "/dev/null",
 ];
 
@@ -96,6 +103,16 @@ fn is_image_extension(ext: &str) -> bool {
 fn has_binary_extension(path: &str) -> bool {
     let lower = path.to_lowercase();
     BINARY_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+}
+
+fn is_blocked_device_path(file_path: &str) -> bool {
+    if BLOCKED_PATHS.contains(&file_path) {
+        return true;
+    }
+    file_path.starts_with("/proc/")
+        && (file_path.ends_with("/fd/0")
+            || file_path.ends_with("/fd/1")
+            || file_path.ends_with("/fd/2"))
 }
 
 /// Check if binary content is detected in a buffer by looking for null bytes
@@ -403,7 +420,7 @@ impl ToolExecutor for FileReadTool {
         let file_path = file_path.as_str();
 
         // Block dangerous device paths.
-        if BLOCKED_PATHS.contains(&file_path) {
+        if is_blocked_device_path(file_path) {
             return Ok(error_result(&format!(
                 "access to '{}' is blocked for safety reasons",
                 file_path
@@ -773,6 +790,31 @@ mod tests {
         assert_eq!(image_media_type("jpeg"), "image/jpeg");
         assert_eq!(image_media_type("gif"), "image/gif");
         assert_eq!(image_media_type("webp"), "image/webp");
+    }
+
+    #[test]
+    fn test_blocked_device_paths_match_ts_set() {
+        for path in [
+            "/dev/zero",
+            "/dev/random",
+            "/dev/urandom",
+            "/dev/full",
+            "/dev/stdin",
+            "/dev/tty",
+            "/dev/console",
+            "/dev/stdout",
+            "/dev/stderr",
+            "/dev/fd/0",
+            "/dev/fd/1",
+            "/dev/fd/2",
+            "/proc/self/fd/0",
+            "/proc/123/fd/1",
+            "/proc/123/fd/2",
+        ] {
+            assert!(is_blocked_device_path(path), "{path} must be blocked");
+        }
+        assert!(!is_blocked_device_path("/proc/123/fd/3"));
+        assert!(!is_blocked_device_path("/dev/shm/file.txt"));
     }
 
     // ---- Integration tests (async, using the tool) ----
