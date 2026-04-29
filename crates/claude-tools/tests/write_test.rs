@@ -175,6 +175,20 @@ async fn test_write_overwrites_existing() {
 
     let on_disk = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(on_disk, new_content);
+
+    let mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let state = ctx.read_file_state.lock().unwrap();
+    assert_eq!(
+        state.get(&file_path).unwrap().timestamp,
+        mtime_ms,
+        "write should store the file mtime like TS"
+    );
 }
 
 #[tokio::test]

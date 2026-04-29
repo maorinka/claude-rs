@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::diff_utils::structured_patch_for_display;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use crate::tool_path::expand_tool_path;
-use crate::write::FILE_HISTORY;
+use crate::write::{file_mtime_ms, FILE_HISTORY};
 use claude_core::types::events::ToolResultData;
 
 /// Maximum number of characters shown in error message snippets.
@@ -290,8 +290,9 @@ Usage:
         // disk form) so the next staleness check's content
         // comparison uses the same normalisation as
         // `check_file_staleness`. Mirrors TS `FileEditTool.ts:520-525`.
+        let mtime_ms = file_mtime_ms(path);
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            state.update_after_write(file_path, Some(new_content.clone()));
+            state.update_after_write_with_timestamp(file_path, Some(new_content.clone()), mtime_ms);
         }
 
         Ok(ToolResultData {

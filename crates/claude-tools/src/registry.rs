@@ -92,6 +92,15 @@ impl ReadFileState {
     /// sync). Mirrors TS `FileEditTool.ts:520-525` which stores
     /// `content: updatedFile` in `readFileState`.
     pub fn update_after_write(&mut self, path: &str, content: Option<String>) {
+        self.update_after_write_with_timestamp(path, content, None);
+    }
+
+    pub fn update_after_write_with_timestamp(
+        &mut self,
+        path: &str,
+        content: Option<String>,
+        timestamp: Option<u64>,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -99,7 +108,7 @@ impl ReadFileState {
         self.entries.insert(
             path.to_string(),
             ReadFileEntry {
-                timestamp: now,
+                timestamp: timestamp.unwrap_or(now),
                 is_partial_view: false,
                 offset: None,
                 limit: None,

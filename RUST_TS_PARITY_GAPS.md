@@ -540,6 +540,9 @@ Improved:
   allow rule instead of a broad generic write-mode suggestion.
 - Rust `Write` now expands relative paths against the request cwd before
   permission checks, staleness checks, and filesystem writes.
+- Rust `Read`, `Edit`, and `Write` read-state timestamps now use the file's
+  actual mtime like TS, instead of wall-clock "now", so stale-write checks and
+  same-range Read dedup share the same timestamp basis.
 
 Needs work:
 - File-history integration.

@@ -207,13 +207,12 @@ Usage:
             .with_context(|| format!("failed to write file: {file_path}"))?;
 
         // Update read state after successful write so subsequent writes are not rejected.
-        // Store the raw `content` that was written — matches TS `FileWriteTool.ts:331`
-        // which stores the argument passed to `writeTextContent` without
-        // LF-normalisation. `check_file_staleness` at write.rs:73-78 normalises both
-        // sides before comparing, so storage-form doesn't affect correctness; this
-        // keeps exact TS storage parity.
+        // Store the raw `content` and the file's actual mtime, matching TS
+        // `FileWriteTool.ts` which records `content` plus
+        // `getFileModificationTime(fullFilePath)`.
+        let mtime_ms = file_mtime_ms(path);
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            state.update_after_write(file_path, Some(content.to_string()));
+            state.update_after_write_with_timestamp(file_path, Some(content.to_string()), mtime_ms);
         }
 
         let structured_patch = if let Some(old_content) = original_file
@@ -286,6 +285,14 @@ Usage:
     fn max_result_size_chars(&self) -> usize {
         100_000
     }
+}
+
+pub(crate) fn file_mtime_ms(path: &std::path::Path) -> Option<u64> {
+    path.metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
 }
 
 #[cfg(test)]
