@@ -54,7 +54,9 @@ pub mod workflow_tool;
 pub mod worktree_tools;
 pub mod write;
 
-pub use mcp_resource_tools::register_mcp_resource_tools;
+pub use mcp_resource_tools::{
+    register_mcp_resource_tools, register_mcp_resource_tools_if_supported,
+};
 pub use mcp_tool::register_mcp_tools;
 pub use registry::{ProgressSender, ReadFileState, ToolExecutor, ToolRegistry, ToolUseContext};
 pub use tool_search::register_tool_search_snapshot;

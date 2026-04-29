@@ -230,7 +230,8 @@ Files:
 
 Improved:
 - Rust now registers manager-backed `ListMcpResourcesTool` and
-  `ReadMcpResourceTool` in CLI startup.
+  `ReadMcpResourceTool` in CLI startup using the TS capability rule: add them
+  once, only when a connected MCP server advertises `resources`.
 - `ListMcpResourcesTool` reads live resources from `McpManager` and supports
   server filtering.
 - `ReadMcpResourceTool` reads from the requested connected MCP server and

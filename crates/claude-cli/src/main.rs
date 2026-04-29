@@ -5115,6 +5115,8 @@ async fn main() -> Result<()> {
 
         // Register immediately available MCP/shadow tools into the registry.
         claude_tools::register_mcp_tools(&mut tools, mcp_manager.clone()).await;
+        claude_tools::register_mcp_resource_tools_if_supported(&mut tools, mcp_manager.clone())
+            .await;
     }
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
     claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);

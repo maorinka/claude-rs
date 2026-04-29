@@ -383,6 +383,34 @@ pub fn register_mcp_resource_tools(
     registry.register(Arc::new(ReadMcpResourceTool::new(manager)));
 }
 
+/// Register resource tools exactly when TS does: once, and only after at least
+/// one connected MCP server advertises the `resources` capability.
+pub async fn register_mcp_resource_tools_if_supported(
+    registry: &mut crate::registry::ToolRegistry,
+    manager: Arc<RwLock<McpManager>>,
+) {
+    if registry.get("ListMcpResourcesTool").is_some()
+        || registry.get("ReadMcpResourceTool").is_some()
+    {
+        return;
+    }
+
+    let supports_resources = {
+        let mgr = manager.read().await;
+        mgr.connections().await.into_iter().any(|connection| {
+            matches!(
+                connection.status,
+                McpConnectionStatus::Connected { capabilities, .. }
+                    if capabilities.resources.is_some()
+            )
+        })
+    };
+
+    if supports_resources {
+        register_mcp_resource_tools(registry, manager);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
