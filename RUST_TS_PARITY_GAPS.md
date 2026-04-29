@@ -23,8 +23,8 @@ as Teams/Sandbox/VCR/File History.
 The largest remaining gaps are behavioral depth, not just missing files:
 
 - Tool exposure/gating does not match TS in several cases.
-- MCP resource tools are manager-backed, but still need deeper integration
-  coverage against real resource-capable and resource-incapable servers.
+- MCP resource tools are manager-backed and covered against a fake stdio
+  resource server; remaining work is auth/elicitation/reconnect/UI depth.
 - Slash commands are broad but many are manual/link-only replacements for TS
   interactive flows.
 - Query execution is much thinner than TS around context, compaction, hooks,
@@ -265,6 +265,9 @@ Improved:
   server: the server is considered found, but contributes no resources.
 - `ReadMcpResourceTool` now matches TS for a named but disconnected/failed MCP
   server by returning `Server "..." is not connected`.
+- Resource-tool binary persistence now uses a shared Rust `tool-results`
+  storage helper instead of a one-off MCP helper, matching the TS
+  `toolResultStorage` / `mcpOutputStorage` split more closely.
 - TS does not call MCP resource-template APIs or manually walk paginated
   resource cursors in `fetchResourcesForClient`; it calls SDK
   `resources/list` once and adds the `server` field. Rust follows that same
@@ -471,8 +474,7 @@ Missing or partial:
 - VS Code SDK MCP integration.
 
 Needs work:
-- Finish resource tools first because they are visible and currently stubbed.
-- Then wire auth, elicitation, reconnect, and UI flows.
+- Wire MCP auth, elicitation, reconnect, and UI flows.
 
 ## P1: Tools Needing Further Work
 
@@ -587,12 +589,19 @@ Improved since the stale report:
 - HTML responses now go through an HTML-to-Markdown converter before prompt
   application, matching TS's Turndown-based flow much more closely than the
   previous manual tag stripper.
+- Binary WebFetch responses now follow TS: raw bytes are saved to the
+  session `tool-results` directory with a MIME-derived extension, cache entries
+  preserve `persistedPath` / `persistedSize`, and the final result appends the
+  TS saved-binary suffix.
+- Rust no longer applies its old extra 50k-character WebFetch truncation before
+  caching/secondary-model handling; truncation is left to the secondary prompt
+  path like TS.
 
 Still needs work:
 - Preapproved-host behavior parity.
 - Exact Turndown formatting parity for edge-case HTML.
-- Content-type, encoding, binary persistence, cache size/eviction, and
-  size-limit behavior parity.
+- Content-type/encoding details, cache size/eviction, and size-limit behavior
+  parity.
 - Copyright/quote-limit behavior exactly matching TS.
 - Better fallback when no secondary model is registered.
 

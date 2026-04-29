@@ -1,18 +1,16 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use base64::Engine;
 use serde_json::{json, Value};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::tool_result_storage::persist_binary_content;
 use claude_core::mcp::manager::McpManager;
 use claude_core::mcp::types::McpConnectionStatus;
 use claude_core::types::events::ToolResultData;
-
-const TOOL_RESULTS_SUBDIR: &str = "tool-results";
 
 // ─── ListMcpResourcesTool ────────────────────────────────────────────────────
 
@@ -21,43 +19,6 @@ const TOOL_RESULTS_SUBDIR: &str = "tool-results";
 /// `DESCRIPTION` which is the short blurb). Rust port surfaces
 /// the detailed variant to the model.
 pub const LIST_MCP_RESOURCES_PROMPT: &str = include_str!("prompts/list_mcp_resources.md");
-
-fn sanitize_session_path(name: &str) -> String {
-    name.chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
-}
-
-fn tool_results_dir(ctx: &ToolUseContext) -> Result<PathBuf> {
-    let session_id = ctx
-        .options
-        .session_id
-        .as_deref()
-        .unwrap_or_else(|| claude_core::api::client::get_session_id().as_str());
-    let home = dirs::home_dir().context("could not determine home directory")?;
-    Ok(home
-        .join(".claude")
-        .join("projects")
-        .join(sanitize_session_path(
-            &ctx.working_directory.display().to_string(),
-        ))
-        .join(session_id)
-        .join(TOOL_RESULTS_SUBDIR))
-}
-
-async fn persist_binary_content(
-    bytes: &[u8],
-    mime_type: Option<&str>,
-    persist_id: &str,
-    ctx: &ToolUseContext,
-) -> Result<(PathBuf, usize)> {
-    let dir = tool_results_dir(ctx)?;
-    tokio::fs::create_dir_all(&dir).await?;
-    let ext = claude_core::mcp::output_storage::extension_for_mime_type(mime_type);
-    let filepath = dir.join(format!("{persist_id}.{ext}"));
-    tokio::fs::write(&filepath, bytes).await?;
-    Ok((filepath, bytes.len()))
-}
 
 async fn normalize_read_resource_result(
     data: Value,
@@ -449,14 +410,6 @@ mod tests {
             }),
             scope: ConfigScope::Project,
         }
-    }
-
-    #[test]
-    fn session_path_sanitizer_matches_ts_shape() {
-        assert_eq!(
-            sanitize_session_path("/Users/alice/work/claude-rs"),
-            "-Users-alice-work-claude-rs"
-        );
     }
 
     #[tokio::test]

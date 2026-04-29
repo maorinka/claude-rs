@@ -7,6 +7,8 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::tool_result_storage::persist_binary_content;
+use claude_core::mcp::output_storage::{format_file_size, is_binary_content_type};
 use claude_core::permissions::{
     PermissionAllowDecision, PermissionAskDecision, PermissionBehavior, PermissionDecisionReason,
     PermissionDenyDecision, PermissionResult, PermissionRuleSource, PermissionRuleValue,
@@ -35,6 +37,8 @@ struct CachedFetch {
     code_text: String,
     content_type: String,
     content: String,
+    persisted_path: Option<String>,
+    persisted_size: Option<u64>,
 }
 
 /// Max characters sent to the secondary model.
@@ -299,6 +303,8 @@ fn put_cached_url(
     code_text: &str,
     content_type: &str,
     content: &str,
+    persisted_path: Option<String>,
+    persisted_size: Option<u64>,
 ) {
     if let Ok(mut cache) = URL_CACHE.lock() {
         cache.insert(
@@ -310,9 +316,62 @@ fn put_cached_url(
                 code_text: code_text.to_string(),
                 content_type: content_type.to_string(),
                 content: content.to_string(),
+                persisted_path,
+                persisted_size,
             },
         );
     }
+}
+
+fn webfetch_persist_id() -> String {
+    let suffix = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(6)
+        .collect::<String>();
+    format!(
+        "webfetch-{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        suffix
+    )
+}
+
+async fn persist_webfetch_binary_content(
+    body: &[u8],
+    content_type: &str,
+    ctx: &ToolUseContext,
+) -> Option<(String, u64)> {
+    if !is_binary_content_type(content_type) {
+        return None;
+    }
+    let persist_id = webfetch_persist_id();
+    match persist_binary_content(body, Some(content_type), &persist_id, ctx).await {
+        Ok((path, size)) => Some((path.display().to_string(), size as u64)),
+        Err(error) => {
+            tracing::warn!("failed to persist WebFetch binary content: {}", error);
+            None
+        }
+    }
+}
+
+fn append_binary_saved_note(
+    mut result: String,
+    content_type: &str,
+    bytes: u64,
+    persisted_path: Option<&str>,
+    persisted_size: Option<u64>,
+) -> String {
+    if let Some(path) = persisted_path {
+        let size = persisted_size.unwrap_or(bytes) as usize;
+        result.push_str(&format!(
+            "\n\n[Binary content ({}, {}) also saved to {}]",
+            content_type,
+            format_file_size(size),
+            path
+        ));
+    }
+    result
 }
 
 enum DomainCheckResult {
@@ -511,7 +570,7 @@ impl ToolExecutor for WebFetchTool {
     async fn call(
         &self,
         input: &Value,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
         cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
@@ -528,118 +587,130 @@ impl ToolExecutor for WebFetchTool {
         }
 
         let start = std::time::Instant::now();
-        let (bytes, code, code_text, content_type, result_text) = if let Some(cached) =
-            get_cached_url(&url)
-        {
-            (
-                cached.bytes,
-                cached.code,
-                cached.code_text,
-                cached.content_type,
-                cached.content,
-            )
-        } else {
-            let upgraded_url = match upgrade_http_to_https(&url) {
-                Ok(url) => url,
-                Err(_) => return Ok(error_result("Invalid URL")),
-            };
+        let (bytes, code, code_text, content_type, result_text, persisted_path, persisted_size) =
+            if let Some(cached) = get_cached_url(&url) {
+                (
+                    cached.bytes,
+                    cached.code,
+                    cached.code_text,
+                    cached.content_type,
+                    cached.content,
+                    cached.persisted_path,
+                    cached.persisted_size,
+                )
+            } else {
+                let upgraded_url = match upgrade_http_to_https(&url) {
+                    Ok(url) => url,
+                    Err(_) => return Ok(error_result("Invalid URL")),
+                };
 
-            let client = match reqwest::Client::builder()
-                .user_agent(claude_core::user_agent::get_web_fetch_user_agent())
-                .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    return Ok(error_result(format!("failed to build HTTP client: {}", e)));
-                }
-            };
+                let client = match reqwest::Client::builder()
+                    .user_agent(claude_core::user_agent::get_web_fetch_user_agent())
+                    .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return Ok(error_result(format!("failed to build HTTP client: {}", e)));
+                    }
+                };
 
-            if !skip_web_fetch_preflight(&_ctx.working_directory) {
-                let domain = reqwest::Url::parse(&upgraded_url)
-                    .ok()
-                    .and_then(|url| url.host_str().map(ToString::to_string));
-                if let Some(domain) = domain {
-                    match check_domain_blocklist(&client, &domain).await {
-                        DomainCheckResult::Allowed => {}
-                        DomainCheckResult::Blocked => {
-                            return Ok(error_result(format!(
-                                "Claude Code is unable to fetch from {domain}"
-                            )));
-                        }
-                        DomainCheckResult::CheckFailed => {
-                            return Ok(error_result(format!(
+                if !skip_web_fetch_preflight(&ctx.working_directory) {
+                    let domain = reqwest::Url::parse(&upgraded_url)
+                        .ok()
+                        .and_then(|url| url.host_str().map(ToString::to_string));
+                    if let Some(domain) = domain {
+                        match check_domain_blocklist(&client, &domain).await {
+                            DomainCheckResult::Allowed => {}
+                            DomainCheckResult::Blocked => {
+                                return Ok(error_result(format!(
+                                    "Claude Code is unable to fetch from {domain}"
+                                )));
+                            }
+                            DomainCheckResult::CheckFailed => {
+                                return Ok(error_result(format!(
                                     "Unable to verify if domain {domain} is safe to fetch. This may be due to network restrictions or enterprise security policies blocking claude.ai."
                                 )));
+                            }
                         }
                     }
                 }
-            }
 
-            let response =
-                match fetch_with_permitted_redirects(&client, upgraded_url, &cancel, 0).await {
-                    Ok(response) => response,
-                    Err(e) => return Ok(error_result(format!("HTTP request failed: {}", e))),
+                let response =
+                    match fetch_with_permitted_redirects(&client, upgraded_url, &cancel, 0).await {
+                        Ok(response) => response,
+                        Err(e) => return Ok(error_result(format!("HTTP request failed: {}", e))),
+                    };
+
+                let (body, code, code_text, content_type) = match response {
+                    FetchResponse::Content {
+                        body,
+                        code,
+                        code_text,
+                        content_type,
+                    } => (body, code, code_text, content_type),
+                    FetchResponse::Redirect {
+                        original_url,
+                        redirect_url,
+                        status_code,
+                    } => {
+                        let message =
+                            redirect_message(&original_url, &redirect_url, status_code, &prompt);
+                        return Ok(ToolResultData {
+                            data: json!({
+                                "bytes": message.len() as u64,
+                                "code": status_code,
+                                "codeText": redirect_status_text(status_code),
+                                "result": message,
+                                "durationMs": start.elapsed().as_millis() as u64,
+                                "url": url,
+                            }),
+                            is_error: false,
+                        });
+                    }
                 };
 
-            let (body, code, code_text, content_type) = match response {
-                FetchResponse::Content {
-                    body,
-                    code,
-                    code_text,
-                    content_type,
-                } => (body, code, code_text, content_type),
-                FetchResponse::Redirect {
-                    original_url,
-                    redirect_url,
-                    status_code,
-                } => {
-                    let message =
-                        redirect_message(&original_url, &redirect_url, status_code, &prompt);
-                    return Ok(ToolResultData {
-                        data: json!({
-                            "bytes": message.len() as u64,
-                            "code": status_code,
-                            "codeText": redirect_status_text(status_code),
-                            "result": message,
-                            "durationMs": start.elapsed().as_millis() as u64,
-                            "url": url,
-                        }),
-                        is_error: false,
-                    });
+                let bytes = body.len() as u64;
+                if bytes > MAX_HTTP_CONTENT_LENGTH {
+                    return Ok(error_result(format!(
+                        "HTTP response exceeded maximum content length of {} bytes",
+                        MAX_HTTP_CONTENT_LENGTH
+                    )));
                 }
-            };
 
-            let bytes = body.len() as u64;
-            if bytes > MAX_HTTP_CONTENT_LENGTH {
-                return Ok(error_result(format!(
-                    "HTTP response exceeded maximum content length of {} bytes",
-                    MAX_HTTP_CONTENT_LENGTH
-                )));
-            }
-
-            let body_text = String::from_utf8_lossy(&body).into_owned();
-            let result_text =
-                if content_type.contains("text/html") || body_text.trim_start().starts_with('<') {
+                let persisted = persist_webfetch_binary_content(&body, &content_type, ctx).await;
+                let body_text = String::from_utf8_lossy(&body).into_owned();
+                let result_text = if content_type.contains("text/html")
+                    || body_text.trim_start().starts_with('<')
+                {
                     html_to_markdown(&body_text)
                 } else {
                     body_text
                 };
 
-            const MAX_CHARS: usize = 50_000;
-            let result_text = if result_text.len() > MAX_CHARS {
-                let mut cut = MAX_CHARS;
-                while !result_text.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                format!("{}...[truncated]", &result_text[..cut])
-            } else {
-                result_text
+                let (persisted_path, persisted_size) =
+                    persisted.map_or((None, None), |(path, size)| (Some(path), Some(size)));
+                put_cached_url(
+                    &url,
+                    bytes,
+                    code,
+                    &code_text,
+                    &content_type,
+                    &result_text,
+                    persisted_path.clone(),
+                    persisted_size,
+                );
+                (
+                    bytes,
+                    code,
+                    code_text,
+                    content_type,
+                    result_text,
+                    persisted_path,
+                    persisted_size,
+                )
             };
-            put_cached_url(&url, bytes, code, &code_text, &content_type, &result_text);
-            (bytes, code, code_text, content_type, result_text)
-        };
         let duration_ms = start.elapsed().as_millis() as u64;
 
         // Apply the user's prompt via the secondary model (TS parity). If
@@ -652,12 +723,19 @@ impl ToolExecutor for WebFetchTool {
             && content_type.contains("text/markdown")
             && result_text.len() < MAX_MARKDOWN_LENGTH
         {
+            let result = append_binary_saved_note(
+                result_text,
+                &content_type,
+                bytes,
+                persisted_path.as_deref(),
+                persisted_size,
+            );
             return Ok(ToolResultData {
                 data: json!({
                     "bytes": bytes,
                     "code": code,
                     "codeText": code_text,
-                    "result": result_text,
+                    "result": result,
                     "durationMs": duration_ms,
                     "url": url,
                 }),
@@ -666,37 +744,62 @@ impl ToolExecutor for WebFetchTool {
         }
         match apply_prompt_to_markdown(&prompt, &result_text, is_preapproved, cancel.clone()).await
         {
-            Ok(Some(summary)) => Ok(ToolResultData {
-                data: json!({
-                    "bytes": bytes,
-                    "code": code,
-                    "codeText": code_text,
-                    "result": summary,
-                    "durationMs": duration_ms,
-                    "url": url,
-                }),
-                is_error: false,
-            }),
-            Ok(None) => Ok(ToolResultData {
-                data: json!({
-                    "bytes": bytes,
-                    "code": code,
-                    "codeText": code_text,
-                    "result": result_text,
-                    "durationMs": duration_ms,
-                    "url": url,
-                }),
-                is_error: false,
-            }),
-            Err(e) => {
-                // Fall back to raw content + prompt echo on secondary-model failure.
-                tracing::warn!("secondary model failed for WebFetch: {}", e);
+            Ok(Some(summary)) => {
+                let result = append_binary_saved_note(
+                    summary,
+                    &content_type,
+                    bytes,
+                    persisted_path.as_deref(),
+                    persisted_size,
+                );
                 Ok(ToolResultData {
                     data: json!({
                         "bytes": bytes,
                         "code": code,
                         "codeText": code_text,
-                        "result": result_text,
+                        "result": result,
+                        "durationMs": duration_ms,
+                        "url": url,
+                    }),
+                    is_error: false,
+                })
+            }
+            Ok(None) => {
+                let result = append_binary_saved_note(
+                    result_text,
+                    &content_type,
+                    bytes,
+                    persisted_path.as_deref(),
+                    persisted_size,
+                );
+                Ok(ToolResultData {
+                    data: json!({
+                        "bytes": bytes,
+                        "code": code,
+                        "codeText": code_text,
+                        "result": result,
+                        "durationMs": duration_ms,
+                        "url": url,
+                    }),
+                    is_error: false,
+                })
+            }
+            Err(e) => {
+                // Fall back to raw content + prompt echo on secondary-model failure.
+                tracing::warn!("secondary model failed for WebFetch: {}", e);
+                let result = append_binary_saved_note(
+                    result_text,
+                    &content_type,
+                    bytes,
+                    persisted_path.as_deref(),
+                    persisted_size,
+                );
+                Ok(ToolResultData {
+                    data: json!({
+                        "bytes": bytes,
+                        "code": code,
+                        "codeText": code_text,
+                        "result": result,
                         "durationMs": duration_ms,
                         "url": url,
                     }),
@@ -777,6 +880,8 @@ mod tests {
             "OK",
             "text/markdown",
             "# Cached",
+            None,
+            None,
         );
         let cached = get_cached_url("https://example.com/a").unwrap();
         assert_eq!(cached.bytes, 42);
@@ -784,7 +889,24 @@ mod tests {
         assert_eq!(cached.code_text, "OK");
         assert_eq!(cached.content_type, "text/markdown");
         assert_eq!(cached.content, "# Cached");
+        assert!(cached.persisted_path.is_none());
+        assert!(cached.persisted_size.is_none());
         assert!(get_cached_url("https://example.com/b").is_none());
+    }
+
+    #[test]
+    fn binary_saved_note_matches_ts_webfetch_suffix() {
+        let result = append_binary_saved_note(
+            "summary".to_string(),
+            "application/pdf",
+            2048,
+            Some("/tmp/a.pdf"),
+            None,
+        );
+        assert_eq!(
+            result,
+            "summary\n\n[Binary content (application/pdf, 2.0KB) also saved to /tmp/a.pdf]"
+        );
     }
 
     #[test]
