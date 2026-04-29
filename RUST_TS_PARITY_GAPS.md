@@ -690,7 +690,8 @@ Improved:
 - Rust print mode now fires `SessionStart` and `UserPromptSubmit` hooks before
   the first model request; `UserPromptSubmit` blocking errors prevent the
   prompt from reaching the model, and additional context is injected into the
-  request-time user context lane.
+  request-time user context lane. `UserPromptSubmit` hook execution is not
+  emitted as stream-json hook events, matching the observed TS print stream.
 - Rust print mode now applies `SessionStart.initialUserMessage` as an initial
   user turn before the submitted prompt, matching TS headless orchestrator
   startup.

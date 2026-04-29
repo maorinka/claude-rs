@@ -4320,11 +4320,6 @@ async fn main() -> Result<()> {
                 None,
             )
             .await;
-        if cli.output_format == OutputFormat::StreamJson {
-            for result in &user_prompt_submit.individual_results {
-                emit_stream_json_hook_events(result, &api_session_id);
-            }
-        }
         if !user_prompt_submit.blocking_errors.is_empty() {
             let blocking = user_prompt_submit
                 .blocking_errors
