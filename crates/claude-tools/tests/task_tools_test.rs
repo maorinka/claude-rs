@@ -31,17 +31,15 @@ async fn create_task(subject: &str, description: &str) -> serde_json::Value {
 #[tokio::test]
 async fn test_task_create_returns_id() {
     let data = create_task("Test subject", "Test description").await;
-    let id = data["id"].as_str().expect("id should be a string");
+    let id = data["task"]["id"].as_str().expect("id should be a string");
     assert!(!id.is_empty(), "id should not be empty");
-    assert_eq!(data["status"], "pending");
-    assert_eq!(data["subject"], "Test subject");
-    assert_eq!(data["description"], "Test description");
+    assert_eq!(data["task"]["subject"], "Test subject");
 }
 
 #[tokio::test]
 async fn test_task_get_returns_created_task() {
     let created = create_task("Get test subject", "Get test desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskGetTool;
     let input = json!({ "taskId": id });
@@ -51,8 +49,8 @@ async fn test_task_get_returns_created_task() {
         .unwrap();
 
     assert!(!result.is_error, "get should succeed");
-    assert_eq!(result.data["id"], id);
-    assert_eq!(result.data["subject"], "Get test subject");
+    assert_eq!(result.data["task"]["id"], id);
+    assert_eq!(result.data["task"]["subject"], "Get test subject");
 }
 
 #[tokio::test]
@@ -64,16 +62,14 @@ async fn test_task_get_nonexistent_returns_error() {
         .await
         .unwrap();
 
-    assert!(
-        result.is_error,
-        "get of nonexistent task should be an error"
-    );
+    assert!(!result.is_error);
+    assert!(result.data["task"].is_null());
 }
 
 #[tokio::test]
 async fn test_task_list_includes_created_tasks() {
     let created = create_task("List test subject", "List test desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskListTool;
     let result = tool
@@ -92,7 +88,7 @@ async fn test_task_list_includes_created_tasks() {
 #[tokio::test]
 async fn test_task_update_status() {
     let created = create_task("Update test subject", "Update test desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskUpdateTool;
     let input = json!({ "taskId": id, "status": "in_progress" });
@@ -102,13 +98,15 @@ async fn test_task_update_status() {
         .unwrap();
 
     assert!(!result.is_error, "update should succeed");
-    assert_eq!(result.data["status"], "in_progress");
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["updatedFields"], json!(["status"]));
+    assert_eq!(result.data["statusChange"]["to"], "in_progress");
 }
 
 #[tokio::test]
 async fn test_task_update_subject_and_description() {
     let created = create_task("Old subject", "Old desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskUpdateTool;
     let input = json!({
@@ -122,14 +120,30 @@ async fn test_task_update_subject_and_description() {
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(result.data["subject"], "New subject");
-    assert_eq!(result.data["description"], "New desc");
+    assert_eq!(result.data["success"], true);
+    assert_eq!(
+        result.data["updatedFields"],
+        json!(["subject", "description"])
+    );
+
+    let get_tool = TaskGetTool;
+    let get_result = get_tool
+        .call(
+            &json!({ "taskId": id }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_result.data["task"]["subject"], "New subject");
+    assert_eq!(get_result.data["task"]["description"], "New desc");
 }
 
 #[tokio::test]
 async fn test_task_stop_sets_status_stopped() {
     let created = create_task("Stop test subject", "Stop test desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskStopTool;
     let input = json!({ "taskId": id });
@@ -152,13 +166,13 @@ async fn test_task_stop_sets_status_stopped() {
         )
         .await
         .unwrap();
-    assert_eq!(get_result.data["status"], "stopped");
+    assert_eq!(get_result.data["task"]["status"], "stopped");
 }
 
 #[tokio::test]
 async fn test_task_output_returns_description() {
     let created = create_task("Output test subject", "This is the output description").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskOutputTool;
     let input = json!({ "taskId": id });
@@ -181,7 +195,7 @@ async fn test_task_output_returns_description() {
 #[tokio::test]
 async fn test_task_output_returns_real_output_when_set() {
     let created = create_task("Real output subject", "fallback description").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     // Simulate a background process appending output
     append_output(&id, "hello ");
@@ -206,7 +220,7 @@ async fn test_task_output_returns_real_output_when_set() {
 #[tokio::test]
 async fn test_task_output_falls_back_to_description() {
     let created = create_task("Fallback subject", "This is the description fallback").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     // No output appended — should fall back to description
     let tool = TaskOutputTool;
@@ -231,7 +245,7 @@ async fn test_task_output_falls_back_to_description() {
 #[tokio::test]
 async fn test_register_process_sets_pid_and_status() {
     let created = create_task("PID test subject", "PID test desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     // Simulate process launch
     register_process(&id, 12345);
@@ -248,9 +262,8 @@ async fn test_register_process_sets_pid_and_status() {
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(result.data["pid"], 12345, "pid should be set to 12345");
     assert_eq!(
-        result.data["status"], "in_progress",
+        result.data["task"]["status"], "in_progress",
         "status should be in_progress"
     );
 }
@@ -258,7 +271,7 @@ async fn test_register_process_sets_pid_and_status() {
 #[tokio::test]
 async fn test_task_output_includes_pid() {
     let created = create_task("PID output subject", "PID output desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     register_process(&id, 99999);
     append_output(&id, "some process output");
@@ -285,7 +298,7 @@ async fn test_task_output_includes_pid() {
 #[tokio::test]
 async fn test_task_stop_with_no_pid() {
     let created = create_task("No PID stop subject", "No PID stop desc").await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let id = created["task"]["id"].as_str().unwrap().to_string();
 
     // No PID registered — stop should still succeed and set status
     let tool = TaskStopTool;
@@ -314,8 +327,8 @@ fn test_task_tool_properties() {
 
     let dummy = json!({});
 
-    // Create: not safe, not read-only
-    assert!(!create.is_concurrency_safe(&dummy));
+    // Create: safe in TS, not read-only
+    assert!(create.is_concurrency_safe(&dummy));
     assert!(!create.is_read_only(&dummy));
 
     // List: safe, read-only
@@ -326,8 +339,8 @@ fn test_task_tool_properties() {
     assert!(get.is_concurrency_safe(&dummy));
     assert!(get.is_read_only(&dummy));
 
-    // Update: not safe, not read-only
-    assert!(!update.is_concurrency_safe(&dummy));
+    // Update: safe in TS, not read-only
+    assert!(update.is_concurrency_safe(&dummy));
     assert!(!update.is_read_only(&dummy));
 
     // Stop: not safe, not read-only

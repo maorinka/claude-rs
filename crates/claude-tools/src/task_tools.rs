@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -51,13 +52,14 @@ impl TaskEntry {
 
 static TASK_STORE: Lazy<Mutex<HashMap<String, TaskEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
 fn new_task_id() -> String {
-    uuid::Uuid::new_v4().to_string()
+    NEXT_TASK_ID.fetch_add(1, Ordering::SeqCst).to_string()
 }
 
 fn error_result(msg: impl Into<String>) -> ToolResultData {
@@ -152,7 +154,7 @@ impl ToolExecutor for TaskCreateTool {
     }
 
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
-        false
+        true
     }
     fn is_read_only(&self, _input: &Value) -> bool {
         false
@@ -218,7 +220,12 @@ impl ToolExecutor for TaskCreateTool {
         }
 
         Ok(ToolResultData {
-            data: entry.to_json(),
+            data: json!({
+                "task": {
+                    "id": id,
+                    "subject": subject,
+                }
+            }),
             is_error: false,
         })
     }
@@ -260,17 +267,23 @@ impl ToolExecutor for TaskListTool {
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
         let store = TASK_STORE.lock().unwrap();
-        let mut tasks: Vec<Value> = store.values().map(|t| t.to_json()).collect();
-        // Sort by created_at for stable ordering
-        tasks.sort_by(|a, b| {
-            a["createdAt"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["createdAt"].as_str().unwrap_or(""))
-        });
+        let mut entries: Vec<_> = store.values().collect();
+        entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        let tasks = entries
+            .into_iter()
+            .map(|task| {
+                json!({
+                    "id": task.id,
+                    "subject": task.subject,
+                    "status": task.status,
+                    "owner": Value::Null,
+                    "blockedBy": Vec::<String>::new(),
+                })
+            })
+            .collect::<Vec<_>>();
 
         Ok(ToolResultData {
-            data: json!({ "tasks": tasks, "count": tasks.len() }),
+            data: json!({ "tasks": tasks }),
             is_error: false,
         })
     }
@@ -316,7 +329,7 @@ impl ToolExecutor for TaskUpdateTool {
     }
 
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
-        false
+        true
     }
     fn is_read_only(&self, _input: &Value) -> bool {
         false
@@ -339,7 +352,17 @@ impl ToolExecutor for TaskUpdateTool {
             let store = TASK_STORE.lock().unwrap();
             match store.get(&task_id) {
                 Some(entry) => entry.clone(),
-                None => return Ok(error_result(format!("task not found: {}", task_id))),
+                None => {
+                    return Ok(ToolResultData {
+                        data: json!({
+                            "success": false,
+                            "taskId": task_id,
+                            "updatedFields": [],
+                            "error": "Task not found",
+                        }),
+                        is_error: false,
+                    });
+                }
             }
         };
 
@@ -362,7 +385,15 @@ impl ToolExecutor for TaskUpdateTool {
                         .map(claude_core::hooks::get_task_completed_hook_message)
                         .collect::<Vec<_>>()
                         .join("\n");
-                    return Ok(error_result(msg));
+                    return Ok(ToolResultData {
+                        data: json!({
+                            "success": false,
+                            "taskId": task_id,
+                            "updatedFields": [],
+                            "error": msg,
+                        }),
+                        is_error: false,
+                    });
                 }
             }
         }
@@ -370,22 +401,71 @@ impl ToolExecutor for TaskUpdateTool {
         let mut store = TASK_STORE.lock().unwrap();
         let entry = match store.get_mut(&task_id) {
             Some(e) => e,
-            None => return Ok(error_result(format!("task not found: {}", task_id))),
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({
+                        "success": false,
+                        "taskId": task_id,
+                        "updatedFields": [],
+                        "error": "Task not found",
+                    }),
+                    is_error: false,
+                });
+            }
         };
 
+        let old_status = entry.status.clone();
+        let mut updated_fields = Vec::new();
         if let Some(status) = requested_status {
-            entry.status = status;
+            if status == "deleted" {
+                store.remove(&task_id);
+                return Ok(ToolResultData {
+                    data: json!({
+                        "success": true,
+                        "taskId": task_id,
+                        "updatedFields": ["deleted"],
+                        "statusChange": {
+                            "from": old_status,
+                            "to": "deleted",
+                        },
+                    }),
+                    is_error: false,
+                });
+            }
+            if entry.status != status {
+                entry.status = status;
+                updated_fields.push("status");
+            }
         }
         if let Some(subject) = input["subject"].as_str() {
-            entry.subject = subject.to_string();
+            if entry.subject != subject {
+                entry.subject = subject.to_string();
+                updated_fields.push("subject");
+            }
         }
         if let Some(description) = input["description"].as_str() {
-            entry.description = description.to_string();
+            if entry.description != description {
+                entry.description = description.to_string();
+                updated_fields.push("description");
+            }
         }
 
-        let updated = entry.to_json();
+        let status_change = if old_status != entry.status {
+            json!({
+                "from": old_status,
+                "to": entry.status,
+            })
+        } else {
+            Value::Null
+        };
         Ok(ToolResultData {
-            data: updated,
+            data: json!({
+                "success": true,
+                "taskId": task_id,
+                "updatedFields": updated_fields,
+                "statusChange": status_change,
+                "verificationNudgeNeeded": false,
+            }),
             is_error: false,
         })
     }
@@ -440,10 +520,22 @@ impl ToolExecutor for TaskGetTool {
         let store = TASK_STORE.lock().unwrap();
         match store.get(&task_id) {
             Some(entry) => Ok(ToolResultData {
-                data: entry.to_json(),
+                data: json!({
+                    "task": {
+                        "id": entry.id,
+                        "subject": entry.subject,
+                        "description": entry.description,
+                        "status": entry.status,
+                        "blocks": Vec::<String>::new(),
+                        "blockedBy": Vec::<String>::new(),
+                    }
+                }),
                 is_error: false,
             }),
-            None => Ok(error_result(format!("task not found: {}", task_id))),
+            None => Ok(ToolResultData {
+                data: json!({ "task": Value::Null }),
+                is_error: false,
+            }),
         }
     }
 }

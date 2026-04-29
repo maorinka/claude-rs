@@ -679,14 +679,23 @@ Files:
   `src/tools/TodoWriteTool/*`, `src/utils/tasks.ts`
 
 Needs work:
-- Respect TS `isTodoV2Enabled()` gating.
 - Persistent task store parity.
 - Owner/team awareness.
 - `blocks` / `blockedBy`.
-- `TaskCreated` and `TaskCompleted` hooks.
 - Active spinner verb / active form behavior.
 - Auto-classifier input integration.
 - Cross-session task behavior.
+
+Improved:
+- Rust now matches TS Task v2/TodoWrite visibility for interactive vs
+  noninteractive startup, including `CLAUDE_CODE_ENABLE_TASKS`.
+- TaskCreate, TaskGet, TaskList, and TaskUpdate now return the same
+  model-facing result envelopes as TS (`{task: ...}`, `{tasks: ...}`,
+  `{success, taskId, updatedFields, statusChange...}`) instead of leaking the
+  internal task store entry shape.
+- TaskCreate and TaskUpdate are now marked concurrency-safe like TS.
+- Rust task tools now fire `TaskCreated` and `TaskCompleted` hooks around task
+  create/update.
 
 ### MCPAuthTool
 
