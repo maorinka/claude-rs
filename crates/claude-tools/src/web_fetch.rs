@@ -870,26 +870,11 @@ impl ToolExecutor for WebFetchTool {
                 })
             }
             Err(e) => {
-                // Fall back to raw content + prompt echo on secondary-model failure.
                 tracing::warn!("secondary model failed for WebFetch: {}", e);
-                let result = append_binary_saved_note(
-                    result_text,
-                    &content_type,
-                    bytes,
-                    persisted_path.as_deref(),
-                    persisted_size,
-                );
-                Ok(ToolResultData {
-                    data: json!({
-                        "bytes": bytes,
-                        "code": code,
-                        "codeText": code_text,
-                        "result": result,
-                        "durationMs": duration_ms,
-                        "url": url,
-                    }),
-                    is_error: false,
-                })
+                Ok(error_result(format!(
+                    "Failed to apply prompt to fetched content: {}",
+                    e
+                )))
             }
         }
     }

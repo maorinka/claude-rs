@@ -159,7 +159,11 @@ impl SecondaryModel for HaikuSecondaryModel {
             }
         }
 
-        Ok(out)
+        if out.is_empty() {
+            Ok("No response from model".to_string())
+        } else {
+            Ok(out)
+        }
     }
 
     async fn web_search(

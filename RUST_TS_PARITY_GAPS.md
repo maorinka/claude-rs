@@ -616,12 +616,16 @@ Improved since the stale report:
   TS and uses the same host/path-prefix mechanism.
 - WebFetch URL caching now follows TS's 15-minute, 50MB processed-content LRU
   behavior instead of an unbounded TTL-only map.
+- WebFetch secondary-model failures now fail the tool call instead of silently
+  returning raw fetched content, and empty secondary-model text maps to the TS
+  `No response from model` fallback.
 
 Still needs work:
 - Exact Turndown formatting parity for edge-case HTML.
 - Content-type/encoding details and size-limit behavior parity.
 - Copyright/quote-limit behavior exactly matching TS.
-- Better fallback when no secondary model is registered.
+- Wire the Haiku secondary model in every runtime path that can execute
+  WebFetch, not only CLI startup.
 
 ### SkillTool
 
