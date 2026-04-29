@@ -711,6 +711,11 @@ Improved:
   `--append-system-prompt-file` with the same mutual-exclusion/file-read
   behavior as TS; a custom system prompt replaces the default prompt and append
   prompt content is appended afterward.
+- Rust print mode now accepts the TS SDK input flags `--input-format`,
+  `--include-hook-events`, `--include-partial-messages`, and
+  `--replay-user-messages`, validates the stream-json-only combinations, and
+  seeds the initial prompt, system prompt, append prompt, and JSON Schema from
+  SDK stream-json stdin `user` / `initialize` messages.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

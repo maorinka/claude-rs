@@ -23,9 +23,25 @@ pub struct Cli {
     #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
     pub output_format: OutputFormat,
 
+    /// Input format for non-interactive mode
+    #[arg(long = "input-format", value_enum, default_value_t = InputFormat::Text)]
+    pub input_format: InputFormat,
+
     /// JSON Schema for structured output validation
     #[arg(long = "json-schema")]
     pub json_schema: Option<String>,
+
+    /// Include hook lifecycle events in stream-json output
+    #[arg(long = "include-hook-events")]
+    pub include_hook_events: bool,
+
+    /// Include partial stream message chunks in stream-json output
+    #[arg(long = "include-partial-messages")]
+    pub include_partial_messages: bool,
+
+    /// Re-emit SDK user stdin messages on stdout
+    #[arg(long = "replay-user-messages")]
+    pub replay_user_messages: bool,
 
     /// Model to use
     #[arg(short, long)]
@@ -122,6 +138,86 @@ pub enum OutputFormat {
     Text,
     Json,
     StreamJson,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum InputFormat {
+    Text,
+    StreamJson,
+}
+
+#[derive(Default)]
+struct StreamJsonStdinSeed {
+    prompt: Option<String>,
+    system_prompt: Option<String>,
+    append_system_prompt: Option<String>,
+    json_schema: Option<String>,
+}
+
+fn sdk_content_to_prompt(content: &serde_json::Value) -> Option<String> {
+    match content {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Array(blocks) => {
+            let mut out = String::new();
+            for block in blocks {
+                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                    out.push_str(text);
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(out)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_stream_json_stdin(stdin: &str) -> Result<StreamJsonStdinSeed> {
+    let mut seed = StreamJsonStdinSeed::default();
+    for line in stdin.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let message: serde_json::Value = serde_json::from_str(line)
+            .map_err(|err| anyhow::anyhow!("Error parsing stream-json input: {err}"))?;
+        match message.get("type").and_then(|v| v.as_str()) {
+            Some("user") => {
+                if let Some(content) = message
+                    .get("message")
+                    .and_then(|v| v.get("content"))
+                    .and_then(sdk_content_to_prompt)
+                {
+                    seed.prompt = Some(match seed.prompt.take() {
+                        Some(existing) if !existing.is_empty() => format!("{existing}\n{content}"),
+                        _ => content,
+                    });
+                }
+            }
+            Some("control_request") => {
+                let request = message.get("request").unwrap_or(&serde_json::Value::Null);
+                if request.get("subtype").and_then(|v| v.as_str()) == Some("initialize") {
+                    if let Some(system_prompt) =
+                        request.get("systemPrompt").and_then(|v| v.as_str())
+                    {
+                        seed.system_prompt = Some(system_prompt.to_string());
+                    }
+                    if let Some(append_system_prompt) =
+                        request.get("appendSystemPrompt").and_then(|v| v.as_str())
+                    {
+                        seed.append_system_prompt = Some(append_system_prompt.to_string());
+                    }
+                    if let Some(json_schema) = request.get("jsonSchema") {
+                        seed.json_schema = Some(serde_json::to_string(json_schema)?);
+                    }
+                }
+            }
+            Some("keep_alive") | Some("update_environment_variables") => {}
+            Some(_) | None => {}
+        }
+    }
+    Ok(seed)
 }
 
 fn resolve_prompt_file_option(
@@ -522,6 +618,22 @@ mod tests {
 
         assert_eq!(denials, vec!["Write".to_string(), "Agent".to_string()]);
         assert!(base_tool_denials_from_cli_tools(&["default".to_string()], &all_tools).is_empty());
+    }
+
+    #[test]
+    fn stream_json_stdin_seed_reads_user_and_initialize_messages() {
+        let input = concat!(
+            "{\"type\":\"control_request\",\"request\":{\"subtype\":\"initialize\",\"systemPrompt\":\"sys\",\"appendSystemPrompt\":\"append\",\"jsonSchema\":{\"type\":\"object\"}}}\n",
+            "{\"type\":\"user\",\"session_id\":\"\",\"message\":{\"role\":\"user\",\"content\":\"hi\"},\"parent_tool_use_id\":null}\n",
+            "{\"type\":\"user\",\"session_id\":\"\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"there\"}]},\"parent_tool_use_id\":null}\n",
+        );
+
+        let seed = parse_stream_json_stdin(input).unwrap();
+
+        assert_eq!(seed.system_prompt.as_deref(), Some("sys"));
+        assert_eq!(seed.append_system_prompt.as_deref(), Some("append"));
+        assert_eq!(seed.json_schema.as_deref(), Some("{\"type\":\"object\"}"));
+        assert_eq!(seed.prompt.as_deref(), Some("hi\nthere"));
     }
 
     #[test]
@@ -3438,15 +3550,57 @@ fn maybe_handle_remote_control_fast_path_args() {
 #[tokio::main]
 async fn main() -> Result<()> {
     maybe_handle_remote_control_fast_path_args();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if cli.input_format == InputFormat::StreamJson && cli.output_format != OutputFormat::StreamJson
+    {
+        eprintln!("Error: --input-format=stream-json requires output-format=stream-json.");
+        std::process::exit(1);
+    }
+    if cli.replay_user_messages
+        && (cli.input_format != InputFormat::StreamJson
+            || cli.output_format != OutputFormat::StreamJson)
+    {
+        eprintln!(
+            "Error: --replay-user-messages requires both --input-format=stream-json and --output-format=stream-json."
+        );
+        std::process::exit(1);
+    }
+    if cli.include_partial_messages && (!cli.print || cli.output_format != OutputFormat::StreamJson)
+    {
+        eprintln!(
+            "Error: --include-partial-messages requires --print and --output-format=stream-json."
+        );
+        std::process::exit(1);
+    }
     let mut prompt_arg = cli.prompt.clone();
     if cli.print && prompt_arg.is_none() {
         use std::io::Read;
         let mut stdin = String::new();
         std::io::stdin().read_to_string(&mut stdin)?;
-        let stdin = stdin.trim_end().to_string();
-        if !stdin.is_empty() {
-            prompt_arg = Some(stdin);
+        match cli.input_format {
+            InputFormat::Text => {
+                let stdin = stdin.trim_end().to_string();
+                if !stdin.is_empty() {
+                    prompt_arg = Some(stdin);
+                }
+            }
+            InputFormat::StreamJson => {
+                let seed = parse_stream_json_stdin(&stdin)?;
+                if prompt_arg.is_none() {
+                    prompt_arg = seed.prompt;
+                }
+                if seed.system_prompt.is_some() {
+                    cli.system_prompt = seed.system_prompt;
+                    cli.system_prompt_file = None;
+                }
+                if seed.append_system_prompt.is_some() {
+                    cli.append_system_prompt = seed.append_system_prompt;
+                    cli.append_system_prompt_file = None;
+                }
+                if seed.json_schema.is_some() {
+                    cli.json_schema = seed.json_schema;
+                }
+            }
         }
     }
 
