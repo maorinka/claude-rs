@@ -680,9 +680,8 @@ Files:
 
 Needs work:
 - TS file-lock task mutation serialization.
-- Owner/team awareness.
-- `blocks` / `blockedBy`.
-- Active spinner verb / active form behavior.
+- Full owner/team mailbox behavior and automatic teammate owner assignment.
+- Active spinner UI behavior using task `activeForm`.
 - Auto-classifier input integration.
 - Cross-session task behavior.
 
@@ -702,6 +701,16 @@ Improved:
   process-based teammates.
 - Task ID allocation now honors a TS-style `.highwatermark` file so deleted
   task IDs are not reused.
+- TaskCreate and TaskUpdate now persist TS task fields for `activeForm`,
+  `owner`, `blocks`, `blockedBy`, and `metadata`, including metadata null-key
+  deletion.
+- TaskUpdate now applies `addBlocks` / `addBlockedBy` through the same
+  bidirectional dependency model as TS, and TaskGet / TaskList expose the
+  resulting dependency fields.
+- TaskList now filters internal metadata tasks and hides completed blockers
+  from `blockedBy`, matching TS list output behavior.
+- Task deletion now removes dependency references from other tasks and updates
+  the high-water mark, matching TS delete cleanup semantics.
 
 ### MCPAuthTool
 

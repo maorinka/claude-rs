@@ -30,7 +30,21 @@ pub struct TaskEntry {
     pub id: String,
     pub subject: String,
     pub description: String,
+    #[serde(
+        rename = "activeForm",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub active_form: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub status: String, // "pending", "in_progress", "completed", "stopped"
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    #[serde(rename = "blockedBy", default)]
+    pub blocked_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
     /// Captured stdout/stderr output from the background process (if any).
@@ -47,11 +61,33 @@ impl TaskEntry {
             "id": self.id,
             "subject": self.subject,
             "description": self.description,
+            "activeForm": self.active_form,
+            "owner": self.owner,
             "status": self.status,
+            "blocks": self.blocks,
+            "blockedBy": self.blocked_by,
+            "metadata": self.metadata,
             "createdAt": self.created_at,
             "output": self.output,
             "pid": self.pid,
         })
+    }
+}
+
+fn new_task_entry(id: String, subject: String, description: String) -> TaskEntry {
+    TaskEntry {
+        id,
+        subject,
+        description,
+        active_form: None,
+        owner: None,
+        status: "pending".to_string(),
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
+        metadata: None,
+        created_at: now_iso(),
+        output: None,
+        pid: None,
     }
 }
 
@@ -198,10 +234,67 @@ fn save_task_entry(entry: &TaskEntry) {
     }
 }
 
-fn delete_task_entry(task_id: &str) {
-    let _ = std::fs::remove_file(task_path(task_id));
-    if let Ok(mut store) = TASK_STORE.lock() {
-        store.remove(task_id);
+fn delete_task_entry(task_id: &str) -> bool {
+    if let Ok(numeric_id) = task_id.parse::<u64>() {
+        let current = read_high_water_mark();
+        if numeric_id > current {
+            write_high_water_mark(numeric_id);
+        }
+    }
+    let file_deleted = match std::fs::remove_file(task_path(task_id)) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => false,
+    };
+    let store_deleted = TASK_STORE
+        .lock()
+        .ok()
+        .and_then(|mut store| store.remove(task_id))
+        .is_some();
+    let deleted = file_deleted || store_deleted;
+    if !deleted {
+        return false;
+    }
+    for mut task in list_task_entries() {
+        let original_blocks = task.blocks.len();
+        let original_blocked_by = task.blocked_by.len();
+        task.blocks.retain(|id| id != task_id);
+        task.blocked_by.retain(|id| id != task_id);
+        if task.blocks.len() != original_blocks || task.blocked_by.len() != original_blocked_by {
+            save_task_entry(&task);
+        }
+    }
+    true
+}
+
+fn block_task(blocker_id: &str, blocked_id: &str) -> bool {
+    let Some(mut blocker) = load_task_entry(blocker_id) else {
+        return false;
+    };
+    let Some(mut blocked) = load_task_entry(blocked_id) else {
+        return false;
+    };
+    let mut changed = false;
+    if !blocker.blocks.iter().any(|id| id == blocked_id) {
+        blocker.blocks.push(blocked_id.to_string());
+        changed = true;
+    }
+    if !blocked.blocked_by.iter().any(|id| id == blocker_id) {
+        blocked.blocked_by.push(blocker_id.to_string());
+        changed = true;
+    }
+    save_task_entry(&blocker);
+    save_task_entry(&blocked);
+    changed
+}
+
+fn value_is_js_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64() != Some(0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
     }
 }
 
@@ -222,17 +315,8 @@ pub fn register_process(task_id: &str, pid: u32) {
 /// queried via TaskGet / TaskStop / TaskOutput.
 pub fn create_task_entry(subject: &str, description: &str) -> String {
     let id = new_task_id();
-    let entry = TaskEntry {
-        id: id.clone(),
-        subject: subject.to_string(),
-        description: description.to_string(),
-        status: "pending".to_string(),
-        created_at: now_iso(),
-        output: None,
-        pid: None,
-    };
-    let mut store = TASK_STORE.lock().unwrap();
-    store.insert(id.clone(), entry);
+    let entry = new_task_entry(id.clone(), subject.to_string(), description.to_string());
+    save_task_entry(&entry);
     id
 }
 
@@ -282,6 +366,14 @@ impl ToolExecutor for TaskCreateTool {
                 "description": {
                     "type": "string",
                     "description": "Detailed description of the task"
+                },
+                "activeForm": {
+                    "type": "string",
+                    "description": "Present continuous form for spinner"
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Arbitrary metadata to attach to the task"
                 }
             },
             "required": ["subject", "description"]
@@ -312,15 +404,12 @@ impl ToolExecutor for TaskCreateTool {
         };
 
         let id = new_task_id();
-        let entry = TaskEntry {
-            id: id.clone(),
-            subject: subject.clone(),
-            description: description.clone(),
-            status: "pending".to_string(),
-            created_at: now_iso(),
-            output: None,
-            pid: None,
-        };
+        let mut entry = new_task_entry(id.clone(), subject.clone(), description.clone());
+        entry.active_form = input["activeForm"].as_str().map(str::to_string);
+        entry.metadata = input
+            .get("metadata")
+            .filter(|value| !value.is_null())
+            .cloned();
 
         save_task_entry(&entry);
 
@@ -399,16 +488,34 @@ impl ToolExecutor for TaskListTool {
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
         let mut entries = list_task_entries();
+        let completed = entries
+            .iter()
+            .filter(|task| task.status == "completed")
+            .map(|task| task.id.clone())
+            .collect::<std::collections::HashSet<_>>();
         entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         let tasks = entries
             .into_iter()
+            .filter(|task| {
+                !task
+                    .metadata
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and_then(|metadata| metadata.get("_internal"))
+                    .is_some_and(value_is_js_truthy)
+            })
             .map(|task| {
+                let blocked_by = task
+                    .blocked_by
+                    .into_iter()
+                    .filter(|id| !completed.contains(id))
+                    .collect::<Vec<_>>();
                 json!({
                     "id": task.id,
                     "subject": task.subject,
                     "status": task.status,
-                    "owner": Value::Null,
-                    "blockedBy": Vec::<String>::new(),
+                    "owner": task.owner,
+                    "blockedBy": blocked_by,
                 })
             })
             .collect::<Vec<_>>();
@@ -453,6 +560,28 @@ impl ToolExecutor for TaskUpdateTool {
                 "description": {
                     "type": "string",
                     "description": "Updated description"
+                },
+                "activeForm": {
+                    "type": "string",
+                    "description": "Present continuous form for spinner"
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Agent or teammate owner"
+                },
+                "addBlocks": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Task IDs this task blocks"
+                },
+                "addBlockedBy": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Task IDs that block this task"
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Metadata fields to merge; null values delete keys"
                 }
             },
             "required": ["taskId"]
@@ -545,17 +674,22 @@ impl ToolExecutor for TaskUpdateTool {
         let mut updated_fields = Vec::new();
         if let Some(status) = requested_status {
             if status == "deleted" {
-                delete_task_entry(&task_id);
+                let deleted = delete_task_entry(&task_id);
+                let mut data = json!({
+                    "success": deleted,
+                    "taskId": task_id,
+                    "updatedFields": if deleted { json!(["deleted"]) } else { json!([]) },
+                });
+                if deleted {
+                    data["statusChange"] = json!({
+                        "from": old_status,
+                        "to": "deleted",
+                    });
+                } else {
+                    data["error"] = json!("Failed to delete task");
+                }
                 return Ok(ToolResultData {
-                    data: json!({
-                        "success": true,
-                        "taskId": task_id,
-                        "updatedFields": ["deleted"],
-                        "statusChange": {
-                            "from": old_status,
-                            "to": "deleted",
-                        },
-                    }),
+                    data,
                     is_error: false,
                 });
             }
@@ -576,6 +710,37 @@ impl ToolExecutor for TaskUpdateTool {
                 updated_fields.push("description");
             }
         }
+        if let Some(active_form) = input["activeForm"].as_str() {
+            if entry.active_form.as_deref() != Some(active_form) {
+                entry.active_form = Some(active_form.to_string());
+                updated_fields.push("activeForm");
+            }
+        }
+        if let Some(owner) = input["owner"].as_str() {
+            if entry.owner.as_deref() != Some(owner) {
+                entry.owner = Some(owner.to_string());
+                updated_fields.push("owner");
+            }
+        }
+        if let Some(metadata) = input.get("metadata").filter(|value| value.is_object()) {
+            let mut merged = entry
+                .metadata
+                .as_ref()
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(obj) = metadata.as_object() {
+                for (key, value) in obj {
+                    if value.is_null() {
+                        merged.remove(key);
+                    } else {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            entry.metadata = Some(Value::Object(merged));
+            updated_fields.push("metadata");
+        }
 
         let status_change = if old_status != entry.status {
             json!({
@@ -586,14 +751,50 @@ impl ToolExecutor for TaskUpdateTool {
             Value::Null
         };
         save_task_entry(&entry);
-        Ok(ToolResultData {
-            data: json!({
+        drop(entry);
+        if let Some(add_blocks) = input["addBlocks"].as_array() {
+            let existing_blocks = load_task_entry(&task_id)
+                .map(|task| task.blocks)
+                .unwrap_or_default();
+            let new_blocks = add_blocks
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|block_id| !existing_blocks.iter().any(|id| id == block_id))
+                .collect::<Vec<_>>();
+            for block_id in &new_blocks {
+                block_task(&task_id, block_id);
+            }
+            if !new_blocks.is_empty() {
+                updated_fields.push("blocks");
+            }
+        }
+        if let Some(add_blocked_by) = input["addBlockedBy"].as_array() {
+            let existing_blocked_by = load_task_entry(&task_id)
+                .map(|task| task.blocked_by)
+                .unwrap_or_default();
+            let new_blocked_by = add_blocked_by
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|blocker_id| !existing_blocked_by.iter().any(|id| id == blocker_id))
+                .collect::<Vec<_>>();
+            for blocker_id in &new_blocked_by {
+                block_task(blocker_id, &task_id);
+            }
+            if !new_blocked_by.is_empty() {
+                updated_fields.push("blockedBy");
+            }
+        }
+        let mut data = json!({
                 "success": true,
                 "taskId": task_id,
                 "updatedFields": updated_fields,
-                "statusChange": status_change,
                 "verificationNudgeNeeded": false,
-            }),
+        });
+        if !status_change.is_null() {
+            data["statusChange"] = status_change;
+        }
+        Ok(ToolResultData {
+            data,
             is_error: false,
         })
     }
@@ -653,8 +854,8 @@ impl ToolExecutor for TaskGetTool {
                         "subject": entry.subject,
                         "description": entry.description,
                         "status": entry.status,
-                        "blocks": Vec::<String>::new(),
-                        "blockedBy": Vec::<String>::new(),
+                        "blocks": entry.blocks,
+                        "blockedBy": entry.blocked_by,
                     }
                 }),
                 is_error: false,
@@ -897,6 +1098,14 @@ mod tests {
         (dir, guard)
     }
 
+    fn test_ctx() -> ToolUseContext {
+        ToolUseContext::for_test(
+            std::path::PathBuf::from("/tmp"),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::registry::ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        )
+    }
+
     #[test]
     fn task_entries_persist_to_ts_config_task_dir() {
         let _lock = ENV_LOCK.lock().unwrap();
@@ -905,7 +1114,12 @@ mod tests {
             id: "1".into(),
             subject: "Persisted".into(),
             description: "On disk".into(),
+            active_form: None,
+            owner: None,
             status: "pending".into(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
+            metadata: None,
             created_at: "2026-04-29T00:00:00Z".into(),
             output: None,
             pid: None,
@@ -927,5 +1141,233 @@ mod tests {
         assert_eq!(new_task_id(), "1");
         delete_task_entry("1");
         assert_eq!(new_task_id(), "2");
+    }
+
+    #[test]
+    fn delete_task_entry_removes_references_like_ts() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (_dir, _guard) = set_task_test_env();
+
+        save_task_entry(&new_task_entry(
+            "1".into(),
+            "Blocker".into(),
+            "Blocks second".into(),
+        ));
+        save_task_entry(&new_task_entry(
+            "2".into(),
+            "Blocked".into(),
+            "Blocked by first".into(),
+        ));
+        assert!(block_task("1", "2"));
+
+        delete_task_entry("1");
+
+        assert!(load_task_entry("1").is_none());
+        assert_eq!(
+            load_task_entry("2").unwrap().blocked_by,
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn task_tools_track_dependency_fields_like_ts() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (_dir, _guard) = set_task_test_env();
+        NEXT_TASK_ID.store(1, Ordering::SeqCst);
+
+        let create = TaskCreateTool;
+        let first = create
+            .call(
+                &json!({
+                    "subject": "First",
+                    "description": "Blocks the second",
+                    "activeForm": "Checking",
+                    "metadata": {"kind": "setup"}
+                }),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let second = create
+            .call(
+                &json!({
+                    "subject": "Second",
+                    "description": "Waits for the first"
+                }),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let first_id = first.data["task"]["id"].as_str().unwrap();
+        let second_id = second.data["task"]["id"].as_str().unwrap();
+
+        let update = TaskUpdateTool;
+        let updated = update
+            .call(
+                &json!({
+                    "taskId": first_id,
+                    "addBlocks": [second_id],
+                    "owner": "agent-a",
+                    "metadata": {"kind": null, "priority": "high"}
+                }),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(!updated.is_error);
+        assert_eq!(
+            updated.data["updatedFields"],
+            json!(["owner", "metadata", "blocks"])
+        );
+
+        let get = TaskGetTool;
+        let first_get = get
+            .call(
+                &json!({ "taskId": first_id }),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let second_get = get
+            .call(
+                &json!({ "taskId": second_id }),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(first_get.data["task"]["blocks"], json!([second_id]));
+        assert_eq!(second_get.data["task"]["blockedBy"], json!([first_id]));
+
+        let persisted = load_task_entry(first_id).unwrap();
+        assert_eq!(persisted.active_form.as_deref(), Some("Checking"));
+        assert_eq!(persisted.owner.as_deref(), Some("agent-a"));
+        assert_eq!(persisted.metadata, Some(json!({"priority": "high"})));
+    }
+
+    #[tokio::test]
+    async fn task_list_filters_completed_blockers_like_ts() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (_dir, _guard) = set_task_test_env();
+        NEXT_TASK_ID.store(1, Ordering::SeqCst);
+
+        let create = TaskCreateTool;
+        let blocker = create
+            .call(
+                &json!({"subject": "Blocker", "description": "Do first"}),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let blocked = create
+            .call(
+                &json!({"subject": "Blocked", "description": "Do second"}),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let blocker_id = blocker.data["task"]["id"].as_str().unwrap();
+        let blocked_id = blocked.data["task"]["id"].as_str().unwrap();
+
+        let update = TaskUpdateTool;
+        update
+            .call(
+                &json!({"taskId": blocked_id, "addBlockedBy": [blocker_id]}),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let list = TaskListTool;
+        let before = list
+            .call(&json!({}), &test_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        let blocked_before = before.data["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"].as_str() == Some(blocked_id))
+            .unwrap();
+        assert_eq!(blocked_before["blockedBy"], json!([blocker_id]));
+
+        update
+            .call(
+                &json!({"taskId": blocker_id, "status": "completed"}),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let after = list
+            .call(&json!({}), &test_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        let blocked_after = after.data["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"].as_str() == Some(blocked_id))
+            .unwrap();
+        assert_eq!(blocked_after["blockedBy"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn task_list_hides_internal_metadata_tasks_like_ts() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (_dir, _guard) = set_task_test_env();
+        NEXT_TASK_ID.store(1, Ordering::SeqCst);
+
+        let create = TaskCreateTool;
+        create
+            .call(
+                &json!({
+                    "subject": "Hidden",
+                    "description": "Internal",
+                    "metadata": {"_internal": true}
+                }),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let visible = create
+            .call(
+                &json!({"subject": "Visible", "description": "External"}),
+                &test_ctx(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let visible_id = visible.data["task"]["id"].as_str().unwrap();
+
+        let list = TaskListTool;
+        let result = list
+            .call(&json!({}), &test_ctx(), CancellationToken::new(), None)
+            .await
+            .unwrap();
+        let tasks = result.data["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["id"], visible_id);
     }
 }
