@@ -8,7 +8,10 @@ use tracing::{debug, info, warn};
 
 use crate::agents::definitions::builtin_agents;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
-use crate::task_tools::{append_output, create_task_entry, register_process};
+use crate::task_tools::{
+    append_output, create_task_entry, register_process, task_output_path, update_task_status,
+};
+use claude_core::permissions::{get_deny_rule_for_agent, PermissionRuleValue};
 use claude_core::types::events::ToolResultData;
 
 // ---------------------------------------------------------------------------
@@ -368,21 +371,145 @@ assistant: "I'm going to use the Agent tool to launch the greeting-responder age
 
 pub struct AgentTool;
 
+fn is_background_tasks_disabled() -> bool {
+    std::env::var("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty() && value != "0" && value != "false"
+        })
+        .unwrap_or(false)
+}
+
+fn context_has_tool(ctx: &ToolUseContext, names: &[&str]) -> bool {
+    ctx.options.tools.iter().any(|tool| {
+        let Some(name) = tool.get("name").and_then(Value::as_str) else {
+            return false;
+        };
+        names.iter().any(|candidate| name == *candidate)
+    })
+}
+
+fn all_agent_disallowed_tools() -> Vec<&'static str> {
+    let mut names = vec![
+        "TaskOutput",
+        "ExitPlanMode",
+        "EnterPlanMode",
+        "AskUserQuestion",
+        "TaskStop",
+        "Workflow",
+    ];
+    if std::env::var("USER_TYPE").ok().as_deref() != Some("ant") {
+        names.push("Agent");
+    }
+    names
+}
+
+fn parse_tool_rule_name(spec: &str) -> String {
+    PermissionRuleValue::from_string(spec).tool_name
+}
+
+fn available_tool_names(ctx: &ToolUseContext) -> Vec<String> {
+    ctx.options
+        .tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
+fn resolve_agent_tool_names(
+    agent: &RuntimeAgentDefinition,
+    available_tools: &[String],
+    is_async: bool,
+) -> Option<Vec<String>> {
+    if available_tools.is_empty() {
+        return agent.tools.clone();
+    }
+
+    let all_disallowed = all_agent_disallowed_tools();
+    let async_allowed = [
+        "Read",
+        "WebSearch",
+        "TodoWrite",
+        "Grep",
+        "WebFetch",
+        "Glob",
+        "Bash",
+        "PowerShell",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "Skill",
+        "SyntheticOutput",
+        "ToolSearch",
+        "EnterWorktree",
+        "ExitWorktree",
+    ];
+    let agent_disallowed = agent
+        .disallowed_tools
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .map(|spec| parse_tool_rule_name(spec))
+        .collect::<std::collections::HashSet<_>>();
+
+    let allowed_available = available_tools
+        .iter()
+        .filter(|name| {
+            !all_disallowed
+                .iter()
+                .any(|disallowed| disallowed == &name.as_str())
+        })
+        .filter(|name| {
+            !is_async
+                || async_allowed
+                    .iter()
+                    .any(|allowed| allowed == &name.as_str())
+        })
+        .filter(|name| !agent_disallowed.contains(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let has_wildcard = agent
+        .tools
+        .as_ref()
+        .is_none_or(|tools| tools.len() == 1 && tools[0] == "*");
+    if has_wildcard {
+        return Some(allowed_available);
+    }
+
+    let available = allowed_available
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    Some(
+        agent
+            .tools
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .filter_map(|spec| {
+                let tool_name = parse_tool_rule_name(spec);
+                available.contains(&tool_name).then_some(tool_name)
+            })
+            .collect(),
+    )
+}
+
 #[async_trait]
 impl ToolExecutor for AgentTool {
     fn name(&self) -> &str {
         "Agent"
     }
     fn aliases(&self) -> &[&str] {
-        &["agent"]
+        &["Task"]
     }
     fn description(&self) -> String {
         build_agent_prompt()
     }
     fn input_schema(&self) -> Value {
-        json!({
+        let mut schema = json!({
             "type": "object",
-            "required": ["prompt"],
+            "required": ["description", "prompt"],
             "properties": {
                 "prompt": {
                     "type": "string",
@@ -423,7 +550,30 @@ impl ToolExecutor for AgentTool {
                     "description": "Permission mode for the spawned agent (e.g. \"plan\" to require plan approval)"
                 }
             }
-        })
+        });
+        if is_background_tasks_disabled() {
+            if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+                properties.remove("run_in_background");
+            }
+        }
+        schema
+    }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        let prompt = input.get("prompt").and_then(Value::as_str).unwrap_or("");
+        let mut tags = Vec::new();
+        if let Some(subagent_type) = input.get("subagent_type").and_then(Value::as_str) {
+            tags.push(subagent_type.to_string());
+        }
+        if let Some(mode) = input.get("mode").and_then(Value::as_str) {
+            tags.push(format!("mode={mode}"));
+        }
+        let prefix = if tags.is_empty() {
+            ": ".to_string()
+        } else {
+            format!("({}): ", tags.join(", "))
+        };
+        Some(format!("{prefix}{prompt}"))
     }
 
     async fn call(
@@ -451,6 +601,17 @@ impl ToolExecutor for AgentTool {
                 });
             }
         };
+        if let Some(rule) = get_deny_rule_for_agent(&ctx.permission_context, "Agent", agent_type) {
+            return Ok(ToolResultData {
+                data: json!(format!(
+                    "Agent type '{}' has been denied by permission rule '{}' from {}.",
+                    agent_type,
+                    rule.rule_value.to_rule_string(),
+                    rule.source.display_name()
+                )),
+                is_error: true,
+            });
+        }
         let model = input
             .get("model")
             .and_then(|v| v.as_str())
@@ -480,6 +641,7 @@ impl ToolExecutor for AgentTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
             || selected_agent.background == Some(true);
+        let run_in_background = run_in_background && !is_background_tasks_disabled();
 
         // Log team association if provided
         if let Some(team) = team_name {
@@ -545,11 +707,13 @@ impl ToolExecutor for AgentTool {
         if let Some(system_prompt) = selected_agent.system_prompt.as_deref() {
             cmd.arg("--system-prompt").arg(system_prompt);
         }
-        if let Some(tools) = selected_agent.tools.as_ref() {
+        let resolved_tools = resolve_agent_tool_names(
+            &selected_agent,
+            &available_tool_names(ctx),
+            run_in_background,
+        );
+        if let Some(tools) = resolved_tools.as_ref() {
             cmd.arg("--tools").arg(tools.join(","));
-        }
-        if let Some(disallowed_tools) = selected_agent.disallowed_tools.as_ref() {
-            cmd.arg("--disallowedTools").arg(disallowed_tools.join(","));
         }
         cmd.current_dir(&work_dir);
 
@@ -578,8 +742,12 @@ impl ToolExecutor for AgentTool {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or(prompt);
-            let task_id = create_task_entry("Background agent", description);
+            let task_id = create_task_entry(description, prompt);
             let task_id_clone = task_id.clone();
+            let output_file = task_output_path(&task_id).to_string_lossy().to_string();
+            let can_read_output_file = context_has_tool(ctx, &["Read", "Bash"]);
+
+            cmd.env("CLAUDE_CODE_AGENT_ID", &task_id);
 
             // Spawn the child and register its PID immediately.
             let mut child = cmd.spawn()?;
@@ -589,6 +757,7 @@ impl ToolExecutor for AgentTool {
             // Capture stdout in a background tokio task and feed it
             // into the task store so TaskOutput can return it.
             let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
             let task_id_for_reader = task_id.clone();
             if let Some(stdout) = stdout_handle {
                 tokio::spawn(async move {
@@ -607,11 +776,37 @@ impl ToolExecutor for AgentTool {
                     }
                 });
             }
+            let task_id_for_stderr = task_id.clone();
+            if let Some(stderr) = stderr_handle {
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut reader = tokio::io::BufReader::new(stderr);
+                    let mut buf = vec![0u8; 8192];
+                    loop {
+                        match reader.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let text = String::from_utf8_lossy(&buf[..n]);
+                                append_output(&task_id_for_stderr, &text);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                });
+            }
 
             // Wait for process completion in the background.
             tokio::spawn(async move {
                 match child.wait().await {
                     Ok(status) => {
+                        update_task_status(
+                            &task_id_clone,
+                            if status.success() {
+                                "completed"
+                            } else {
+                                "failed"
+                            },
+                        );
                         debug!(
                             task_id = task_id_clone,
                             success = status.success(),
@@ -619,6 +814,7 @@ impl ToolExecutor for AgentTool {
                         );
                     }
                     Err(e) => {
+                        update_task_status(&task_id_clone, "failed");
                         warn!(task_id = task_id_clone, error = %e, "Background agent failed");
                     }
                 }
@@ -630,14 +826,13 @@ impl ToolExecutor for AgentTool {
 
             Ok(ToolResultData {
                 data: json!({
+                    "isAsync": true,
                     "status": "async_launched",
-                    "agentId": agent_id,
-                    "task_id": task_id,
+                    "agentId": task_id,
                     "description": description,
                     "prompt": prompt,
-                    "outputFile": "",
-                    "canReadOutputFile": false,
-                    "pid": pid,
+                    "outputFile": output_file,
+                    "canReadOutputFile": can_read_output_file,
                 }),
                 is_error: false,
             })
@@ -815,6 +1010,100 @@ mod tests {
             "TS contract keeps plugin agents in the embedded Agent description order"
         );
         set_runtime_agents(Vec::new());
+    }
+
+    #[test]
+    fn resolve_agent_tools_filters_like_ts_for_wildcard_agents() {
+        let _guard = AGENT_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("USER_TYPE");
+        let agent = RuntimeAgentDefinition {
+            agent_type: "general-purpose".into(),
+            when_to_use: "general".into(),
+            source: AgentSource::BuiltIn,
+            tools: None,
+            disallowed_tools: None,
+            system_prompt: None,
+            model: None,
+            permission_mode: None,
+            background: None,
+            isolation: None,
+            initial_prompt: None,
+        };
+        let available = vec![
+            "Read".to_string(),
+            "Bash".to_string(),
+            "Agent".to_string(),
+            "TaskOutput".to_string(),
+            "ExitPlanMode".to_string(),
+            "Write".to_string(),
+        ];
+
+        assert_eq!(
+            resolve_agent_tool_names(&agent, &available, false).unwrap(),
+            vec!["Read", "Bash", "Write"]
+        );
+    }
+
+    #[test]
+    fn resolve_agent_tools_applies_agent_allow_and_deny_lists() {
+        let agent = RuntimeAgentDefinition {
+            agent_type: "custom".into(),
+            when_to_use: "custom".into(),
+            source: AgentSource::ProjectSettings,
+            tools: Some(vec![
+                "Read".into(),
+                "Bash(git status)".into(),
+                "Write".into(),
+                "Missing".into(),
+            ]),
+            disallowed_tools: Some(vec!["Write".into()]),
+            system_prompt: None,
+            model: None,
+            permission_mode: None,
+            background: None,
+            isolation: None,
+            initial_prompt: None,
+        };
+        let available = vec![
+            "Read".to_string(),
+            "Bash".to_string(),
+            "Write".to_string(),
+            "TaskStop".to_string(),
+        ];
+
+        assert_eq!(
+            resolve_agent_tool_names(&agent, &available, false).unwrap(),
+            vec!["Read", "Bash"]
+        );
+    }
+
+    #[test]
+    fn resolve_async_agent_tools_uses_ts_async_allowlist() {
+        let agent = RuntimeAgentDefinition {
+            agent_type: "general-purpose".into(),
+            when_to_use: "general".into(),
+            source: AgentSource::BuiltIn,
+            tools: None,
+            disallowed_tools: None,
+            system_prompt: None,
+            model: None,
+            permission_mode: None,
+            background: None,
+            isolation: None,
+            initial_prompt: None,
+        };
+        let available = vec![
+            "Read".to_string(),
+            "Bash".to_string(),
+            "TaskCreate".to_string(),
+            "LSP".to_string(),
+            "ToolSearch".to_string(),
+        ];
+
+        assert_eq!(
+            resolve_agent_tool_names(&agent, &available, true).unwrap(),
+            vec!["Read", "Bash", "ToolSearch"]
+        );
     }
 
     #[test]

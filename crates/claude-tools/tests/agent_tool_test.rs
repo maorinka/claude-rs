@@ -61,16 +61,19 @@ fn test_agent_tool_schema_has_required_prompt() {
         required.iter().any(|v| v == "prompt"),
         "prompt should be required"
     );
+    assert!(
+        required.iter().any(|v| v == "description"),
+        "description should be required"
+    );
 }
 
 #[test]
-fn test_agent_tool_has_alias() {
+fn test_agent_tool_has_ts_legacy_alias() {
     let reg = build_default_registry();
-    // The Agent tool has "agent" as an alias
-    let by_alias = reg.get("agent");
+    let by_alias = reg.get("Task");
     assert!(
         by_alias.is_some(),
-        "Agent tool should be findable by alias 'agent'"
+        "Agent tool should be findable by legacy TS alias 'Task'"
     );
 }
 

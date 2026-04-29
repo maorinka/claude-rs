@@ -674,13 +674,21 @@ Files:
 - Rust teams: `crates/claude-core/src/teams/*`
 - TS reference: `src/tools/AgentTool/*`
 
+Completed in Rust:
+- Agent input schema now matches the TS externally visible contract for required `description` + `prompt`, the legacy `Task` alias, and `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` hiding `run_in_background`.
+- Agent auto-classifier input now matches TS `toAutoClassifierInput`: `(subagent_type, mode=...): prompt`, or `: prompt`.
+- Agent spawn now honors TS-style `Agent(agentType)` deny rules at call time.
+- Child tool resolution now follows TS `resolveAgentTools`: start from the parent available tools, remove globally disallowed subagent tools, apply async allow-list when running in background, parse permission-rule tool specs, and apply each agent's allow/deny frontmatter before passing `--tools`.
+- Background Agent result shape now matches TS async launch fields (`isAsync`, `status`, `agentId`, `description`, `prompt`, `outputFile`, `canReadOutputFile`) and uses the task id as the agent id.
+- Background Agent output is persisted to a task output file and task status is marked completed/failed when the child exits.
+
 Needs work:
-- Fork-mode parity.
-- Progress/event reporting parity.
-- Permission propagation and deny-list filtering.
+- Fork-mode parity (`buildForkedMessages`, shared cache context, fork child recursion guard).
+- Progress/event reporting parity (`agent_progress`, foreground task registration, SDK task notifications, summarization).
+- Prompt-time permission deny-list filtering. Rust enforces deny rules at call time, but the tool description is still built without the `ToolUseContext`, so denied agents can still appear in the static description until the prompt builder gets context-aware.
 - Agent transcript/session persistence.
-- Coordinator/worker prompt and allowed-tool parity.
-- Background agent lifecycle parity.
+- Coordinator/worker prompt variants and allowedAgentTypes metadata from `Agent(...)` tool specs.
+- Remote agent isolation (`isolation: "remote"`) for ant-only builds.
 
 ### Task tools / Todo tools
 

@@ -151,6 +151,10 @@ fn task_path(task_id: &str) -> PathBuf {
     tasks_dir().join(format!("{}.json", sanitize_path_component(task_id)))
 }
 
+pub fn task_output_path(task_id: &str) -> PathBuf {
+    tasks_dir().join(format!("{}.output", sanitize_path_component(task_id)))
+}
+
 fn high_water_mark_path() -> PathBuf {
     tasks_dir().join(HIGH_WATER_MARK_FILE)
 }
@@ -312,6 +316,18 @@ pub fn append_output(task_id: &str, text: &str) {
         let buf = entry.output.get_or_insert_with(String::new);
         buf.push_str(text);
         save_task_entry(&entry);
+    }
+    let path = task_output_path(task_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = file.write_all(text.as_bytes());
     }
 }
 

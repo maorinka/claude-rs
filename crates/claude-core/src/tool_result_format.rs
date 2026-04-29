@@ -19,7 +19,7 @@ pub fn format_tool_result_for_model(tool_name: &str, data: &Value) -> String {
 }
 
 pub fn format_tool_result_content_for_model(tool_name: &str, data: &Value) -> Value {
-    if tool_name == "Agent" || tool_name == "agent" {
+    if tool_name == "Agent" || tool_name == "Task" {
         return ensure_non_empty_tool_result_content(
             tool_name,
             format_agent_tool_result_content_for_model(data),

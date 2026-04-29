@@ -1,3 +1,4 @@
+use claude_tools::agent_tool::AgentTool;
 use claude_tools::bash::BashTool;
 use claude_tools::edit::FileEditTool;
 use claude_tools::glob_tool::GlobTool;
@@ -105,5 +106,25 @@ fn task_tools_project_ts_classifier_text() {
             .to_auto_classifier_input(&json!({"task_id": "3"}))
             .as_deref(),
         Some("3")
+    );
+}
+
+#[test]
+fn agent_tool_projects_prompt_with_ts_tags() {
+    assert_eq!(
+        AgentTool
+            .to_auto_classifier_input(&json!({"prompt": "inspect auth"}))
+            .as_deref(),
+        Some(": inspect auth")
+    );
+    assert_eq!(
+        AgentTool
+            .to_auto_classifier_input(&json!({
+                "subagent_type": "Explore",
+                "mode": "plan",
+                "prompt": "map the project"
+            }))
+            .as_deref(),
+        Some("(Explore, mode=plan): map the project")
     );
 }
