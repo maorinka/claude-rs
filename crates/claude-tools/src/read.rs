@@ -22,7 +22,6 @@ const BLOCKED_PATHS: &[&str] = &[
     "/dev/fd/0",
     "/dev/fd/1",
     "/dev/fd/2",
-    "/dev/null",
 ];
 
 const DEFAULT_LINE_LIMIT: u64 = 2000;
@@ -854,6 +853,7 @@ mod tests {
             assert!(is_blocked_device_path(path), "{path} must be blocked");
         }
         assert!(!is_blocked_device_path("/proc/123/fd/3"));
+        assert!(!is_blocked_device_path("/dev/null"));
         assert!(!is_blocked_device_path("/dev/shm/file.txt"));
     }
 
