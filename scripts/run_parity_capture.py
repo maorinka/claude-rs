@@ -382,6 +382,39 @@ def main() -> int:
     parser.add_argument("--output-format", choices=["text", "json", "stream-json"], default="text")
     parser.add_argument("--ts-command", default="claude")
     parser.add_argument("--rust-command", default="cargo run -q -p claude-cli --")
+    parser.add_argument(
+        "--extra-arg",
+        action="append",
+        default=[],
+        help="extra CLI argument to pass to both TS and Rust; repeat for multiple args",
+    )
+    parser.add_argument(
+        "--extra-args",
+        default="",
+        help="shell-style extra arguments to pass to both TS and Rust",
+    )
+    parser.add_argument(
+        "--ts-extra-arg",
+        action="append",
+        default=[],
+        help="extra CLI argument to pass only to the installed TS CLI; repeat for multiple args",
+    )
+    parser.add_argument(
+        "--ts-extra-args",
+        default="",
+        help="shell-style extra arguments to pass only to the installed TS CLI",
+    )
+    parser.add_argument(
+        "--rust-extra-arg",
+        action="append",
+        default=[],
+        help="extra CLI argument to pass only to the Rust CLI; repeat for multiple args",
+    )
+    parser.add_argument(
+        "--rust-extra-args",
+        default="",
+        help="shell-style extra arguments to pass only to the Rust CLI",
+    )
     parser.add_argument("--no-clean", action="store_true", help="append to output dir instead of recreating it")
     parser.add_argument("--keep-going-on-error", action="store_true", help="run both CLIs and print a diff even if one exits nonzero")
     args = parser.parse_args()
@@ -423,6 +456,10 @@ def main() -> int:
             args.max_turns,
             "--dangerously-skip-permissions",
         ]
+        ts_cmd.extend(args.extra_arg)
+        ts_cmd.extend(shlex.split(args.extra_args))
+        ts_cmd.extend(args.ts_extra_arg)
+        ts_cmd.extend(shlex.split(args.ts_extra_args))
         if args.output_format != "text":
             ts_cmd.extend(["--output-format", args.output_format])
         rs_cmd = shlex.split(args.rust_command) + [
@@ -432,6 +469,10 @@ def main() -> int:
             args.max_turns,
             "--dangerously-skip-permissions",
         ]
+        rs_cmd.extend(args.extra_arg)
+        rs_cmd.extend(shlex.split(args.extra_args))
+        rs_cmd.extend(args.rust_extra_arg)
+        rs_cmd.extend(shlex.split(args.rust_extra_args))
         if args.output_format != "text":
             rs_cmd.extend(["--output-format", args.output_format])
 
