@@ -85,7 +85,7 @@ fn test_agent_tool_full_prompt_content() {
 
     // Verify the prompt has all key sections from the TS getPrompt()
     assert!(
-        desc.contains("Launch a new agent to handle complex, multi-step tasks autonomously."),
+        desc.contains("Launch a new agent to handle complex, multi-step tasks."),
         "Should have the shared core intro"
     );
     assert!(
@@ -99,7 +99,7 @@ fn test_agent_tool_full_prompt_content() {
     assert!(desc.contains("Explore"), "Should list the Explore agent");
     assert!(desc.contains("Plan"), "Should list the Plan agent");
     assert!(
-        desc.contains("When NOT to use the Agent tool:"),
+        desc.contains("## When not to use"),
         "Should have the 'when not to use' section"
     );
     assert!(
@@ -110,7 +110,7 @@ fn test_agent_tool_full_prompt_content() {
         desc.contains("Never delegate understanding."),
         "Should have the delegation warning"
     );
-    assert!(desc.contains("Usage notes:"), "Should have usage notes");
+    assert!(desc.contains("## Usage notes"), "Should have usage notes");
     assert!(
         desc.contains("Foreground vs background"),
         "Should have foreground/background guidance"

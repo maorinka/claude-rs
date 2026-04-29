@@ -1873,6 +1873,7 @@ struct CliAgentJson {
     background: Option<bool>,
     isolation: Option<String>,
     initial_prompt: Option<String>,
+    required_mcp_servers: Option<Vec<String>>,
 }
 
 fn parse_agent_tool_list(value: Option<&Value>) -> Option<Vec<String>> {
@@ -1944,6 +1945,7 @@ fn parse_cli_agents_json(raw: &str) -> Vec<claude_tools::agent_tool::RuntimeAgen
             agent.background = parsed.background;
             agent.isolation = parsed.isolation;
             agent.initial_prompt = parsed.initial_prompt;
+            agent.required_mcp_servers = parsed.required_mcp_servers;
             Some(agent)
         })
         .collect()
@@ -1978,6 +1980,35 @@ fn frontmatter_bool(
             _ => None,
         })
     })
+}
+
+fn frontmatter_string_list(
+    frontmatter: &claude_core::frontmatter::Frontmatter,
+    key: &str,
+) -> Option<Vec<String>> {
+    use claude_core::frontmatter::FrontmatterValue;
+    match frontmatter.get(key)? {
+        FrontmatterValue::String(value) => {
+            let items = value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (!items.is_empty()).then_some(items)
+        }
+        FrontmatterValue::List(items) => {
+            let values = items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then_some(values)
+        }
+        _ => None,
+    }
 }
 
 fn parse_markdown_agent(
@@ -2025,6 +2056,7 @@ fn parse_markdown_agent(
         background: frontmatter_bool(&file.frontmatter, "background"),
         isolation: frontmatter_string(&file.frontmatter, "isolation").map(str::to_string),
         initial_prompt: frontmatter_string(&file.frontmatter, "initialPrompt").map(str::to_string),
+        required_mcp_servers: frontmatter_string_list(&file.frontmatter, "requiredMcpServers"),
     })
 }
 
@@ -2179,6 +2211,10 @@ fn load_plugin_agents(
                     .filter(|value| *value == "worktree")
                     .map(str::to_string),
                 initial_prompt: None,
+                required_mcp_servers: frontmatter_string_list(
+                    &parsed.frontmatter,
+                    "requiredMcpServers",
+                ),
             });
         }
     }
@@ -5540,8 +5576,68 @@ async fn main() -> Result<()> {
     // Create cancellation token
     let cancel = tokio_util::sync::CancellationToken::new();
 
+    // Determine permission mode.
+    // Priority: CLI flag > CLAUDE_PERMISSION_MODE env var > Default.
+    // The env var is set by agent_tool.rs when spawning sub-agents to
+    // propagate the parent's permission mode.
+    let permission_mode = if cli.dangerously_skip_permissions {
+        claude_core::permissions::types::PermissionMode::BypassPermissions
+    } else if let Some(mode_str) = &cli.permission_mode {
+        claude_core::permissions::types::PermissionMode::from_string(mode_str)
+    } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
+        claude_core::permissions::types::PermissionMode::from_string(&mode_str)
+    } else if let Some(mode) =
+        claude_core::permissions::permission_mode_from_settings_value(&permission_settings)
+    {
+        mode
+    } else {
+        claude_core::permissions::types::PermissionMode::Default
+    };
+    let permission_rules_from_disk =
+        claude_core::permissions::load_permission_rules_from_disk_by_source(&project_root);
+    let additional_dirs =
+        claude_core::permissions::permission_additional_directories_from_settings_value(
+            &permission_settings,
+        );
+    let mut disallowed_tools_cli = cli.disallowed_tools.clone();
+    disallowed_tools_cli.extend(base_tool_denials_from_cli_tools(
+        &cli.tools,
+        &base_permission_tool_names,
+    ));
+    let mut add_dirs = additional_dirs;
+    add_dirs.extend(cli.add_dirs.clone());
+    let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
+        &cli.allowed_tools,
+        &disallowed_tools_cli,
+        permission_mode.clone(),
+        cli.dangerously_skip_permissions,
+        &add_dirs,
+        &permission_rules_from_disk,
+        cwd.clone(),
+    )
+    .tool_permission_context;
+
     // Get tool definitions for the engine
-    let tool_defs = tools.tool_definitions();
+    let tool_definition_context = claude_tools::registry::ToolDefinitionContext {
+        permission_context: &initial_permission_context,
+        available_tools: tools
+            .all()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect(),
+        allowed_agent_types: std::env::var("CLAUDE_CODE_ALLOWED_AGENT_TYPES")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty()),
+    };
+    let tool_defs = tools.tool_definitions_with_context(Some(&tool_definition_context));
     let stream_json_tool_names: Vec<String> = tool_defs
         .iter()
         .map(|tool| {
@@ -5689,47 +5785,6 @@ async fn main() -> Result<()> {
     if let Some(extra) = append_system_prompt {
         query_engine.append_system_prompt(extra);
     }
-
-    // Determine permission mode.
-    // Priority: CLI flag > CLAUDE_PERMISSION_MODE env var > Default.
-    // The env var is set by agent_tool.rs when spawning sub-agents to
-    // propagate the parent's permission mode.
-    let permission_mode = if cli.dangerously_skip_permissions {
-        claude_core::permissions::types::PermissionMode::BypassPermissions
-    } else if let Some(mode_str) = &cli.permission_mode {
-        claude_core::permissions::types::PermissionMode::from_string(mode_str)
-    } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
-        claude_core::permissions::types::PermissionMode::from_string(&mode_str)
-    } else if let Some(mode) =
-        claude_core::permissions::permission_mode_from_settings_value(&permission_settings)
-    {
-        mode
-    } else {
-        claude_core::permissions::types::PermissionMode::Default
-    };
-    let permission_rules_from_disk =
-        claude_core::permissions::load_permission_rules_from_disk_by_source(&project_root);
-    let additional_dirs =
-        claude_core::permissions::permission_additional_directories_from_settings_value(
-            &permission_settings,
-        );
-    let mut disallowed_tools_cli = cli.disallowed_tools.clone();
-    disallowed_tools_cli.extend(base_tool_denials_from_cli_tools(
-        &cli.tools,
-        &base_permission_tool_names,
-    ));
-    let mut add_dirs = additional_dirs;
-    add_dirs.extend(cli.add_dirs.clone());
-    let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
-        &cli.allowed_tools,
-        &disallowed_tools_cli,
-        permission_mode.clone(),
-        cli.dangerously_skip_permissions,
-        &add_dirs,
-        &permission_rules_from_disk,
-        cwd.clone(),
-    )
-    .tool_permission_context;
 
     // Handle non-interactive prompt mode
     if let Some(prompt) = prompt_arg {

@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::agents::definitions::builtin_agents;
-use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::registry::{ProgressSender, ToolDefinitionContext, ToolExecutor, ToolUseContext};
 use crate::task_tools::{
     append_output, create_task_entry, register_process, task_output_path, update_task_status,
 };
@@ -54,6 +54,7 @@ pub struct RuntimeAgentDefinition {
     pub background: Option<bool>,
     pub isolation: Option<String>,
     pub initial_prompt: Option<String>,
+    pub required_mcp_servers: Option<Vec<String>>,
 }
 
 impl RuntimeAgentDefinition {
@@ -77,6 +78,7 @@ impl RuntimeAgentDefinition {
             background: None,
             isolation: None,
             initial_prompt: None,
+            required_mcp_servers: None,
         }
     }
 }
@@ -124,6 +126,7 @@ fn builtin_agent_summaries() -> Vec<RuntimeAgentDefinition> {
             background: None,
             isolation: None,
             initial_prompt: None,
+            required_mcp_servers: None,
         })
         .collect()
 }
@@ -200,6 +203,60 @@ pub fn active_agent_definitions() -> Vec<RuntimeAgentDefinition> {
     order_like_ts_contract(active)
 }
 
+fn has_required_mcp_servers(agent: &RuntimeAgentDefinition, available_servers: &[String]) -> bool {
+    let Some(required) = agent.required_mcp_servers.as_ref() else {
+        return true;
+    };
+    if required.is_empty() {
+        return true;
+    }
+
+    required.iter().all(|pattern| {
+        let pattern = pattern.to_ascii_lowercase();
+        available_servers
+            .iter()
+            .any(|server| server.to_ascii_lowercase().contains(&pattern))
+    })
+}
+
+fn mcp_servers_with_tools(available_tools: &[String]) -> Vec<String> {
+    let mut servers = Vec::new();
+    for tool in available_tools {
+        let Some(rest) = tool.strip_prefix("mcp__") else {
+            continue;
+        };
+        let Some((server, _tool)) = rest.split_once("__") else {
+            continue;
+        };
+        if !server.is_empty() && !servers.iter().any(|existing| existing == server) {
+            servers.push(server.to_string());
+        }
+    }
+    servers
+}
+
+pub fn active_agent_definitions_for_context(
+    ctx: Option<&ToolDefinitionContext<'_>>,
+) -> Vec<RuntimeAgentDefinition> {
+    let mut agents = active_agent_definitions();
+    if let Some(ctx) = ctx {
+        let available_servers = mcp_servers_with_tools(&ctx.available_tools);
+        agents.retain(|agent| has_required_mcp_servers(agent, &available_servers));
+        agents.retain(|agent| {
+            claude_core::permissions::get_deny_rule_for_agent(
+                ctx.permission_context,
+                "Agent",
+                &agent.agent_type,
+            )
+            .is_none()
+        });
+        if let Some(allowed) = ctx.allowed_agent_types.as_ref() {
+            agents.retain(|agent| allowed.contains(&agent.agent_type));
+        }
+    }
+    agents
+}
+
 pub fn active_agent_names() -> Vec<String> {
     active_agent_definitions()
         .into_iter()
@@ -243,6 +300,28 @@ fn format_agent_line(name: &str, when_to_use: &str, tools_desc: &str) -> String 
     format!("- {}: {} (Tools: {})", name, when_to_use, tools_desc)
 }
 
+fn ts_agent_description_with_agent_list(agent_list_section: &str) -> Option<String> {
+    let raw: Value = serde_json::from_str(include_str!("ts_tool_contracts_2_1_119.json")).ok()?;
+    let description = raw
+        .as_array()?
+        .iter()
+        .find(|tool| tool.get("name") == Some(&json!("Agent")))?
+        .get("description")?
+        .as_str()?;
+    let start_marker = "Available agent types and the tools they have access to:\n";
+    let end_marker = "\n\nWhen using the Agent tool";
+    let start = description.find(start_marker)?;
+    let after_start = start + start_marker.len();
+    let relative_end = description[after_start..].find(end_marker)?;
+    let end = after_start + relative_end;
+
+    let mut out = String::new();
+    out.push_str(&description[..start]);
+    out.push_str(agent_list_section);
+    out.push_str(&description[end..]);
+    Some(out)
+}
+
 /// Build the complete Agent tool prompt with all sections.
 ///
 /// Mirrors the TS `getPrompt()` function from `tools/AgentTool/prompt.ts`.
@@ -254,10 +333,10 @@ fn format_agent_line(name: &str, when_to_use: &str, tools_desc: &str) -> String 
 /// This is strictly stronger isolation at the cost of having to re-describe
 /// context in the sub-agent prompt. The optional `isolation: "worktree"`
 /// parameter layers filesystem isolation on top (temporary git worktree).
-fn build_agent_prompt() -> String {
+fn build_agent_prompt_for_context(ctx: Option<&ToolDefinitionContext<'_>>) -> String {
     // Build the agent list section from the active agent set using TS override
     // order: built-in, plugin, user, project, flag, managed.
-    let agents = active_agent_definitions();
+    let agents = active_agent_definitions_for_context(ctx);
     let agent_lines: Vec<String> = agents
         .iter()
         .map(|a| {
@@ -270,6 +349,9 @@ fn build_agent_prompt() -> String {
         "Available agent types and the tools they have access to:\n{}",
         agent_lines.join("\n")
     );
+    if let Some(description) = ts_agent_description_with_agent_list(&agent_list_section) {
+        return description;
+    }
 
     // Shared core prompt
     let shared = format!(
@@ -369,6 +451,10 @@ assistant: "I'm going to use the Agent tool to launch the greeting-responder age
     )
 }
 
+fn build_agent_prompt() -> String {
+    build_agent_prompt_for_context(None)
+}
+
 pub struct AgentTool;
 
 fn is_background_tasks_disabled() -> bool {
@@ -408,6 +494,10 @@ fn parse_tool_rule_name(spec: &str) -> String {
     PermissionRuleValue::from_string(spec).tool_name
 }
 
+fn parse_tool_rule(spec: &str) -> PermissionRuleValue {
+    PermissionRuleValue::from_string(spec)
+}
+
 fn available_tool_names(ctx: &ToolUseContext) -> Vec<String> {
     ctx.options
         .tools
@@ -416,13 +506,39 @@ fn available_tool_names(ctx: &ToolUseContext) -> Vec<String> {
         .collect()
 }
 
-fn resolve_agent_tool_names(
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ResolvedAgentTools {
+    tool_names: Option<Vec<String>>,
+    allowed_agent_types: Option<Vec<String>>,
+}
+
+fn allowed_agent_types_from_specs(specs: Option<&[String]>) -> Option<Vec<String>> {
+    specs?.iter().find_map(|spec| {
+        let rule = parse_tool_rule(spec);
+        if rule.tool_name != "Agent" {
+            return None;
+        }
+        Some(
+            rule.rule_content?
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )
+    })
+}
+
+fn resolve_agent_tools(
     agent: &RuntimeAgentDefinition,
     available_tools: &[String],
     is_async: bool,
-) -> Option<Vec<String>> {
+) -> ResolvedAgentTools {
     if available_tools.is_empty() {
-        return agent.tools.clone();
+        return ResolvedAgentTools {
+            tool_names: agent.tools.clone(),
+            allowed_agent_types: allowed_agent_types_from_specs(agent.tools.as_deref()),
+        };
     }
 
     let all_disallowed = all_agent_disallowed_tools();
@@ -474,25 +590,46 @@ fn resolve_agent_tool_names(
         .as_ref()
         .is_none_or(|tools| tools.len() == 1 && tools[0] == "*");
     if has_wildcard {
-        return Some(allowed_available);
+        return ResolvedAgentTools {
+            tool_names: Some(allowed_available),
+            allowed_agent_types: None,
+        };
     }
 
     let available = allowed_available
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    Some(
-        agent
-            .tools
-            .as_ref()
-            .into_iter()
-            .flatten()
-            .filter_map(|spec| {
-                let tool_name = parse_tool_rule_name(spec);
-                available.contains(&tool_name).then_some(tool_name)
-            })
-            .collect(),
-    )
+    let mut allowed_agent_types = None;
+    let tool_names = agent
+        .tools
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|spec| {
+            let rule = parse_tool_rule(spec);
+            if rule.tool_name == "Agent" {
+                if let Some(content) = rule.rule_content.as_ref() {
+                    allowed_agent_types = Some(
+                        content
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                    );
+                }
+            }
+            available
+                .contains(&rule.tool_name)
+                .then_some(rule.tool_name)
+        })
+        .collect();
+
+    ResolvedAgentTools {
+        tool_names: Some(tool_names),
+        allowed_agent_types,
+    }
 }
 
 #[async_trait]
@@ -505,6 +642,9 @@ impl ToolExecutor for AgentTool {
     }
     fn description(&self) -> String {
         build_agent_prompt()
+    }
+    fn description_with_context(&self, ctx: Option<&ToolDefinitionContext<'_>>) -> String {
+        build_agent_prompt_for_context(ctx)
     }
     fn input_schema(&self) -> Value {
         let mut schema = json!({
@@ -707,13 +847,16 @@ impl ToolExecutor for AgentTool {
         if let Some(system_prompt) = selected_agent.system_prompt.as_deref() {
             cmd.arg("--system-prompt").arg(system_prompt);
         }
-        let resolved_tools = resolve_agent_tool_names(
+        let resolved_tools = resolve_agent_tools(
             &selected_agent,
             &available_tool_names(ctx),
             run_in_background,
         );
-        if let Some(tools) = resolved_tools.as_ref() {
+        if let Some(tools) = resolved_tools.tool_names.as_ref() {
             cmd.arg("--tools").arg(tools.join(","));
+        }
+        if let Some(allowed) = resolved_tools.allowed_agent_types.as_ref() {
+            cmd.env("CLAUDE_CODE_ALLOWED_AGENT_TYPES", allowed.join(","));
         }
         cmd.current_dir(&work_dir);
 
@@ -723,6 +866,9 @@ impl ToolExecutor for AgentTool {
         }
         if let Some(name) = agent_name {
             cmd.env("CLAUDE_CODE_AGENT_ID", name);
+        }
+        if !run_in_background {
+            cmd.arg("--session-id").arg(&agent_id);
         }
 
         cmd.stdout(std::process::Stdio::piped())
@@ -748,6 +894,7 @@ impl ToolExecutor for AgentTool {
             let can_read_output_file = context_has_tool(ctx, &["Read", "Bash"]);
 
             cmd.env("CLAUDE_CODE_AGENT_ID", &task_id);
+            cmd.arg("--session-id").arg(&task_id);
 
             // Spawn the child and register its PID immediately.
             let mut child = cmd.spawn()?;
@@ -987,6 +1134,7 @@ mod tests {
             background: None,
             isolation: None,
             initial_prompt: None,
+            required_mcp_servers: None,
         }]);
 
         let names = active_agent_names();
@@ -1028,6 +1176,7 @@ mod tests {
             background: None,
             isolation: None,
             initial_prompt: None,
+            required_mcp_servers: None,
         };
         let available = vec![
             "Read".to_string(),
@@ -1039,7 +1188,9 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_agent_tool_names(&agent, &available, false).unwrap(),
+            resolve_agent_tools(&agent, &available, false)
+                .tool_names
+                .unwrap(),
             vec!["Read", "Bash", "Write"]
         );
     }
@@ -1063,6 +1214,7 @@ mod tests {
             background: None,
             isolation: None,
             initial_prompt: None,
+            required_mcp_servers: None,
         };
         let available = vec![
             "Read".to_string(),
@@ -1072,7 +1224,9 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_agent_tool_names(&agent, &available, false).unwrap(),
+            resolve_agent_tools(&agent, &available, false)
+                .tool_names
+                .unwrap(),
             vec!["Read", "Bash"]
         );
     }
@@ -1091,6 +1245,7 @@ mod tests {
             background: None,
             isolation: None,
             initial_prompt: None,
+            required_mcp_servers: None,
         };
         let available = vec![
             "Read".to_string(),
@@ -1101,9 +1256,106 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_agent_tool_names(&agent, &available, true).unwrap(),
+            resolve_agent_tools(&agent, &available, true)
+                .tool_names
+                .unwrap(),
             vec!["Read", "Bash", "ToolSearch"]
         );
+    }
+
+    #[test]
+    fn resolve_agent_tools_preserves_allowed_agent_types_metadata_like_ts() {
+        let agent = RuntimeAgentDefinition {
+            agent_type: "coordinator".into(),
+            when_to_use: "coordinate".into(),
+            source: AgentSource::ProjectSettings,
+            tools: Some(vec!["Agent(worker, reviewer)".into(), "Read".into()]),
+            disallowed_tools: None,
+            system_prompt: None,
+            model: None,
+            permission_mode: None,
+            background: None,
+            isolation: None,
+            initial_prompt: None,
+            required_mcp_servers: None,
+        };
+        let available = vec!["Agent".to_string(), "Read".to_string()];
+        let resolved = resolve_agent_tools(&agent, &available, false);
+
+        assert_eq!(
+            resolved.allowed_agent_types,
+            Some(vec!["worker".into(), "reviewer".into()])
+        );
+        assert_eq!(resolved.tool_names, Some(vec!["Read".into()]));
+    }
+
+    #[test]
+    fn agent_prompt_context_filters_denied_and_mcp_required_agents_like_ts() {
+        let _guard = AGENT_TEST_LOCK.lock().unwrap();
+        use claude_core::permissions::{
+            PermissionRuleSource, ToolPermissionContext, ToolPermissionRulesBySource,
+        };
+        use std::collections::HashMap;
+
+        set_runtime_agents(vec![
+            RuntimeAgentDefinition {
+                agent_type: "needs-github".into(),
+                when_to_use: "Needs GitHub MCP".into(),
+                source: AgentSource::ProjectSettings,
+                tools: None,
+                disallowed_tools: None,
+                system_prompt: Some("prompt".into()),
+                model: None,
+                permission_mode: None,
+                background: None,
+                isolation: None,
+                initial_prompt: None,
+                required_mcp_servers: Some(vec!["github".into()]),
+            },
+            RuntimeAgentDefinition {
+                agent_type: "denied-agent".into(),
+                when_to_use: "Denied".into(),
+                source: AgentSource::ProjectSettings,
+                tools: None,
+                disallowed_tools: None,
+                system_prompt: Some("prompt".into()),
+                model: None,
+                permission_mode: None,
+                background: None,
+                isolation: None,
+                initial_prompt: None,
+                required_mcp_servers: None,
+            },
+        ]);
+
+        let mut deny: ToolPermissionRulesBySource = HashMap::new();
+        deny.insert(
+            PermissionRuleSource::Session,
+            vec!["Agent(denied-agent)".into()],
+        );
+        let permission_context = ToolPermissionContext {
+            always_deny_rules: deny,
+            ..Default::default()
+        };
+        let ctx = ToolDefinitionContext {
+            permission_context: &permission_context,
+            available_tools: vec!["Read".into(), "mcp__github__search".into()],
+            allowed_agent_types: None,
+        };
+        let prompt = build_agent_prompt_for_context(Some(&ctx));
+
+        assert!(prompt.contains("needs-github"));
+        assert!(!prompt.contains("denied-agent"));
+
+        let ctx_without_mcp = ToolDefinitionContext {
+            permission_context: &permission_context,
+            available_tools: vec!["Read".into()],
+            allowed_agent_types: None,
+        };
+        let prompt = build_agent_prompt_for_context(Some(&ctx_without_mcp));
+        assert!(!prompt.contains("needs-github"));
+
+        set_runtime_agents(Vec::new());
     }
 
     #[test]

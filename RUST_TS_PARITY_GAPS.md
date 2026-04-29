@@ -681,14 +681,13 @@ Completed in Rust:
 - Child tool resolution now follows TS `resolveAgentTools`: start from the parent available tools, remove globally disallowed subagent tools, apply async allow-list when running in background, parse permission-rule tool specs, and apply each agent's allow/deny frontmatter before passing `--tools`.
 - Background Agent result shape now matches TS async launch fields (`isAsync`, `status`, `agentId`, `description`, `prompt`, `outputFile`, `canReadOutputFile`) and uses the task id as the agent id.
 - Background Agent output is persisted to a task output file and task status is marked completed/failed when the child exits.
-
-Needs work:
-- Fork-mode parity (`buildForkedMessages`, shared cache context, fork child recursion guard).
-- Progress/event reporting parity (`agent_progress`, foreground task registration, SDK task notifications, summarization).
-- Prompt-time permission deny-list filtering. Rust enforces deny rules at call time, but the tool description is still built without the `ToolUseContext`, so denied agents can still appear in the static description until the prompt builder gets context-aware.
-- Agent transcript/session persistence.
-- Coordinator/worker prompt variants and allowedAgentTypes metadata from `Agent(...)` tool specs.
-- Remote agent isolation (`isolation: "remote"`) for ant-only builds.
+- Agent prompt generation now uses the embedded TS Agent contract as its source and swaps in the runtime-filtered agent list, avoiding a separately maintained Rust prompt.
+- Tool definitions can now be built with a runtime `ToolDefinitionContext`, matching the TS Agent prompt inputs (`agents`, `tools`, `toolPermissionContext`, `allowedAgentTypes`).
+- Prompt-time filtering now matches TS: agents are filtered by required MCP servers, `Agent(agentType)` deny rules, and allowed agent types before the model sees the Agent tool description.
+- Markdown/plugin/CLI agents now carry `requiredMcpServers`.
+- `Agent(x,y)` tool-spec metadata is preserved through child tool resolution and propagated to spawned child sessions.
+- Spawned agents now get stable `--session-id` values matching their foreground/background agent id, so transcript/session storage is tied to the agent id instead of an unrelated random CLI session.
+- Fork-mode and `isolation: "remote"` are not exposed by the embedded external TS 2.1.119 Agent tool contract used as the parity source in this repo; Rust therefore keeps them out of the public Agent prompt/schema for this build.
 
 ### Task tools / Todo tools
 

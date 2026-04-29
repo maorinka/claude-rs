@@ -152,6 +152,12 @@ fn test_tool_definitions_match_ts_ordering() {
 
     assert_eq!(
         names,
-        vec!["Alpha", "Zed", "mcp__alpha__tool", "mcp__zeta__tool"]
+        vec![
+            "Alpha",
+            "ToolSearch",
+            "Zed",
+            "mcp__alpha__tool",
+            "mcp__zeta__tool"
+        ]
     );
 }

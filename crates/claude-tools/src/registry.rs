@@ -14,6 +14,12 @@ pub use claude_core::permissions::types::PermissionMode;
 
 pub type ProgressSender = mpsc::Sender<ToolProgressData>;
 
+pub struct ToolDefinitionContext<'a> {
+    pub permission_context: &'a claude_core::permissions::ToolPermissionContext,
+    pub available_tools: Vec<String>,
+    pub allowed_agent_types: Option<Vec<String>>,
+}
+
 /// Metadata recorded when a file is read. Used by Write/Edit tools
 /// to detect staleness (file modified externally after we last read it).
 #[derive(Debug, Clone)]
@@ -231,6 +237,9 @@ pub trait ToolExecutor: Send + Sync {
     fn description(&self) -> String {
         format!("Tool: {}", self.name())
     }
+    fn description_with_context(&self, _ctx: Option<&ToolDefinitionContext<'_>>) -> String {
+        self.description()
+    }
     fn input_schema(&self) -> Value;
     async fn call(
         &self,
@@ -374,6 +383,13 @@ impl ToolRegistry {
     }
 
     pub fn tool_definitions(&self) -> Vec<claude_core::api::client::ToolDefinition> {
+        self.tool_definitions_with_context(None)
+    }
+
+    pub fn tool_definitions_with_context(
+        &self,
+        ctx: Option<&ToolDefinitionContext<'_>>,
+    ) -> Vec<claude_core::api::client::ToolDefinition> {
         let mut built_in = Vec::new();
         let mut mcp = Vec::new();
         for tool in self.all() {
@@ -393,11 +409,11 @@ impl ToolRegistry {
             .map(|t| {
                 let mut definition = claude_core::api::client::ToolDefinition {
                     name: t.name().to_string(),
-                    description: t.description(),
+                    description: t.description_with_context(ctx),
                     input_schema: normalize_local_tool_schema(t.name(), t.input_schema()),
                     defer_loading: crate::tool_search::is_deferred_tool_name(t.name()),
                 };
-                apply_ts_tool_contract(&mut definition);
+                apply_ts_tool_contract(&mut definition, ctx.is_some());
                 definition
             })
             .collect()
@@ -429,8 +445,14 @@ static TS_TOOL_CONTRACTS: Lazy<HashMap<String, (String, Value)>> = Lazy::new(|| 
     contracts
 });
 
-fn apply_ts_tool_contract(definition: &mut claude_core::api::client::ToolDefinition) {
+fn apply_ts_tool_contract(
+    definition: &mut claude_core::api::client::ToolDefinition,
+    has_runtime_context: bool,
+) {
     if definition.name.starts_with("mcp__") {
+        return;
+    }
+    if has_runtime_context && definition.name == "Agent" {
         return;
     }
 
