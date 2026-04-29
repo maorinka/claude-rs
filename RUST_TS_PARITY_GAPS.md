@@ -249,7 +249,13 @@ Improved:
   ordered result yielding; a regression test now covers the TS concurrency cap.
 - The shared executor now mirrors TS Bash-error cancellation: a failed Bash
   call cancels parallel siblings and yields ordered synthetic cancellation
-  results instead of letting sibling tools continue silently.
+  results instead of letting sibling tools continue silently. Synthetic
+  executor errors now use TS `<tool_use_error>...</tool_use_error>` model
+  content.
+- The shared executor now has the TS streaming-fallback `discard()` path:
+  queued/running tools are abandoned and returned as ordered synthetic
+  `<tool_use_error>Error: Streaming fallback - tool execution discarded</tool_use_error>`
+  results.
 - Rust CLI and TUI model-result mapping now apply the TS empty-result guard:
   empty strings, empty arrays, and whitespace-only text block arrays become
   `(<ToolName> completed with no output)` instead of an empty tool result.

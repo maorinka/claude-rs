@@ -287,12 +287,56 @@ async fn test_bash_error_cancels_parallel_siblings_like_ts() {
         let data = result.result.as_ref().unwrap();
         assert!(data.is_error);
         assert!(
-            data.data["error"]
+            data.data
                 .as_str()
                 .unwrap()
-                .contains("Cancelled: parallel tool call Bash(tu_bash) errored"),
+                .contains(
+                    "<tool_use_error>Cancelled: parallel tool call Bash(tu_bash) errored</tool_use_error>"
+                ),
             "expected TS-style sibling cancellation, got {:?}",
             data.data
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_discard_returns_ts_streaming_fallback_errors() {
+    let call_fn: ToolCallFn = Arc::new(|name, id, _input, cancel| {
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = cancel.cancelled() => Err(anyhow::anyhow!("cancelled")),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => Ok(ToolResultData {
+                    data: serde_json::json!({"tool": name, "id": id}),
+                    is_error: false,
+                }),
+            }
+        })
+    });
+
+    let cancel = CancellationToken::new();
+    let mut exec = StreamingToolExecutor::new(cancel, call_fn);
+    exec.add_tool(PendingTool {
+        id: "tu_read".into(),
+        name: "Read".into(),
+        input: serde_json::json!({}),
+        is_concurrent: true,
+    });
+    exec.add_tool(PendingTool {
+        id: "tu_glob".into(),
+        name: "Glob".into(),
+        input: serde_json::json!({}),
+        is_concurrent: true,
+    });
+
+    exec.discard();
+    let results = exec.flush().await;
+    assert_eq!(results.len(), 2);
+    for result in results {
+        let data = result.result.unwrap();
+        assert!(data.is_error);
+        assert_eq!(
+            data.data.as_str().unwrap(),
+            "<tool_use_error>Error: Streaming fallback - tool execution discarded</tool_use_error>"
         );
     }
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
@@ -60,6 +60,7 @@ pub struct StreamingToolExecutor {
     tool_call_fn: ToolCallFn,
     sibling_cancel: CancellationToken,
     bash_error_description: Option<String>,
+    discarded: bool,
 }
 
 impl StreamingToolExecutor {
@@ -78,6 +79,27 @@ impl StreamingToolExecutor {
             tool_call_fn,
             sibling_cancel,
             bash_error_description: None,
+            discarded: false,
+        }
+    }
+
+    /// Discard all pending and in-progress tool work.
+    ///
+    /// Mirrors TS `StreamingToolExecutor.discard()`: queued tools do not
+    /// start, and running tools are converted to ordered synthetic errors when
+    /// they complete or observe cancellation.
+    pub fn discard(&mut self) {
+        self.discarded = true;
+        self.sibling_cancel.cancel();
+        for queued in self.queued.drain(..) {
+            self.completed_buffer.insert(
+                queued.index,
+                CompletedTool {
+                    id: queued.tool.id,
+                    name: queued.tool.name,
+                    result: Ok(streaming_fallback_discard_result()),
+                },
+            );
         }
     }
 
@@ -158,6 +180,17 @@ impl StreamingToolExecutor {
     }
 
     fn spawn_tool(&mut self, index: usize, tool: PendingTool) {
+        if self.discarded {
+            self.completed_buffer.insert(
+                index,
+                CompletedTool {
+                    id: tool.id,
+                    name: tool.name,
+                    result: Ok(streaming_fallback_discard_result()),
+                },
+            );
+            return;
+        }
         if let Some(description) = self.bash_error_description.clone() {
             self.completed_buffer.insert(
                 index,
@@ -208,6 +241,9 @@ impl StreamingToolExecutor {
         }
 
         match self.bash_error_description.clone() {
+            _ if self.discarded => {
+                completed.result = Ok(streaming_fallback_discard_result());
+            }
             Some(description) if completed.name != "Bash" => {
                 completed.result = Ok(cancelled_by_parallel_bash_result(&description));
             }
@@ -239,7 +275,17 @@ fn get_max_tool_use_concurrency() -> usize {
 fn cancelled_by_parallel_bash_result(description: &str) -> ToolResultData {
     let message = format!("Cancelled: parallel tool call {description} errored");
     ToolResultData {
-        data: json!({ "error": message }),
+        data: Value::String(format!("<tool_use_error>{message}</tool_use_error>")),
+        is_error: true,
+    }
+}
+
+fn streaming_fallback_discard_result() -> ToolResultData {
+    ToolResultData {
+        data: Value::String(
+            "<tool_use_error>Error: Streaming fallback - tool execution discarded</tool_use_error>"
+                .to_string(),
+        ),
         is_error: true,
     }
 }
