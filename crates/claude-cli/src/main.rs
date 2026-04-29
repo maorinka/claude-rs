@@ -134,6 +134,10 @@ pub struct Cli {
     #[arg(long)]
     pub max_turns: Option<u32>,
 
+    /// Maximum dollar amount to spend on API calls (non-interactive)
+    #[arg(long = "max-budget-usd")]
+    pub max_budget_usd: Option<f64>,
+
     /// API-side task budget in tokens
     #[arg(long = "task-budget")]
     pub task_budget: Option<u64>,
@@ -932,6 +936,41 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(parse_setting_sources_flag(&Some("workspace".to_string())).is_err());
+    }
+
+    #[test]
+    fn max_budget_usd_cli_and_stream_event_match_ts_shape() {
+        let cli =
+            Cli::try_parse_from(["claude-rs", "-p", "--max-budget-usd", "0.25", "hi"]).unwrap();
+        assert_eq!(cli.max_budget_usd, Some(0.25));
+
+        let usage = claude_core::types::usage::Usage {
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_creation_input_tokens: Some(0),
+            cache_read_input_tokens: Some(0),
+        };
+        let event = stream_json_max_budget_usd_event_with_meta(
+            0.25,
+            "session-1",
+            StreamJsonResultMeta {
+                duration_ms: 1,
+                num_turns: 1,
+                stop_reason: "end_turn",
+                total_usage: Some(&usage),
+                latest_usage: Some(&usage),
+                model_display: "claude-sonnet-4-6",
+                max_tokens: 64_000,
+                context_window: 200_000,
+                total_cost_usd: 0.25,
+            },
+        );
+        assert_eq!(event["subtype"], serde_json::json!("error_max_budget_usd"));
+        assert_eq!(event["is_error"], serde_json::json!(true));
+        assert_eq!(
+            event["errors"],
+            serde_json::json!(["Reached maximum budget ($0.25)"])
+        );
     }
 
     #[test]
@@ -3450,6 +3489,7 @@ struct StreamJsonResultMeta<'a> {
 enum PrintTerminalOutcome {
     Completed { stop_reason: String },
     MaxTurns { max_turns: u32, turn_count: u32 },
+    MaxBudgetUsd { max_budget_usd: f64 },
     StructuredOutputRetries { max_retries: u32 },
 }
 
@@ -3574,6 +3614,74 @@ fn stream_json_max_turns_event_with_meta(
         "uuid": uuid::Uuid::new_v4().to_string(),
         "errors": [format!("Reached maximum number of turns ({max_turns})")],
     })
+}
+
+fn stream_json_max_budget_usd_event_with_meta(
+    max_budget_usd: f64,
+    session_id: &str,
+    meta: StreamJsonResultMeta<'_>,
+) -> serde_json::Value {
+    let usage = meta.total_usage.map(|total_usage| {
+        let iteration_usage = meta.latest_usage.unwrap_or(total_usage);
+        let iteration = stream_json_usage_value(iteration_usage, "", false);
+        let mut usage_value = stream_json_usage_value(total_usage, "", true);
+        usage_value["server_tool_use"] = serde_json::json!({
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+        });
+        usage_value["iterations"] = serde_json::json!([{
+            "input_tokens": iteration["input_tokens"].clone(),
+            "output_tokens": iteration["output_tokens"].clone(),
+            "cache_creation_input_tokens": iteration["cache_creation_input_tokens"].clone(),
+            "cache_read_input_tokens": iteration["cache_read_input_tokens"].clone(),
+            "cache_creation": iteration["cache_creation"].clone(),
+            "type": "message",
+        }]);
+        usage_value
+    });
+    let model_usage = meta.total_usage.map(|usage| {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            normalize_model_display_for_stream_json(meta.model_display),
+            serde_json::json!({
+                "inputTokens": usage.input_tokens,
+                "outputTokens": usage.output_tokens,
+                "cacheReadInputTokens": usage.cache_read_input_tokens.unwrap_or(0),
+                "cacheCreationInputTokens": usage.cache_creation_input_tokens.unwrap_or(0),
+                "webSearchRequests": 0,
+                "costUSD": meta.total_cost_usd,
+                "contextWindow": meta.context_window,
+                "maxOutputTokens": meta.max_tokens,
+            }),
+        );
+        serde_json::Value::Object(map)
+    });
+
+    serde_json::json!({
+        "type": "result",
+        "subtype": "error_max_budget_usd",
+        "is_error": true,
+        "duration_ms": meta.duration_ms,
+        "duration_api_ms": meta.duration_ms,
+        "num_turns": meta.num_turns,
+        "stop_reason": meta.stop_reason,
+        "session_id": session_id,
+        "total_cost_usd": meta.total_cost_usd,
+        "usage": usage,
+        "modelUsage": model_usage,
+        "permission_denials": [],
+        "fast_mode_state": "off",
+        "uuid": uuid::Uuid::new_v4().to_string(),
+        "errors": [format!("Reached maximum budget (${max_budget_usd})")],
+    })
+}
+
+fn total_cost_for_usage(model: &str, usage: Option<&claude_core::types::usage::Usage>) -> f64 {
+    let mut cost_tracker = claude_core::cost::tracker::CostTracker::new(model);
+    if let Some(usage) = usage {
+        cost_tracker.add_usage(usage);
+    }
+    cost_tracker.total_cost_usd()
 }
 
 fn stream_json_rate_limit_event(session_id: &str) -> serde_json::Value {
@@ -3894,6 +4002,14 @@ async fn main() -> Result<()> {
     if matches!(cli.task_budget, Some(0)) {
         eprintln!("error: invalid value '0' for '--task-budget <TASK_BUDGET>': --task-budget must be a positive integer");
         std::process::exit(2);
+    }
+    if let Some(max_budget_usd) = cli.max_budget_usd {
+        if !max_budget_usd.is_finite() || max_budget_usd <= 0.0 {
+            eprintln!(
+                "error: invalid value '{max_budget_usd}' for '--max-budget-usd <MAX_BUDGET_USD>': --max-budget-usd must be a positive number greater than 0"
+            );
+            std::process::exit(2);
+        }
     }
     let mut prompt_arg = cli.prompt.clone();
     if cli.print && prompt_arg.is_none() {
@@ -5034,6 +5150,11 @@ async fn main() -> Result<()> {
                     latest_usage = Some(usage);
                 }
             }
+            if let Some(max_budget_usd) = cli.max_budget_usd {
+                if total_cost_for_usage(&model, total_usage.as_ref()) >= max_budget_usd {
+                    break PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd };
+                }
+            }
 
             match result {
                 TurnResult::Done(stop_reason) => {
@@ -5663,6 +5784,13 @@ async fn main() -> Result<()> {
                             "is_error": true,
                             "errors": [format!("Reached maximum number of turns ({max_turns})")],
                         }))?,
+                    PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } =>
+                        serde_json::to_string(&serde_json::json!({
+                            "type": "result",
+                            "subtype": "error_max_budget_usd",
+                            "is_error": true,
+                            "errors": [format!("Reached maximum budget (${max_budget_usd})")],
+                        }))?,
                     PrintTerminalOutcome::StructuredOutputRetries { max_retries } =>
                         serde_json::to_string(&serde_json::json!({
                             "type": "result",
@@ -5673,10 +5801,7 @@ async fn main() -> Result<()> {
                 }
             );
         } else if cli.output_format == OutputFormat::StreamJson {
-            let mut cost_tracker = claude_core::cost::tracker::CostTracker::new(&model);
-            if let Some(ref usage) = total_usage {
-                cost_tracker.add_usage(usage);
-            }
+            let total_cost_usd = total_cost_for_usage(&model, total_usage.as_ref());
             let context_window = if model_display.contains("[1M]") || model_display.contains("[1m]")
             {
                 1_000_000
@@ -5687,6 +5812,7 @@ async fn main() -> Result<()> {
             let meta_num_turns = match terminal_outcome {
                 PrintTerminalOutcome::Completed { .. } => num_turns,
                 PrintTerminalOutcome::MaxTurns { turn_count, .. } => turn_count,
+                PrintTerminalOutcome::MaxBudgetUsd { .. } => num_turns,
                 PrintTerminalOutcome::StructuredOutputRetries { .. } => num_turns,
             };
             let meta = StreamJsonResultMeta {
@@ -5695,6 +5821,7 @@ async fn main() -> Result<()> {
                 stop_reason: match &terminal_outcome {
                     PrintTerminalOutcome::Completed { stop_reason } => stop_reason,
                     PrintTerminalOutcome::MaxTurns { .. } => "tool_use",
+                    PrintTerminalOutcome::MaxBudgetUsd { .. } => "end_turn",
                     PrintTerminalOutcome::StructuredOutputRetries { .. } => "end_turn",
                 },
                 total_usage: total_usage.as_ref(),
@@ -5702,7 +5829,7 @@ async fn main() -> Result<()> {
                 model_display: &model_display,
                 max_tokens: resolve_max_output_tokens(&model, &settings),
                 context_window,
-                total_cost_usd: cost_tracker.total_cost_usd(),
+                total_cost_usd,
             };
             match terminal_outcome {
                 PrintTerminalOutcome::Completed { .. } => {
@@ -5716,6 +5843,13 @@ async fn main() -> Result<()> {
                 PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
                     emit_stream_json(stream_json_max_turns_event_with_meta(
                         max_turns,
+                        &session_id,
+                        meta,
+                    ));
+                }
+                PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } => {
+                    emit_stream_json(stream_json_max_budget_usd_event_with_meta(
+                        max_budget_usd,
                         &session_id,
                         meta,
                     ));
@@ -5740,6 +5874,9 @@ async fn main() -> Result<()> {
                 }
                 PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
                     println!("Error: Reached max turns ({max_turns})");
+                }
+                PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } => {
+                    println!("Error: Exceeded USD budget ({max_budget_usd})");
                 }
                 PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
                     println!(

@@ -741,6 +741,9 @@ Improved:
   allowlist behavior: only `context-1m-2025-08-07` is forwarded, disallowed
   values warn and are ignored, and OAuth/subscriber sessions ignore custom
   betas like TS.
+- Rust print mode now accepts TS `--max-budget-usd`, validates positive
+  numeric input, checks accumulated request cost after turns, and emits the
+  TS `error_max_budget_usd` result shape/text when the cap is reached.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like
