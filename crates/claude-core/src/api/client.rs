@@ -571,6 +571,15 @@ fn prepare_tool_definitions_for_request(
     messages: &[Value],
     tools: &[ToolDefinition],
 ) -> Vec<Value> {
+    prepare_tool_definitions_for_request_with_count(config, messages, tools, None)
+}
+
+fn prepare_tool_definitions_for_request_with_count(
+    config: &ApiConfig,
+    messages: &[Value],
+    tools: &[ToolDefinition],
+    deferred_tool_tokens: Option<usize>,
+) -> Vec<Value> {
     if tools.is_empty() {
         return Vec::new();
     }
@@ -588,8 +597,12 @@ fn prepare_tool_definitions_for_request(
         && match tool_search_request_mode() {
             ToolSearchRequestMode::ToolSearch => true,
             ToolSearchRequestMode::ToolSearchAuto => {
-                deferred_tool_description_chars(tools)
-                    >= auto_tool_search_char_threshold(&config.model)
+                if let Some(tokens) = deferred_tool_tokens {
+                    tokens >= auto_tool_search_token_threshold(&config.model)
+                } else {
+                    deferred_tool_description_chars(tools)
+                        >= auto_tool_search_char_threshold(&config.model)
+                }
             }
             ToolSearchRequestMode::Standard => false,
         };
@@ -654,18 +667,25 @@ fn deferred_tool_description_chars(tools: &[ToolDefinition]) -> usize {
         .sum()
 }
 
-fn auto_tool_search_char_threshold(model: &str) -> usize {
-    let percentage = match std::env::var("ENABLE_TOOL_SEARCH").ok().as_deref() {
-        Some("auto") | None => 10,
-        Some(value) => parse_auto_tool_search_percentage(value).unwrap_or(10),
-    } as f64
-        / 100.0;
+fn auto_tool_search_token_threshold(model: &str) -> usize {
+    let percentage = auto_tool_search_percentage() as f64 / 100.0;
     let context_window_tokens = if has_1m_context(model) {
         1_000_000
     } else {
         200_000
     };
-    (context_window_tokens as f64 * percentage * 2.5).floor() as usize
+    (context_window_tokens as f64 * percentage).floor() as usize
+}
+
+fn auto_tool_search_percentage() -> u8 {
+    match std::env::var("ENABLE_TOOL_SEARCH").ok().as_deref() {
+        Some("auto") | None => 10,
+        Some(value) => parse_auto_tool_search_percentage(value).unwrap_or(10),
+    }
+}
+
+fn auto_tool_search_char_threshold(model: &str) -> usize {
+    (auto_tool_search_token_threshold(model) as f64 * 2.5).floor() as usize
 }
 
 fn extract_discovered_tool_names(messages: &[Value]) -> std::collections::HashSet<&str> {
@@ -768,6 +788,29 @@ fn build_minimal_request_body(
 
     body
 }
+
+fn build_request_body_with_tool_search_count(
+    config: &ApiConfig,
+    messages: &[Value],
+    system: &[ContentBlock],
+    tools: &[ToolDefinition],
+    is_oauth: bool,
+    deferred_tool_tokens: Option<usize>,
+) -> Value {
+    let mut body = build_request_body(config, messages, system, &[], is_oauth);
+    let tools_for_request = prepare_tool_definitions_for_request_with_count(
+        config,
+        messages,
+        tools,
+        deferred_tool_tokens,
+    );
+    if !tools_for_request.is_empty() {
+        body["tools"] = Value::Array(tools_for_request);
+    }
+    body
+}
+
+const TOOL_TOKEN_COUNT_OVERHEAD: usize = 500;
 
 /// Get or create a persistent device ID (matches TS `getOrCreateUserID()`).
 fn get_or_create_device_id() -> String {
@@ -900,8 +943,97 @@ impl ApiClient {
         tools: &[ToolDefinition],
         _event_tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<Response> {
-        let body = build_request_body(&self.config, messages, system, tools, self.auth.is_oauth());
+        let deferred_tool_tokens = self
+            .count_deferred_tool_tokens_for_auto_tool_search(tools)
+            .await;
+        let body = build_request_body_with_tool_search_count(
+            &self.config,
+            messages,
+            system,
+            tools,
+            self.auth.is_oauth(),
+            deferred_tool_tokens,
+        );
         self.send_streaming_body(body).await
+    }
+
+    async fn count_deferred_tool_tokens_for_auto_tool_search(
+        &self,
+        tools: &[ToolDefinition],
+    ) -> Option<usize> {
+        if tool_search_request_mode() != ToolSearchRequestMode::ToolSearchAuto {
+            return None;
+        }
+        if !tool_search_allowed_for_request(&self.config)
+            || !model_supports_tool_reference(&self.config.model)
+            || !tools.iter().any(|tool| tool.name == "ToolSearch")
+        {
+            return None;
+        }
+
+        let deferred_tools = tools
+            .iter()
+            .filter(|tool| is_deferred_tool(tool))
+            .cloned()
+            .collect::<Vec<_>>();
+        if deferred_tools.is_empty() {
+            return Some(0);
+        }
+
+        match self.count_tool_definition_tokens(&deferred_tools).await {
+            Ok(Some(tokens)) if tokens > 0 => {
+                Some(tokens.saturating_sub(TOOL_TOKEN_COUNT_OVERHEAD))
+            }
+            _ => None,
+        }
+    }
+
+    async fn count_tool_definition_tokens(
+        &self,
+        tools: &[ToolDefinition],
+    ) -> Result<Option<usize>> {
+        let auth = self.current_request_auth().await?;
+        let (header_name, header_value) = auth.to_header();
+        let url = format!("{}/v1/messages/count_tokens", self.config.base_url);
+        let body = json!({
+            "model": normalize_model_for_api(&self.config.model),
+            "messages": [{"role": "user", "content": "foo"}],
+            "tools": tools,
+        });
+
+        let mut request = self
+            .http
+            .post(url)
+            .header("anthropic-version", &self.config.api_version)
+            .header("content-type", "application/json")
+            .header(header_name, header_value);
+
+        if !minimal_transport_enabled() {
+            let beta_header = anthropic_beta_header_value(auth.is_oauth(), &self.config.model);
+            request = request
+                .header("accept", "application/json")
+                .header("user-agent", crate::user_agent::get_user_agent(None))
+                .header("x-claude-code-session-id", &self.config.session_id)
+                .header("x-stainless-lang", "js")
+                .header("x-stainless-package-version", "2.2.0")
+                .header("x-stainless-runtime", "node")
+                .header("x-stainless-retry-count", "0")
+                .header("anthropic-beta", beta_header)
+                .header("anthropic-dangerous-direct-browser-access", "true")
+                .header("x-app", "cli");
+        } else if auth.is_oauth() {
+            request = request.header("anthropic-beta", "oauth-2025-04-20");
+        }
+
+        let response = request.json(&body).send().await?;
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let value = response.json::<Value>().await?;
+        Ok(value
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .map(|tokens| tokens as usize))
     }
 
     async fn send_streaming_body(&self, mut body: Value) -> Result<Response> {
@@ -1602,6 +1734,59 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["Read", "ToolSearch"]);
         assert!(body_uses_tool_search(&body));
+        clear_tool_search_env();
+    }
+
+    #[test]
+    fn tool_search_auto_prefers_token_count_over_char_fallback_match_ts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "auto:10");
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            ..Default::default()
+        };
+        let tools = vec![
+            tool_def("Read"),
+            tool_def("ToolSearch"),
+            tool_def("mcp__small__tool"),
+        ];
+
+        let char_fallback_body = build_request_body(&config, &[], &[], &tools, false);
+        assert!(
+            !body_uses_tool_search(&char_fallback_body),
+            "short descriptions should remain below the char fallback threshold"
+        );
+
+        let counted_body = build_request_body_with_tool_search_count(
+            &config,
+            &[],
+            &[],
+            &tools,
+            false,
+            Some(auto_tool_search_token_threshold(&config.model)),
+        );
+        assert!(
+            body_uses_tool_search(&counted_body),
+            "API token count should drive tst-auto when available"
+        );
+        clear_tool_search_env();
+    }
+
+    #[test]
+    fn tool_search_auto_token_count_subtracts_ts_tool_overhead() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        clear_tool_search_env();
+        std::env::set_var("ENABLE_TOOL_SEARCH", "auto:10");
+        assert_eq!(TOOL_TOKEN_COUNT_OVERHEAD, 500);
+        assert_eq!(
+            auto_tool_search_token_threshold("claude-sonnet-4-6"),
+            20_000
+        );
+        assert_eq!(auto_tool_search_char_threshold("claude-sonnet-4-6"), 50_000);
         clear_tool_search_env();
     }
 

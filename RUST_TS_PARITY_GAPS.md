@@ -201,9 +201,10 @@ Improved:
   model, including the refreshed ToolSearch snapshot.
 - Rust now applies the TS request-time ToolSearch gate in the API layer:
   model support, explicit/env mode, non-first-party proxy default-disable,
-  `auto:N` character fallback threshold, discovered `tool_reference` scan,
-  deferred MCP and `shouldDefer` built-in tool filtering, and beta-header
-  insertion only when ToolSearch/defer-loading is actually used.
+  `auto:N` token-count threshold with TS's character fallback when the
+  count-tokens call is unavailable, discovered `tool_reference` scan, deferred
+  MCP and `shouldDefer` built-in tool filtering, and beta-header insertion only
+  when ToolSearch/defer-loading is actually used.
 - Rust now also reads TS compact-boundary
   `compactMetadata.preCompactDiscoveredTools`, so deferred tools loaded before
   compaction remain available afterward without hardcoding private tool names.
@@ -215,9 +216,6 @@ Improved:
 
 Needs work:
 - Keep tool ordering stable for prompt-cache compatibility.
-- Replace the request-time ToolSearch `auto` character fallback with the TS
-  preferred token-counting path when the count-tokens API is wired into this
-  layer.
 - Broaden deny-rule filtering to all registry construction paths and add MCP
   integration coverage with real connected tools.
 - Revisit MCP auth/resource tool visibility against TS `specialTools` and MCP
