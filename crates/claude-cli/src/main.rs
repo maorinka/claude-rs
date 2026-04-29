@@ -52,6 +52,10 @@ pub struct Cli {
     #[arg(long = "effort", value_parser = ["low", "medium", "high", "max"])]
     pub effort: Option<String>,
 
+    /// Beta headers to include in API requests (API key users only)
+    #[arg(long = "betas", num_args = 1.., value_delimiter = ',')]
+    pub betas: Vec<String>,
+
     /// Verbose output
     #[arg(short, long)]
     pub verbose: bool,
@@ -656,6 +660,37 @@ fn split_tool_args(values: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn filter_allowed_sdk_betas(betas: &[String], is_oauth: bool) -> Vec<String> {
+    if betas.is_empty() {
+        return Vec::new();
+    }
+    if is_oauth {
+        eprintln!(
+            "Warning: Custom betas are only available for API key users. Ignoring provided betas."
+        );
+        return Vec::new();
+    }
+    let allowed = [claude_core::constants::betas::CONTEXT_1M];
+    let mut result = Vec::new();
+    for beta in betas
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        if allowed.contains(&beta) {
+            if !result.iter().any(|existing: &String| existing == beta) {
+                result.push(beta.to_string());
+            }
+        } else {
+            eprintln!(
+                "Warning: Beta header '{beta}' is not allowed. Only the following betas are supported: {}",
+                allowed.join(", ")
+            );
+        }
+    }
+    result
+}
+
 fn filter_registry_by_cli_tools(registry: &mut claude_tools::ToolRegistry, values: &[String]) {
     if values.is_empty() {
         return;
@@ -835,6 +870,27 @@ mod tests {
             other => panic!("expected http config, got {other:?}"),
         }
         std::env::remove_var("CLAUDE_RS_TEST_MCP_TOKEN");
+    }
+
+    #[test]
+    fn sdk_betas_follow_ts_allowlist() {
+        let betas = filter_allowed_sdk_betas(
+            &[
+                claude_core::constants::betas::CONTEXT_1M.to_string(),
+                "not-allowed".to_string(),
+                claude_core::constants::betas::CONTEXT_1M.to_string(),
+            ],
+            false,
+        );
+        assert_eq!(
+            betas,
+            vec![claude_core::constants::betas::CONTEXT_1M.to_string()]
+        );
+        assert!(filter_allowed_sdk_betas(
+            &[claude_core::constants::betas::CONTEXT_1M.to_string()],
+            true
+        )
+        .is_empty());
     }
 
     #[test]
@@ -4459,6 +4515,10 @@ async fn main() -> Result<()> {
             .workload
             .clone()
             .filter(|value| !value.trim().is_empty()),
+        sdk_betas: filter_allowed_sdk_betas(
+            &cli.betas,
+            matches!(&auth, claude_core::api::client::AuthMethod::OAuthToken(_)),
+        ),
         model: model.clone(),
         ..Default::default()
     };

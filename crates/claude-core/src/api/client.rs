@@ -59,6 +59,16 @@ fn add_tool_search_beta_header(header: &str) -> String {
     }
 }
 
+fn add_beta_header(header: &str, beta: &str) -> String {
+    if header.split(',').any(|part| part.trim() == beta) {
+        header.to_string()
+    } else if header.is_empty() {
+        beta.to_string()
+    } else {
+        format!("{header},{beta}")
+    }
+}
+
 fn oauth_billing_header(workload: Option<&str>) -> String {
     let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
     let workload_pair = workload
@@ -148,6 +158,8 @@ pub struct ApiConfig {
     pub task_budget_total: Option<u64>,
     /// Optional workload attribution included in the OAuth billing header.
     pub workload: Option<String>,
+    /// SDK-provided beta headers after TS allowlist filtering.
+    pub sdk_betas: Vec<String>,
     /// Anthropic API version header value.
     pub api_version: String,
     /// Stable process-scoped session id, matching TS bootstrap session behavior.
@@ -167,6 +179,7 @@ impl Default for ApiConfig {
             effort: None,
             task_budget_total: None,
             workload: None,
+            sdk_betas: Vec::new(),
             api_version: "2023-06-01".into(),
             session_id: get_session_id().clone(),
             account_uuid: String::new(),
@@ -924,6 +937,11 @@ impl ApiClient {
                 .header("x-stainless-retry-count", "0");
 
             let mut beta_header = anthropic_beta_header_value(auth.is_oauth(), &self.config.model);
+            if !auth.is_oauth() {
+                for beta in &self.config.sdk_betas {
+                    beta_header = add_beta_header(&beta_header, beta);
+                }
+            }
             if body_uses_tool_search(&body) {
                 beta_header = add_tool_search_beta_header(&beta_header);
             }
@@ -935,7 +953,7 @@ impl ApiClient {
                     .split(',')
                     .any(|part| part.trim() == crate::constants::betas::TASK_BUDGETS)
             {
-                beta_header = format!("{beta_header},{}", crate::constants::betas::TASK_BUDGETS);
+                beta_header = add_beta_header(&beta_header, crate::constants::betas::TASK_BUDGETS);
             }
 
             request = request

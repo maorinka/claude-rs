@@ -729,6 +729,10 @@ Improved:
   budgets are sent as `output_config.task_budget` with the task-budgets beta,
   and workload tags are threaded into the OAuth billing attribution block as
   `cc_workload`, matching the TS request-construction mechanism.
+- Rust print mode now accepts TS `--betas` and applies the same SDK beta
+  allowlist behavior: only `context-1m-2025-08-07` is forwarded, disallowed
+  values warn and are ignored, and OAuth/subscriber sessions ignore custom
+  betas like TS.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

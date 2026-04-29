@@ -81,6 +81,7 @@ impl HaikuSecondaryModel {
             effort: None,
             task_budget_total: None,
             workload: None,
+            sdk_betas: Vec::new(),
         };
         let web_search_config = ApiConfig {
             base_url,
@@ -94,6 +95,7 @@ impl HaikuSecondaryModel {
             effort: None,
             task_budget_total: None,
             workload: None,
+            sdk_betas: Vec::new(),
         };
         Self {
             client: ApiClient::new(config, auth.clone()),
