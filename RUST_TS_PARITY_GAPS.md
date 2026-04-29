@@ -96,17 +96,21 @@ Now matching:
   all-events switch for `--include-hook-events` / `CLAUDE_CODE_REMOTE`.
 - Print-mode stream-json now emits `UserPromptSubmit` hook events before
   `system/init`, matching TS startup flow, and tool hook events use the SDK
-  `hook_started` / `hook_progress` / `hook_response` system-event shape.
+  `hook_started` / `hook_progress` / `hook_response` system-event shape,
+  including progress-interval streaming for long-running command hooks.
 - Hook settings merging now appends hook event arrays across settings and
   enabled plugin hook files instead of overwriting earlier arrays, so user
   hooks and plugin hooks both run. The `run pwd --include-hook-events` smoke
   now matches TS on three Stop hook starts and three Stop hook responses.
+- Rust stream-json no longer synthesizes `rate_limit_event` from
+  `hook_started`; the remaining timing gap is tracked as API status-listener
+  plumbing instead of hook-event coupling.
 - Latest normal stream-json smoke:
   `/tmp/claude-rs-parity-stream-normal-after-partial`.
 - Latest partial-message stream-json smoke:
   `/tmp/claude-rs-parity-partial-messages-2`.
 - Latest hook-event stream-json smoke:
-  `/tmp/claude-rs-parity-hook-events-4`.
+  `/tmp/claude-rs-parity-rate-limit-order-2`.
 - Text `--print` mode now buffers assistant text and prints only successful
   final output like TS, so `--max-turns` errors do not leak partial assistant
   text before `Error: Reached max turns (...)`; the text-mode max-turns error
@@ -1045,9 +1049,9 @@ Needs work:
 3. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
 4. Verify rich user/system context lifecycle against resumed sessions and
    remote-control captures.
-5. Complete the remaining hook timing/concurrency parity, especially the
-   race between very fast `PreToolUse` hook responses and `rate_limit_event`
-   emission, plus progress-interval streaming for long-running hooks.
+5. Complete the remaining stream-json rate-limit timing parity by plumbing
+   API status changes like TS instead of relying on deterministic fallback
+   placement around very fast `PreToolUse` hooks.
 6. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
 7. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.

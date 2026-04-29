@@ -5405,18 +5405,8 @@ async fn main() -> Result<()> {
     );
     if cli.output_format == OutputFormat::StreamJson {
         let hook_session_id = api_session_id.clone();
-        let hook_rate_limit_emitted = stream_json_rate_limit_emitted.clone();
         claude_core::hooks::register_hook_event_handler(Some(std::sync::Arc::new(move |event| {
-            let should_emit_rate_limit = matches!(
-                &event,
-                claude_core::hooks::HookExecutionEvent::Started { hook_event, .. }
-                    if hook_event == "PreToolUse"
-            ) && !hook_rate_limit_emitted
-                .swap(true, std::sync::atomic::Ordering::SeqCst);
             emit_stream_json_hook_execution_event(event, &hook_session_id);
-            if should_emit_rate_limit {
-                emit_stream_json(stream_json_rate_limit_event(&hook_session_id));
-            }
         })));
     }
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth.clone());
