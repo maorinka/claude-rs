@@ -99,6 +99,7 @@ pub mod proxy;
 pub mod query;
 pub mod query_context;
 pub mod rate_limit_messages;
+pub mod rate_limits;
 pub mod remote;
 pub mod remote_managed_settings;
 pub mod remote_trigger_api_prompt;

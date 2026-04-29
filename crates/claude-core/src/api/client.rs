@@ -1108,10 +1108,19 @@ impl ApiClient {
             let response = request.json(&body).send().await?;
 
             if response.status().is_success() {
+                crate::rate_limits::extract_quota_status_from_headers(
+                    response.headers(),
+                    auth.is_oauth(),
+                );
                 return Ok(response);
             }
 
             let status = response.status().as_u16();
+            crate::rate_limits::extract_quota_status_from_error(
+                Some(response.headers()),
+                status,
+                auth.is_oauth(),
+            );
             let err_body = response.text().await.unwrap_or_default();
 
             // Return a typed error for prompt-too-long so the engine can

@@ -1195,7 +1195,10 @@ mod tests {
 
     #[test]
     fn stream_json_rate_limit_event_matches_sdk_shape() {
-        let event = stream_json_rate_limit_event("session-1");
+        let event = stream_json_rate_limit_event(
+            "session-1",
+            &claude_core::rate_limits::ClaudeAiLimits::default(),
+        );
         assert_eq!(event["type"], "rate_limit_event");
         assert_eq!(event["session_id"], "session-1");
         assert_eq!(event["rate_limit_info"]["status"], "allowed");
@@ -1349,7 +1352,7 @@ mod tests {
             "No resources found. MCP servers may still provide tools even if they have no resources."
         );
         assert_eq!(
-            format_tool_result_for_model(
+            serde_json::from_str::<serde_json::Value>(&format_tool_result_for_model(
                 "ListMcpResourcesTool",
                 &serde_json::json!([
                     {
@@ -1359,8 +1362,14 @@ mod tests {
                         "server": "example"
                     }
                 ])
-            ),
-            r#"[{"mimeType":"text/plain","name":"a.txt","server":"example","uri":"file:///tmp/a.txt"}]"#
+            ))
+            .unwrap(),
+            serde_json::json!([{
+                "mimeType": "text/plain",
+                "name": "a.txt",
+                "server": "example",
+                "uri": "file:///tmp/a.txt"
+            }])
         );
     }
 
@@ -4397,13 +4406,13 @@ fn total_cost_for_usage(model: &str, usage: Option<&claude_core::types::usage::U
     cost_tracker.total_cost_usd()
 }
 
-fn stream_json_rate_limit_event(session_id: &str) -> serde_json::Value {
+fn stream_json_rate_limit_event(
+    session_id: &str,
+    limits: &claude_core::rate_limits::ClaudeAiLimits,
+) -> serde_json::Value {
     serde_json::json!({
         "type": "rate_limit_event",
-        "rate_limit_info": {
-            "status": "allowed",
-            "isUsingOverage": false,
-        },
+        "rate_limit_info": limits,
         "uuid": uuid::Uuid::new_v4().to_string(),
         "session_id": session_id,
     })
@@ -5628,8 +5637,6 @@ async fn main() -> Result<()> {
     };
 
     let api_session_id = api_config.session_id.clone();
-    let stream_json_rate_limit_emitted =
-        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     claude_core::hooks::clear_hook_event_state();
     claude_core::hooks::set_all_hook_events_enabled(
         cli.include_hook_events || claude_core::errors_util::is_env_truthy("CLAUDE_CODE_REMOTE"),
@@ -5639,6 +5646,13 @@ async fn main() -> Result<()> {
         claude_core::hooks::register_hook_event_handler(Some(std::sync::Arc::new(move |event| {
             emit_stream_json_hook_execution_event(event, &hook_session_id);
         })));
+        let rate_limit_session_id = api_session_id.clone();
+        claude_core::rate_limits::register_status_listener(std::sync::Arc::new(move |limits| {
+            emit_stream_json(stream_json_rate_limit_event(
+                &rate_limit_session_id,
+                &limits,
+            ));
+        }));
     }
     let api_client = claude_core::api::client::ApiClient::new(api_config, auth.clone());
 
@@ -5956,7 +5970,6 @@ async fn main() -> Result<()> {
         let started_at = std::time::Instant::now();
         let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
         let mut total_usage: Option<claude_core::types::usage::Usage> = None;
-        let rate_limit_emitted = stream_json_rate_limit_emitted.clone();
         let mut num_turns: u32 = 0;
         let terminal_outcome = loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
@@ -6021,11 +6034,6 @@ async fn main() -> Result<()> {
 
             match result {
                 TurnResult::Done(stop_reason) => {
-                    if cli.output_format == OutputFormat::StreamJson
-                        && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
-                    {
-                        emit_stream_json(stream_json_rate_limit_event(&session_id));
-                    }
                     if cli.json_schema.is_some() && structured_output.is_none() {
                         if structured_output_retry_count >= max_structured_output_retries {
                             break PrintTerminalOutcome::StructuredOutputRetries {
@@ -6049,11 +6057,6 @@ async fn main() -> Result<()> {
                     max_turns,
                     turn_count,
                 } => {
-                    if cli.output_format == OutputFormat::StreamJson
-                        && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
-                    {
-                        emit_stream_json(stream_json_rate_limit_event(&session_id));
-                    }
                     break PrintTerminalOutcome::MaxTurns {
                         max_turns,
                         turn_count,
@@ -6621,11 +6624,6 @@ async fn main() -> Result<()> {
                         if let Some(reminder) = pending_skill_reminder {
                             query_engine.add_user_context_message(reminder);
                         }
-                    }
-                    if cli.output_format == OutputFormat::StreamJson
-                        && !rate_limit_emitted.swap(true, std::sync::atomic::Ordering::SeqCst)
-                    {
-                        emit_stream_json(stream_json_rate_limit_event(&session_id));
                     }
                     if let Some(max_turns) = cli.max_turns.filter(|max_turns| *max_turns > 0) {
                         if num_turns >= max_turns {

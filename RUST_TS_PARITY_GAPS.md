@@ -129,9 +129,11 @@ Now matching:
   enabled plugin hook files instead of overwriting earlier arrays, so user
   hooks and plugin hooks both run. The `run pwd --include-hook-events` smoke
   now matches TS on three Stop hook starts and three Stop hook responses.
-- Rust stream-json no longer synthesizes `rate_limit_event` from
-  `hook_started`; the remaining timing gap is tracked as API status-listener
-  plumbing instead of hook-event coupling.
+- Rust stream-json now follows TS rate-limit status flow: `ApiClient` extracts
+  quota status from successful response headers and 429 error headers, updates a
+  process-wide rate-limit status listener set, and stream-json subscribes to
+  that listener to emit `rate_limit_event`. The old deterministic fallback
+  emissions after `Done`, `ToolUse`, and `MaxTurns` were removed.
 - Latest normal stream-json smoke:
   `/tmp/claude-rs-parity-stream-normal-after-partial`.
 - Latest partial-message stream-json smoke:
@@ -1269,11 +1271,8 @@ Needs work:
 
 ## Suggested Next Order
 
-1. Complete the remaining stream-json rate-limit timing parity by plumbing
-   API status changes like TS instead of relying on deterministic fallback
-   placement around very fast `PreToolUse` hooks.
-2. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
-3. Decide scope for bridge/direct-connect/upstream proxy before porting more
+1. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
+2. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
-4. Reconcile current live Agent-tool metadata for plugin-provided agents.
-5. Update or replace `feature-gap-analysis.md` once this checklist is validated.
+3. Reconcile current live Agent-tool metadata for plugin-provided agents.
+4. Update or replace `feature-gap-analysis.md` once this checklist is validated.
