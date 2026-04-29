@@ -8,7 +8,9 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 use super::aggregation::aggregate_hook_results;
-use super::hook_events::{emit_hook_response, emit_hook_started, HookResponseData};
+use super::hook_events::{
+    emit_hook_progress, emit_hook_response, emit_hook_started, HookResponseData,
+};
 use super::matching::{get_matching_hooks, resolve_match_query, MatchedHook};
 use super::types::*;
 
@@ -412,7 +414,16 @@ async fn exec_hook(
 
     let result = match &matched.hook {
         HookCommand::Command(cmd) => {
-            exec_command_hook(cmd, event, hook_name, json_input, cwd, effective_timeout_ms).await
+            exec_command_hook(
+                cmd,
+                event,
+                hook_name,
+                &hook_id,
+                json_input,
+                cwd,
+                effective_timeout_ms,
+            )
+            .await
         }
         HookCommand::Prompt(prompt) => {
             exec_prompt_hook(prompt, event, hook_name, json_input, effective_timeout_ms).await
@@ -503,6 +514,7 @@ async fn exec_command_hook(
     hook: &CommandHook,
     event: &HookEvent,
     hook_name: &str,
+    hook_id: &str,
     json_input: &str,
     cwd: &str,
     timeout_ms: u64,
@@ -536,6 +548,7 @@ async fn exec_command_hook(
         .stderr(Stdio::piped())
         .current_dir(cwd)
         .env("CLAUDE_PROJECT_DIR", cwd)
+        .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("Failed to spawn hook command: {}", command))?;
 
@@ -548,56 +561,119 @@ async fn exec_command_hook(
         drop(stdin);
     }
 
-    // Take stdout/stderr handles before waiting so we can still kill the child
-    // on timeout (child.wait() borrows, whereas wait_with_output() consumes).
-    let mut child_stdout = child.stdout.take();
-    let mut child_stderr = child.stderr.take();
+    let stdout_buf = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    let stderr_buf = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
 
-    // Wait for the process with timeout, killing the child on timeout to avoid
-    // orphaned processes.
-    let timeout_duration = Duration::from_millis(timeout_ms);
-    let status = tokio::select! {
-        result = child.wait() => {
-            match result {
-                Ok(status) => status,
-                Err(e) => {
-                    return Ok(HookResult {
-                        outcome: HookOutcome::NonBlockingError,
-                        stderr: format!("Error executing hook: {}", e),
-                        command_display: command.clone(),
-                        ..Default::default()
-                    });
+    let stdout_task = child.stdout.take().map(|mut out| {
+        let stdout_buf = stdout_buf.clone();
+        tokio::spawn(async move {
+            let mut chunk = [0_u8; 4096];
+            loop {
+                match tokio::io::AsyncReadExt::read(&mut out, &mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        stdout_buf
+                            .lock()
+                            .await
+                            .push_str(&String::from_utf8_lossy(&chunk[..n]));
+                    }
+                    Err(_) => break,
                 }
             }
-        }
-        _ = tokio::time::sleep(timeout_duration) => {
-            // Timeout — kill the child process to avoid orphans.
-            let _ = child.kill().await;
-            return Ok(HookResult {
-                outcome: HookOutcome::NonBlockingError,
-                stderr: format!(
-                    "Hook timed out after {}ms: {}",
-                    timeout_ms, command
-                ),
-                command_display: command.clone(),
-                ..Default::default()
-            });
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut err| {
+        let stderr_buf = stderr_buf.clone();
+        tokio::spawn(async move {
+            let mut chunk = [0_u8; 4096];
+            loop {
+                match tokio::io::AsyncReadExt::read(&mut err, &mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        stderr_buf
+                            .lock()
+                            .await
+                            .push_str(&String::from_utf8_lossy(&chunk[..n]));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+    });
+
+    // Wait for the process with timeout, killing the child on timeout to avoid
+    // orphaned processes. While waiting, emit TS-style progress events when
+    // cumulative stdout/stderr changes.
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    let mut wait_task = tokio::spawn(async move { child.wait().await });
+    let timeout = tokio::time::sleep(timeout_duration);
+    tokio::pin!(timeout);
+    let mut interval = tokio::time::interval(Duration::from_millis(1000));
+    let mut last_progress_output = String::new();
+    let status = loop {
+        tokio::select! {
+            result = &mut wait_task => {
+                break match result {
+                    Ok(Ok(status)) => status,
+                    Ok(Err(e)) => {
+                        return Ok(HookResult {
+                            outcome: HookOutcome::NonBlockingError,
+                            stderr: format!("Error executing hook: {}", e),
+                            command_display: command.clone(),
+                            ..Default::default()
+                        });
+                    }
+                    Err(e) => {
+                        return Ok(HookResult {
+                            outcome: HookOutcome::NonBlockingError,
+                            stderr: format!("Error waiting for hook: {}", e),
+                            command_display: command.clone(),
+                            ..Default::default()
+                        });
+                    }
+                };
+            }
+            _ = interval.tick() => {
+                let stdout = stdout_buf.lock().await.clone();
+                let stderr = stderr_buf.lock().await.clone();
+                let output = format!("{stdout}{stderr}");
+                if !output.is_empty() && output != last_progress_output {
+                    last_progress_output = output.clone();
+                    emit_hook_progress(
+                        hook_id.to_string(),
+                        hook_name.to_string(),
+                        event.as_str().to_string(),
+                        stdout,
+                        stderr,
+                        output,
+                    );
+                }
+            }
+            _ = &mut timeout => {
+                wait_task.abort();
+                return Ok(HookResult {
+                    outcome: HookOutcome::NonBlockingError,
+                    stderr: format!(
+                        "Hook timed out after {}ms: {}",
+                        timeout_ms, command
+                    ),
+                    command_display: command.clone(),
+                    ..Default::default()
+                });
+            }
         }
     };
 
-    // Read captured stdout/stderr after the process has exited.
-    let mut stdout_bytes = Vec::new();
-    let mut stderr_bytes = Vec::new();
-    if let Some(ref mut out) = child_stdout {
-        let _ = tokio::io::AsyncReadExt::read_to_end(out, &mut stdout_bytes).await;
+    if let Some(task) = stdout_task {
+        let _ = task.await;
     }
-    if let Some(ref mut err) = child_stderr {
-        let _ = tokio::io::AsyncReadExt::read_to_end(err, &mut stderr_bytes).await;
+    if let Some(task) = stderr_task {
+        let _ = task.await;
     }
 
     let exit_code = status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    let stdout = stdout_buf.lock().await.clone();
+    let stderr = stderr_buf.lock().await.clone();
 
     debug!(
         "Command hook {} exited with code {}, stdout={} bytes, stderr={} bytes",
