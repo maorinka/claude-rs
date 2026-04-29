@@ -126,6 +126,14 @@ pub struct Cli {
     #[arg(long)]
     pub max_turns: Option<u32>,
 
+    /// API-side task budget in tokens
+    #[arg(long = "task-budget")]
+    pub task_budget: Option<u64>,
+
+    /// Workload tag for billing-header attribution
+    #[arg(long = "workload", hide = true)]
+    pub workload: Option<String>,
+
     /// System prompt to use for the session
     #[arg(long = "system-prompt")]
     pub system_prompt: Option<String>,
@@ -3765,6 +3773,10 @@ async fn main() -> Result<()> {
         );
         std::process::exit(1);
     }
+    if matches!(cli.task_budget, Some(0)) {
+        eprintln!("error: invalid value '0' for '--task-budget <TASK_BUDGET>': --task-budget must be a positive integer");
+        std::process::exit(2);
+    }
     let mut prompt_arg = cli.prompt.clone();
     if cli.print && prompt_arg.is_none() {
         use std::io::Read;
@@ -4441,6 +4453,11 @@ async fn main() -> Result<()> {
             .effort
             .clone()
             .or_else(|| settings.effort_level.clone())
+            .filter(|value| !value.trim().is_empty()),
+        task_budget_total: cli.task_budget,
+        workload: cli
+            .workload
+            .clone()
             .filter(|value| !value.trim().is_empty()),
         model: model.clone(),
         ..Default::default()

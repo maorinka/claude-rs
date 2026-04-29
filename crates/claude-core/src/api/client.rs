@@ -59,10 +59,14 @@ fn add_tool_search_beta_header(header: &str) -> String {
     }
 }
 
-fn oauth_billing_header() -> String {
+fn oauth_billing_header(workload: Option<&str>) -> String {
     let cch = rand::thread_rng().next_u32() & 0x000f_ffff;
+    let workload_pair = workload
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!(" cc_workload={value};"))
+        .unwrap_or_default();
     format!(
-        "x-anthropic-billing-header: cc_version=2.1.121.b32; cc_entrypoint=sdk-cli; cch={cch:05x};"
+        "x-anthropic-billing-header: cc_version=2.1.121.b32; cc_entrypoint=sdk-cli; cch={cch:05x};{workload_pair}"
     )
 }
 
@@ -140,6 +144,10 @@ pub struct ApiConfig {
     pub speed: Option<Speed>,
     /// Optional model effort level for `output_config.effort`.
     pub effort: Option<String>,
+    /// Optional API-side task budget for `output_config.task_budget`.
+    pub task_budget_total: Option<u64>,
+    /// Optional workload attribution included in the OAuth billing header.
+    pub workload: Option<String>,
     /// Anthropic API version header value.
     pub api_version: String,
     /// Stable process-scoped session id, matching TS bootstrap session behavior.
@@ -157,6 +165,8 @@ impl Default for ApiConfig {
             thinking: ThinkingConfig::Adaptive,
             speed: None,
             effort: None,
+            task_budget_total: None,
+            workload: None,
             api_version: "2023-06-01".into(),
             session_id: get_session_id().clone(),
             account_uuid: String::new(),
@@ -319,8 +329,22 @@ pub fn build_request_body(
     if let Some(thinking) = thinking_obj {
         body["thinking"] = thinking;
     }
-    if let Some(effort) = resolve_output_effort(&api_model, config.effort.as_deref()) {
-        body["output_config"] = json!({ "effort": effort });
+    let output_effort = resolve_output_effort(&api_model, config.effort.as_deref());
+    if output_effort.is_some() || config.task_budget_total.is_some() {
+        let mut output_config = serde_json::Map::new();
+        if let Some(effort) = output_effort {
+            output_config.insert("effort".to_string(), json!(effort));
+        }
+        if let Some(total) = config.task_budget_total {
+            output_config.insert(
+                "task_budget".to_string(),
+                json!({
+                    "type": "tokens",
+                    "total": total,
+                }),
+            );
+        }
+        body["output_config"] = Value::Object(output_config);
     }
 
     // Optional speed hint.
@@ -345,7 +369,7 @@ pub fn build_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: oauth_billing_header(),
+                text: oauth_billing_header(config.workload.as_deref()),
             });
         }
         full_system.extend_from_slice(system);
@@ -709,7 +733,7 @@ fn build_minimal_request_body(
         let mut full_system: Vec<ContentBlock> = Vec::new();
         if is_oauth {
             full_system.push(ContentBlock::Text {
-                text: oauth_billing_header(),
+                text: oauth_billing_header(config.workload.as_deref()),
             });
         }
         full_system.extend_from_slice(system);
@@ -902,6 +926,16 @@ impl ApiClient {
             let mut beta_header = anthropic_beta_header_value(auth.is_oauth(), &self.config.model);
             if body_uses_tool_search(&body) {
                 beta_header = add_tool_search_beta_header(&beta_header);
+            }
+            if body
+                .get("output_config")
+                .and_then(|value| value.get("task_budget"))
+                .is_some()
+                && !beta_header
+                    .split(',')
+                    .any(|part| part.trim() == crate::constants::betas::TASK_BUDGETS)
+            {
+                beta_header = format!("{beta_header},{}", crate::constants::betas::TASK_BUDGETS);
             }
 
             request = request
@@ -1163,6 +1197,46 @@ mod tests {
         };
         let body = build_request_body(&unsupported_model, &[], &[], &[], false);
         assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn task_budget_merges_into_output_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-opus-4-6".into(),
+            max_tokens: 64_000,
+            task_budget_total: Some(12_345),
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[], false);
+        assert_eq!(
+            body["output_config"],
+            json!({
+                "effort": "high",
+                "task_budget": {
+                    "type": "tokens",
+                    "total": 12_345,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn workload_is_included_in_oauth_billing_header() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_cache_env();
+        let config = ApiConfig {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 8_192,
+            workload: Some("cron".into()),
+            ..Default::default()
+        };
+        let body = build_request_body(&config, &[], &[], &[], true);
+        let first_system = body["system"].as_array().unwrap()[0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(first_system.contains(" cc_workload=cron;"));
     }
 
     #[test]

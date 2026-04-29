@@ -725,6 +725,10 @@ Improved:
   of only the legacy stdio shape, so user/project/runtime settings can define
   `stdio`, `http`, `sse`, `sse-ide`, `ws`, and `ws-ide` entries through the
   same general MCP config path.
+- Rust print mode now accepts TS `--task-budget` and `--workload`: task
+  budgets are sent as `output_config.task_budget` with the task-budgets beta,
+  and workload tags are threaded into the OAuth billing attribution block as
+  `cc_workload`, matching the TS request-construction mechanism.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

@@ -79,6 +79,8 @@ impl HaikuSecondaryModel {
             session_id: session_id.clone(),
             account_uuid: String::new(),
             effort: None,
+            task_budget_total: None,
+            workload: None,
         };
         let web_search_config = ApiConfig {
             base_url,
@@ -90,6 +92,8 @@ impl HaikuSecondaryModel {
             session_id,
             account_uuid: String::new(),
             effort: None,
+            task_budget_total: None,
+            workload: None,
         };
         Self {
             client: ApiClient::new(config, auth.clone()),
