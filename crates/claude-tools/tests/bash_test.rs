@@ -117,6 +117,48 @@ async fn test_bash_cwd_persists_between_foreground_commands() {
 }
 
 #[tokio::test]
+async fn test_bash_cwd_resets_after_cd_outside_allowed_dirs() {
+    let tool = BashTool::new();
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().join("base");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let ctx = make_ctx(base.clone());
+
+    let cd_result = tool
+        .call(
+            &json!({ "command": format!("cd {}", outside.display()) }),
+            &ctx,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!cd_result.is_error);
+    assert_eq!(cd_result.data["code"], 0);
+    assert!(cd_result.data["stderr"]
+        .as_str()
+        .unwrap()
+        .contains("Shell cwd was reset to"));
+
+    let pwd_result = tool
+        .call(
+            &json!({ "command": "pwd" }),
+            &ctx,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!pwd_result.is_error);
+    let stdout = pwd_result.data["stdout"].as_str().unwrap().trim();
+    let actual = std::fs::canonicalize(stdout).unwrap();
+    let expected = std::fs::canonicalize(base).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
 async fn test_bash_cancellation() {
     let tool = BashTool::new();
     let ctx = make_ctx(tmpdir());

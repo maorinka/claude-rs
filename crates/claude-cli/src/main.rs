@@ -3797,7 +3797,12 @@ async fn run_permission_prompt_tool(
     let ctx = claude_tools::ToolUseContext::new(
         cwd.to_path_buf(),
         read_file_state,
-        permission_mode,
+        permission_mode.clone(),
+        claude_core::permissions::ToolPermissionContext {
+            mode: permission_mode,
+            working_directory: cwd.to_path_buf(),
+            ..Default::default()
+        },
         std::sync::Arc::new(
             claude_core::tool_use_context_options::ToolUseContextOptions::minimal(model),
         ),
@@ -6147,6 +6152,7 @@ async fn main() -> Result<()> {
                                                         cwd.clone(),
                                                         read_file_state.clone(),
                                                         permission_mode.clone(),
+                                                        perm_ctx.clone(),
                                                         std::sync::Arc::new({
                                                             let mut options =
                                                                 claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
@@ -6294,6 +6300,7 @@ async fn main() -> Result<()> {
                                             cwd.clone(),
                                             read_file_state.clone(),
                                             permission_mode.clone(),
+                                            perm_ctx.clone(),
                                             std::sync::Arc::new({
                                                 let mut options =
                                                     claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);

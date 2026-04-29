@@ -127,6 +127,27 @@ impl BashTool {
         }
         let _ = tokio::fs::remove_file(cwd_file).await;
     }
+
+    async fn reset_cwd_if_outside_project(&self, ctx: &ToolUseContext) -> bool {
+        let current = {
+            let cwd = self.cwd.lock().await;
+            cwd.clone().unwrap_or_else(|| ctx.working_directory.clone())
+        };
+        let original = &ctx.working_directory;
+        let should_maintain =
+            claude_core::errors_util::is_env_truthy("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR");
+        let outside_allowed = current != *original
+            && !claude_core::permissions::path_in_allowed_working_path(
+                &current.display().to_string(),
+                &ctx.permission_context,
+            );
+        if should_maintain || outside_allowed {
+            let mut cwd = self.cwd.lock().await;
+            *cwd = Some(original.clone());
+            return outside_allowed && !should_maintain;
+        }
+        false
+    }
 }
 
 impl Default for BashTool {
@@ -159,6 +180,14 @@ fn cwd_capture_path() -> std::path::PathBuf {
 fn command_with_cwd_capture(command: &str, cwd_file: &std::path::Path) -> String {
     let quoted = shell_single_quote(&cwd_file.display().to_string());
     format!("trap 'pwd -P > {quoted}' EXIT\n{command}")
+}
+
+fn stderr_append_shell_reset_message(stderr: &str, original_cwd: &std::path::Path) -> String {
+    format!(
+        "{}\nShell cwd was reset to {}",
+        stderr.trim(),
+        original_cwd.display()
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -745,6 +774,11 @@ While the Bash tool can do similar things, it's better to use the built-in tools
                     }
                 } else {
                     stderr
+                };
+                let final_stderr = if self.reset_cwd_if_outside_project(ctx).await {
+                    stderr_append_shell_reset_message(&final_stderr, &ctx.working_directory)
+                } else {
+                    final_stderr
                 };
 
                 Ok(ToolResultData {

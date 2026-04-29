@@ -153,6 +153,10 @@ pub struct ToolUseContext {
     /// The current permission mode of the parent session.
     /// Propagated to sub-agents to avoid unconditionally granting bypass.
     pub permission_mode: PermissionMode,
+    /// Full session permission context. TS tools receive this via app state;
+    /// Rust keeps the snapshot here so tool execution can honor working-dir
+    /// allowlists and rule state after permission evaluation.
+    pub permission_context: claude_core::permissions::ToolPermissionContext,
     /// Session options (model, tools, commands, thinking config, …).
     /// Always present — matches TS `ToolUseContext.options` which is
     /// non-optional. Headless callers pass
@@ -172,6 +176,7 @@ impl ToolUseContext {
         working_directory: PathBuf,
         read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
         permission_mode: PermissionMode,
+        permission_context: claude_core::permissions::ToolPermissionContext,
         options: Arc<claude_core::tool_use_context_options::ToolUseContextOptions>,
         host: claude_core::tool_host::SharedToolHost,
     ) -> Self {
@@ -179,6 +184,7 @@ impl ToolUseContext {
             working_directory,
             read_file_state,
             permission_mode,
+            permission_context,
             options,
             host,
         }
@@ -194,10 +200,16 @@ impl ToolUseContext {
         read_file_state: Arc<std::sync::Mutex<ReadFileState>>,
         permission_mode: PermissionMode,
     ) -> Self {
+        let permission_context = claude_core::permissions::ToolPermissionContext {
+            mode: permission_mode.clone(),
+            working_directory: working_directory.clone(),
+            ..Default::default()
+        };
         Self {
             working_directory,
             read_file_state,
             permission_mode,
+            permission_context,
             options: Arc::new(
                 claude_core::tool_use_context_options::ToolUseContextOptions::minimal(
                     "claude-opus-4-7",

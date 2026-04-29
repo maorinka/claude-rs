@@ -1770,6 +1770,7 @@ impl App {
                             let cancel_clone = cancel.clone();
                             let rfs_clone = read_file_state.clone();
                             let perm_mode_clone = perm_ctx.mode.clone();
+                            let perm_ctx_clone = perm_ctx.clone();
                             let model_clone = self.model_name.clone();
                             let tx_tool = tx.clone();
                             let tidx = tool_idx;
@@ -1782,6 +1783,7 @@ impl App {
                                     cancel_clone,
                                     rfs_clone,
                                     perm_mode_clone,
+                                    perm_ctx_clone,
                                     &model_clone,
                                 )
                                 .await;
@@ -2931,6 +2933,7 @@ async fn execute_tool(
     cancel: CancellationToken,
     read_file_state: std::sync::Arc<std::sync::Mutex<claude_tools::registry::ReadFileState>>,
     permission_mode: PermissionMode,
+    permission_context: ToolPermissionContext,
     model: &str,
 ) -> Result<ToolResultData> {
     use claude_core::tool_host::NullToolHost;
@@ -2950,6 +2953,7 @@ async fn execute_tool(
         cwd.to_path_buf(),
         read_file_state,
         permission_mode,
+        permission_context,
         options,
         host,
     );

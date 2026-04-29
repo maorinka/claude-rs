@@ -495,7 +495,6 @@ Needs work:
 - Git operation tracking.
 - Background task spawning and foreground registration.
 - Chunked streaming output parity.
-- Cwd reset if outside project.
 - File-history tracking for shell-modified files.
 - Better command semantics for pipelines, shell builtins, and platform quirks.
 
@@ -506,6 +505,13 @@ Improved:
   like TS instead of treating the build as read-only.
 - Foreground Bash commands now persist cwd across calls by capturing `pwd -P`
   after command completion, matching TS `runShellCommand` cwd tracking.
+- Bash tool execution now carries the full `ToolPermissionContext`, so cwd reset
+  uses the same allowed-working-path decision as TS instead of a local cwd-only
+  check.
+- Foreground Bash cwd now resets to the original project cwd when a command moves
+  outside the allowed working directories, and appends `Shell cwd was reset to
+  ...` to stderr like TS. `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` forces the
+  reset without the warning suffix, matching TS.
 
 ### FileEditTool
 
