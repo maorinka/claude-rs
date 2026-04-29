@@ -218,6 +218,9 @@ Improved:
 - `ListMcpResourcesTool` and `ReadMcpResourceTool` now use the TS explicit
   missing-server error shape (`Server "..." not found. Available servers: ...`)
   instead of silently returning an empty resource list or a Rust manager error.
+- `ReadMcpResourceTool` now checks the connected server's MCP capabilities and
+  returns the TS-style `Server "..." does not support resources` error instead
+  of attempting `resources/read` against servers without resource support.
 
 Still needs work:
 - Verify pagination/cursors if applicable, resource templates, and

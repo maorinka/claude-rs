@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::mcp::manager::McpManager;
+use claude_core::mcp::types::McpConnectionStatus;
 use claude_core::types::events::ToolResultData;
 
 const TOOL_RESULTS_SUBDIR: &str = "tool-results";
@@ -333,6 +334,18 @@ Parameters:
                     }),
                     is_error: true,
                 });
+            }
+            if let Some(connection) = manager.connection(server).await {
+                if let McpConnectionStatus::Connected { capabilities, .. } = connection.status {
+                    if capabilities.resources.is_none() {
+                        return Ok(ToolResultData {
+                            data: json!({
+                                "error": format!("Server \"{}\" does not support resources", server)
+                            }),
+                            is_error: true,
+                        });
+                    }
+                }
             }
             return match manager.read_resource(server, uri).await {
                 Ok(data) => {
