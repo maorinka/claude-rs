@@ -2,7 +2,7 @@
 
 Date: 2026-04-28
 
-Latest live proxy comparison: 2026-04-28
+Latest live proxy comparison: 2026-04-29
 
 Reference code inspected:
 - TypeScript source snapshot: `/Users/maorhadad/Downloads/src`
@@ -36,10 +36,10 @@ The largest remaining gaps are behavioral depth, not just missing files:
 
 ## Current Live Context Diff
 
-Captured through `scripts/run_parity_capture.py` on 2026-04-28:
+Captured through `scripts/run_parity_capture.py` on 2026-04-29:
 
 - Capture directory:
-  `/tmp/claude-rs-parity-toolsearch-request-fixed`
+  `/tmp/claude-rs-parity-after-powershell`
 
 Now matching:
 
@@ -627,6 +627,9 @@ Improved since the stale report:
 - WebFetch secondary-model failures now fail the tool call instead of silently
   returning raw fetched content, and empty secondary-model text maps to the TS
   `No response from model` fallback.
+- WebFetch now converts fetched content to Markdown only when the HTTP
+  `content-type` includes `text/html`, matching TS; Rust no longer guesses HTML
+  from a leading `<` in non-HTML responses.
 
 Still needs work:
 - Exact Turndown formatting parity for edge-case HTML.

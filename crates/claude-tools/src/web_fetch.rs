@@ -453,6 +453,10 @@ fn append_binary_saved_note(
     result
 }
 
+fn should_convert_webfetch_body_to_markdown(content_type: &str) -> bool {
+    content_type.contains("text/html")
+}
+
 enum DomainCheckResult {
     Allowed,
     Blocked,
@@ -760,9 +764,7 @@ impl ToolExecutor for WebFetchTool {
 
                 let persisted = persist_webfetch_binary_content(&body, &content_type, ctx).await;
                 let body_text = String::from_utf8_lossy(&body).into_owned();
-                let result_text = if content_type.contains("text/html")
-                    || body_text.trim_start().starts_with('<')
-                {
+                let result_text = if should_convert_webfetch_body_to_markdown(&content_type) {
                     html_to_markdown(&body_text)
                 } else {
                     body_text
@@ -1007,6 +1009,17 @@ mod tests {
         );
         assert!(get_cached_url("https://example.com/first").is_none());
         assert!(get_cached_url("https://example.com/second").is_some());
+    }
+
+    #[test]
+    fn markdown_conversion_uses_content_type_only_like_ts() {
+        assert!(should_convert_webfetch_body_to_markdown(
+            "text/html; charset=utf-8"
+        ));
+        assert!(!should_convert_webfetch_body_to_markdown("text/plain"));
+        assert!(!should_convert_webfetch_body_to_markdown(
+            "application/xhtml+xml"
+        ));
     }
 
     #[test]
