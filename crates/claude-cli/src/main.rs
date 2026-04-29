@@ -1742,35 +1742,6 @@ fn stream_json_plugin_entries(project_root: &std::path::Path) -> Vec<serde_json:
         .collect()
 }
 
-fn plugin_markdown_stems(project_root: &std::path::Path, dir_name: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    for (plugin_name, _, root) in enabled_plugin_roots(project_root) {
-        let dir = root.join(dir_name);
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        let mut stems = entries
-            .flatten()
-            .filter_map(|entry| {
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-                    return None;
-                }
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .map(|stem| stem.to_string())
-            })
-            .collect::<Vec<_>>();
-        stems.sort();
-        names.extend(
-            stems
-                .into_iter()
-                .map(|stem| format!("{plugin_name}:{stem}")),
-        );
-    }
-    names
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CliAgentJson {
@@ -1947,18 +1918,153 @@ fn load_markdown_agents(
         .collect()
 }
 
-fn stream_json_agent_names(project_root: &std::path::Path) -> Vec<String> {
-    let mut agents = claude_tools::agent_tool::active_agent_names();
-    let builtin_len = claude_tools::agents::definitions::builtin_agents().len();
-    let plugin_names = plugin_markdown_stems(project_root, "agents");
-    for (offset, name) in plugin_names.into_iter().enumerate() {
-        if agents.iter().any(|agent| agent == &name) {
-            continue;
+fn sanitize_plugin_id(plugin_id: &str) -> String {
+    plugin_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn plugin_data_dir(source_name: &str) -> Option<std::path::PathBuf> {
+    let claude_dir = claude_core::config::paths::claude_dir().ok()?;
+    let dir = claude_dir
+        .join("plugins")
+        .join("data")
+        .join(sanitize_plugin_id(source_name));
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir)
+}
+
+fn substitute_plugin_variables(
+    system_prompt: &str,
+    root: &std::path::Path,
+    source_name: &str,
+) -> String {
+    let root_text = root.display().to_string();
+    let mut out = system_prompt.replace("${CLAUDE_PLUGIN_ROOT}", &root_text);
+    if let Some(data_dir) = plugin_data_dir(source_name) {
+        out = out.replace("${CLAUDE_PLUGIN_DATA}", &data_dir.display().to_string());
+    }
+    out
+}
+
+fn collect_plugin_markdown_files(
+    dir: &std::path::Path,
+    namespace: &[String],
+    out: &mut Vec<(std::path::PathBuf, Vec<String>)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            let mut child_namespace = namespace.to_vec();
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                child_namespace.push(name.to_string());
+            }
+            collect_plugin_markdown_files(&path, &child_namespace, out);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+            out.push((path, namespace.to_vec()));
         }
-        let index = (builtin_len + offset).min(agents.len());
-        agents.insert(index, name);
+    }
+}
+
+fn load_plugin_agents(
+    project_root: &std::path::Path,
+) -> Vec<claude_tools::agent_tool::RuntimeAgentDefinition> {
+    if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_SIMPLE") {
+        return Vec::new();
+    }
+
+    let mut agents = Vec::new();
+    for (plugin_name, source, root) in enabled_plugin_roots(project_root) {
+        let agents_dir = root.join("agents");
+        let mut files = Vec::new();
+        collect_plugin_markdown_files(&agents_dir, &[], &mut files);
+        let source_name = format!("{plugin_name}@{source}");
+        for (path, namespace) in files {
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let parsed = claude_core::frontmatter::parse_frontmatter(&raw);
+            let base_name = parsed
+                .frontmatter
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .or_else(|| {
+                    path.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| "agent".to_string());
+            let mut name_parts = vec![plugin_name.clone()];
+            name_parts.extend(namespace);
+            name_parts.push(base_name);
+            let agent_type = name_parts.join(":");
+            let when_to_use = parsed
+                .frontmatter
+                .get("description")
+                .and_then(|value| value.as_str())
+                .or_else(|| {
+                    parsed
+                        .frontmatter
+                        .get("when-to-use")
+                        .and_then(|value| value.as_str())
+                })
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Agent from {plugin_name} plugin"));
+            let model = parsed.frontmatter.get("model").and_then(|value| {
+                let trimmed = value.as_str()?.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.eq_ignore_ascii_case("inherit") {
+                    Some("inherit".to_string())
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+            agents.push(claude_tools::agent_tool::RuntimeAgentDefinition {
+                agent_type,
+                when_to_use,
+                source: claude_tools::agent_tool::AgentSource::Plugin,
+                tools: parse_agent_frontmatter_tools(parsed.frontmatter.get("tools")),
+                disallowed_tools: if parsed.frontmatter.contains_key("disallowedTools") {
+                    parse_agent_frontmatter_tools(parsed.frontmatter.get("disallowedTools"))
+                } else {
+                    None
+                },
+                system_prompt: Some(substitute_plugin_variables(
+                    parsed.content.trim(),
+                    &root,
+                    &source_name,
+                )),
+                model,
+                permission_mode: None,
+                background: frontmatter_bool(&parsed.frontmatter, "background"),
+                isolation: frontmatter_string(&parsed.frontmatter, "isolation")
+                    .filter(|value| *value == "worktree")
+                    .map(str::to_string),
+            });
+        }
     }
     agents
+}
+
+fn stream_json_agent_names(project_root: &std::path::Path) -> Vec<String> {
+    let _ = project_root;
+    claude_tools::agent_tool::active_agent_names()
 }
 
 fn stream_json_slash_commands(
@@ -4584,7 +4690,8 @@ async fn main() -> Result<()> {
         merge_json_values(&mut raw_settings, overlay_value.clone());
         merge_json_values(&mut permission_settings, overlay_value);
     }
-    let mut runtime_agents = load_markdown_agents(&cwd);
+    let mut runtime_agents = load_plugin_agents(&project_root);
+    runtime_agents.extend(load_markdown_agents(&cwd));
     let cli_agents = cli
         .agents
         .as_deref()
