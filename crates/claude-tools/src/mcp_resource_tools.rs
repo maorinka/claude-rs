@@ -204,8 +204,8 @@ impl ToolExecutor for ListMcpResourcesTool {
         if let Some(manager) = &self.manager {
             let manager = manager.read().await;
             if let Some(server) = server {
-                if !manager.is_connected(server).await {
-                    let mut available = manager.connected_server_names().await;
+                if manager.connection(server).await.is_none() {
+                    let mut available = manager.server_names().await;
                     available.sort();
                     return Ok(ToolResultData {
                         data: json!({
@@ -216,6 +216,12 @@ impl ToolExecutor for ListMcpResourcesTool {
                             )
                         }),
                         is_error: true,
+                    });
+                }
+                if !manager.is_connected(server).await {
+                    return Ok(ToolResultData {
+                        data: json!([]),
+                        is_error: false,
                     });
                 }
             }
@@ -321,8 +327,8 @@ Parameters:
 
         if let Some(manager) = &self.manager {
             let manager = manager.read().await;
-            if !manager.is_connected(server).await {
-                let mut available = manager.connected_server_names().await;
+            let Some(connection) = manager.connection(server).await else {
+                let mut available = manager.server_names().await;
                 available.sort();
                 return Ok(ToolResultData {
                     data: json!({
@@ -334,18 +340,22 @@ Parameters:
                     }),
                     is_error: true,
                 });
-            }
-            if let Some(connection) = manager.connection(server).await {
-                if let McpConnectionStatus::Connected { capabilities, .. } = connection.status {
-                    if capabilities.resources.is_none() {
-                        return Ok(ToolResultData {
-                            data: json!({
-                                "error": format!("Server \"{}\" does not support resources", server)
-                            }),
-                            is_error: true,
-                        });
-                    }
-                }
+            };
+            let McpConnectionStatus::Connected { capabilities, .. } = connection.status else {
+                return Ok(ToolResultData {
+                    data: json!({
+                        "error": format!("Server \"{}\" is not connected", server)
+                    }),
+                    is_error: true,
+                });
+            };
+            if capabilities.resources.is_none() {
+                return Ok(ToolResultData {
+                    data: json!({
+                        "error": format!("Server \"{}\" does not support resources", server)
+                    }),
+                    is_error: true,
+                });
             }
             return match manager.read_resource(server, uri).await {
                 Ok(data) => {
@@ -416,6 +426,9 @@ mod tests {
     use super::*;
     use crate::registry::ReadFileState;
     use claude_core::mcp::manager::McpManager;
+    use claude_core::mcp::types::{
+        ConfigScope, McpServerConfig, McpStdioServerConfig, ScopedMcpServerConfig,
+    };
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -425,6 +438,17 @@ mod tests {
             Arc::new(std::sync::Mutex::new(ReadFileState::new())),
             crate::registry::PermissionMode::Default,
         )
+    }
+
+    fn missing_binary_config() -> ScopedMcpServerConfig {
+        ScopedMcpServerConfig {
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: "/definitely/not/a/real/binary/claude_rs_mcp_resource_test".into(),
+                args: vec![],
+                env: None,
+            }),
+            scope: ConfigScope::Project,
+        }
     }
 
     #[test]
@@ -552,6 +576,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manager_backed_list_named_disconnected_server_returns_empty_like_ts() {
+        let manager = Arc::new(RwLock::new(McpManager::new()));
+        manager
+            .read()
+            .await
+            .connect_server("failed-server", missing_binary_config())
+            .await;
+        let tool = ListMcpResourcesTool::new(manager);
+        let input = json!({ "server": "failed-server" });
+        let ctx = make_ctx();
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.data.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn manager_backed_read_reports_manager_error() {
         let manager = Arc::new(RwLock::new(McpManager::new()));
         let tool = ReadMcpResourceTool::new(manager);
@@ -564,6 +606,27 @@ mod tests {
         assert_eq!(
             result.data["error"],
             "Server \"missing\" not found. Available servers: "
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_backed_read_named_disconnected_server_matches_ts_error() {
+        let manager = Arc::new(RwLock::new(McpManager::new()));
+        manager
+            .read()
+            .await
+            .connect_server("failed-server", missing_binary_config())
+            .await;
+        let tool = ReadMcpResourceTool::new(manager);
+        let input = json!({ "server": "failed-server", "uri": "file://test.txt" });
+        let ctx = make_ctx();
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(result.is_error);
+        assert_eq!(
+            result.data["error"],
+            "Server \"failed-server\" is not connected"
         );
     }
 }

@@ -261,10 +261,16 @@ Improved:
 - `ReadMcpResourceTool` now checks the connected server's MCP capabilities and
   returns the TS-style `Server "..." does not support resources` error instead
   of attempting `resources/read` against servers without resource support.
+- `ListMcpResourcesTool` now matches TS for a named but disconnected/failed MCP
+  server: the server is considered found, but contributes no resources.
+- `ReadMcpResourceTool` now matches TS for a named but disconnected/failed MCP
+  server by returning `Server "..." is not connected`.
+- TS does not call MCP resource-template APIs or manually walk paginated
+  resource cursors in `fetchResourcesForClient`; it calls SDK
+  `resources/list` once and adds the `server` field. Rust follows that same
+  flow.
 
 Still needs work:
-- Verify pagination/cursors if applicable, resource templates, and
-  connected-but-resource-unsupported error text against TS.
 - Add integration tests with a real or fake MCP server exposing resources.
 
 ### Tool executor is simplified

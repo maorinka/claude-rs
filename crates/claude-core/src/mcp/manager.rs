@@ -734,6 +734,11 @@ impl McpManager {
         self.clients.read().await.keys().cloned().collect()
     }
 
+    /// Get the names of all known/configured servers, regardless of status.
+    pub async fn server_names(&self) -> Vec<String> {
+        self.connections.read().await.keys().cloned().collect()
+    }
+
     /// Check if a specific server is connected.
     pub async fn is_connected(&self, name: &str) -> bool {
         self.clients.read().await.contains_key(name)
