@@ -513,12 +513,19 @@ Files:
 - `crates/claude-tools/src/write.rs`
 - TS reference: `src/tools/FileWriteTool/*`
 
+Improved:
+- Rust `Write` results now include TS-shaped `structuredPatch`: updates return
+  hunks with `oldStart`, `oldLines`, `newStart`, `newLines`, and prefixed diff
+  lines; creates return `structuredPatch: []`.
+- Existing empty files now follow TS's current truthiness behavior in the
+  result shape: the write is reported as `create` with `originalFile: null`.
+
 Needs work:
 - Permission validation parity.
 - File-history integration.
-- Git diff output.
-- Append mode if TS supports it in the active reference path.
-- More precise stale-write behavior.
+- Conditional `gitDiff` output behind TS's remote/feature gate.
+- Staleness atomicity and encoding/LSP/VSCode side effects in the exact TS
+  call order.
 
 ### WebFetchTool
 
@@ -667,8 +674,6 @@ Improved:
   without request-time name guessing.
 
 Needs work:
-- Replace fallback-only request-time `auto` threshold with TS's preferred
-  count-token path.
 - Add integration coverage for `ToolSearch select:*` with a live/fake MCP
   server across multiple turns.
 

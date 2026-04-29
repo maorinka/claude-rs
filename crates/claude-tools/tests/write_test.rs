@@ -44,6 +44,7 @@ async fn test_write_new_file() {
     assert_eq!(result.data["filePath"], file_path);
     assert_eq!(result.data["content"], content);
     assert!(result.data["originalFile"].is_null());
+    assert_eq!(result.data["structuredPatch"], json!([]));
 
     let on_disk = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(on_disk, content);
@@ -109,6 +110,22 @@ async fn test_write_overwrites_existing() {
     assert_eq!(result.data["type"], "update");
     assert_eq!(result.data["content"], new_content);
     assert_eq!(result.data["originalFile"], original);
+    let patch = result.data["structuredPatch"]
+        .as_array()
+        .expect("structuredPatch must be an array");
+    assert!(!patch.is_empty(), "updates must include a structured diff");
+    assert_eq!(patch[0]["oldStart"], 1);
+    assert_eq!(patch[0]["newStart"], 1);
+    assert!(patch[0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line == "-original content"));
+    assert!(patch[0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line == "+updated content"));
 
     let on_disk = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(on_disk, new_content);
@@ -124,6 +141,32 @@ async fn test_write_is_destructive() {
     assert!(!tool.is_read_only(&input));
     assert_eq!(tool.max_result_size_chars(), 100_000);
     assert_eq!(tool.name(), "Write");
+}
+
+#[tokio::test]
+async fn test_write_empty_existing_file_matches_ts_create_result() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = FileWriteTool;
+    let ctx = make_ctx(tmp.path());
+    let file_path = tmp.path().join("empty.txt").to_string_lossy().to_string();
+
+    std::fs::write(&file_path, "").unwrap();
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(&file_path, false, Some(String::new()));
+
+    let result = call_tool(
+        &tool,
+        json!({ "file_path": file_path, "content": "now has content" }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["type"], "create");
+    assert!(result.data["originalFile"].is_null());
+    assert_eq!(result.data["structuredPatch"], json!([]));
 }
 
 // ─── team_mem_secret_guard integration ──────────────────────────────────────
