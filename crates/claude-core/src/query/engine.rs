@@ -783,6 +783,7 @@ impl QueryEngine {
                         "role": "user",
                         "content": synthetic_results,
                     }));
+                    self.persist_unpersisted_messages();
                 }
                 self.state = QueryState::Terminal {
                     stop_reason: StopReason::EndTurn,
@@ -1343,7 +1344,10 @@ fn split_content_replacement_entries(
             continue;
         }
 
-        if entry.get("role").is_some() {
+        if entry.get("role").is_some()
+            || entry.get("type").and_then(|ty| ty.as_str()) == Some("compact_boundary")
+            || entry.get("subtype").and_then(|ty| ty.as_str()) == Some("compact_boundary")
+        {
             messages.push(entry);
         }
     }
@@ -1354,6 +1358,211 @@ fn split_content_replacement_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::mpsc as tokio_mpsc;
+
+    fn test_engine(
+        base_url: String,
+        session_id: &str,
+        storage_dir: Option<&std::path::Path>,
+    ) -> QueryEngine {
+        let api_client = crate::api::client::ApiClient::new(
+            crate::api::client::ApiConfig {
+                base_url,
+                session_id: session_id.to_string(),
+                model: "claude-sonnet-4-6".into(),
+                ..Default::default()
+            },
+            crate::api::client::AuthMethod::ApiKey("test".into()),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut engine = QueryEngine::new(api_client, vec![], vec![], cancel);
+        if let Some(dir) = storage_dir {
+            engine.set_transcript_storage(crate::session::storage::SessionStorage::from_dir(
+                dir.to_path_buf(),
+            ));
+        }
+        engine
+    }
+
+    struct TestSseServer {
+        base_url: String,
+        body_rx: tokio_mpsc::Receiver<serde_json::Value>,
+        chunk_tx: tokio_mpsc::Sender<String>,
+    }
+
+    async fn spawn_sse_server() -> TestSseServer {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (body_tx, body_rx) = tokio_mpsc::channel(8);
+        let (chunk_tx, mut chunk_rx) = tokio_mpsc::channel::<String>(8);
+
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let request = read_http_request(&mut socket).await;
+            if let Some(body) = request.and_then(|request| request_body_json(&request)) {
+                let _ = body_tx.send(body).await;
+            }
+            let headers =
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+            let _ = socket.write_all(headers.as_bytes()).await;
+            while let Some(chunk) = chunk_rx.recv().await {
+                let _ = socket.write_all(chunk.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        TestSseServer {
+            base_url,
+            body_rx,
+            chunk_tx,
+        }
+    }
+
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 1024];
+        let header_end = loop {
+            let n = socket.read(&mut tmp).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&buf[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while buf.len() < header_end + content_length {
+            let n = socket.read(&mut tmp).await.ok()?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+        }
+        Some(buf)
+    }
+
+    fn request_body_json(request: &[u8]) -> Option<serde_json::Value> {
+        let header_end = find_subsequence(request, b"\r\n\r\n")? + 4;
+        serde_json::from_slice(&request[header_end..]).ok()
+    }
+
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    fn sse(event: &str, data: serde_json::Value) -> String {
+        format!("event: {event}\ndata: {data}\n\n")
+    }
+
+    fn message_start() -> String {
+        sse(
+            "message_start",
+            serde_json::json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_01",
+                    "model": "claude-sonnet-4-6",
+                    "role": "assistant",
+                    "content": [],
+                    "stop_reason": null,
+                    "usage": {"input_tokens": 10, "output_tokens": 0}
+                }
+            }),
+        )
+    }
+
+    fn text_response(text: &str) -> String {
+        format!(
+            "{}{}{}{}{}{}",
+            message_start(),
+            sse(
+                "content_block_start",
+                serde_json::json!({
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""}
+                })
+            ),
+            sse(
+                "content_block_delta",
+                serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": text}
+                })
+            ),
+            sse(
+                "content_block_stop",
+                serde_json::json!({"type": "content_block_stop", "index": 0})
+            ),
+            sse(
+                "message_delta",
+                serde_json::json!({
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 3}
+                })
+            ),
+            sse("message_stop", serde_json::json!({"type": "message_stop"})),
+        )
+    }
+
+    fn tool_use_prefix(tool_id: &str, tool_name: &str, input_json: &str) -> String {
+        format!(
+            "{}{}{}{}",
+            message_start(),
+            sse(
+                "content_block_start",
+                serde_json::json!({
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name}
+                })
+            ),
+            sse(
+                "content_block_delta",
+                serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": input_json}
+                })
+            ),
+            sse(
+                "content_block_stop",
+                serde_json::json!({"type": "content_block_stop", "index": 0})
+            ),
+        )
+    }
+
+    async fn drain_stream_events(mut rx: tokio_mpsc::Receiver<StreamEvent>) -> Vec<StreamEvent> {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    }
+
+    fn transcript_entries(dir: &std::path::Path) -> Vec<serde_json::Value> {
+        crate::session::storage::SessionStorage::from_dir(dir.to_path_buf())
+            .load_transcript()
+            .unwrap()
+    }
 
     #[test]
     fn user_context_is_prepended_to_first_user_message() {
@@ -1542,6 +1751,249 @@ mod tests {
         assert_eq!(entries[0]["role"], "user");
         assert_eq!(entries[0]["content"][0]["text"], "context");
         assert_eq!(entries[0]["content"][1]["text"], "hello");
+    }
+
+    #[tokio::test]
+    async fn transcript_records_full_query_turn_against_sse_stream() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut server = spawn_sse_server().await;
+        let mut engine = test_engine(server.base_url.clone(), "session-query", Some(tmp.path()));
+        engine.add_user_message("hello");
+
+        let (event_tx, event_rx) = tokio_mpsc::channel(32);
+        let send = server.chunk_tx.clone();
+        let run = tokio::spawn(async move { engine.run_turn(&event_tx).await });
+        send.send(text_response("hi back")).await.unwrap();
+        drop(send);
+
+        let result = run.await.unwrap().unwrap();
+        assert!(matches!(result, TurnResult::Done(StopReason::EndTurn)));
+        let events = drain_stream_events(event_rx).await;
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::RequestStart { .. })));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Done { .. })));
+
+        let request_body = server.body_rx.recv().await.unwrap();
+        assert_eq!(request_body["messages"][0]["content"][0]["text"], "hello");
+
+        let entries = transcript_entries(tmp.path());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["role"], "user");
+        assert_eq!(entries[0]["content"][0]["text"], "hello");
+        assert_eq!(entries[1]["role"], "assistant");
+        assert_eq!(entries[1]["content"][0]["text"], "hi back");
+    }
+
+    #[tokio::test]
+    async fn transcript_records_assistant_tool_use_and_followup_tool_result() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let server = spawn_sse_server().await;
+        let mut engine = test_engine(server.base_url.clone(), "session-tool", Some(tmp.path()));
+        engine.add_user_message("run tool");
+
+        let (event_tx, _event_rx) = tokio_mpsc::channel(32);
+        let send = server.chunk_tx.clone();
+        let result = {
+            let run =
+                tokio::spawn(async move { engine.run_turn(&event_tx).await.map(|r| (r, engine)) });
+            let mut payload = tool_use_prefix("toolu_1", "Bash", "{\"command\":\"pwd\"}");
+            payload.push_str(&sse(
+                "message_delta",
+                serde_json::json!({
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 1}
+                }),
+            ));
+            payload.push_str(&sse(
+                "message_stop",
+                serde_json::json!({"type": "message_stop"}),
+            ));
+            send.send(payload).await.unwrap();
+            drop(send);
+            run.await.unwrap().unwrap()
+        };
+
+        let (turn, mut engine) = result;
+        let TurnResult::ToolUse(tool_uses) = turn else {
+            panic!("expected tool use");
+        };
+        assert_eq!(tool_uses.len(), 1);
+        assert_eq!(tool_uses[0].id, "toolu_1");
+        assert_eq!(tool_uses[0].name, "Bash");
+        assert_eq!(tool_uses[0].input["command"], "pwd");
+        assert_eq!(tool_uses[0].message_id.as_deref(), Some("msg_01"));
+
+        engine.add_tool_result_content_with_error_field_and_name(
+            "toolu_1",
+            Some("Bash"),
+            Some(100_000),
+            serde_json::Value::String("ok".to_string()),
+            false,
+            false,
+        );
+
+        let entries = transcript_entries(tmp.path());
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1]["role"], "assistant");
+        assert_eq!(entries[1]["content"][0]["type"], "tool_use");
+        assert_eq!(entries[1]["content"][0]["id"], "toolu_1");
+        assert_eq!(entries[2]["role"], "user");
+        assert_eq!(entries[2]["content"][0]["type"], "tool_result");
+        assert_eq!(entries[2]["content"][0]["tool_use_id"], "toolu_1");
+        assert!(entries[2]["content"][0].get("is_error").is_none());
+    }
+
+    #[tokio::test]
+    async fn transcript_records_synthetic_tool_result_when_cancelled_mid_tool_use() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let server = spawn_sse_server().await;
+        let mut engine = test_engine(server.base_url.clone(), "session-cancel", Some(tmp.path()));
+        engine.add_user_message("start tool");
+        let cancel = tokio_util::sync::CancellationToken::new();
+        engine.set_cancel_token(cancel.clone());
+
+        let (event_tx, mut event_rx) = tokio_mpsc::channel(32);
+        let send = server.chunk_tx.clone();
+        let run = tokio::spawn(async move { engine.run_turn(&event_tx).await });
+        send.send(tool_use_prefix(
+            "toolu_cancel",
+            "Bash",
+            "{\"command\":\"sleep 10\"}",
+        ))
+        .await
+        .unwrap();
+
+        while let Some(event) = event_rx.recv().await {
+            if matches!(
+                event,
+                StreamEvent::ToolStart {
+                    ref tool_use_id,
+                    ..
+                } if tool_use_id == "toolu_cancel"
+            ) {
+                break;
+            }
+        }
+
+        cancel.cancel();
+        send.send(sse("ping", serde_json::json!({"type": "ping"})))
+            .await
+            .unwrap();
+        drop(send);
+
+        let result = run.await.unwrap().unwrap();
+        assert!(matches!(result, TurnResult::Done(StopReason::EndTurn)));
+
+        let entries = transcript_entries(tmp.path());
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1]["content"][0]["type"], "tool_use");
+        assert_eq!(entries[2]["role"], "user");
+        assert_eq!(entries[2]["content"][0]["type"], "tool_result");
+        assert_eq!(entries[2]["content"][0]["tool_use_id"], "toolu_cancel");
+        assert_eq!(entries[2]["content"][0]["is_error"], true);
+        assert_eq!(entries[2]["content"][0]["content"][0]["text"], CANCEL_MSG);
+    }
+
+    #[tokio::test]
+    async fn transcript_records_content_replacement_and_resume_reconstructs_budget_state() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut server = spawn_sse_server().await;
+        let mut engine = test_engine(server.base_url.clone(), "session-budget", Some(tmp.path()));
+        engine.messages = vec![
+            serde_json::json!({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_a", "name": "Tool", "input": {}},
+                {"type": "tool_use", "id": "toolu_b", "name": "Tool", "input": {}}
+            ]}),
+            serde_json::json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_a", "content": "a".repeat(120_000)},
+                {"type": "tool_result", "tool_use_id": "toolu_b", "content": "b".repeat(120_000)}
+            ]}),
+        ];
+        engine.persist_unpersisted_messages();
+
+        let (event_tx, _event_rx) = tokio_mpsc::channel(32);
+        let send = server.chunk_tx.clone();
+        let run = tokio::spawn(async move { engine.run_turn(&event_tx).await });
+        send.send(text_response("done")).await.unwrap();
+        drop(send);
+        let result = run.await.unwrap().unwrap();
+        assert!(matches!(result, TurnResult::Done(StopReason::EndTurn)));
+
+        let request_body = server.body_rx.recv().await.unwrap();
+        let request_content = request_body["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(request_content.len(), 2);
+        let replaced_in_request = request_content
+            .iter()
+            .filter(|block| {
+                block["content"]
+                    .as_str()
+                    .map(|text| text.starts_with(crate::query::result_budget::PERSISTED_OUTPUT_TAG))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(replaced_in_request, 1);
+
+        let entries = transcript_entries(tmp.path());
+        assert_eq!(entries[0]["role"], "assistant");
+        assert_eq!(entries[1]["role"], "user");
+        assert_eq!(entries[2]["type"], "content-replacement");
+        assert_eq!(entries[2]["replacements"].as_array().unwrap().len(), 1);
+
+        let mut resumed = test_engine("http://127.0.0.1:1".to_string(), "session-budget", None);
+        resumed.load_messages(entries);
+        let resumed_messages = resumed.messages().to_vec();
+        let replay = crate::query::result_budget::apply_tool_result_budget(
+            "session-budget",
+            &resumed_messages,
+            &mut resumed.content_replacement_state,
+            &resumed.content_budget_skip_tool_use_ids,
+        );
+        assert!(replay.newly_replaced.is_empty());
+        let replay_content = replay.messages[1]["content"].as_array().unwrap();
+        let replaced_after_resume = replay_content
+            .iter()
+            .filter(|block| {
+                block["content"]
+                    .as_str()
+                    .map(|text| text.starts_with(crate::query::result_budget::PERSISTED_OUTPUT_TAG))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(replaced_after_resume, 1);
+    }
+
+    #[test]
+    fn transcript_resume_filters_after_last_compact_boundary_and_keeps_markers_ephemeral() {
+        let mut engine = test_engine("http://127.0.0.1:1".to_string(), "session-resume", None);
+        engine.load_messages(vec![
+            serde_json::json!({"role": "user", "content": [{"type": "text", "text": "before"}]}),
+            serde_json::json!({"type": "compact_boundary", "summary": "old"}),
+            serde_json::json!({"role": "user", "content": [{"type": "text", "text": "after"}]}),
+        ]);
+        assert_eq!(engine.messages().len(), 2);
+        assert_eq!(engine.messages()[0]["type"], "compact_boundary");
+        assert_eq!(engine.messages()[1]["content"][0]["text"], "after");
+        assert_eq!(engine.transcript_persisted_count, 2);
+
+        engine.add_resume_continuation_markers();
+        assert_eq!(engine.messages().len(), 4);
+        assert_eq!(
+            engine.messages()[2]["content"][0]["text"],
+            "Continue from where you left off."
+        );
+        assert_eq!(
+            engine.messages()[3]["content"][0]["text"],
+            "No response requested."
+        );
+        assert_eq!(
+            engine.transcript_persisted_count,
+            engine.messages().len(),
+            "resume continuation markers are in-memory and considered already persisted"
+        );
     }
 }
 

@@ -134,6 +134,14 @@ Now matching:
   process-wide rate-limit status listener set, and stream-json subscribes to
   that listener to emit `rate_limit_event`. The old deterministic fallback
   emissions after `Done`, `ToolUse`, and `MaxTurns` were removed.
+- Query transcript coverage now exercises the real API/SSE path with a local
+  test server: normal user+assistant turns, assistant tool-use plus follow-up
+  tool_result, cancellation after tool_use with synthetic tool_result
+  persistence, content-replacement transcript records plus resume
+  reconstruction, and compact-boundary resume filtering. This also fixed two
+  parity bugs: cancelled tool-use synthetic results are now written to the
+  transcript, and compact-boundary entries survive the resume splitter before
+  TS-style post-boundary filtering runs.
 - Latest normal stream-json smoke:
   `/tmp/claude-rs-parity-stream-normal-after-partial`.
 - Latest partial-message stream-json smoke:
@@ -443,12 +451,16 @@ Missing or partial:
 
 Needs work:
 - Build a TS/Rust behavior matrix for each query transition.
-- Add transcript-level tests for tool-use, cancel, compact, max-token recovery,
-  stop hooks, and resumed sessions.
+- Extend transcript-level tests to remaining query edges not covered by the
+  current real-SSE harness: max-token recovery, stop-hook blocking/retry, and
+  prompt-too-long reactive compaction.
 
 Improved:
 - StopFailure hooks now fire for request errors, streamed API error events,
   and stream idle timeout failures instead of only the initial API send path.
+- Transcript-level tests now cover normal query turns, tool-use turns,
+  cancellation after tool_use, large tool-result content-replacement records,
+  compact-boundary resume filtering, and ephemeral resume continuation markers.
 
 ### Bridge / direct-connect / upstream proxy
 
@@ -1271,8 +1283,7 @@ Needs work:
 
 ## Suggested Next Order
 
-1. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
-2. Decide scope for bridge/direct-connect/upstream proxy before porting more
+1. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
-3. Reconcile current live Agent-tool metadata for plugin-provided agents.
-4. Update or replace `feature-gap-analysis.md` once this checklist is validated.
+2. Reconcile current live Agent-tool metadata for plugin-provided agents.
+3. Update or replace `feature-gap-analysis.md` once this checklist is validated.
