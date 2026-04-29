@@ -584,10 +584,13 @@ Improved since the stale report:
   content, preapproved-host auto-allow, allow/ask/deny rule matching, and
   local-settings allow suggestions instead of inheriting blanket read-only
   auto-allow.
+- HTML responses now go through an HTML-to-Markdown converter before prompt
+  application, matching TS's Turndown-based flow much more closely than the
+  previous manual tag stripper.
 
 Still needs work:
 - Preapproved-host behavior parity.
-- HTML to Markdown conversion parity. Rust currently strips HTML manually.
+- Exact Turndown formatting parity for edge-case HTML.
 - Content-type, encoding, binary persistence, cache size/eviction, and
   size-limit behavior parity.
 - Copyright/quote-limit behavior exactly matching TS.

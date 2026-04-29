@@ -22,6 +22,7 @@ uuid.workspace = true
 chrono.workspace = true
 dirs = "6"
 jsonschema = { version = "0.46.3", default-features = false }
+quick_html2md = "0.2.1"
 
 [dev-dependencies]
 tempfile = "3"

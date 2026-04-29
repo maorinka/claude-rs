@@ -373,106 +373,11 @@ async fn check_domain_blocklist(client: &reqwest::Client, domain: &str) -> Domai
     }
 }
 
-/// Strip HTML tags from a string, returning plain text.
-fn strip_html(html: &str) -> String {
-    let mut result = String::with_capacity(html.len());
-    let mut in_tag = false;
-    let mut in_script = false;
-    let mut in_style = false;
-    let mut tag_buf = String::new();
-
-    let chars: Vec<char> = html.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '<' {
-            in_tag = true;
-            tag_buf.clear();
-            i += 1;
-            continue;
-        }
-        if in_tag {
-            if c == '>' {
-                in_tag = false;
-                let tag_lower = tag_buf.trim().to_lowercase();
-                if tag_lower.starts_with("script") {
-                    in_script = true;
-                } else if tag_lower == "/script" {
-                    in_script = false;
-                } else if tag_lower.starts_with("style") {
-                    in_style = true;
-                } else if tag_lower == "/style" {
-                    in_style = false;
-                }
-                // Add whitespace for block-level elements
-                let block_tags = [
-                    "div",
-                    "p",
-                    "br",
-                    "h1",
-                    "h2",
-                    "h3",
-                    "h4",
-                    "h5",
-                    "h6",
-                    "li",
-                    "tr",
-                    "td",
-                    "th",
-                    "blockquote",
-                    "section",
-                    "article",
-                    "header",
-                    "footer",
-                    "nav",
-                    "main",
-                ];
-                for bt in &block_tags {
-                    if tag_lower.starts_with(bt) || tag_lower == format!("/{}", bt) {
-                        result.push('\n');
-                        break;
-                    }
-                }
-                tag_buf.clear();
-            } else {
-                tag_buf.push(c);
-            }
-            i += 1;
-            continue;
-        }
-        if !in_script && !in_style {
-            result.push(c);
-        }
-        i += 1;
-    }
-
-    // Decode common HTML entities
-    let result = result
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .replace("&apos;", "'");
-
-    // Collapse multiple blank lines
-    let mut out = String::new();
-    let mut consecutive_newlines = 0usize;
-    for c in result.chars() {
-        if c == '\n' {
-            consecutive_newlines += 1;
-            if consecutive_newlines <= 2 {
-                out.push(c);
-            }
-        } else {
-            consecutive_newlines = 0;
-            out.push(c);
-        }
-    }
-
-    out.trim().to_string()
+/// Convert HTML to Markdown before handing content to the secondary model.
+/// TS uses `turndown`; this keeps the same semantic surface instead of
+/// flattening HTML to plain text.
+fn html_to_markdown(html: &str) -> String {
+    quick_html2md::html_to_markdown(html).trim().to_string()
 }
 
 /// Verbatim port of TS WebFetchTool/prompt.ts DESCRIPTION.
@@ -717,7 +622,7 @@ impl ToolExecutor for WebFetchTool {
             let body_text = String::from_utf8_lossy(&body).into_owned();
             let result_text =
                 if content_type.contains("text/html") || body_text.trim_start().starts_with('<') {
-                    strip_html(&body_text)
+                    html_to_markdown(&body_text)
                 } else {
                     body_text
                 };
@@ -814,6 +719,17 @@ mod tests {
         assert!(pre.contains("Provide a concise response based on the content above"));
         assert!(un.contains("125-character maximum"));
         assert!(pre.len() < un.len());
+    }
+
+    #[test]
+    fn html_conversion_preserves_markdown_structure() {
+        let markdown = html_to_markdown(
+            r#"<html><body><h1>Title</h1><p>Hello <strong>world</strong>.</p><ul><li>One</li><li>Two</li></ul></body></html>"#,
+        );
+        assert!(markdown.contains("# Title"), "{markdown}");
+        assert!(markdown.contains("**world**"), "{markdown}");
+        assert!(markdown.contains("- One"), "{markdown}");
+        assert!(markdown.contains("- Two"), "{markdown}");
     }
 
     #[tokio::test]
