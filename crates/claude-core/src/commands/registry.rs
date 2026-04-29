@@ -11,6 +11,7 @@ pub struct Command {
     pub name: String,
     pub description: String,
     pub command_type: CommandType,
+    pub aliases: Vec<String>,
     pub handler: Box<dyn CommandHandler>,
 }
 
@@ -127,21 +128,37 @@ pub enum CommandResult {
 
 pub struct CommandRegistry {
     commands: HashMap<String, Command>,
+    aliases: HashMap<String, String>,
 }
 
 impl CommandRegistry {
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),
+            aliases: HashMap::new(),
         }
     }
 
     pub fn register(&mut self, cmd: Command) {
+        for alias in &cmd.aliases {
+            self.aliases.insert(alias.clone(), cmd.name.clone());
+        }
         self.commands.insert(cmd.name.clone(), cmd);
     }
 
+    pub fn register_alias(&mut self, alias: &str, canonical: &str) {
+        if self.commands.contains_key(canonical) {
+            self.aliases
+                .insert(alias.to_string(), canonical.to_string());
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<&Command> {
-        self.commands.get(name)
+        self.commands.get(name).or_else(|| {
+            self.aliases
+                .get(name)
+                .and_then(|name| self.commands.get(name))
+        })
     }
 
     pub fn all(&self) -> Vec<&Command> {
@@ -153,6 +170,7 @@ impl CommandRegistry {
             .values()
             .filter(|c| {
                 c.name.contains(query)
+                    || c.aliases.iter().any(|alias| alias.contains(query))
                     || c.description.to_lowercase().contains(&query.to_lowercase())
             })
             .collect()

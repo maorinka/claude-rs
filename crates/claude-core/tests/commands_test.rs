@@ -62,6 +62,7 @@ fn test_register_and_get_command() {
         name: "echo".to_string(),
         description: "Echo arguments".to_string(),
         command_type: CommandType::Action,
+        aliases: vec!["say".to_string()],
         handler: Box::new(EchoHandler),
     });
 
@@ -71,6 +72,7 @@ fn test_register_and_get_command() {
         "Command 'echo' should be found after registration"
     );
     assert_eq!(cmd.unwrap().name, "echo");
+    assert_eq!(registry.get("say").unwrap().name, "echo");
 
     assert!(
         registry.get("nonexistent").is_none(),
@@ -198,14 +200,15 @@ fn test_all_builtin_commands_registered() {
 
     // Verify we have a reasonable number of commands
     assert!(
-        count >= 47,
-        "Expected at least 47 built-in commands, found {}",
+        count >= 60,
+        "Expected at least 60 built-in commands, found {}",
         count
     );
 
     // Spot-check a selection of required commands
     let required = [
         "help",
+        "exit",
         "status",
         "clear",
         "compact",
@@ -220,7 +223,6 @@ fn test_all_builtin_commands_registered() {
         "review",
         "branch",
         "pr",
-        "bug",
         "test",
         "refactor",
         "explain",
@@ -253,13 +255,51 @@ fn test_all_builtin_commands_registered() {
         "pr-comments",
         "proactive",
         "ultrareview",
-        // Batch 2 commands will be added when rate limit resets
+        "advisor",
+        "terminal-setup",
+        "web-setup",
+        "think-back",
+        "rate-limit-options",
+        "statusline",
+        "stickers",
+        "vim",
+        "thinkback-play",
+        "ide",
+        "login",
+        "logout",
     ];
     for name in &required {
         assert!(
             registry.get(name).is_some(),
             "Built-in command '{}' must be registered",
             name
+        );
+    }
+
+    let aliases = [
+        ("settings", "config"),
+        ("continue", "resume"),
+        ("checkpoint", "rewind"),
+        ("bashes", "tasks"),
+        ("allowed-tools", "permissions"),
+        ("plugins", "plugin"),
+        ("marketplace", "plugin"),
+        ("app", "desktop"),
+        ("ios", "mobile"),
+        ("android", "mobile"),
+        ("bug", "feedback"),
+        ("quit", "exit"),
+        ("remote", "session"),
+        ("rc", "remote-control"),
+        ("terminalSetup", "terminal-setup"),
+        ("thinkback", "think-back"),
+        ("remote-setup", "web-setup"),
+    ];
+    for (alias, canonical) in aliases {
+        assert_eq!(
+            registry.get(alias).map(|cmd| cmd.name.as_str()),
+            Some(canonical),
+            "alias /{alias} should resolve to /{canonical}"
         );
     }
 }

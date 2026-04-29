@@ -831,40 +831,68 @@ Files:
 - `crates/claude-core/src/commands/registry.rs`
 - TS reference: `src/commands/*`, `src/commands.ts`
 
-Broad command coverage now exists, but many commands are not equivalent.
+Completed audit:
+- Rust now has registry-level alias support and TS-compatible aliases:
+  `/settings`, `/continue`, `/checkpoint`, `/bashes`, `/allowed-tools`,
+  `/plugins`, `/marketplace`, `/app`, `/ios`, `/android`, `/bug`, `/quit`,
+  `/remote`, and `/rc`.
+- Rust now uses TS canonical names for `/terminal-setup`, `/think-back`, and
+  `/web-setup`, while keeping previous Rust names as compatibility aliases.
+- Added placeholder slash commands for TS surface entries that were absent from
+  Rust: `/advisor`, `/exit`, `/ide`, `/login`, `/logout`,
+  `/rate-limit-options`, `/statusline`, `/stickers`, `/vim`, and
+  `/thinkback-play`.
+- Added tests that required commands exist and aliases resolve to the canonical
+  TS command.
 
-Commands that appear especially partial or manual:
-- `/feedback`: local transcript text instead of TS submission/form flow.
-- `/upgrade`: static links instead of TS flow.
-- `/install-github-app`: manual steps instead of interactive GitHub wizard.
-- `/install-slack-app`: static instructions.
-- `/chrome`: static docs/store pointers.
-- `/desktop`: static download/docs instead of session handoff.
-- `/mobile`: static instructions.
-- `/terminalSetup`: diagnostics/instructions only.
-- `/heapdump`: informational only.
-- `/remote-env`: local/env display, not full TS remote integration.
-- `/remote-setup`: setup instructions, not full flow.
-- `/passes`: likely prompt-only approximation.
-- `/mcp`: management surface is far thinner than TS.
-- `/plugin`: management surface is far thinner than TS.
-- `/skills`: listing only vs full TS UI.
-- `/agents`: no full running-agent management.
-- `/resume`: needs session-search/selection parity.
-- `/copy`: depends on shell clipboard tools, not full TS UI behavior.
-- `/export`: verify format/session-content parity.
-- `/memory`: verify against TS memory command and memdir behavior.
-- `/permissions`: verify against full TS permissions UI.
-- `/doctor`: verify against TS doctor checks.
-- `/context`: verify against TS context visualization/noninteractive output.
-- `/output-style`: currently deprecated/config-style behavior; TS has richer UI.
+Classification:
 
-Needs work:
-- For every command, classify as `full`, `partial`, `prompt-only`,
-  `link-only`, or `missing`.
-- Add golden tests against TS command output where possible.
-- Wire commands to live TUI dialogs rather than static text for interactive
-  flows.
+| Command(s) | Status | Notes |
+| --- | --- | --- |
+| `/help` | partial | Static Rust help text; TS renders rich Ink help and dynamic command availability. |
+| `/clear` (`/reset`, `/new`) | full | Clears Rust conversation state and alias behavior now matches TS. |
+| `/cost`, `/stats`, `/usage` | partial | Rust reports local tracker data; TS has richer account/session usage surfaces. |
+| `/model`, `/effort`, `/fast`, `/brief`, `/theme`, `/color` | partial | Rust mutates shared TUI state/settings; TS uses interactive pickers and richer validation. |
+| `/config` (`/settings`) | partial | Rust shows settings text; TS opens config UI. |
+| `/permissions` (`/allowed-tools`) | partial | Rust shows permission mode; TS has full permission management UI. |
+| `/memory` | partial | Rust lists memory files; TS has full memory editor/discovery behavior. |
+| `/tasks` (`/bashes`) | partial | Rust lists task state; TS has richer task/background-command dialogs. |
+| `/resume` (`/continue`) | partial | Rust has command stub/session logic elsewhere; TS has picker/search/resume UX. |
+| `/context` | partial | Rust reports token/context values; TS has visual context grid and noninteractive variant. |
+| `/doctor` | partial | Rust performs basic local checks; TS doctor has broader install/auth/IDE/MCP diagnostics. |
+| `/diff` | partial | Rust shows git diff; TS UI has richer rendering. |
+| `/export` | partial | Rust writes markdown/text export; TS has export dialog/session-content parity still to verify. |
+| `/mcp` | partial | Rust status/listing only; TS has full MCP management UI. |
+| `/plugin` (`/plugins`, `/marketplace`) | partial | Rust local listing/help only; TS marketplace/install/enable/disable UI is not ported. |
+| `/skills` | partial | Rust lists skills; TS has richer skills UI/search. |
+| `/agents` | partial | Rust lists minimal agent/task state; TS has running-agent management dialogs. |
+| `/rewind` (`/checkpoint`) | partial | Rust has rewind UI elsewhere, but command-level behavior is not fully TS. |
+| `/files` | partial | Rust lists project/context files; TS ant-only file context UI differs. |
+| `/hooks` | partial | Rust lists hook config; TS has hook command UI/flows. |
+| `/session` (`/remote`) | partial | Rust shows session info; TS remote session URL/QR flow is richer. |
+| `/copy` | partial | Rust uses shell clipboard tools; TS has selector/UI behavior. |
+| `/rename`, `/add-dir`, `/tag` | partial | Rust updates local shared state; TS has richer validation/UI. |
+| `/release-notes`, `/reload-plugins` | partial | Rust returns text/local reload summary; TS has richer plugin/release flows. |
+| `/sandbox`, `/output-style` | partial | Rust has local settings stubs; TS has full sandbox/output-style UI. |
+| `/remote-control` (`/rc`) | partial | Rust records local request; TS starts Claude.ai session-ingress bridge. |
+| `/remote-env` | partial | Rust prints env values; TS configures remote environment. |
+| `/exit` (`/quit`), `/vim`, `/statusline`, `/stickers` | partial | Rust placeholders; TS executes TUI/input/status/sticker flows. |
+| `/ide` | partial | Rust placeholder; TS manages IDE integrations. |
+| `/login`, `/logout` | partial | Rust points to CLI subcommands; TS opens auth dialogs. |
+| `/feedback` (`/bug`) | link-only | Rust prints issue URL/transcript text; TS opens feedback/bug flow. |
+| `/upgrade`, `/privacy-settings`, `/install-github-app`, `/install-slack-app`, `/chrome`, `/desktop` (`/app`), `/mobile` (`/ios`, `/android`), `/terminal-setup`, `/heapdump`, `/web-setup` | link-only | Rust gives URLs/manual instructions; TS opens product-specific UI/wizards. |
+| `/init`, `/init-verifiers`, `/compact`, `/plan`, `/exit-plan`, `/commit`, `/review`, `/branch`, `/pr-comments`, `/commit-push-pr`, `/security-review`, `/insights`, `/btw`, `/advisor`, `/passes` | prompt-only | Rust expands to a prompt; TS prompt commands may also carry allowed-tools/progress metadata. |
+| `/ultrareview`, `/think-back`, `/thinkback-play`, `/rate-limit-options`, `/extra-usage` | partial | Product/account/UI-backed TS behavior is only approximated or placeholder in Rust. |
+| `/proactive`, `/ultraplan`, `/share`, `/env`, `/team-onboarding`, `/test`, `/refactor`, `/explain`, `/docs` | Rust-only/divergent | Not part of the inspected external TS command list or are internal/gated in TS; keep under review so they do not leak when TS would hide them. |
+| `/voice`, `/assistant`, `/brief` TS command, `/peers`, `/workflows`, `/torch`, `/buddy`, `/remote-control-server`, `/version`, internal-only commands | missing or gated out | TS registers these only behind feature/user/build gates. Rust should only expose them if the corresponding subsystem is ported and gated the same way. |
+
+Remaining slash-command work:
+- Replace partial/link-only placeholders with real TS-equivalent TUI dialogs and
+  service calls where product parity is required.
+- Add golden tests against TS output/command metadata for stable local and
+  prompt commands.
+- Port command availability filtering (`availability`, `isEnabled`, provider
+  gates, remote-safe/bridge-safe filtering) as a general command registry layer.
 
 ## P1: Hooks
 
@@ -1215,13 +1243,12 @@ Needs work:
 
 ## Suggested Next Order
 
-1. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
-2. Verify rich user/system context lifecycle against resumed sessions and
+1. Verify rich user/system context lifecycle against resumed sessions and
    remote-control captures.
-3. Complete the remaining stream-json rate-limit timing parity by plumbing
+2. Complete the remaining stream-json rate-limit timing parity by plumbing
    API status changes like TS instead of relying on deterministic fallback
    placement around very fast `PreToolUse` hooks.
-4. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
-5. Decide scope for bridge/direct-connect/upstream proxy before porting more
+3. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
+4. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
-6. Update or replace `feature-gap-analysis.md` once this checklist is validated.
+5. Update or replace `feature-gap-analysis.md` once this checklist is validated.

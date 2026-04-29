@@ -15,6 +15,7 @@ impl CommandHandler for HelpHandler {
         Ok(CommandResult::Action(
             "Available slash commands:\n\
              /help          - Show available commands\n\
+             /exit          - Exit the TUI\n\
              /status        - Show session status (model, tokens, messages)\n\
              /clear         - Clear conversation history\n\
              /compact       - Manually trigger conversation compaction\n\
@@ -29,7 +30,6 @@ impl CommandHandler for HelpHandler {
              /review        - Review code changes (git diff)\n\
              /branch        - Create a new git branch\n\
              /pr            - Create a pull request description\n\
-             /bug           - Report or analyze a bug\n\
              /test          - Generate tests for code\n\
              /refactor      - Suggest refactoring\n\
              /explain       - Explain code\n\
@@ -74,7 +74,7 @@ impl CommandHandler for HelpHandler {
              /commit-push-pr - Commit, push, and create PR\n\
              /security-review - Security review of branch\n\
              /ultraplan     - Ultra-detailed planning mode\n\
-             /thinkback     - Replay reasoning process\n\
+             /think-back    - Your 2025 Claude Code Year in Review\n\
              /insights      - Usage insights report"
                 .to_string(),
         ))
@@ -2399,6 +2399,119 @@ impl CommandHandler for BtwHandler {
     }
 }
 
+/// /exit — TS exits the TUI. Rust command execution returns text today; the
+/// TUI-level exit action is tracked separately, so this is intentionally
+/// classified as partial.
+pub struct ExitHandler;
+impl CommandHandler for ExitHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Exit requested. Press Ctrl-C to quit this Rust TUI session.".to_string(),
+        ))
+    }
+}
+
+/// /statusline — TS opens statusline configuration. Rust currently reports the
+/// equivalent settings location.
+pub struct StatuslineHandler;
+impl CommandHandler for StatuslineHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Status line configuration lives in ~/.claude/settings.json under `statusLine`."
+                .to_string(),
+        ))
+    }
+}
+
+/// /rate-limit-options — TS opens the rate-limit/extra-usage UI.
+pub struct RateLimitOptionsHandler;
+impl CommandHandler for RateLimitOptionsHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Rate limit options are not interactive in Rust yet. Use /extra-usage for the current session usage summary."
+                .to_string(),
+        ))
+    }
+}
+
+/// /stickers — TS shows sticker UI.
+pub struct StickersHandler;
+impl CommandHandler for StickersHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Stickers UI is not implemented in the Rust TUI yet.".to_string(),
+        ))
+    }
+}
+
+/// /vim — TS toggles the text input mode. Rust has Vim input internals but no
+/// slash-command bridge for toggling them yet.
+pub struct VimHandler;
+impl CommandHandler for VimHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Vim mode slash-command toggle is not wired in the Rust TUI yet.".to_string(),
+        ))
+    }
+}
+
+/// /thinkback-play — TS plays the generated year-in-review animation.
+pub struct ThinkbackPlayHandler;
+impl CommandHandler for ThinkbackPlayHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Thinkback playback is not implemented in the Rust TUI yet.".to_string(),
+        ))
+    }
+}
+
+/// /ide — TS manages IDE integrations.
+pub struct IdeHandler;
+impl CommandHandler for IdeHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "IDE integration management is not implemented in the Rust TUI yet.".to_string(),
+        ))
+    }
+}
+
+/// /login and /logout are full CLI subcommands in Rust but only informational
+/// slash commands until the TS login dialogs are ported.
+pub struct LoginHandler;
+impl CommandHandler for LoginHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Use `claude-rs login` from your shell to start the OAuth login flow.".to_string(),
+        ))
+    }
+}
+
+pub struct LogoutHandler;
+impl CommandHandler for LogoutHandler {
+    fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        Ok(CommandResult::Action(
+            "Use `claude-rs logout` from your shell to clear local auth.".to_string(),
+        ))
+    }
+}
+
+/// /advisor — lightweight prompt stand-in for the TS local advisor command.
+pub struct AdvisorHandler;
+impl CommandHandler for AdvisorHandler {
+    fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandResult> {
+        let topic = args.trim();
+        let prompt = if topic.is_empty() {
+            "Act as a senior engineering advisor. Review the current project context and suggest the highest-leverage next step."
+                .to_string()
+        } else {
+            format!(
+                "Act as a senior engineering advisor. Give concise, actionable advice about: {topic}"
+            )
+        };
+        Ok(CommandResult::Message(prompt))
+    }
+}
+
 /// /feedback — Submit feedback about Claude Code. TS opens a form; we print
 /// the URL and echo the optional report text so it's in the transcript.
 pub struct FeedbackHandler;
@@ -2770,6 +2883,7 @@ pub fn build_default_commands() -> CommandRegistry {
                 name: $name.to_string(),
                 description: $desc.to_string(),
                 command_type: CommandType::$typ,
+                aliases: Vec::new(),
                 handler: Box::new($handler),
             });
         };
@@ -2779,6 +2893,7 @@ pub fn build_default_commands() -> CommandRegistry {
 
     // Action commands (existing)
     register!("help", "Show available commands", Action, HelpHandler);
+    register!("exit", "Exit the TUI", Action, ExitHandler);
     register!(
         "status",
         "Show session status (model, tokens, messages)",
@@ -2861,6 +2976,14 @@ pub fn build_default_commands() -> CommandRegistry {
     register!("stats", "Show usage statistics", Action, StatsHandler);
     register!("env", "Show environment variables", Action, EnvHandler);
     register!("hooks", "List configured hooks", Action, HooksHandler);
+    register!("ide", "Manage IDE integrations", Action, IdeHandler);
+    register!("login", "Authenticate Claude Code", Action, LoginHandler);
+    register!(
+        "logout",
+        "Clear local authentication",
+        Action,
+        LogoutHandler
+    );
     register!("session", "Session management", Action, SessionHandler);
     register!(
         "copy",
@@ -2892,7 +3015,6 @@ pub fn build_default_commands() -> CommandRegistry {
     );
     register!("branch", "Create a new git branch", Prompt, BranchHandler);
     register!("pr", "Create a pull request description", Prompt, PrHandler);
-    register!("bug", "Report or analyze a bug", Prompt, BugHandler);
     register!("test", "Generate tests for code", Prompt, TestHandler);
     register!("refactor", "Suggest refactoring", Prompt, RefactorHandler);
     register!("explain", "Explain code", Prompt, ExplainHandler);
@@ -2986,8 +3108,8 @@ pub fn build_default_commands() -> CommandRegistry {
         UltraplanHandler
     );
     register!(
-        "thinkback",
-        "Replay reasoning process",
+        "think-back",
+        "Your 2025 Claude Code Year in Review",
         Prompt,
         ThinkbackHandler
     );
@@ -2999,6 +3121,12 @@ pub fn build_default_commands() -> CommandRegistry {
         "Ask a quick side question without losing context",
         Prompt,
         BtwHandler
+    );
+    register!(
+        "advisor",
+        "Ask for concise engineering advice",
+        Prompt,
+        AdvisorHandler
     );
     register!(
         "feedback",
@@ -3029,6 +3157,26 @@ pub fn build_default_commands() -> CommandRegistry {
         "Detailed usage breakdown including per-turn tokens",
         Action,
         ExtraUsageHandler
+    );
+    register!(
+        "rate-limit-options",
+        "Show rate-limit options",
+        Action,
+        RateLimitOptionsHandler
+    );
+    register!(
+        "statusline",
+        "Set up Claude Code's status line UI",
+        Action,
+        StatuslineHandler
+    );
+    register!("stickers", "Show Claude stickers", Action, StickersHandler);
+    register!("vim", "Toggle Vim editing mode", Action, VimHandler);
+    register!(
+        "thinkback-play",
+        "Play the thinkback animation",
+        Action,
+        ThinkbackPlayHandler
     );
 
     // Batch 5 — integration / setup commands (URL + instructions; TS opens UI)
@@ -3063,7 +3211,7 @@ pub fn build_default_commands() -> CommandRegistry {
         MobileHandler
     );
     register!(
-        "terminalSetup",
+        "terminal-setup",
         "Terminal setup diagnostics + instructions",
         Action,
         TerminalSetupHandler
@@ -3081,7 +3229,7 @@ pub fn build_default_commands() -> CommandRegistry {
         RemoteEnvHandler
     );
     register!(
-        "remote-setup",
+        "web-setup",
         "Remote session setup instructions",
         Action,
         RemoteSetupHandler
@@ -3093,17 +3241,34 @@ pub fn build_default_commands() -> CommandRegistry {
         RemoteControlHandler
     );
     register!(
-        "rc",
-        "Alias for /remote-control",
-        Action,
-        RemoteControlHandler
-    );
-    register!(
         "passes",
         "Summarise GitHub items waiting on the user",
         Prompt,
         PassesHandler
     );
+
+    // TS slash-command aliases. Keep these in the registry rather than
+    // duplicating command entries so picker/help output remains canonical.
+    registry.register_alias("reset", "clear");
+    registry.register_alias("new", "clear");
+    registry.register_alias("settings", "config");
+    registry.register_alias("continue", "resume");
+    registry.register_alias("checkpoint", "rewind");
+    registry.register_alias("bashes", "tasks");
+    registry.register_alias("allowed-tools", "permissions");
+    registry.register_alias("plugins", "plugin");
+    registry.register_alias("marketplace", "plugin");
+    registry.register_alias("app", "desktop");
+    registry.register_alias("ios", "mobile");
+    registry.register_alias("android", "mobile");
+    registry.register_alias("bug", "feedback");
+    registry.register_alias("quit", "exit");
+    registry.register_alias("remote", "session");
+    registry.register_alias("rc", "remote-control");
+    // Compatibility aliases for names used by earlier Rust builds.
+    registry.register_alias("terminalSetup", "terminal-setup");
+    registry.register_alias("thinkback", "think-back");
+    registry.register_alias("remote-setup", "web-setup");
 
     registry
 }
@@ -3568,7 +3733,7 @@ mod tests {
             "commit-push-pr",
             "security-review",
             "ultraplan",
-            "thinkback",
+            "think-back",
             "insights",
         ];
         for name in &expected {
@@ -3620,7 +3785,7 @@ mod tests {
                     "/commit-push-pr",
                     "/security-review",
                     "/ultraplan",
-                    "/thinkback",
+                    "/think-back",
                     "/insights",
                 ] {
                     assert!(text.contains(cmd), "/help should list {}", cmd);
