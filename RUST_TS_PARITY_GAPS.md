@@ -269,9 +269,8 @@ Improved:
   resource cursors in `fetchResourcesForClient`; it calls SDK
   `resources/list` once and adds the `server` field. Rust follows that same
   flow.
-
-Still needs work:
-- Add integration tests with a real or fake MCP server exposing resources.
+- Resource list/read now has integration coverage with a fake stdio MCP server
+  exposing `resources/list` and `resources/read`.
 
 ### Tool executor is simplified
 
