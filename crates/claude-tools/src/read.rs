@@ -393,11 +393,11 @@ impl ToolExecutor for FileReadTool {
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "0-based line index to start reading from."
+                    "description": "The line number to start reading from. Only provide if the file is too large to read at once."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of lines to return."
+                    "description": "The number of lines to read. Only provide if the file is too large to read at once."
                 },
                 "pages": {
                     "type": "string",
@@ -610,14 +610,44 @@ impl FileReadTool {
         input: &Value,
         ctx: &ToolUseContext,
     ) -> Result<ToolResultData> {
-        // Track whether offset/limit were explicitly supplied by the caller.
-        // is_partial should only be true when the user explicitly bounded the read.
-        // Mirrors TS: FileReadTool stores `offset`/`limit` as undefined when not provided,
-        // and isPartialView is only set by auto-injection paths, not normal reads.
-        let explicit_offset = input.get("offset").and_then(|v| v.as_u64()).is_some();
-        let explicit_limit = input.get("limit").and_then(|v| v.as_u64()).is_some();
-        let offset = input["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = input["limit"].as_u64().unwrap_or(DEFAULT_LINE_LIMIT) as usize;
+        let requested_offset = input["offset"].as_u64().unwrap_or(1);
+        let requested_limit = input.get("limit").and_then(|v| v.as_u64());
+        let line_offset = if requested_offset == 0 {
+            0
+        } else {
+            requested_offset.saturating_sub(1)
+        } as usize;
+        let limit = requested_limit.unwrap_or(DEFAULT_LINE_LIMIT) as usize;
+
+        let existing_read = ctx
+            .read_file_state
+            .lock()
+            .ok()
+            .and_then(|state| state.get(file_path).cloned());
+        if let Some(existing) = existing_read {
+            if !existing.is_partial_view
+                && existing.offset == Some(requested_offset)
+                && existing.limit == requested_limit
+            {
+                if let Ok(metadata) = tokio::fs::metadata(file_path).await {
+                    if let Ok(modified) = metadata.modified() {
+                        let mtime_ms = modified
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        if mtime_ms == existing.timestamp {
+                            return Ok(ToolResultData {
+                                data: json!({
+                                    "type": "file_unchanged",
+                                    "file": { "filePath": file_path }
+                                }),
+                                is_error: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         // Read the file as raw bytes first for binary detection and size check.
         let raw_bytes = match read_bytes_with_screenshot_fallback(file_path).await {
@@ -662,16 +692,25 @@ impl FileReadTool {
             }
         };
 
-        // Record this read in the shared state for staleness tracking.
-        // is_partial is only true when the caller explicitly provided offset or limit;
-        // a default read (no args) is never partial, even if the file has fewer lines
-        // than DEFAULT_LINE_LIMIT. Mirrors TS: isPartialView is only set for bounded reads.
-        let is_partial = explicit_offset || explicit_limit;
+        let mtime_ms = tokio::fs::metadata(file_path)
+            .await
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as u64);
+
+        // TS Read stores offset/limit for dedup, but does not mark normal
+        // bounded Read calls as `isPartialView`; that flag is reserved for
+        // auto-injected partial views.
         if let Ok(mut state) = ctx.read_file_state.lock() {
-            // Pass file content for full reads so write/edit can do content-comparison
-            // fallback when mtime changes (antivirus/cloud-sync harmless touch).
-            let stored_content = if is_partial { None } else { Some(raw.clone()) };
-            state.record_read(file_path, is_partial, stored_content);
+            state.record_read_range(
+                file_path,
+                false,
+                Some(raw.clone()),
+                Some(requested_offset),
+                requested_limit,
+                mtime_ms,
+            );
         }
 
         // Split exactly like TS addLineNumbers/read bookkeeping:
@@ -684,11 +723,11 @@ impl FileReadTool {
         let total_lines = all_lines.len();
 
         // Apply offset and limit.
-        let start = offset.min(total_lines);
+        let start = line_offset.min(total_lines);
         let end = (start + limit).min(total_lines);
         let selected = &all_lines[start..end];
 
-        let start_line = start + 1; // convert to 1-based
+        let start_line = requested_offset;
         let selected_content = selected.join("\n");
 
         let result_data = json!({
@@ -1255,9 +1294,29 @@ mod tests {
         let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
         assert!(!result.is_error);
         assert_eq!(result.data["file"]["numLines"], 2);
-        assert_eq!(result.data["file"]["startLine"], 3); // 1-based: offset 2 -> line 3
+        assert_eq!(result.data["file"]["startLine"], 2);
         let content_out = result.data["file"]["content"].as_str().unwrap();
-        assert_eq!(content_out, "c\nd");
+        assert_eq!(content_out, "b\nc");
+    }
+
+    #[tokio::test]
+    async fn test_read_text_file_dedups_unchanged_same_range() {
+        let content = "a\nb\nc\nd\ne\n";
+        let f = make_temp_file("txt", content.as_bytes());
+        let path = f.path().to_str().unwrap();
+
+        let tool = FileReadTool;
+        let input = json!({ "file_path": path, "offset": 2, "limit": 2 });
+        let ctx = make_tool_context();
+        let cancel = CancellationToken::new();
+
+        let first = tool.call(&input, &ctx, cancel.clone(), None).await.unwrap();
+        assert_eq!(first.data["type"], "text");
+
+        let second = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(!second.is_error);
+        assert_eq!(second.data["type"], "file_unchanged");
+        assert_eq!(second.data["file"]["filePath"], path);
     }
 
     #[tokio::test]

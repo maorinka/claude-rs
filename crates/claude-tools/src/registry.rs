@@ -22,6 +22,11 @@ pub struct ReadFileEntry {
     pub timestamp: u64,
     /// Whether this was a partial view (offset/limit supplied explicitly).
     pub is_partial_view: bool,
+    /// Original 1-based Read offset. `None` entries come from Edit/Write updates
+    /// or non-Read state writes and are never eligible for Read dedup.
+    pub offset: Option<u64>,
+    /// Original Read line limit.
+    pub limit: Option<u64>,
     /// For full reads, the file content at read time. Used as a content-comparison
     /// fallback when mtime has changed but the file was not actually modified
     /// (e.g. antivirus scan, cloud-sync metadata touch).
@@ -50,6 +55,18 @@ impl ReadFileState {
     /// reads (offset/limit supplied). Stored content enables content-comparison fallback
     /// in `check_file_staleness` to distinguish harmless mtime touches from real edits.
     pub fn record_read(&mut self, path: &str, is_partial_view: bool, content: Option<String>) {
+        self.record_read_range(path, is_partial_view, content, None, None, None);
+    }
+
+    pub fn record_read_range(
+        &mut self,
+        path: &str,
+        is_partial_view: bool,
+        content: Option<String>,
+        offset: Option<u64>,
+        limit: Option<u64>,
+        timestamp: Option<u64>,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -57,8 +74,10 @@ impl ReadFileState {
         self.entries.insert(
             path.to_string(),
             ReadFileEntry {
-                timestamp: now,
+                timestamp: timestamp.unwrap_or(now),
                 is_partial_view,
+                offset,
+                limit,
                 // Store content only for full reads; partial reads never need it.
                 content: if is_partial_view { None } else { content },
             },
@@ -82,6 +101,8 @@ impl ReadFileState {
             ReadFileEntry {
                 timestamp: now,
                 is_partial_view: false,
+                offset: None,
+                limit: None,
                 content,
             },
         );

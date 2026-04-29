@@ -76,6 +76,9 @@ Now matching:
   before the next API request rather than emitted as a separate user turn.
 - `Read` line-number output now preserves TS trailing-newline behavior
   (`content.split(/\r?\n/)`), including the final numbered blank line.
+- `Read` offset handling now follows TS 1-based semantics, and repeated
+  same-file/same-range reads now return the TS `file_unchanged` stub when the
+  file mtime is unchanged instead of re-sending duplicate file content.
 - `Read` tool result metadata now keeps raw file content like TS
   `FileReadTool`, and model-facing tool-result text is line-numbered only
   when the CLI maps tool data into the next model request.

@@ -776,6 +776,9 @@ fn format_tool_result_string_for_model(tool_name: &str, data: &Value) -> String 
     if let Some(text) = data.as_str() {
         return text.to_string();
     }
+    if data.get("type").and_then(Value::as_str) == Some("file_unchanged") {
+        return "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.".to_string();
+    }
     if data.get("type").and_then(Value::as_str) == Some("text") {
         if let Some(file) = data.get("file") {
             if let Some(content) = file.get("content").and_then(Value::as_str) {
@@ -913,6 +916,21 @@ mod tests {
         assert_eq!(
             unknown_tool_error_content("MissingTool"),
             "<tool_use_error>Error: No such tool available: MissingTool</tool_use_error>"
+        );
+    }
+
+    #[test]
+    fn read_file_unchanged_maps_to_ts_stub() {
+        let text = format_tool_result_for_model(
+            "Read",
+            &serde_json::json!({
+                "type": "file_unchanged",
+                "file": { "filePath": "/tmp/a.txt" }
+            }),
+        );
+        assert_eq!(
+            text,
+            "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."
         );
     }
 }

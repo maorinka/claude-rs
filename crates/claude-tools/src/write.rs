@@ -336,6 +336,8 @@ mod tests {
                 crate::registry::ReadFileEntry {
                     timestamp: 1000, // very old timestamp
                     is_partial_view: false,
+                    offset: None,
+                    limit: None,
                     content: None,
                 },
             );

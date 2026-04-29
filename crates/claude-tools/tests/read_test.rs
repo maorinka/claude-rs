@@ -52,7 +52,7 @@ async fn test_read_with_offset_and_limit() {
     }
     let path = f.path().to_str().unwrap().to_string();
 
-    // offset=2 means skip lines 0 and 1 (0-indexed), so start from line index 2 (1-based: line 3)
+    // TS Read offsets are 1-based, so offset=2 starts at line 2.
     let result = call_tool(json!({ "file_path": path, "offset": 2, "limit": 2 })).await;
 
     assert!(!result.is_error);
@@ -60,8 +60,8 @@ async fn test_read_with_offset_and_limit() {
     let file = &result.data["file"];
     assert_eq!(file["numLines"], 2, "should return exactly 2 lines");
     assert_eq!(
-        file["startLine"], 3,
-        "startLine should be 1-based (offset 2 => line 3)"
+        file["startLine"], 2,
+        "startLine should follow TS 1-based offset semantics"
     );
     assert_eq!(
         file["totalLines"], 6,
@@ -69,11 +69,11 @@ async fn test_read_with_offset_and_limit() {
     );
 
     let content = file["content"].as_str().unwrap();
-    // lines returned are "three" and "four" (1-based lines 3 and 4)
+    // lines returned are "two" and "three" (1-based lines 2 and 3)
+    assert!(content.contains("two"), "should contain line 2: two");
     assert!(content.contains("three"), "should contain line 3: three");
-    assert!(content.contains("four"), "should contain line 4: four");
     assert!(!content.contains("one"), "should not contain line 1");
-    assert!(!content.contains("five"), "should not contain line 5");
+    assert!(!content.contains("four"), "should not contain line 4");
 }
 
 #[tokio::test]
