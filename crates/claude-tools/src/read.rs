@@ -368,7 +368,8 @@ impl ToolExecutor for FileReadTool {
         let Some(file_path) = input["file_path"].as_str() else {
             return claude_core::permissions::PermissionResult::passthrough("");
         };
-        match claude_core::permissions::check_read_permission_for_tool(file_path, context) {
+        let file_path = expand_tool_path(file_path, &context.working_directory);
+        match claude_core::permissions::check_read_permission_for_tool(&file_path, context) {
             claude_core::permissions::PermissionDecision::Allow(allow) => {
                 claude_core::permissions::PermissionResult::Allow(allow)
             }

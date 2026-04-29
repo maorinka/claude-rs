@@ -102,6 +102,27 @@ async fn test_write_expands_relative_path_against_context_cwd() {
     );
 }
 
+#[test]
+fn test_write_permission_expands_relative_path_against_context_cwd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = FileWriteTool;
+    let context = claude_core::permissions::ToolPermissionContext {
+        mode: claude_core::permissions::PermissionMode::AcceptEdits,
+        working_directory: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+
+    let result = tool.check_permissions(
+        &json!({ "file_path": "relative.txt", "content": "x" }),
+        &context,
+    );
+
+    assert!(
+        matches!(result, claude_core::permissions::PermissionResult::Allow(_)),
+        "relative write inside cwd should be allowed in acceptEdits mode"
+    );
+}
+
 #[tokio::test]
 async fn test_write_overwrites_existing() {
     let tmp = tempfile::tempdir().unwrap();
