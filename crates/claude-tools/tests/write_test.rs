@@ -4,6 +4,8 @@ use claude_tools::write::FileWriteTool;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn make_ctx(dir: &std::path::Path) -> ToolUseContext {
     ToolUseContext::for_test(
         dir.to_path_buf(),
@@ -18,6 +20,34 @@ async fn call_tool(tool: &FileWriteTool, input: Value, ctx: &ToolUseContext) -> 
     tool.call(&input, ctx, CancellationToken::new(), None)
         .await
         .expect("tool call should succeed")
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn init_git_repo() -> Option<tempfile::TempDir> {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_none()
+    {
+        return None;
+    }
+    let dir = tempfile::tempdir().ok()?;
+    if !git(dir.path(), &["init", "-b", "main"]) {
+        return None;
+    }
+    let _ = git(dir.path(), &["config", "user.email", "test@example.com"]);
+    let _ = git(dir.path(), &["config", "user.name", "Test User"]);
+    Some(dir)
 }
 
 #[tokio::test]
@@ -48,6 +78,47 @@ async fn test_write_new_file() {
 
     let on_disk = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(on_disk, content);
+}
+
+#[tokio::test]
+async fn test_write_includes_remote_git_diff_when_growthbook_enabled() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(tmp) = init_git_repo() else {
+        return;
+    };
+    std::env::set_var("CLAUDE_CODE_REMOTE", "1");
+    std::env::set_var("CLAUDE_CODE_GROWTHBOOK_TENGU_QUARTZ_LANTERN", "1");
+
+    let file_path = tmp.path().join("tracked.txt");
+    std::fs::write(&file_path, "old\n").unwrap();
+    assert!(git(tmp.path(), &["add", "tracked.txt"]));
+    assert!(git(tmp.path(), &["commit", "-m", "init"]));
+
+    let tool = FileWriteTool;
+    let ctx = make_ctx(tmp.path());
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false, None);
+
+    let result = call_tool(
+        &tool,
+        json!({ "file_path": file_path.to_string_lossy(), "content": "old\nnew\n" }),
+        &ctx,
+    )
+    .await;
+
+    std::env::remove_var("CLAUDE_CODE_REMOTE");
+    std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_TENGU_QUARTZ_LANTERN");
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["gitDiff"]["filename"], "tracked.txt");
+    assert_eq!(result.data["gitDiff"]["status"], "modified");
+    assert_eq!(result.data["gitDiff"]["additions"], 1);
+    assert!(result.data["gitDiff"]["patch"]
+        .as_str()
+        .unwrap()
+        .contains("+new"));
 }
 
 #[tokio::test]

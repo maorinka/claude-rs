@@ -5,6 +5,8 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn make_ctx(dir: &TempDir) -> ToolUseContext {
     ToolUseContext::for_test(
         dir.path().to_path_buf(),
@@ -22,6 +24,34 @@ async fn call_tool(
 ) -> ToolResultData {
     let cancel = CancellationToken::new();
     tool.call(&input, ctx, cancel, None).await.unwrap()
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn init_git_repo() -> Option<TempDir> {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_none()
+    {
+        return None;
+    }
+    let dir = TempDir::new().ok()?;
+    if !git(dir.path(), &["init", "-b", "main"]) {
+        return None;
+    }
+    let _ = git(dir.path(), &["config", "user.email", "test@example.com"]);
+    let _ = git(dir.path(), &["config", "user.name", "Test User"]);
+    Some(dir)
 }
 
 #[tokio::test]
@@ -79,6 +109,52 @@ async fn test_edit_replace_string() {
         .unwrap()
         .iter()
         .any(|line| line == "+goodbye world"));
+}
+
+#[tokio::test]
+async fn test_edit_includes_remote_git_diff_when_growthbook_enabled() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dir) = init_git_repo() else {
+        return;
+    };
+    std::env::set_var("CLAUDE_CODE_REMOTE", "1");
+    std::env::set_var("CLAUDE_CODE_GROWTHBOOK_TENGU_QUARTZ_LANTERN", "1");
+
+    let file_path = dir.path().join("hello.txt");
+    std::fs::write(&file_path, "hello world\n").unwrap();
+    assert!(git(dir.path(), &["add", "hello.txt"]));
+    assert!(git(dir.path(), &["commit", "-m", "init"]));
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state
+        .lock()
+        .unwrap()
+        .record_read(file_path.to_str().unwrap(), false, None);
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "hello",
+            "new_string": "goodbye"
+        }),
+        &ctx,
+    )
+    .await;
+
+    std::env::remove_var("CLAUDE_CODE_REMOTE");
+    std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_TENGU_QUARTZ_LANTERN");
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["gitDiff"]["filename"], "hello.txt");
+    assert_eq!(result.data["gitDiff"]["status"], "modified");
+    assert_eq!(result.data["gitDiff"]["additions"], 1);
+    assert_eq!(result.data["gitDiff"]["deletions"], 1);
+    assert!(result.data["gitDiff"]["patch"]
+        .as_str()
+        .unwrap()
+        .contains("+goodbye world"));
 }
 
 #[tokio::test]

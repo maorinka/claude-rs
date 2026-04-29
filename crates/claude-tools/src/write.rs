@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::diff_utils::structured_patch_for_display;
+use crate::git_diff::{fetch_single_file_git_diff, should_include_tool_git_diff};
 use crate::registry::{ProgressSender, ReadFileState, ToolExecutor, ToolUseContext};
 use crate::tool_path::expand_tool_path;
 use claude_core::file_history::FileHistoryTracker;
@@ -224,7 +225,7 @@ Usage:
             Vec::new()
         };
 
-        let data = if is_ts_update {
+        let mut data = if is_ts_update {
             json!({
                 "type": write_type,
                 "filePath": file_path,
@@ -241,6 +242,13 @@ Usage:
                 "originalFile": null,
             })
         };
+        if should_include_tool_git_diff() {
+            if let Some(git_diff) = fetch_single_file_git_diff(path).await {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("gitDiff".to_string(), git_diff);
+                }
+            }
+        }
 
         Ok(ToolResultData {
             data,

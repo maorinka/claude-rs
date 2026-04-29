@@ -537,6 +537,11 @@ Improved:
   focused tests.
 - Rust `Edit` now expands relative paths against the request cwd before
   permission checks, staleness checks, and filesystem writes.
+- Rust `Edit` now includes TS-shaped `gitDiff` output only when both
+  `CLAUDE_CODE_REMOTE` and the cached GrowthBook flag
+  `tengu_quartz_lantern` are enabled, using the TS single-file diff rules:
+  tracked files diff against `CLAUDE_CODE_BASE_REF` or the default-branch
+  merge-base, while untracked files get a synthetic all-additions patch.
 
 ### FileWriteTool
 
@@ -558,10 +563,12 @@ Improved:
 - Rust `Read`, `Edit`, and `Write` read-state timestamps now use the file's
   actual mtime like TS, instead of wall-clock "now", so stale-write checks and
   same-range Read dedup share the same timestamp basis.
+- Rust `Write` now includes TS-shaped `gitDiff` output behind the same
+  `CLAUDE_CODE_REMOTE` plus cached `tengu_quartz_lantern` GrowthBook gate as
+  TS, sharing the tracked/untracked single-file diff helper with `Edit`.
 
 Needs work:
 - File-history integration.
-- Conditional `gitDiff` output behind TS's remote/feature gate.
 - Staleness atomicity and encoding/LSP/VSCode side effects in the exact TS
   call order.
 

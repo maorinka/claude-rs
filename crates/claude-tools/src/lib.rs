@@ -15,6 +15,7 @@ pub mod destructive_command_warning;
 mod diff_utils;
 pub mod edit;
 pub mod edit_quote_style;
+mod git_diff;
 pub mod glob_tool;
 pub mod grep;
 pub mod list_peers_tool;

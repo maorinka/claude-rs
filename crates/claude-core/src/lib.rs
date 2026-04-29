@@ -57,6 +57,7 @@ pub mod fingerprint;
 pub mod fps_tracker;
 pub mod frontmatter;
 pub mod git_availability;
+pub mod growthbook;
 pub mod hash;
 pub mod hooks;
 pub mod hyperlink;

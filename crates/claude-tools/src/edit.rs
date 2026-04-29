@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::diff_utils::structured_patch_for_display;
+use crate::git_diff::{fetch_single_file_git_diff, should_include_tool_git_diff};
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use crate::tool_path::expand_tool_path;
 use crate::write::{file_mtime_ms, FILE_HISTORY};
@@ -194,16 +195,25 @@ Usage:
                     std::fs::create_dir_all(parent)?;
                 }
                 std::fs::write(path, new_string)?;
+                let structured_patch = structured_patch_for_display("", new_string);
+                let mut data = json!({
+                    "filePath": file_path,
+                    "oldString": old_string,
+                    "newString": new_string,
+                    "originalFile": "",
+                    "structuredPatch": structured_patch,
+                    "userModified": false,
+                    "replaceAll": replace_all
+                });
+                if should_include_tool_git_diff() {
+                    if let Some(git_diff) = fetch_single_file_git_diff(path).await {
+                        if let Some(obj) = data.as_object_mut() {
+                            obj.insert("gitDiff".to_string(), git_diff);
+                        }
+                    }
+                }
                 return Ok(ToolResultData {
-                    data: json!({
-                        "filePath": file_path,
-                        "oldString": old_string,
-                        "newString": new_string,
-                        "originalFile": "",
-                        "structuredPatch": structured_patch_for_display("", new_string),
-                        "userModified": false,
-                        "replaceAll": replace_all
-                    }),
+                    data,
                     is_error: false,
                 });
             }
@@ -295,8 +305,7 @@ Usage:
             state.update_after_write_with_timestamp(file_path, Some(new_content.clone()), mtime_ms);
         }
 
-        Ok(ToolResultData {
-            data: json!({
+        let mut data = json!({
                 "filePath": file_path,
                 "oldString": old_string,
                 "newString": new_string,
@@ -304,7 +313,17 @@ Usage:
                 "structuredPatch": structured_patch_for_display(&original, &new_content),
                 "userModified": false,
                 "replaceAll": replace_all
-            }),
+        });
+        if should_include_tool_git_diff() {
+            if let Some(git_diff) = fetch_single_file_git_diff(path).await {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("gitDiff".to_string(), git_diff);
+                }
+            }
+        }
+
+        Ok(ToolResultData {
+            data,
             is_error: false,
         })
     }
