@@ -340,6 +340,8 @@ Query forms:
 }
 
 pub fn register_tool_search_snapshot(registry: &mut crate::registry::ToolRegistry) {
+    registry.remove("ToolSearch");
+
     if !is_tool_search_enabled_optimistic() {
         return;
     }

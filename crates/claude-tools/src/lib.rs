@@ -305,6 +305,32 @@ pub fn filter_registry_by_deny_rules(
     }
 }
 
+/// Filter a registry using the full TS-style permission context.
+///
+/// This mirrors `tools.ts::filterToolsByDenyRules`: only whole-tool deny
+/// rules remove tools from the model-visible registry. Content-specific rules
+/// such as `Bash(git status)` still leave the tool visible and are enforced at
+/// call time. MCP server-prefix denies like `mcp__server` remove every tool
+/// belonging to that server.
+pub fn filter_registry_by_permission_context(
+    registry: &mut ToolRegistry,
+    context: &claude_core::permissions::ToolPermissionContext,
+) {
+    let denied_names = registry
+        .all()
+        .into_iter()
+        .filter(|tool| {
+            let perms = registry::ExecutorToolPermissions::new(tool.clone(), serde_json::json!({}));
+            claude_core::permissions::get_deny_rule_for_tool(context, &perms).is_some()
+        })
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+
+    for name in denied_names {
+        registry.remove(&name);
+    }
+}
+
 fn rule_denies_whole_tool(
     tool_name: &str,
     rule: &claude_core::config::settings::PermissionRuleConfig,

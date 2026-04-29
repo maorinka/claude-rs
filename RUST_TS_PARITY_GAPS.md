@@ -182,7 +182,7 @@ loading behavior, not force a fixed hardcoded order for private plugins.
 
 ## P0: Wrong Or Risky Behavior
 
-### Tool registry exposure/gating still needs request-time parity
+### Tool registry exposure/gating
 
 Rust registers several tools unconditionally in
 `crates/claude-tools/src/lib.rs`, including:
@@ -225,13 +225,23 @@ Improved:
 - REPL mode now hides the same primitive tools as TS when the `REPL` tool is
   active: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`,
   `NotebookEdit`, and `Agent`.
-
-Needs work:
-- Keep tool ordering stable for prompt-cache compatibility.
-- Broaden deny-rule filtering to all registry construction paths and add MCP
-  integration coverage with real connected tools.
-- Revisit MCP auth/resource tool visibility against TS `specialTools` and MCP
-  connection state.
+- Rust now uses the full `ToolPermissionContext` for prompt-visible registry
+  filtering, not just settings-file deny rules. This matches TS
+  `filterToolsByDenyRules` across CLI, disk, policy, and MCP server-prefix
+  deny sources.
+- ToolSearch snapshot refresh now removes any stale snapshot before rebuilding
+  and is filtered again afterward, so a denied or CLI-excluded ToolSearch is
+  not reintroduced after MCP registration.
+- Prompt/tool-definition ordering now follows TS `assembleToolPool`: sorted
+  built-ins as one prefix, then sorted MCP-partition tools. MCP resource helper
+  tools (`ListMcpResourcesTool`, `ReadMcpResourceTool`) are treated as MCP
+  partition tools, matching TS `specialTools` / `appState.mcp.tools` behavior.
+- MCP resource tools remain absent from the base registry and are added only
+  after a connected MCP server advertises resource capabilities, matching TS
+  MCP connection-state visibility.
+- Added registry tests for full-context deny filtering, MCP server-prefix deny
+  filtering, ToolSearch not being reintroduced after deny, and MCP resource
+  tool ordering.
 
 ### MCP resource tools need deeper parity
 
@@ -1205,15 +1215,13 @@ Needs work:
 
 ## Suggested Next Order
 
-1. Fix tool registry gating and deny-rule filtering.
-2. Wire MCP resource tools to `McpManager`.
-3. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
-4. Verify rich user/system context lifecycle against resumed sessions and
+1. Audit slash commands into `full/partial/prompt-only/link-only/missing`.
+2. Verify rich user/system context lifecycle against resumed sessions and
    remote-control captures.
-5. Complete the remaining stream-json rate-limit timing parity by plumbing
+3. Complete the remaining stream-json rate-limit timing parity by plumbing
    API status changes like TS instead of relying on deterministic fallback
    placement around very fast `PreToolUse` hooks.
-6. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
-7. Decide scope for bridge/direct-connect/upstream proxy before porting more
+4. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
+5. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
-8. Update or replace `feature-gap-analysis.md` once this checklist is validated.
+6. Update or replace `feature-gap-analysis.md` once this checklist is validated.

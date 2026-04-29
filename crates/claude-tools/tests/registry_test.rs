@@ -142,6 +142,8 @@ fn test_tool_definitions_match_ts_ordering() {
     reg.register(Arc::new(NamedTool("mcp__zeta__tool")));
     reg.register(Arc::new(NamedTool("Alpha")));
     reg.register(Arc::new(NamedTool("ToolSearch")));
+    reg.register(Arc::new(NamedTool("ReadMcpResourceTool")));
+    reg.register(Arc::new(NamedTool("ListMcpResourcesTool")));
     reg.register(Arc::new(NamedTool("mcp__alpha__tool")));
 
     let names: Vec<String> = reg
@@ -156,6 +158,8 @@ fn test_tool_definitions_match_ts_ordering() {
             "Alpha",
             "ToolSearch",
             "Zed",
+            "ListMcpResourcesTool",
+            "ReadMcpResourceTool",
             "mcp__alpha__tool",
             "mcp__zeta__tool"
         ]

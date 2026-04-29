@@ -1,8 +1,10 @@
 use claude_core::config::settings::PermissionRuleConfig;
+use claude_core::permissions::{PermissionMode, PermissionRuleSource, ToolPermissionContext};
 use claude_tools::{
     build_default_registry, build_default_registry_with_options, filter_registry_by_deny_rules,
-    RegistryOptions,
+    filter_registry_by_permission_context, RegistryOptions,
 };
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -270,4 +272,98 @@ fn test_blanket_deny_rules_filter_default_registry() {
         "content-specific deny rules must not hide the whole tool"
     );
     assert!(reg.get("ToolSearch").is_none());
+}
+
+#[test]
+fn test_permission_context_deny_rules_filter_registry_like_ts() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+    std::env::set_var("ENABLE_TOOL_SEARCH", "true");
+
+    let mut deny = HashMap::new();
+    deny.insert(
+        PermissionRuleSource::CliArg,
+        vec![
+            "Read".to_string(),
+            "Bash(git status)".to_string(),
+            "ToolSearch".to_string(),
+        ],
+    );
+    let ctx = ToolPermissionContext {
+        mode: PermissionMode::Default,
+        always_deny_rules: deny,
+        ..Default::default()
+    };
+
+    let mut reg = build_default_registry();
+    filter_registry_by_permission_context(&mut reg, &ctx);
+    claude_tools::register_tool_search_snapshot(&mut reg);
+    filter_registry_by_permission_context(&mut reg, &ctx);
+
+    assert!(reg.get("Read").is_none());
+    assert!(
+        reg.get("Bash").is_some(),
+        "content-specific deny rules must not hide the whole tool"
+    );
+    assert!(
+        reg.get("ToolSearch").is_none(),
+        "ToolSearch must not be reintroduced after a deny-rule filter"
+    );
+
+    std::env::remove_var("ENABLE_TOOL_SEARCH");
+}
+
+#[test]
+fn test_permission_context_mcp_server_deny_filters_all_server_tools_like_ts() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    clear_registry_env();
+
+    let mut deny = HashMap::new();
+    deny.insert(
+        PermissionRuleSource::CliArg,
+        vec!["mcp__jira".to_string(), "mcp__slack__post".to_string()],
+    );
+    let ctx = ToolPermissionContext {
+        mode: PermissionMode::Default,
+        always_deny_rules: deny,
+        ..Default::default()
+    };
+
+    let mut reg = claude_tools::ToolRegistry::new();
+    reg.register(std::sync::Arc::new(claude_tools::mcp_tool::McpTool::new(
+        "mcp__jira__search".to_string(),
+        "search".to_string(),
+        "jira".to_string(),
+        "Search Jira".to_string(),
+        serde_json::json!({"type": "object"}),
+        std::sync::Arc::new(tokio::sync::RwLock::new(
+            claude_core::mcp::manager::McpManager::new(),
+        )),
+    )));
+    reg.register(std::sync::Arc::new(claude_tools::mcp_tool::McpTool::new(
+        "mcp__slack__post".to_string(),
+        "post".to_string(),
+        "slack".to_string(),
+        "Post Slack".to_string(),
+        serde_json::json!({"type": "object"}),
+        std::sync::Arc::new(tokio::sync::RwLock::new(
+            claude_core::mcp::manager::McpManager::new(),
+        )),
+    )));
+    reg.register(std::sync::Arc::new(claude_tools::mcp_tool::McpTool::new(
+        "mcp__slack__search".to_string(),
+        "search".to_string(),
+        "slack".to_string(),
+        "Search Slack".to_string(),
+        serde_json::json!({"type": "object"}),
+        std::sync::Arc::new(tokio::sync::RwLock::new(
+            claude_core::mcp::manager::McpManager::new(),
+        )),
+    )));
+
+    filter_registry_by_permission_context(&mut reg, &ctx);
+
+    assert!(reg.get("mcp__jira__search").is_none());
+    assert!(reg.get("mcp__slack__post").is_none());
+    assert!(reg.get("mcp__slack__search").is_some());
 }

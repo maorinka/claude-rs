@@ -5061,7 +5061,50 @@ async fn main() -> Result<()> {
         .iter()
         .map(|tool| tool.name().to_string())
         .collect::<Vec<_>>();
+
+    // Determine permission mode and build the full permission context before
+    // any prompt-visible tool list is finalized. TS routes `getTools()` and
+    // `assembleToolPool()` through `filterToolsByDenyRules(permissionContext)`,
+    // so CLI/disk/policy deny rules must all be visible here.
+    let permission_mode = if cli.dangerously_skip_permissions {
+        claude_core::permissions::types::PermissionMode::BypassPermissions
+    } else if let Some(mode_str) = &cli.permission_mode {
+        claude_core::permissions::types::PermissionMode::from_string(mode_str)
+    } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
+        claude_core::permissions::types::PermissionMode::from_string(&mode_str)
+    } else if let Some(mode) =
+        claude_core::permissions::permission_mode_from_settings_value(&permission_settings)
+    {
+        mode
+    } else {
+        claude_core::permissions::types::PermissionMode::Default
+    };
+    let permission_rules_from_disk =
+        claude_core::permissions::load_permission_rules_from_disk_by_source(&project_root);
+    let additional_dirs =
+        claude_core::permissions::permission_additional_directories_from_settings_value(
+            &permission_settings,
+        );
+    let mut disallowed_tools_cli = cli.disallowed_tools.clone();
+    disallowed_tools_cli.extend(base_tool_denials_from_cli_tools(
+        &cli.tools,
+        &base_permission_tool_names,
+    ));
+    let mut add_dirs = additional_dirs;
+    add_dirs.extend(cli.add_dirs.clone());
+    let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
+        &cli.allowed_tools,
+        &disallowed_tools_cli,
+        permission_mode.clone(),
+        cli.dangerously_skip_permissions,
+        &add_dirs,
+        &permission_rules_from_disk,
+        cwd.clone(),
+    )
+    .tool_permission_context;
+
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
+    claude_tools::filter_registry_by_permission_context(&mut tools, &initial_permission_context);
 
     // Register bundled skills (simplify, stuck, remember, …).
     // Each skill's registrar applies its own TS-parity gate
@@ -5283,7 +5326,7 @@ async fn main() -> Result<()> {
             .await;
     }
     filter_registry_by_cli_tools(&mut tools, &cli.tools);
-    claude_tools::filter_registry_by_deny_rules(&mut tools, &settings.permissions.deny);
+    claude_tools::filter_registry_by_permission_context(&mut tools, &initial_permission_context);
     let permission_prompt_tool = if let Some(name) = &cli.permission_prompt_tool {
         if prompt_arg.is_none() {
             eprintln!("Error: --permission-prompt-tool can only be used with --print");
@@ -5319,6 +5362,8 @@ async fn main() -> Result<()> {
         None
     };
     claude_tools::register_tool_search_snapshot(&mut tools);
+    filter_registry_by_cli_tools(&mut tools, &cli.tools);
+    claude_tools::filter_registry_by_permission_context(&mut tools, &initial_permission_context);
 
     // --- Skill discovery ---
     let mut skill_additional_dirs =
@@ -5575,47 +5620,6 @@ async fn main() -> Result<()> {
 
     // Create cancellation token
     let cancel = tokio_util::sync::CancellationToken::new();
-
-    // Determine permission mode.
-    // Priority: CLI flag > CLAUDE_PERMISSION_MODE env var > Default.
-    // The env var is set by agent_tool.rs when spawning sub-agents to
-    // propagate the parent's permission mode.
-    let permission_mode = if cli.dangerously_skip_permissions {
-        claude_core::permissions::types::PermissionMode::BypassPermissions
-    } else if let Some(mode_str) = &cli.permission_mode {
-        claude_core::permissions::types::PermissionMode::from_string(mode_str)
-    } else if let Ok(mode_str) = std::env::var("CLAUDE_PERMISSION_MODE") {
-        claude_core::permissions::types::PermissionMode::from_string(&mode_str)
-    } else if let Some(mode) =
-        claude_core::permissions::permission_mode_from_settings_value(&permission_settings)
-    {
-        mode
-    } else {
-        claude_core::permissions::types::PermissionMode::Default
-    };
-    let permission_rules_from_disk =
-        claude_core::permissions::load_permission_rules_from_disk_by_source(&project_root);
-    let additional_dirs =
-        claude_core::permissions::permission_additional_directories_from_settings_value(
-            &permission_settings,
-        );
-    let mut disallowed_tools_cli = cli.disallowed_tools.clone();
-    disallowed_tools_cli.extend(base_tool_denials_from_cli_tools(
-        &cli.tools,
-        &base_permission_tool_names,
-    ));
-    let mut add_dirs = additional_dirs;
-    add_dirs.extend(cli.add_dirs.clone());
-    let initial_permission_context = claude_core::permissions::initialize_tool_permission_context(
-        &cli.allowed_tools,
-        &disallowed_tools_cli,
-        permission_mode.clone(),
-        cli.dangerously_skip_permissions,
-        &add_dirs,
-        &permission_rules_from_disk,
-        cwd.clone(),
-    )
-    .tool_permission_context;
 
     // Get tool definitions for the engine
     let tool_definition_context = claude_tools::registry::ToolDefinitionContext {

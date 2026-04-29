@@ -393,7 +393,7 @@ impl ToolRegistry {
         let mut built_in = Vec::new();
         let mut mcp = Vec::new();
         for tool in self.all() {
-            if tool.name().starts_with("mcp__") {
+            if is_mcp_partition_tool_name(tool.name()) {
                 mcp.push(tool);
             } else {
                 built_in.push(tool);
@@ -418,6 +418,10 @@ impl ToolRegistry {
             })
             .collect()
     }
+}
+
+fn is_mcp_partition_tool_name(name: &str) -> bool {
+    name.starts_with("mcp__") || matches!(name, "ListMcpResourcesTool" | "ReadMcpResourceTool")
 }
 
 static TS_TOOL_CONTRACTS: Lazy<HashMap<String, (String, Value)>> = Lazy::new(|| {
