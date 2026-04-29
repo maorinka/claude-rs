@@ -23,6 +23,10 @@ pub struct Cli {
     #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
     pub output_format: OutputFormat,
 
+    /// JSON Schema for structured output validation
+    #[arg(long = "json-schema")]
+    pub json_schema: Option<String>,
+
     /// Model to use
     #[arg(short, long)]
     pub model: Option<String>,
@@ -3620,6 +3624,12 @@ async fn main() -> Result<()> {
         claude_tools::build_default_registry_with_options(claude_tools::RegistryOptions {
             is_non_interactive_session: prompt_arg.is_some(),
         });
+    if let Some(schema_text) = &cli.json_schema {
+        let schema: serde_json::Value = serde_json::from_str(schema_text)
+            .map_err(|err| anyhow::anyhow!("Invalid --json-schema JSON: {err}"))?;
+        let tool = claude_tools::synthetic_output::JsonSchemaSyntheticOutputTool::new(schema)?;
+        tools.register(Arc::new(tool));
+    }
     let base_permission_tool_names = tools
         .all()
         .iter()
@@ -4392,6 +4402,7 @@ async fn main() -> Result<()> {
 
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
         let mut final_text = String::new();
+        let mut structured_output: Option<serde_json::Value> = None;
         let session_id = api_session_id.clone();
         let started_at = std::time::Instant::now();
         let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
@@ -4992,6 +5003,9 @@ async fn main() -> Result<()> {
                         } else {
                             format_tool_result_content_for_model(&tool_info.name, &result_json)
                         };
+                        if !is_error && tool_info.name == "StructuredOutput" {
+                            structured_output = result_json.get("structured_output").cloned();
+                        }
 
                         if cli.output_format == OutputFormat::StreamJson {
                             stream_tool_results.push(serde_json::json!({
@@ -5044,13 +5058,18 @@ async fn main() -> Result<()> {
             println!(
                 "{}",
                 match terminal_outcome {
-                    PrintTerminalOutcome::Completed { .. } =>
-                        serde_json::to_string(&serde_json::json!({
-                            "type": "result",
-                            "subtype": "success",
-                            "is_error": false,
-                            "result": final_text,
-                        }))?,
+                    PrintTerminalOutcome::Completed { .. } => {
+                        let mut value = serde_json::json!({
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": false,
+                        "result": final_text,
+                        });
+                        if let Some(ref structured) = structured_output {
+                            value["structured_output"] = structured.clone();
+                        }
+                        serde_json::to_string(&value)?
+                    }
                     PrintTerminalOutcome::MaxTurns { max_turns, .. } =>
                         serde_json::to_string(&serde_json::json!({
                             "type": "result",
@@ -5092,11 +5111,12 @@ async fn main() -> Result<()> {
             };
             match terminal_outcome {
                 PrintTerminalOutcome::Completed { .. } => {
-                    emit_stream_json(stream_json_result_event_with_meta(
-                        &final_text,
-                        &session_id,
-                        meta,
-                    ));
+                    let mut event =
+                        stream_json_result_event_with_meta(&final_text, &session_id, meta);
+                    if let Some(ref structured) = structured_output {
+                        event["structured_output"] = structured.clone();
+                    }
+                    emit_stream_json(event);
                 }
                 PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
                     emit_stream_json(stream_json_max_turns_event_with_meta(

@@ -8,6 +8,25 @@ use claude_core::types::events::ToolResultData;
 
 pub struct SyntheticOutputTool;
 
+impl SyntheticOutputTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+pub struct JsonSchemaSyntheticOutputTool {
+    schema: Value,
+    validator: jsonschema::Validator,
+}
+
+impl JsonSchemaSyntheticOutputTool {
+    pub fn new(schema: Value) -> Result<Self> {
+        let validator = jsonschema::validator_for(&schema)
+            .map_err(|err| anyhow::anyhow!("Invalid JSON schema: {err}"))?;
+        Ok(Self { schema, validator })
+    }
+}
+
 #[async_trait]
 impl ToolExecutor for SyntheticOutputTool {
     fn name(&self) -> &str {
@@ -47,6 +66,63 @@ impl ToolExecutor for SyntheticOutputTool {
     ) -> Result<ToolResultData> {
         // The tool just validates and returns the input as the structured output.
         // In the full implementation, this would validate against a provided JSON schema.
+        Ok(ToolResultData {
+            data: json!({
+                "message": "Structured output provided successfully",
+                "structured_output": input
+            }),
+            is_error: false,
+        })
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for JsonSchemaSyntheticOutputTool {
+    fn name(&self) -> &str {
+        "StructuredOutput"
+    }
+
+    fn description(&self) -> String {
+        "Return structured output in the requested format. Use this tool to return your final \
+         response in the requested structured format. You MUST call this tool exactly once at \
+         the end of your response to provide the structured output."
+            .to_string()
+    }
+
+    fn input_schema(&self) -> Value {
+        self.schema.clone()
+    }
+
+    fn is_read_only(&self, _input: &Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+        true
+    }
+
+    async fn call(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+        _cancel: CancellationToken,
+        _progress: Option<ProgressSender>,
+    ) -> Result<ToolResultData> {
+        if let Err(error) = self.validator.validate(input) {
+            let errors = std::iter::once(error)
+                .map(|err| {
+                    let path = err.instance_path().to_string();
+                    let path = if path.is_empty() {
+                        "root".to_string()
+                    } else {
+                        path
+                    };
+                    format!("{path}: {err}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!("Output does not match required schema: {errors}");
+        }
         Ok(ToolResultData {
             data: json!({
                 "message": "Structured output provided successfully",
@@ -114,6 +190,38 @@ mod tests {
             result.data["message"].as_str().unwrap(),
             "Structured output provided successfully"
         );
+    }
+
+    #[tokio::test]
+    async fn synthetic_output_validates_json_schema() {
+        let tool = JsonSchemaSyntheticOutputTool::new(json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "required": ["name"]
+        }))
+        .unwrap();
+        let ctx = make_ctx();
+
+        let ok = tool
+            .call(
+                &json!({"name": "Claude"}),
+                &ctx,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.data["structured_output"]["name"], "Claude");
+
+        let err = tool
+            .call(&json!({"name": 42}), &ctx, CancellationToken::new(), None)
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Output does not match required schema"));
     }
 
     #[tokio::test]

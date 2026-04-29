@@ -701,6 +701,10 @@ Improved:
 - Rust now fires `CwdChanged` hooks and updates the process hook runner cwd
   when CLI or TUI worktree tools move the session between the original cwd and
   a worktree, following the TS cwd-watcher hook path.
+- Rust print mode now accepts the TS `--json-schema` flag, injects a
+  schema-specific `StructuredOutput` tool, validates its input with a JSON
+  Schema validator, and includes `structured_output` on successful JSON and
+  stream-json result events.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

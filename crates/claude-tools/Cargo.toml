@@ -20,6 +20,7 @@ regex-lite = "0.1"
 uuid.workspace = true
 chrono.workspace = true
 dirs = "6"
+jsonschema = { version = "0.46.3", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
