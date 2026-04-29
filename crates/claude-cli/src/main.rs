@@ -3875,11 +3875,19 @@ fn stream_json_assistant_tool_use_event(
     model: &str,
     usage: Option<&claude_core::types::usage::Usage>,
 ) -> serde_json::Value {
-    let api_model = model.replace("[1m]", "").replace("[1M]", "");
+    let api_model = tool_info
+        .model
+        .clone()
+        .unwrap_or_else(|| model.replace("[1m]", "").replace("[1M]", ""));
+    let api_message_id = tool_info
+        .message_id
+        .clone()
+        .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4().simple()));
+    let api_usage = tool_info.usage.as_ref().or(usage);
     serde_json::json!({
         "type": "assistant",
         "message": {
-            "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+            "id": api_message_id,
             "type": "message",
             "role": "assistant",
             "model": api_model,
@@ -3893,7 +3901,7 @@ fn stream_json_assistant_tool_use_event(
             "stop_sequence": serde_json::Value::Null,
             "stop_details": serde_json::Value::Null,
             "context_management": serde_json::Value::Null,
-            "usage": usage
+            "usage": api_usage
                 .map(|usage| stream_json_usage_value(usage, "not_available", false))
                 .unwrap_or_else(|| stream_json_usage_value(&claude_core::types::usage::Usage::default(), "not_available", false)),
         },

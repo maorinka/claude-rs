@@ -111,6 +111,9 @@ fn test_tool_use_info() {
         id: "tu_1".into(),
         name: "Bash".into(),
         input: serde_json::json!({"command": "ls"}),
+        message_id: Some("msg_1".into()),
+        model: Some("claude-sonnet-4-6".into()),
+        usage: None,
     };
     assert_eq!(info.name, "Bash");
     assert_eq!(info.input["command"], "ls");

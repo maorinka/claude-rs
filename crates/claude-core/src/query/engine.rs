@@ -796,6 +796,13 @@ impl QueryEngine {
                                                     id: id.clone(),
                                                     name: name.clone(),
                                                     input: input.clone(),
+                                                    message_id: response_message
+                                                        .as_ref()
+                                                        .map(|message| message.id.clone()),
+                                                    model: response_message
+                                                        .as_ref()
+                                                        .map(|message| message.model.clone()),
+                                                    usage: response_usage.clone(),
                                                 });
                                                 // Issue 6: set needs_follow_up regardless of
                                                 // stop_reason (stop_reason == "tool_use" is
@@ -1367,6 +1374,9 @@ pub struct ToolUseInfo {
     pub id: String,
     pub name: String,
     pub input: serde_json::Value,
+    pub message_id: Option<String>,
+    pub model: Option<String>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug)]
