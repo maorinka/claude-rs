@@ -703,6 +703,8 @@ Improved:
 - Required-term searches now match TS scoring: a query containing only
   `+term` filters and scores on that required term instead of dropping all
   matches after filtering.
+- Both MCP resource helper tools now use the TS deferred names in ToolSearch:
+  `ListMcpResourcesTool` and `ReadMcpResourceTool`.
 
 Needs work:
 - Add integration coverage for `ToolSearch select:*` with a live/fake MCP

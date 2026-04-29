@@ -243,6 +243,36 @@ async fn test_search_uses_ts_should_defer_builtin_metadata() {
 }
 
 #[tokio::test]
+async fn test_search_defers_both_ts_mcp_resource_tools() {
+    let tool = ToolSearchTool::new(vec![
+        (
+            "ListMcpResourcesTool".to_string(),
+            "List available MCP resources".to_string(),
+        ),
+        (
+            "ReadMcpResourceTool".to_string(),
+            "Read a specific MCP resource".to_string(),
+        ),
+    ]);
+    let result = tool
+        .call(
+            &json!({ "query": "select:ListMcpResourcesTool,ReadMcpResourceTool" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(!result.is_error);
+    assert_eq!(
+        matches(&result),
+        vec!["ListMcpResourcesTool", "ReadMcpResourceTool"]
+    );
+    assert_eq!(result.data["total_deferred_tools"], 2);
+}
+
+#[tokio::test]
 async fn test_required_only_query_scores_required_terms_like_ts() {
     let tool = ToolSearchTool::new(vec![(
         "mcp__slack__send_message".to_string(),

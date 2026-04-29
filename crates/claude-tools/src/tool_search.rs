@@ -391,7 +391,7 @@ pub fn is_deferred_tool_name(name: &str) -> bool {
                 | "LSP"
                 | "ListMcpResourcesTool"
                 | "NotebookEdit"
-                | "ReadMcpResource"
+                | "ReadMcpResourceTool"
                 | "RemoteTrigger"
                 | "ScheduleCron"
                 | "SendMessage"
