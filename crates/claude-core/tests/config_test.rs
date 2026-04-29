@@ -52,6 +52,36 @@ fn test_settings_deserialize() {
 }
 
 #[test]
+fn test_settings_mcp_http_server_deserialize() {
+    let json = r#"{
+        "mcpServers": {
+            "docs": {
+                "type": "http",
+                "url": "https://example.com/mcp",
+                "headers": {"Authorization": "Bearer token"}
+            }
+        }
+    }"#;
+    let settings: Settings = serde_json::from_str(json).unwrap();
+    let entry = settings.mcp_servers.get("docs").unwrap();
+    let config = entry.to_mcp_server_config().unwrap();
+    match config {
+        claude_core::mcp::types::McpServerConfig::Http(http) => {
+            assert_eq!(http.url, "https://example.com/mcp");
+            assert_eq!(
+                http.headers
+                    .as_ref()
+                    .unwrap()
+                    .get("Authorization")
+                    .map(String::as_str),
+                Some("Bearer token")
+            );
+        }
+        other => panic!("expected http config, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_settings_merge() {
     let base = Settings {
         model: Some("claude-sonnet-4-6".into()),

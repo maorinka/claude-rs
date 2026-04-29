@@ -21,7 +21,8 @@ pub struct SettingsPermissions {
 
 /// Configuration for a single MCP server entry in settings.json.
 ///
-/// Matches the TS format:
+/// Matches the TS `McpServerConfig` union. `type` defaults to stdio when it is
+/// omitted, preserving the older settings shape:
 /// ```json
 /// {
 ///   "command": "npx",
@@ -32,11 +33,40 @@ pub struct SettingsPermissions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct McpServerSettingsEntry {
+    #[serde(rename = "type")]
+    pub transport_type: Option<String>,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    #[serde(rename = "authToken", default)]
+    pub auth_token: Option<String>,
+}
+
+impl McpServerSettingsEntry {
+    pub fn to_mcp_server_config(
+        &self,
+    ) -> Result<crate::mcp::types::McpServerConfig, serde_json::Error> {
+        let mut value = serde_json::to_value(self)?;
+        if let Some(obj) = value.as_object_mut() {
+            if self.transport_type.is_none() {
+                obj.remove("type");
+            }
+            obj.retain(|_, value| match value {
+                serde_json::Value::Null => false,
+                serde_json::Value::String(text) => !text.is_empty(),
+                serde_json::Value::Array(items) => !items.is_empty(),
+                serde_json::Value::Object(map) => !map.is_empty(),
+                _ => true,
+            });
+        }
+        crate::mcp::types::McpServerConfig::from_value(value)
+    }
 }
 
 /// Top-level settings structure. All fields are optional so that partial

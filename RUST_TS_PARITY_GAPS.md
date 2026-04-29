@@ -721,6 +721,10 @@ Improved:
   settings, dynamic MCP configs are parsed from JSON strings or files with
   environment-variable expansion, and CLI MCP configs override file/plugin
   configs while preserving insertion order.
+- Rust settings `mcpServers` now parse the same transport union as TS instead
+  of only the legacy stdio shape, so user/project/runtime settings can define
+  `stdio`, `http`, `sse`, `sse-ide`, `ws`, and `ws-ide` entries through the
+  same general MCP config path.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

@@ -4055,19 +4055,10 @@ async fn main() -> Result<()> {
         if !mcp_server_order.contains(name) {
             mcp_server_order.push(name.clone());
         }
-        let env = if entry.env.is_empty() {
-            None
-        } else {
-            Some(entry.env.clone())
-        };
         let scoped = claude_core::mcp::types::ScopedMcpServerConfig {
-            config: claude_core::mcp::types::McpServerConfig::Stdio(
-                claude_core::mcp::types::McpStdioServerConfig {
-                    command: entry.command.clone(),
-                    args: entry.args.clone(),
-                    env,
-                },
-            ),
+            config: entry.to_mcp_server_config().map_err(|err| {
+                anyhow::anyhow!("Error: Invalid MCP configuration:\nsettings: {name}: {err}")
+            })?,
             scope: claude_core::mcp::types::ConfigScope::User,
         };
         if name.starts_with("plugin:") {
