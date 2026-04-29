@@ -5547,11 +5547,35 @@ async fn main() -> Result<()> {
     } else {
         String::new()
     };
+    if cli.resume.is_some() && cli.session_id.is_some() {
+        eprintln!("Error: --session-id can only be used with --resume when forking the session.");
+        std::process::exit(1);
+    }
+    let resolved_resume_session_id = if let Some(ref session_id_raw) = cli.resume {
+        Some(if session_id_raw.eq_ignore_ascii_case("last") {
+            let sessions = claude_core::session::manager::SessionManager::list_sessions()?;
+            match sessions.first() {
+                Some(info) => {
+                    tracing::info!("Resolved --resume last to session '{}'", info.id);
+                    info.id.clone()
+                }
+                None => {
+                    eprintln!("No previous sessions found to resume.");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            session_id_raw.clone()
+        })
+    } else {
+        None
+    };
     let api_config = claude_core::api::client::ApiConfig {
         max_tokens: resolve_max_output_tokens(&model, &settings),
         session_id: cli
             .session_id
             .clone()
+            .or_else(|| resolved_resume_session_id.clone())
             .unwrap_or_else(|| claude_core::api::client::get_session_id().clone()),
         account_uuid,
         effort: resolve_effort_for_api(cli.effort.as_deref(), &settings),
@@ -5666,28 +5690,12 @@ async fn main() -> Result<()> {
     if let Some(max) = cli.max_turns {
         query_engine.set_max_turns(max);
     }
+    let mut resumed_history_has_user_context = false;
 
     // Handle --resume: load transcript from a previous session.
     // Supports `--resume <session-id>` or `--resume last` to pick the most recent.
-    if let Some(ref session_id_raw) = cli.resume {
-        let resolved_id = if session_id_raw.eq_ignore_ascii_case("last") {
-            // Find the most recent session by modification time
-            let sessions = claude_core::session::manager::SessionManager::list_sessions()?;
-            match sessions.first() {
-                Some(info) => {
-                    tracing::info!("Resolved --resume last to session '{}'", info.id);
-                    info.id.clone()
-                }
-                None => {
-                    eprintln!("No previous sessions found to resume.");
-                    std::process::exit(1);
-                }
-            }
-        } else {
-            session_id_raw.clone()
-        };
-
-        let session_mgr = claude_core::session::manager::SessionManager::resume(&resolved_id)?;
+    if let Some(resolved_id) = resolved_resume_session_id.as_deref() {
+        let session_mgr = claude_core::session::manager::SessionManager::resume(resolved_id)?;
         let transcript = session_mgr.storage().load_transcript()?;
         if transcript.is_empty() {
             eprintln!(
@@ -5706,6 +5714,8 @@ async fn main() -> Result<()> {
                 transcript.len()
             );
             query_engine.load_messages(transcript);
+            resumed_history_has_user_context = query_engine.has_user_context_in_history();
+            query_engine.add_resume_continuation_markers();
         }
     }
 
@@ -5721,16 +5731,18 @@ async fn main() -> Result<()> {
             None,
         )
         .await;
-    for context in session_start.additional_contexts {
-        query_engine.append_user_context_block(format!(
-            "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
-            context
-        ));
+    if !resumed_history_has_user_context {
+        for context in session_start.additional_contexts {
+            query_engine.append_user_context_block(format!(
+                "<system-reminder>\nSessionStart hook additional context: {}\n</system-reminder>",
+                context
+            ));
+        }
     }
     let session_start_initial_user_message = session_start.initial_user_message;
 
     // Add MCP server instructions as request-time user context, matching TS.
-    {
+    if !resumed_history_has_user_context {
         let mgr = mcp_manager.read().await;
         let connections = mgr.connections().await;
         let mut instructions_parts: Vec<String> = Vec::new();
@@ -5760,17 +5772,19 @@ async fn main() -> Result<()> {
     }
 
     // Add skill descriptions as request-time user context, matching TS.
-    if !skills.is_empty() {
+    if !resumed_history_has_user_context && !skills.is_empty() {
         query_engine.append_user_context_block(skills_reminder_block(&skills));
     }
 
-    if let Some(context) =
-        claude_core::context::system_prompt::build_project_user_context_block_with_additional(
-            &project_root,
-            &skill_additional_dirs,
-        )
-    {
-        query_engine.append_user_context_block(context);
+    if !resumed_history_has_user_context {
+        if let Some(context) =
+            claude_core::context::system_prompt::build_project_user_context_block_with_additional(
+                &project_root,
+                &skill_additional_dirs,
+            )
+        {
+            query_engine.append_user_context_block(context);
+        }
     }
 
     // TS getSystemContext() appends gitStatus to the system prompt, gated by

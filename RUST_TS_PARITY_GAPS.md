@@ -40,6 +40,12 @@ Captured through `scripts/run_parity_capture.py` on 2026-04-29:
 
 - Capture directory:
   `/tmp/claude-rs-parity-after-powershell`
+- Fresh fixed-session lifecycle capture:
+  `/tmp/claude-rs-context-lifecycle-start-3`
+- Resume lifecycle capture:
+  `/tmp/claude-rs-context-lifecycle-resume-3`
+- Remote-mode context capture (`CLAUDE_CODE_REMOTE=1`):
+  `/tmp/claude-rs-context-lifecycle-remote-mode-2`
 
 Now matching:
 
@@ -47,6 +53,15 @@ Now matching:
 - `output_config` effort now uses TS-supported values only; stale `xhigh`
   settings/env values are coerced before reaching the API.
 - Message shape.
+- Resume lifecycle shape: Rust now persists normal user/assistant/tool
+  messages, reuses the resumed session id for non-fork `--resume`, reconstructs
+  the TS in-memory continuation sentinel pair (`Continue from where you left
+  off.` / `No response requested.`), and avoids duplicating startup context
+  when the resumed history already carries it. Latest resume capture is
+  `message_count` 5 vs 5 and `message_shape` equal.
+- Remote-mode context gates: with `CLAUDE_CODE_REMOTE=1`, Rust now hides
+  `RemoteTrigger`, hides the bundled `schedule` skill, skips git system
+  context, and matches TS tool count/order (86 vs 86).
 - Prompt cache marker count.
 - Tool count: 87 vs 87.
 - Tool names, tool order, and tool schemas. This now includes the installed
@@ -146,9 +161,11 @@ Remaining first-turn prompt-context difference:
 
 - The available-skills block has the same entries, but plugin command/skill
   order can differ between runs.
-- Latest capture reports `equal ignoring skill order: yes`; the first-turn
-  API body is now equal after normalizing the plugin skill/command order that
-  TS itself emits nondeterministically.
+- Latest fresh/resume/remote lifecycle captures match message shape and context
+  lifecycle. Full scrubbed-body equality still reports `no` because private
+  plugin skill ordering remains nondeterministic and current live Agent-tool
+  metadata differs for some plugin-provided agents; this is tracked outside the
+  context lifecycle item.
 
 ### TS Skill And Command Ordering Rules
 
@@ -385,11 +402,20 @@ Improved:
 - Dynamic context is prepended to the first user message or smooshed into the
   adjacent tool-result content, matching the TS message shape used in live
   proxy captures.
+- Rust now materializes first-turn context into the durable message lifecycle
+  before the first API request, so resumed sessions keep the same model-visible
+  context prefix as TS.
+- Print-mode `--resume` now reuses the resumed session id, not a fresh CLI
+  session id.
+- Print-mode `--resume` now adds TS-style in-memory continuation markers
+  without writing them back to the transcript.
+- Remote-mode (`CLAUDE_CODE_REMOTE=1`) now hides remote-trigger scheduling
+  surfaces that TS does not expose in remote sessions.
 
-Needs work:
-- Cache context at the same lifecycle points as TS.
-- Verify remote/CCR resume behavior against live TS captures now that
-  system-context injection is request-time instead of a static prompt mutation.
+Remaining adjacent work:
+- Remote-control's actual session-ingress bridge runtime is still tracked in
+  the bridge/direct-connect scope below; this item verified the remote-mode
+  context gates available through live API captures.
 
 ## P0: Missing Core TS Behavior
 
@@ -1243,12 +1269,11 @@ Needs work:
 
 ## Suggested Next Order
 
-1. Verify rich user/system context lifecycle against resumed sessions and
-   remote-control captures.
-2. Complete the remaining stream-json rate-limit timing parity by plumbing
+1. Complete the remaining stream-json rate-limit timing parity by plumbing
    API status changes like TS instead of relying on deterministic fallback
    placement around very fast `PreToolUse` hooks.
-3. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
-4. Decide scope for bridge/direct-connect/upstream proxy before porting more
+2. Add transcript-level tests for query/tool/cancel/compact/resume behavior.
+3. Decide scope for bridge/direct-connect/upstream proxy before porting more
    isolated helpers.
+4. Reconcile current live Agent-tool metadata for plugin-provided agents.
 5. Update or replace `feature-gap-analysis.md` once this checklist is validated.

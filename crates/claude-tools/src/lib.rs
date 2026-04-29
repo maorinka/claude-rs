@@ -222,7 +222,9 @@ pub fn build_default_registry_with_options(options: RegistryOptions) -> ToolRegi
         reg.register(Arc::new(cron_tool::CronDeleteTool));
         reg.register(Arc::new(cron_tool::CronListTool));
     }
-    if feature_enabled("AGENT_TRIGGERS_REMOTE") {
+    if feature_enabled("AGENT_TRIGGERS_REMOTE")
+        && !claude_core::errors_util::is_env_truthy("CLAUDE_CODE_REMOTE")
+    {
         reg.register(Arc::new(remote_trigger::RemoteTriggerTool));
     }
 

@@ -64,7 +64,9 @@ pub fn register_bundled_skills() {
     register_stuck_skill();
     register_remember_skill();
     register_loop_skill();
-    register_schedule_skill();
+    if !claude_core::errors_util::is_env_truthy("CLAUDE_CODE_REMOTE") {
+        register_schedule_skill();
+    }
     register_claude_api_skill();
     register_init_skill();
     register_review_skill();

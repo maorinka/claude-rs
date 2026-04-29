@@ -67,6 +67,7 @@ pub struct QueryEngine {
     content_budget_skip_tool_use_ids: HashSet<String>,
     stop_hook_active: bool,
     transcript_storage: Option<crate::session::storage::SessionStorage>,
+    transcript_persisted_count: usize,
 }
 
 impl QueryEngine {
@@ -98,6 +99,7 @@ impl QueryEngine {
             content_budget_skip_tool_use_ids: HashSet::new(),
             stop_hook_active: false,
             transcript_storage: None,
+            transcript_persisted_count: 0,
         }
     }
 
@@ -126,6 +128,7 @@ impl QueryEngine {
     pub fn load_messages(&mut self, messages: Vec<serde_json::Value>) {
         let (messages, replacements) = split_content_replacement_entries(messages);
         self.messages = filter_after_compact_boundary(messages);
+        self.transcript_persisted_count = self.messages.len();
         self.usage_anchor = None;
         self.content_replacement_state =
             crate::query::result_budget::ContentReplacementState::reconstruct_from_messages_and_records(
@@ -247,12 +250,53 @@ impl QueryEngine {
         &self.messages
     }
 
-    /// Add a user message
-    pub fn add_user_message(&mut self, text: &str) {
+    /// Whether the active history already carries TS-style request context.
+    /// Resumed Rust sessions created by this engine persist the first user
+    /// turn after context materialization, so startup context must not be
+    /// prepended a second time on resume.
+    pub fn has_user_context_in_history(&self) -> bool {
+        self.messages
+            .iter()
+            .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("user"))
+            .and_then(|msg| msg.get("content").and_then(|content| content.as_array()))
+            .map(|content| {
+                content.iter().any(|block| {
+                    block
+                        .get("text")
+                        .and_then(|text| text.as_str())
+                        .map(|text| text.starts_with("<system-reminder>"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Add TS resume-normalization markers without writing them back to the
+    /// transcript. TS reconstructs these in memory on each resume when the
+    /// prior turn ended at a user message, then removes/recreates them as
+    /// needed for the next resume.
+    pub fn add_resume_continuation_markers(&mut self) {
         self.messages.push(serde_json::json!({
             "role": "user",
-            "content": [{"type": "text", "text": text}]
+            "content": [{"type": "text", "text": "Continue from where you left off."}],
         }));
+        self.messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "No response requested."}],
+        }));
+        self.transcript_persisted_count = self.messages.len();
+    }
+
+    /// Add a user message
+    pub fn add_user_message(&mut self, text: &str) {
+        let message = serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": text}]
+        });
+        self.messages.push(message);
+        if self.user_context_blocks.is_empty() {
+            self.persist_unpersisted_messages();
+        }
     }
 
     /// Add a tool result message
@@ -329,6 +373,11 @@ impl QueryEngine {
             block["is_error"] = serde_json::json!(is_error);
         }
 
+        let transcript_message = serde_json::json!({
+            "role": "user",
+            "content": [block.clone()]
+        });
+        let mut appended_to_existing = false;
         if let Some(last) = self.messages.last_mut() {
             let can_append = last.get("role").and_then(|role| role.as_str()) == Some("user")
                 && last
@@ -347,15 +396,22 @@ impl QueryEngine {
                     .and_then(|content| content.as_array_mut())
                 {
                     content.push(block);
-                    return;
+                    appended_to_existing = true;
                 }
             }
         }
 
-        self.messages.push(serde_json::json!({
-            "role": "user",
-            "content": [block]
-        }));
+        if appended_to_existing {
+            if self.user_context_blocks.is_empty() {
+                self.append_transcript_line(&transcript_message);
+            }
+            return;
+        }
+
+        self.messages.push(transcript_message);
+        if self.user_context_blocks.is_empty() {
+            self.persist_unpersisted_messages();
+        }
     }
 
     /// Repair message history to satisfy API constraints:
@@ -461,10 +517,12 @@ impl QueryEngine {
 
     /// Add the raw assistant message from the API response
     pub fn add_assistant_message(&mut self, content: Vec<serde_json::Value>) {
-        self.messages.push(serde_json::json!({
+        let message = serde_json::json!({
             "role": "assistant",
             "content": content,
-        }));
+        });
+        self.messages.push(message);
+        self.persist_unpersisted_messages();
     }
 
     fn should_compact_now(&self) -> bool {
@@ -556,10 +614,12 @@ impl QueryEngine {
         // We use a loop with at most 2 iterations: the first attempt, and optionally a
         // single retry after reactive compaction (avoids async recursion / Box::pin).
         let response = 'api_call: loop {
+            self.materialize_user_context_blocks();
             let system_prompt_for_request = self.system_prompt_for_request();
-            // Build dynamic user context prepend (Issue 25).
-            // Mirrors TS prependUserContext() — injects currentDate as a
-            // separate meta user message at request time.
+            // Build the request messages after request-time context has been
+            // materialized into the durable message list. TS persists these
+            // context-bearing messages, so resumed sessions see the same
+            // history rather than a raw prompt with context rebuilt differently.
             let messages_for_query =
                 build_messages_for_query(&self.messages, &self.user_context_blocks);
             let budget_result = crate::query::result_budget::apply_tool_result_budget(
@@ -1041,6 +1101,60 @@ impl QueryEngine {
         }
     }
 
+    fn materialize_user_context_blocks(&mut self) {
+        if self.user_context_blocks.is_empty() {
+            return;
+        }
+
+        let mut context_blocks = std::mem::take(&mut self.user_context_blocks);
+        if let Some(first_user) = self
+            .messages
+            .iter_mut()
+            .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("user"))
+        {
+            match first_user.get_mut("content") {
+                Some(serde_json::Value::Array(content)) => {
+                    content.splice(0..0, context_blocks);
+                }
+                Some(content) => {
+                    let existing = content.take();
+                    context_blocks.push(existing);
+                    *content = serde_json::Value::Array(context_blocks);
+                }
+                None => {
+                    first_user["content"] = serde_json::Value::Array(context_blocks);
+                }
+            }
+        } else {
+            self.messages.insert(
+                0,
+                serde_json::json!({
+                    "role": "user",
+                    "content": context_blocks,
+                }),
+            );
+        }
+
+        self.persist_unpersisted_messages();
+    }
+
+    fn persist_unpersisted_messages(&mut self) {
+        while self.transcript_persisted_count < self.messages.len() {
+            let message = self.messages[self.transcript_persisted_count].clone();
+            self.append_transcript_line(&message);
+            self.transcript_persisted_count += 1;
+        }
+    }
+
+    fn append_transcript_line(&self, message: &serde_json::Value) {
+        let Some(storage) = &self.transcript_storage else {
+            return;
+        };
+        if let Ok(line) = serde_json::to_string(message) {
+            let _ = storage.append_transcript(&line);
+        }
+    }
+
     async fn handle_max_tokens(
         &mut self,
         event_tx: &mpsc::Sender<StreamEvent>,
@@ -1137,23 +1251,6 @@ fn smoosh_text_into_last_tool_result(content: &mut [serde_json::Value], text: St
     }
 }
 
-/// Build a `<system-reminder>` prepend content block containing dynamic context.
-/// Mirrors TS prependUserContext() in src/utils/api.ts.
-/// Injects the current date so the model always has up-to-date temporal context.
-/// Returns None if no context is available (currently always returns Some).
-fn build_user_context_block() -> Option<serde_json::Value> {
-    use chrono::Local;
-    let current_date = format!("Today's date is {}.", Local::now().format("%a %b %d %Y"));
-
-    let inner = format!("# currentDate\n{}", current_date);
-    let content = format!(
-        "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n{}\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>",
-        inner
-    );
-
-    Some(serde_json::json!({"type": "text", "text": content}))
-}
-
 /// Build the request message list with dynamic user context.
 ///
 /// TS `prependUserContext()` prepends system-reminder content blocks to the
@@ -1163,11 +1260,6 @@ fn build_messages_for_query(
     extra_context_blocks: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
     let mut context_blocks = extra_context_blocks.to_vec();
-    if context_blocks.is_empty() {
-        if let Some(context_block) = build_user_context_block() {
-            context_blocks.push(context_block);
-        }
-    }
     if context_blocks.is_empty() {
         return messages.to_vec();
     };
@@ -1269,8 +1361,12 @@ mod tests {
             "role": "user",
             "content": [{"type": "text", "text": "hi"}]
         })];
+        let extra = vec![serde_json::json!({
+            "type": "text",
+            "text": "<system-reminder>\ncontext\n</system-reminder>",
+        })];
 
-        let with_context = build_messages_for_query(&messages, &[]);
+        let with_context = build_messages_for_query(&messages, &extra);
 
         assert_eq!(with_context.len(), 1);
         assert_eq!(with_context[0]["role"], "user");
@@ -1289,8 +1385,9 @@ mod tests {
             "role": "assistant",
             "content": [{"type": "text", "text": "hello"}]
         })];
+        let extra = vec![serde_json::json!({"type": "text", "text": "context"})];
 
-        let with_context = build_messages_for_query(&messages, &[]);
+        let with_context = build_messages_for_query(&messages, &extra);
 
         assert_eq!(with_context.len(), 2);
         assert_eq!(with_context[0]["role"], "user");
@@ -1392,6 +1489,59 @@ mod tests {
         assert!(
             matches!(&full[0], ContentBlock::Text { text } if text == "static prompt\n\ngitStatus: Current branch: main")
         );
+    }
+
+    #[test]
+    fn transcript_storage_records_user_assistant_and_tool_messages() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let storage = crate::session::storage::SessionStorage::from_dir(tmp.path().to_path_buf());
+        let api_client = crate::api::client::ApiClient::new(
+            crate::api::client::ApiConfig::default(),
+            crate::api::client::AuthMethod::ApiKey("test".into()),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut engine = QueryEngine::new(api_client, vec![], vec![], cancel);
+        engine.set_transcript_storage(storage);
+
+        engine.add_user_message("hello");
+        engine.add_assistant_message(vec![serde_json::json!({"type": "text", "text": "hi"})]);
+        engine.add_tool_result("toolu_1", "done", false);
+
+        let storage = crate::session::storage::SessionStorage::from_dir(tmp.path().to_path_buf());
+        let entries = storage.load_transcript().unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["role"], "user");
+        assert_eq!(entries[0]["content"][0]["text"], "hello");
+        assert_eq!(entries[1]["role"], "assistant");
+        assert_eq!(entries[1]["content"][0]["text"], "hi");
+        assert_eq!(entries[2]["role"], "user");
+        assert_eq!(entries[2]["content"][0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn transcript_storage_records_materialized_user_context() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let storage = crate::session::storage::SessionStorage::from_dir(tmp.path().to_path_buf());
+        let api_client = crate::api::client::ApiClient::new(
+            crate::api::client::ApiConfig::default(),
+            crate::api::client::AuthMethod::ApiKey("test".into()),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut engine = QueryEngine::new(api_client, vec![], vec![], cancel);
+        engine.set_transcript_storage(storage);
+
+        engine.append_user_context_block("context".to_string());
+        engine.add_user_message("hello");
+        engine.materialize_user_context_blocks();
+
+        let storage = crate::session::storage::SessionStorage::from_dir(tmp.path().to_path_buf());
+        let entries = storage.load_transcript().unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["role"], "user");
+        assert_eq!(entries[0]["content"][0]["text"], "context");
+        assert_eq!(entries[0]["content"][1]["text"], "hello");
     }
 }
 
