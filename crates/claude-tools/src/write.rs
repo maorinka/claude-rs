@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diff_utils::structured_patch_for_display;
 use crate::registry::{ProgressSender, ReadFileState, ToolExecutor, ToolUseContext};
+use crate::tool_path::expand_tool_path;
 use claude_core::file_history::FileHistoryTracker;
 use claude_core::types::events::ToolResultData;
 
@@ -138,6 +139,8 @@ Usage:
         let file_path = input["file_path"]
             .as_str()
             .context("file_path must be a string")?;
+        let file_path = expand_tool_path(file_path, &ctx.working_directory);
+        let file_path = file_path.as_str();
         let content = input["content"]
             .as_str()
             .context("content must be a string")?;

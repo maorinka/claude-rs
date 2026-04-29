@@ -121,6 +121,39 @@ async fn test_edit_replace_all() {
 }
 
 #[tokio::test]
+async fn test_edit_expands_relative_path_against_context_cwd() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("relative_edit.txt");
+    std::fs::write(&file_path, "old value").unwrap();
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+    ctx.read_file_state.lock().unwrap().record_read(
+        file_path.to_str().unwrap(),
+        false,
+        Some("old value".to_string()),
+    );
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": "relative_edit.txt",
+            "old_string": "old",
+            "new_string": "new"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error);
+    assert_eq!(
+        result.data["filePath"],
+        file_path.to_string_lossy().as_ref()
+    );
+    assert_eq!(std::fs::read_to_string(file_path).unwrap(), "new value");
+}
+
+#[tokio::test]
 async fn test_edit_error_on_ambiguous_match() {
     let dir = TempDir::new().unwrap();
     let file_path = dir.path().join("multi.txt");

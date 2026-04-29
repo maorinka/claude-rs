@@ -45,6 +45,7 @@ pub mod task_tools;
 pub mod team_tools;
 pub mod terminal_capture_tool;
 pub mod todo_write;
+mod tool_path;
 pub mod tool_search;
 pub mod verify_plan_tool;
 pub mod web_browser_tool;

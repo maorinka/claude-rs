@@ -79,6 +79,9 @@ Now matching:
 - `Read` tool result metadata now keeps raw file content like TS
   `FileReadTool`, and model-facing tool-result text is line-numbered only
   when the CLI maps tool data into the next model request.
+- `Read`, `Edit`, and `Write` now expand relative paths against the
+  request-scoped cwd before filesystem access, matching the TS
+  `backfillObservableInput` / `expandPath` flow.
 - Installed CLI identity is synced to the current TS CLI version observed in
   live captures: `2.1.121`, including the OAuth billing version string.
 - Stream-json assistant events for multi-block responses now split per content
@@ -508,6 +511,8 @@ Improved:
   `userModified`, using the same shared display-diff helper as `Write`.
 - CRLF preservation and LF-normalized `originalFile` behavior are covered by
   focused tests.
+- Rust `Edit` now expands relative paths against the request cwd before
+  staleness checks and filesystem writes.
 
 ### FileWriteTool
 
@@ -524,6 +529,8 @@ Improved:
 - Write permission safety prompts now mirror TS's narrow `.claude/skills/<name>`
   suggestion: Rust offers a session-scoped `Edit(/.claude/skills/<name>/**)`
   allow rule instead of a broad generic write-mode suggestion.
+- Rust `Write` now expands relative paths against the request cwd before
+  staleness checks and filesystem writes.
 
 Needs work:
 - File-history integration.

@@ -78,6 +78,31 @@ async fn test_write_creates_parent_dirs() {
 }
 
 #[tokio::test]
+async fn test_write_expands_relative_path_against_context_cwd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = FileWriteTool;
+    let ctx = make_ctx(tmp.path());
+
+    let result = call_tool(
+        &tool,
+        json!({ "file_path": "relative.txt", "content": "relative content" }),
+        &ctx,
+    )
+    .await;
+
+    let expected_path = tmp.path().join("relative.txt");
+    assert!(!result.is_error);
+    assert_eq!(
+        result.data["filePath"],
+        expected_path.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        std::fs::read_to_string(expected_path).unwrap(),
+        "relative content"
+    );
+}
+
+#[tokio::test]
 async fn test_write_overwrites_existing() {
     let tmp = tempfile::tempdir().unwrap();
     let tool = FileWriteTool;

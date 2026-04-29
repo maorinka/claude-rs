@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diff_utils::structured_patch_for_display;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::tool_path::expand_tool_path;
 use crate::write::FILE_HISTORY;
 use claude_core::types::events::ToolResultData;
 
@@ -146,6 +147,8 @@ Usage:
             Some(p) => p,
             None => return Ok(error_result("Missing required field: file_path")),
         };
+        let file_path = expand_tool_path(file_path, &ctx.working_directory);
+        let file_path = file_path.as_str();
         let old_string = match input["old_string"].as_str() {
             Some(s) => s,
             None => return Ok(error_result("Missing required field: old_string")),

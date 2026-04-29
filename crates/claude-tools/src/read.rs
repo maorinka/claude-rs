@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use crate::tool_path::expand_tool_path;
 use claude_core::types::events::ToolResultData;
 
 /// Paths that must never be opened (infinite / blocking / sensitive device files).
@@ -397,6 +398,8 @@ impl ToolExecutor for FileReadTool {
                 return Ok(error_result("missing required parameter: file_path"));
             }
         };
+        let file_path = expand_tool_path(file_path, &ctx.working_directory);
+        let file_path = file_path.as_str();
 
         // Block dangerous device paths.
         if BLOCKED_PATHS.contains(&file_path) {
@@ -813,6 +816,30 @@ mod tests {
             .decode(result.data["file"]["base64"].as_str().unwrap())
             .unwrap();
         assert_eq!(decoded, png_data);
+    }
+
+    #[tokio::test]
+    async fn test_read_expands_relative_path_against_context_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("relative_read.txt");
+        std::fs::write(&file_path, "hello\n").unwrap();
+
+        let tool = FileReadTool;
+        let input = json!({ "file_path": "relative_read.txt" });
+        let ctx = ToolUseContext::for_test(
+            dir.path().to_path_buf(),
+            Arc::new(std::sync::Mutex::new(ReadFileState::new())),
+            crate::registry::PermissionMode::Default,
+        );
+        let cancel = CancellationToken::new();
+
+        let result = tool.call(&input, &ctx, cancel, None).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(
+            result.data["file"]["filePath"],
+            file_path.to_string_lossy().as_ref()
+        );
+        assert_eq!(result.data["file"]["content"], "hello\n");
     }
 
     #[tokio::test]
