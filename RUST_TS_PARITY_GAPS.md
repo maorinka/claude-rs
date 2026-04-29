@@ -476,6 +476,11 @@ Missing or partial:
 Needs work:
 - Wire MCP auth, elicitation, reconnect, and UI flows.
 
+Improved:
+- MCP auto-mode classifier input encoding now follows the TS
+  `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
+  keys and JavaScript `String(value)` coercion for arrays and nested objects.
+
 ## P1: Tools Needing Further Work
 
 ### BashTool

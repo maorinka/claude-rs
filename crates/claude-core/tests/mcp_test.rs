@@ -641,7 +641,7 @@ fn test_server_resource_serialization() {
     assert_eq!(json["uri"], "file:///tmp/test.txt");
     assert_eq!(json["name"], "test.txt");
     assert_eq!(json["description"], "A test file");
-    assert_eq!(json["mime_type"], "text/plain");
+    assert_eq!(json["mimeType"], "text/plain");
     assert_eq!(json["server"], "test-server");
 }
 

@@ -195,7 +195,7 @@ mod tests {
 
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.ends_with('\n'));
-        let parsed: Value = serde_json::from_str(contents.trim()).unwrap();
+        let parsed: Value = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
         assert_eq!(parsed["level"], "info");
         assert_eq!(parsed["event"], "ev");
         assert_eq!(parsed["data"]["k"], 1);

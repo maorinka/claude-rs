@@ -300,25 +300,12 @@ pub fn are_mcp_configs_equal(a: &ScopedMcpServerConfig, b: &ScopedMcpServerConfi
 ///
 /// - Empty input → the tool name alone.
 /// - Non-empty → `k1=v1 k2=v2 …` joined with a single space.
+/// - Values use JavaScript `String(value)` semantics, including
+///   arrays as comma-joined values and objects as `[object Object]`.
 ///
-/// Used by the Rust auto-classifier stubs so their input shape
-/// matches what production models see.
-///
-/// # Divergences from TS
-///
-/// * **Key order**: TS iterates `Object.keys(input)` (insertion
-///   order). Rust's default `serde_json::Map` is backed by
-///   `BTreeMap` (alphabetical). Keys come out sorted. This is
-///   stable and deterministic but not TS-identical; classifier
-///   outputs are order-invariant in practice.
-/// * **String values** (primitive): unquoted, matches TS.
-/// * **Numbers / booleans / null**: match TS (`1`, `true`,
-///   `null`).
-/// * **Nested objects**: TS `String({a:1})` → `"[object Object]"`.
-///   Rust emits the compact JSON `{"a":1}`. Divergent but more
-///   useful for the classifier.
-/// * **Arrays**: TS `String([1,2,3])` → `"1,2,3"`. Rust emits
-///   `[1,2,3]` (JSON form). Divergent but more useful.
+/// `serde_json` is built with `preserve_order` so parsed object
+/// keys emerge in the same insertion order TS `Object.keys(input)`
+/// uses.
 pub fn mcp_tool_input_to_auto_classifier_input(
     input: &serde_json::Map<String, serde_json::Value>,
     tool_name: &str,
@@ -328,15 +315,33 @@ pub fn mcp_tool_input_to_auto_classifier_input(
     }
     input
         .iter()
-        .map(|(k, v)| {
-            let vs = match v {
-                serde_json::Value::String(s) => s.clone(),
-                _ => v.to_string(),
-            };
-            format!("{}={}", k, vs)
-        })
+        .map(|(k, v)| format!("{}={}", k, js_string(v)))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn js_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(js_array_element_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        serde_json::Value::Object(_) => "[object Object]".to_string(),
+    }
+}
+
+fn js_array_element_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Array(_) => js_string(value),
+        serde_json::Value::Object(_) => "[object Object]".to_string(),
+        _ => js_string(value),
+    }
 }
 
 // ─── Error classifiers ───────────────────────────────────────────────
@@ -993,40 +998,40 @@ mod tests {
     }
 
     #[test]
-    fn auto_classifier_keys_emerge_alphabetically() {
-        // Codex CR: serde_json::Map is backed by BTreeMap without
-        // the `preserve_order` feature, so iteration is
-        // alphabetical — NOT insertion-order (which is what the
-        // original commit claimed). The output is still stable
-        // and deterministic, just sorted rather than as-inserted.
+    fn auto_classifier_keys_follow_ts_insertion_order() {
         let mut input = serde_json::Map::new();
         input.insert("zebra".into(), serde_json::json!(1));
         input.insert("apple".into(), serde_json::json!(2));
         input.insert("mango".into(), serde_json::json!(3));
         let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
-        assert_eq!(out, "apple=2 mango=3 zebra=1");
+        assert_eq!(out, "zebra=1 apple=2 mango=3");
     }
 
     #[test]
-    fn auto_classifier_array_value_differs_from_ts() {
-        // TS `String([1,2,3])` emits "1,2,3"; Rust emits the JSON
-        // form "[1,2,3]". Divergent but more informative for the
-        // classifier prompt. Pin the Rust shape so it doesn't
-        // drift silently.
+    fn auto_classifier_array_value_matches_ts_string_coercion() {
         let mut input = serde_json::Map::new();
         input.insert("items".into(), serde_json::json!([1, 2, 3]));
         let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
-        assert_eq!(out, "items=[1,2,3]");
+        assert_eq!(out, "items=1,2,3");
     }
 
     #[test]
-    fn auto_classifier_nested_object_value_differs_from_ts() {
-        // TS `String({a:1})` emits "[object Object]"; Rust emits
-        // the JSON form. Divergent but informative.
+    fn auto_classifier_nested_object_value_matches_ts_string_coercion() {
         let mut input = serde_json::Map::new();
         input.insert("opts".into(), serde_json::json!({ "a": 1 }));
         let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
-        assert_eq!(out, r#"opts={"a":1}"#);
+        assert_eq!(out, "opts=[object Object]");
+    }
+
+    #[test]
+    fn auto_classifier_nested_array_values_match_ts_string_coercion() {
+        let mut input = serde_json::Map::new();
+        input.insert(
+            "items".into(),
+            serde_json::json!([true, null, { "a": 1 }, [2, 3]]),
+        );
+        let out = mcp_tool_input_to_auto_classifier_input(&input, "tool");
+        assert_eq!(out, "items=true,,[object Object],2,3");
     }
 
     #[test]
