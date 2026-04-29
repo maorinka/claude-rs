@@ -716,6 +716,11 @@ Improved:
   `--replay-user-messages`, validates the stream-json-only combinations, and
   seeds the initial prompt, system prompt, append prompt, and JSON Schema from
   SDK stream-json stdin `user` / `initialize` messages.
+- Rust startup now accepts TS runtime configuration flags `--settings`,
+  `--mcp-config`, and `--strict-mcp-config`: settings are layered over loaded
+  settings, dynamic MCP configs are parsed from JSON strings or files with
+  environment-variable expansion, and CLI MCP configs override file/plugin
+  configs while preserving insertion order.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

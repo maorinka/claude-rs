@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -88,6 +89,18 @@ pub struct Cli {
     /// Additional directories to allow tool access to
     #[arg(long = "add-dir", num_args = 1..)]
     pub add_dirs: Vec<String>,
+
+    /// Load MCP servers from JSON files or JSON strings
+    #[arg(long = "mcp-config", num_args = 1..)]
+    pub mcp_config: Vec<String>,
+
+    /// Only use MCP servers supplied by --mcp-config
+    #[arg(long = "strict-mcp-config")]
+    pub strict_mcp_config: bool,
+
+    /// Path to a settings JSON file or an inline JSON settings object
+    #[arg(long = "settings")]
+    pub settings: Option<String>,
 
     /// MCP tool to use for permission prompts in print mode
     #[arg(long = "permission-prompt-tool", hide = true)]
@@ -218,6 +231,149 @@ fn parse_stream_json_stdin(stdin: &str) -> Result<StreamJsonStdinSeed> {
         }
     }
     Ok(seed)
+}
+
+fn read_json_arg_or_file(raw: &str, label: &str) -> Result<Value> {
+    if let Ok(value) = serde_json::from_str::<Value>(raw) {
+        return Ok(value);
+    }
+    let path = std::path::PathBuf::from(raw);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| anyhow::anyhow!("Error reading {label} {}: {err}", path.display()))?;
+    serde_json::from_str(&text)
+        .map_err(|err| anyhow::anyhow!("Error parsing {label} {}: {err}", path.display()))
+}
+
+fn merge_json_values(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Object(base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_json_values(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => {
+            *base = overlay;
+        }
+    }
+}
+
+fn expand_env_vars(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '$' {
+            out.push(ch);
+            continue;
+        }
+        if chars.peek() == Some(&'{') {
+            chars.next();
+            let mut name = String::new();
+            for next in chars.by_ref() {
+                if next == '}' {
+                    break;
+                }
+                name.push(next);
+            }
+            out.push_str(&std::env::var(name).unwrap_or_default());
+            continue;
+        }
+        let mut name = String::new();
+        while let Some(&next) = chars.peek() {
+            if next == '_' || next.is_ascii_alphanumeric() {
+                name.push(next);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if name.is_empty() {
+            out.push('$');
+        } else {
+            out.push_str(&std::env::var(name).unwrap_or_default());
+        }
+    }
+    out
+}
+
+fn expand_env_vars_in_json(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            *text = expand_env_vars(text);
+        }
+        Value::Array(items) => {
+            for item in items {
+                expand_env_vars_in_json(item);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values_mut() {
+                expand_env_vars_in_json(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn load_settings_overlay(
+    raw: &Option<String>,
+) -> Result<Option<(claude_core::config::settings::Settings, Value)>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value = read_json_arg_or_file(raw, "--settings")?;
+    let settings = serde_json::from_value::<claude_core::config::settings::Settings>(value.clone())
+        .map_err(|err| anyhow::anyhow!("Error parsing --settings: {err}"))?;
+    Ok(Some((settings, value)))
+}
+
+fn load_dynamic_mcp_configs(
+    values: &[String],
+) -> Result<(
+    std::collections::HashMap<String, claude_core::mcp::types::ScopedMcpServerConfig>,
+    Vec<String>,
+)> {
+    let mut configs = std::collections::HashMap::new();
+    let mut order = Vec::new();
+    for item in values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let mut value = read_json_arg_or_file(item, "--mcp-config")?;
+        expand_env_vars_in_json(&mut value);
+        let servers = value
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Error: Invalid MCP configuration:\ncommand line: Missing mcpServers object"
+                )
+            })?;
+        for (name, config_value) in servers {
+            let config = claude_core::mcp::types::McpServerConfig::from_value(config_value.clone())
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Error: Invalid MCP configuration:\ncommand line: {name}: {err}"
+                    )
+                })?;
+            if !configs.contains_key(name) {
+                order.push(name.clone());
+            }
+            configs.insert(
+                name.clone(),
+                claude_core::mcp::types::ScopedMcpServerConfig {
+                    config,
+                    scope: claude_core::mcp::types::ConfigScope::Dynamic,
+                },
+            );
+        }
+    }
+    Ok((configs, order))
 }
 
 fn resolve_prompt_file_option(
@@ -634,6 +790,43 @@ mod tests {
         assert_eq!(seed.append_system_prompt.as_deref(), Some("append"));
         assert_eq!(seed.json_schema.as_deref(), Some("{\"type\":\"object\"}"));
         assert_eq!(seed.prompt.as_deref(), Some("hi\nthere"));
+    }
+
+    #[test]
+    fn dynamic_mcp_config_parses_json_and_expands_env() {
+        std::env::set_var("CLAUDE_RS_TEST_MCP_TOKEN", "secret");
+        let raw = r#"{
+            "mcpServers": {
+                "docs": {
+                    "type": "http",
+                    "url": "https://example.com/mcp",
+                    "headers": {
+                        "Authorization": "Bearer $CLAUDE_RS_TEST_MCP_TOKEN"
+                    }
+                }
+            }
+        }"#;
+
+        let (configs, order) = load_dynamic_mcp_configs(&[raw.to_string()]).unwrap();
+
+        assert_eq!(order, vec!["docs".to_string()]);
+        let config = configs.get("docs").unwrap();
+        assert_eq!(config.scope, claude_core::mcp::types::ConfigScope::Dynamic);
+        match &config.config {
+            claude_core::mcp::types::McpServerConfig::Http(http) => {
+                assert_eq!(http.url, "https://example.com/mcp");
+                assert_eq!(
+                    http.headers
+                        .as_ref()
+                        .unwrap()
+                        .get("Authorization")
+                        .map(String::as_str),
+                    Some("Bearer secret")
+                );
+            }
+            other => panic!("expected http config, got {other:?}"),
+        }
+        std::env::remove_var("CLAUDE_RS_TEST_MCP_TOKEN");
     }
 
     #[test]
@@ -3799,15 +3992,20 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Load settings from ~/.claude/settings.json
-    let settings = match claude_core::config::paths::user_settings_path() {
+    // Load settings from ~/.claude/settings.json, then layer --settings on top.
+    let mut settings = match claude_core::config::paths::user_settings_path() {
         Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
         Err(_) => claude_core::config::settings::Settings::default(),
     };
-    let raw_settings =
+    let mut raw_settings =
         claude_core::permissions::load_raw_settings_value_with_plugin_hooks(&project_root);
-    let permission_settings =
+    let mut permission_settings =
         claude_core::permissions::load_permission_settings_value(&project_root);
+    if let Some((overlay, overlay_value)) = load_settings_overlay(&cli.settings)? {
+        settings = settings.merge(&overlay);
+        merge_json_values(&mut raw_settings, overlay_value.clone());
+        merge_json_values(&mut permission_settings, overlay_value);
+    }
 
     // Build tool registry
     let mut tools =
@@ -3838,8 +4036,17 @@ async fn main() -> Result<()> {
     // --- MCP server wiring ---
     // Connect to MCP servers configured in settings.mcpServers
     let mcp_manager = Arc::new(RwLock::new(claude_core::mcp::manager::McpManager::new()));
-    let mut mcp_server_settings = settings.mcp_servers.clone();
-    let (plugin_mcp_servers, plugin_mcp_order) = load_enabled_plugin_mcp_servers(&project_root);
+    let (dynamic_mcp_configs, dynamic_mcp_order) = load_dynamic_mcp_configs(&cli.mcp_config)?;
+    let mut mcp_server_settings = if cli.strict_mcp_config {
+        std::collections::HashMap::new()
+    } else {
+        settings.mcp_servers.clone()
+    };
+    let (plugin_mcp_servers, plugin_mcp_order) = if cli.strict_mcp_config {
+        (std::collections::HashMap::new(), Vec::new())
+    } else {
+        load_enabled_plugin_mcp_servers(&project_root)
+    };
     mcp_server_settings.extend(plugin_mcp_servers);
     let mut configs = std::collections::HashMap::new();
     let mut mcp_server_order = plugin_mcp_order;
@@ -3868,17 +4075,25 @@ async fn main() -> Result<()> {
         }
         configs.insert(name.clone(), scoped);
     }
-    let ClaudeAiMcpDiscovery {
-        configs: discovered_claude_ai_configs,
-        order: discovered_claude_ai_order,
-        original_urls: discovered_claude_ai_original_urls,
-    } = fetch_claude_ai_mcp_configs_if_eligible().await;
-    let claude_ai_configs = dedup_claude_ai_mcp_servers(discovered_claude_ai_configs, &configs);
-    for name in discovered_claude_ai_order {
-        if claude_ai_configs.contains_key(&name) && !mcp_server_order.contains(&name) {
-            mcp_server_order.push(name);
+    let (claude_ai_configs, discovered_claude_ai_original_urls) = if cli.strict_mcp_config {
+        (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        )
+    } else {
+        let ClaudeAiMcpDiscovery {
+            configs: discovered_claude_ai_configs,
+            order: discovered_claude_ai_order,
+            original_urls: discovered_claude_ai_original_urls,
+        } = fetch_claude_ai_mcp_configs_if_eligible().await;
+        let claude_ai_configs = dedup_claude_ai_mcp_servers(discovered_claude_ai_configs, &configs);
+        for name in discovered_claude_ai_order {
+            if claude_ai_configs.contains_key(&name) && !mcp_server_order.contains(&name) {
+                mcp_server_order.push(name);
+            }
         }
-    }
+        (claude_ai_configs, discovered_claude_ai_original_urls)
+    };
     let claude_ai_shadow_servers = claude_ai_configs
         .iter()
         .map(|(name, config)| ShadowMcpServer {
@@ -3892,6 +4107,12 @@ async fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
     configs.extend(claude_ai_configs);
+    for name in dynamic_mcp_order {
+        if !mcp_server_order.contains(&name) {
+            mcp_server_order.push(name);
+        }
+    }
+    configs.extend(dynamic_mcp_configs);
     let mut claude_ai_shadow_tools = Vec::new();
     claude_ai_shadow_tools.extend(mcp_contract_shadow_tools(
         plugin_mcp_server_names
