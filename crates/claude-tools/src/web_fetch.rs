@@ -183,6 +183,15 @@ To complete your request, I need to fetch content from the redirected URL. Pleas
     )
 }
 
+fn egress_blocked_error_message(domain: &str) -> String {
+    json!({
+        "error_type": "EGRESS_BLOCKED",
+        "domain": domain,
+        "message": format!("Access to {domain} is blocked by the network egress proxy."),
+    })
+    .to_string()
+}
+
 async fn fetch_with_permitted_redirects(
     client: &reqwest::Client,
     url: String,
@@ -224,6 +233,20 @@ async fn fetch_with_permitted_redirects(
             redirect_url,
             status_code: status.as_u16(),
         });
+    }
+    if !status.is_success() {
+        let proxy_error = response
+            .headers()
+            .get("x-proxy-error")
+            .and_then(|value| value.to_str().ok());
+        if status.as_u16() == 403 && proxy_error == Some("blocked-by-allowlist") {
+            let domain = reqwest::Url::parse(&url)
+                .ok()
+                .and_then(|url| url.host_str().map(ToString::to_string))
+                .unwrap_or_default();
+            anyhow::bail!("{}", egress_blocked_error_message(&domain));
+        }
+        anyhow::bail!("Request failed with status code {}", status.as_u16());
     }
 
     let code = status.as_u16();
@@ -868,6 +891,18 @@ mod tests {
                 .unwrap()
                 .as_str(),
             "https://example.com/a"
+        );
+    }
+
+    #[test]
+    fn egress_blocked_error_message_matches_ts() {
+        let value: Value = serde_json::from_str(&egress_blocked_error_message("example.com"))
+            .expect("valid json error payload");
+        assert_eq!(value["error_type"], "EGRESS_BLOCKED");
+        assert_eq!(value["domain"], "example.com");
+        assert_eq!(
+            value["message"],
+            "Access to example.com is blocked by the network egress proxy."
         );
     }
 

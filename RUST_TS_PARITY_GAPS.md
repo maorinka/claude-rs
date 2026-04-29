@@ -596,9 +596,13 @@ Improved since the stale report:
 - Rust no longer applies its old extra 50k-character WebFetch truncation before
   caching/secondary-model handling; truncation is left to the secondary prompt
   path like TS.
+- WebFetch now treats non-2xx/non-handled-redirect HTTP responses as request
+  failures like Axios does in TS, including the TS egress-proxy 403
+  `EGRESS_BLOCKED` JSON error payload.
+- Preapproved-host permission and prompt-path behavior has been checked against
+  TS and uses the same host/path-prefix mechanism.
 
 Still needs work:
-- Preapproved-host behavior parity.
 - Exact Turndown formatting parity for edge-case HTML.
 - Content-type/encoding details, cache size/eviction, and size-limit behavior
   parity.
