@@ -299,7 +299,7 @@ Query forms:
             }
         }
 
-        let (required_terms, query_terms) = split_query_terms(&query_lower);
+        let (required_terms, all_scoring_terms) = split_query_terms(&query_lower);
 
         let mut scored = self
             .tools
@@ -314,7 +314,7 @@ Query forms:
                 }) {
                     return None;
                 }
-                let score = query_terms
+                let score = all_scoring_terms
                     .iter()
                     .map(|term| score_term(&parsed, &haystack, &tool.description, term))
                     .sum::<usize>();
@@ -466,18 +466,29 @@ fn description_has_word(description: &str, term: &str) -> bool {
 }
 
 fn split_query_terms(query: &str) -> (Vec<String>, Vec<String>) {
-    query
-        .split_whitespace()
-        .fold((Vec::new(), Vec::new()), |mut acc, term| {
-            if let Some(required) = term.strip_prefix('+') {
-                if !required.is_empty() {
-                    acc.0.push(required.to_string());
-                }
-            } else if !term.is_empty() {
-                acc.1.push(term.to_string());
+    let mut required_terms = Vec::new();
+    let mut optional_terms = Vec::new();
+    for term in query.split_whitespace() {
+        if let Some(required) = term.strip_prefix('+') {
+            if !required.is_empty() {
+                required_terms.push(required.to_string());
             }
-            acc
-        })
+        } else if !term.is_empty() {
+            optional_terms.push(term.to_string());
+        }
+    }
+
+    let all_scoring_terms = if required_terms.is_empty() {
+        optional_terms
+    } else {
+        required_terms
+            .iter()
+            .cloned()
+            .chain(optional_terms)
+            .collect()
+    };
+
+    (required_terms, all_scoring_terms)
 }
 
 fn searchable_text(name: &str, description: &str) -> String {

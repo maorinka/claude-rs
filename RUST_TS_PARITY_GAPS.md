@@ -689,6 +689,9 @@ Improved:
   `ToolSearch` can discover tools such as `TodoWrite`, `WebFetch`,
   `WebSearch`, plan/task/cron/config/LSP tools, and worktree/team tools
   without request-time name guessing.
+- Required-term searches now match TS scoring: a query containing only
+  `+term` filters and scores on that required term instead of dropping all
+  matches after filtering.
 
 Needs work:
 - Add integration coverage for `ToolSearch select:*` with a live/fake MCP

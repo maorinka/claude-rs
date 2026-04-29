@@ -243,6 +243,27 @@ async fn test_search_uses_ts_should_defer_builtin_metadata() {
 }
 
 #[tokio::test]
+async fn test_required_only_query_scores_required_terms_like_ts() {
+    let tool = ToolSearchTool::new(vec![(
+        "mcp__slack__send_message".to_string(),
+        "Send a message to Slack".to_string(),
+    )]);
+    let result = tool
+        .call(
+            &json!({ "query": "+slack" }),
+            &make_ctx(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("call should not fail");
+
+    assert!(!result.is_error);
+    assert_eq!(matches(&result), vec!["mcp__slack__send_message"]);
+    assert_eq!(result.data["total_deferred_tools"], 1);
+}
+
+#[tokio::test]
 async fn test_search_result_matches_ts_output_contract() {
     let result = search("glob").await;
     assert!(!result.is_error);
