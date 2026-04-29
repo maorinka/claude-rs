@@ -311,7 +311,7 @@ fn format_agent_tool_result_content_for_model(data: &Value) -> Value {
 }
 
 fn format_tool_result_string_for_model(tool_name: &str, data: &Value) -> String {
-    if tool_name == "Bash" {
+    if tool_name == "Bash" || tool_name == "PowerShell" {
         return format_bash_tool_result_for_model(data);
     }
     if tool_name == "Monitor" {
@@ -961,5 +961,19 @@ mod tests {
             }),
         );
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn powershell_uses_shell_stdout_stderr_mapping_like_ts() {
+        let text = format_tool_result_for_model(
+            "PowerShell",
+            &serde_json::json!({
+                "stdout": "\n\nhello\n",
+                "stderr": "warning\n",
+                "exitCode": 0,
+                "interrupted": false
+            }),
+        );
+        assert_eq!(text, "hello\nwarning");
     }
 }

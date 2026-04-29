@@ -720,9 +720,19 @@ Files:
   `src/utils/shell/shellToolUtils.ts`
 
 Needs work:
-- Gate with `isPowerShellToolEnabled()`.
 - Confirm Windows-specific behavior.
 - Permission and read-only semantics parity with Bash.
+- Background/progress, cwd reset, large-output persistence, git tracking, and
+  image-output handling from TS `PowerShellTool.call`.
+
+Improved:
+- Rust already gates registration through the shared
+  `is_powershell_tool_enabled()` helper, matching TS `isPowerShellToolEnabled()`.
+- PowerShell external-command exit semantics now follow TS
+  `PowerShellTool/commandSemantics.ts` for `grep`/`rg`/`findstr` no-match and
+  `robocopy` success bitfields.
+- Model-facing PowerShell results now use the TS shell stdout/stderr mapping
+  instead of exposing raw JSON.
 
 ### ToolSearchTool
 

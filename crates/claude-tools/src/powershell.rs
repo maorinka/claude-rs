@@ -107,13 +107,22 @@ impl ToolExecutor for PowerShellTool {
                 let stderr = truncate_output(String::from_utf8_lossy(&output.stderr).to_string());
                 let exit_code = output.status.code().unwrap_or(-1);
 
+                let interpretation = crate::powershell_command_semantics::interpret_command_result(
+                    command, exit_code, &stdout, &stderr,
+                );
+                let mut data = json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "interrupted": false,
+                    "exitCode": exit_code
+                });
+                if let Some(message) = interpretation.message {
+                    data["returnCodeInterpretation"] = json!(message);
+                }
+
                 Ok(ToolResultData {
-                    data: json!({
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exitCode": exit_code
-                    }),
-                    is_error: exit_code != 0,
+                    data,
+                    is_error: interpretation.is_error,
                 })
             }
             Err(e) => Ok(ToolResultData {

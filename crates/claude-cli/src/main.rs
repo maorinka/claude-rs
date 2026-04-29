@@ -3077,7 +3077,7 @@ fn format_agent_tool_result_content_for_model(data: &serde_json::Value) -> serde
 
 #[allow(dead_code)]
 fn format_tool_result_string_for_model(tool_name: &str, data: &serde_json::Value) -> String {
-    if tool_name == "Bash" {
+    if tool_name == "Bash" || tool_name == "PowerShell" {
         return format_bash_tool_result_for_model(data);
     }
 

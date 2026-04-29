@@ -27,6 +27,7 @@ pub mod monitor_tool;
 pub mod notebook_edit;
 pub mod plan_mode;
 pub mod powershell;
+pub mod powershell_command_semantics;
 pub mod push_notification_tool;
 pub mod read;
 pub mod read_only_validation;
