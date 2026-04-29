@@ -527,10 +527,18 @@ Files:
 
 Improved since the stale report:
 - Rust now accepts a `prompt` parameter and can call a secondary model.
+- Rust now validates WebFetch URLs with the TS security shape (length cap,
+  parseability, no embedded credentials, public-looking host), upgrades
+  `http:` to `https:` before fetch, disables automatic cross-host redirects
+  and returns the TS redirect instruction message, and emits the TS output
+  keys (`bytes`, `code`, `codeText`, `result`, `durationMs`, `url`) without
+  Rust-only prompt/debug fields.
+- WebFetch permission checks now use TS-style `domain:<hostname>` rule
+  content, preapproved-host auto-allow, allow/ask/deny rule matching, and
+  local-settings allow suggestions instead of inheriting blanket read-only
+  auto-allow.
 
 Still needs work:
-- URL scheme validation.
-- Domain permission gating.
 - Preapproved-host behavior parity.
 - HTML to Markdown conversion parity. Rust currently strips HTML manually.
 - Redirect, content-type, encoding, and size-limit behavior parity.

@@ -4,10 +4,20 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
+use claude_core::permissions::{
+    PermissionAllowDecision, PermissionAskDecision, PermissionBehavior, PermissionDecisionReason,
+    PermissionDenyDecision, PermissionResult, PermissionRuleSource, PermissionRuleValue,
+    PermissionUpdate, ToolPermissionContext,
+};
 use claude_core::secondary_model;
 use claude_core::types::events::ToolResultData;
 
 pub struct WebFetchTool;
+
+const MAX_URL_LENGTH: usize = 2000;
+const MAX_HTTP_CONTENT_LENGTH: u64 = 10 * 1024 * 1024;
+const FETCH_TIMEOUT_SECS: u64 = 60;
+const MAX_REDIRECTS: usize = 10;
 
 /// Max characters sent to the secondary model.
 /// Mirrors TS `MAX_MARKDOWN_LENGTH` in `tools/WebFetchTool/utils.ts`.
@@ -78,6 +88,177 @@ fn error_result(msg: impl Into<String>) -> ToolResultData {
         data: json!({ "error": msg.into() }),
         is_error: true,
     }
+}
+
+fn validate_url(url: &str) -> bool {
+    if url.len() > MAX_URL_LENGTH {
+        return false;
+    }
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.username() != "" || parsed.password().is_some() {
+        return false;
+    }
+    let Some(hostname) = parsed.host_str() else {
+        return false;
+    };
+    hostname.split('.').count() >= 2
+}
+
+fn upgrade_http_to_https(url: &str) -> Result<String> {
+    let mut parsed = reqwest::Url::parse(url)?;
+    if parsed.scheme() == "http" {
+        parsed
+            .set_scheme("https")
+            .map_err(|_| anyhow::anyhow!("failed to upgrade URL scheme"))?;
+    }
+    Ok(parsed.to_string())
+}
+
+fn is_permitted_redirect(original_url: &str, redirect_url: &str) -> bool {
+    let Ok(original) = reqwest::Url::parse(original_url) else {
+        return false;
+    };
+    let Ok(redirect) = reqwest::Url::parse(redirect_url) else {
+        return false;
+    };
+    if redirect.scheme() != original.scheme() {
+        return false;
+    }
+    if redirect.port_or_known_default() != original.port_or_known_default() {
+        return false;
+    }
+    if redirect.username() != "" || redirect.password().is_some() {
+        return false;
+    }
+    let strip_www = |host: &str| host.strip_prefix("www.").unwrap_or(host).to_string();
+    match (original.host_str(), redirect.host_str()) {
+        (Some(a), Some(b)) => strip_www(a) == strip_www(b),
+        _ => false,
+    }
+}
+
+fn redirect_status_text(status: u16) -> &'static str {
+    match status {
+        301 => "Moved Permanently",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        _ => "Found",
+    }
+}
+
+fn redirect_message(original_url: &str, redirect_url: &str, status: u16, prompt: &str) -> String {
+    format!(
+        "REDIRECT DETECTED: The URL redirects to a different host.\n\n\
+Original URL: {original_url}\n\
+Redirect URL: {redirect_url}\n\
+Status: {status} {status_text}\n\n\
+To complete your request, I need to fetch content from the redirected URL. Please use WebFetch again with these parameters:\n\
+- url: \"{redirect_url}\"\n\
+- prompt: \"{prompt}\"",
+        status_text = redirect_status_text(status),
+    )
+}
+
+async fn fetch_with_permitted_redirects(
+    client: &reqwest::Client,
+    url: String,
+    cancel: &CancellationToken,
+    depth: usize,
+) -> Result<FetchResponse> {
+    if depth > MAX_REDIRECTS {
+        anyhow::bail!("Too many redirects (exceeded {MAX_REDIRECTS})");
+    }
+
+    let response = tokio::select! {
+        _ = cancel.cancelled() => {
+            anyhow::bail!("request cancelled");
+        }
+        res = client.get(&url).send() => res?,
+    };
+
+    let status = response.status();
+    if matches!(status.as_u16(), 301 | 302 | 307 | 308) {
+        let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
+            anyhow::bail!("Redirect missing Location header");
+        };
+        let location = location.to_str().unwrap_or_default();
+        let redirect_url = reqwest::Url::parse(&url)?.join(location)?.to_string();
+        if is_permitted_redirect(&url, &redirect_url) {
+            return Box::pin(fetch_with_permitted_redirects(
+                client,
+                redirect_url,
+                cancel,
+                depth + 1,
+            ))
+            .await;
+        }
+        return Ok(FetchResponse::Redirect {
+            original_url: url,
+            redirect_url,
+            status_code: status.as_u16(),
+        });
+    }
+
+    let code = status.as_u16();
+    let code_text = status.canonical_reason().unwrap_or("Unknown").to_string();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = tokio::select! {
+        _ = cancel.cancelled() => {
+            anyhow::bail!("request cancelled while reading body");
+        }
+        res = response.bytes() => res?,
+    };
+    Ok(FetchResponse::Content {
+        body: body.to_vec(),
+        code,
+        code_text,
+        content_type,
+    })
+}
+
+enum FetchResponse {
+    Content {
+        body: Vec<u8>,
+        code: u16,
+        code_text: String,
+        content_type: String,
+    },
+    Redirect {
+        original_url: String,
+        redirect_url: String,
+        status_code: u16,
+    },
+}
+
+fn web_fetch_rule_content(input: &Value) -> String {
+    let Some(url) = input.get("url").and_then(|value| value.as_str()) else {
+        return format!("input:{}", input);
+    };
+    match reqwest::Url::parse(url).ok().and_then(|url| {
+        url.host_str()
+            .map(|hostname| format!("domain:{}", hostname))
+    }) {
+        Some(content) => content,
+        None => format!("input:{}", input),
+    }
+}
+
+fn web_fetch_permission_suggestions(rule_content: &str) -> Vec<PermissionUpdate> {
+    vec![PermissionUpdate::AddRules {
+        destination: PermissionRuleSource::LocalSettings,
+        rules: vec![PermissionRuleValue {
+            tool_name: "WebFetch".to_string(),
+            rule_content: Some(rule_content.to_string()),
+        }],
+        behavior: PermissionBehavior::Allow,
+    }]
 }
 
 /// Strip HTML tags from a string, returning plain text.
@@ -220,6 +401,96 @@ impl ToolExecutor for WebFetchTool {
         true
     }
 
+    fn check_permissions(
+        &self,
+        input: &Value,
+        context: &ToolPermissionContext,
+    ) -> PermissionResult {
+        if let Some(url) = input.get("url").and_then(|value| value.as_str()) {
+            if let Ok(parsed) = reqwest::Url::parse(url) {
+                if crate::web_fetch_preapproved::is_preapproved_host(
+                    parsed.host_str().unwrap_or(""),
+                    parsed.path(),
+                ) {
+                    return PermissionResult::Allow(PermissionAllowDecision {
+                        updated_input: Some(input.clone()),
+                        user_modified: None,
+                        decision_reason: Some(PermissionDecisionReason::Other {
+                            reason: "Preapproved host".to_string(),
+                        }),
+                        tool_use_id: None,
+                        accept_feedback: None,
+                    });
+                }
+            }
+        }
+
+        let rule_content = web_fetch_rule_content(input);
+        let permission_tool =
+            claude_core::permissions::evaluator::SimpleToolPermissions::new("WebFetch", true);
+        let tool = &permission_tool as &dyn claude_core::permissions::evaluator::ToolPermissions;
+        if let Some(rule) = claude_core::permissions::evaluator::get_rule_by_contents_for_tool(
+            context,
+            tool,
+            &PermissionBehavior::Deny,
+        )
+        .get(&rule_content)
+        .cloned()
+        {
+            return PermissionResult::Deny(PermissionDenyDecision {
+                message: format!("WebFetch denied access to {rule_content}."),
+                decision_reason: PermissionDecisionReason::Rule { rule },
+                tool_use_id: None,
+            });
+        }
+        if let Some(rule) = claude_core::permissions::evaluator::get_rule_by_contents_for_tool(
+            context,
+            tool,
+            &PermissionBehavior::Ask,
+        )
+        .get(&rule_content)
+        .cloned()
+        {
+            return PermissionResult::Ask(PermissionAskDecision {
+                message:
+                    "Claude requested permissions to use WebFetch, but you haven't granted it yet."
+                        .to_string(),
+                updated_input: None,
+                decision_reason: Some(PermissionDecisionReason::Rule { rule }),
+                suggestions: Some(web_fetch_permission_suggestions(&rule_content)),
+                blocked_path: None,
+                is_bash_security_check_for_misparsing: None,
+            });
+        }
+        if let Some(rule) = claude_core::permissions::evaluator::get_rule_by_contents_for_tool(
+            context,
+            tool,
+            &PermissionBehavior::Allow,
+        )
+        .get(&rule_content)
+        .cloned()
+        {
+            return PermissionResult::Allow(PermissionAllowDecision {
+                updated_input: Some(input.clone()),
+                user_modified: None,
+                decision_reason: Some(PermissionDecisionReason::Rule { rule }),
+                tool_use_id: None,
+                accept_feedback: None,
+            });
+        }
+
+        PermissionResult::Ask(PermissionAskDecision {
+            message:
+                "Claude requested permissions to use WebFetch, but you haven't granted it yet."
+                    .to_string(),
+            updated_input: None,
+            decision_reason: None,
+            suggestions: Some(web_fetch_permission_suggestions(&rule_content)),
+            blocked_path: None,
+            is_bash_security_check_for_misparsing: None,
+        })
+    }
+
     async fn call(
         &self,
         input: &Value,
@@ -235,61 +506,79 @@ impl ToolExecutor for WebFetchTool {
             Some(p) => p.to_string(),
             None => return Ok(error_result("missing required parameter: prompt")),
         };
+        if !validate_url(&url) {
+            return Ok(error_result("Invalid URL"));
+        }
 
         let start = std::time::Instant::now();
+        let upgraded_url = match upgrade_http_to_https(&url) {
+            Ok(url) => url,
+            Err(_) => return Ok(error_result("Invalid URL")),
+        };
 
         // Build reqwest client
         let client = match reqwest::Client::builder()
             .user_agent("claude-rs/0.1")
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
         {
             Ok(c) => c,
             Err(e) => return Ok(error_result(format!("failed to build HTTP client: {}", e))),
         };
 
-        // Make the request, respecting cancellation
-        let response = tokio::select! {
-            _ = cancel.cancelled() => {
-                return Ok(error_result("request cancelled"));
-            }
-            res = client.get(&url).send() => {
-                match res {
-                    Ok(r) => r,
-                    Err(e) => return Ok(error_result(format!("HTTP request failed: {}", e))),
-                }
+        let response = match fetch_with_permitted_redirects(&client, upgraded_url, &cancel, 0).await
+        {
+            Ok(response) => response,
+            Err(e) => return Ok(error_result(format!("HTTP request failed: {}", e))),
+        };
+
+        let (body, code, code_text, content_type) = match response {
+            FetchResponse::Content {
+                body,
+                code,
+                code_text,
+                content_type,
+            } => (body, code, code_text, content_type),
+            FetchResponse::Redirect {
+                original_url,
+                redirect_url,
+                status_code,
+            } => {
+                let message = redirect_message(&original_url, &redirect_url, status_code, &prompt);
+                return Ok(ToolResultData {
+                    data: json!({
+                        "bytes": message.len() as u64,
+                        "code": status_code,
+                        "codeText": redirect_status_text(status_code),
+                        "result": message,
+                        "durationMs": start.elapsed().as_millis() as u64,
+                        "url": url,
+                    }),
+                    is_error: false,
+                });
             }
         };
 
-        let status = response.status();
-        let code = status.as_u16();
-        let code_text = status.canonical_reason().unwrap_or("Unknown").to_string();
-
-        // Read body
-        let body_bytes = tokio::select! {
-            _ = cancel.cancelled() => {
-                return Ok(error_result("request cancelled while reading body"));
-            }
-            res = response.bytes() => {
-                match res {
-                    Ok(b) => b,
-                    Err(e) => return Ok(error_result(format!("failed to read response body: {}", e))),
-                }
-            }
-        };
-
-        let bytes = body_bytes.len() as u64;
+        let bytes = body.len() as u64;
+        if bytes > MAX_HTTP_CONTENT_LENGTH {
+            return Ok(error_result(format!(
+                "HTTP response exceeded maximum content length of {} bytes",
+                MAX_HTTP_CONTENT_LENGTH
+            )));
+        }
         let duration_ms = start.elapsed().as_millis() as u64;
 
         // Convert body to string
-        let body_text = String::from_utf8_lossy(&body_bytes).into_owned();
+        let body_text = String::from_utf8_lossy(&body).into_owned();
 
         // Strip HTML if it looks like HTML
-        let result_text = if body_text.trim_start().starts_with('<') {
-            strip_html(&body_text)
-        } else {
-            body_text
-        };
+        let result_text =
+            if content_type.contains("text/html") || body_text.trim_start().starts_with('<') {
+                strip_html(&body_text)
+            } else {
+                body_text
+            };
 
         // Truncate to reasonable size before sending anything downstream.
         const MAX_CHARS: usize = 50_000;
@@ -304,12 +593,27 @@ impl ToolExecutor for WebFetchTool {
         };
 
         // Apply the user's prompt via the secondary model (TS parity). If
-        // no secondary model is registered, echo the prompt back in the
-        // result so the primary model can apply it to the raw content
-        // itself — this is strictly better than silently discarding it.
+        // no secondary model is registered, return the fetched content in
+        // the same output shape so the primary model can still continue.
         // The is_preapproved flag relaxes the quoting guidelines applied
         // to the secondary-model prompt (TS makeSecondaryModelPrompt).
         let is_preapproved = crate::web_fetch_preapproved::is_preapproved_url(&url);
+        if is_preapproved
+            && content_type.contains("text/markdown")
+            && result_text.len() < MAX_MARKDOWN_LENGTH
+        {
+            return Ok(ToolResultData {
+                data: json!({
+                    "bytes": bytes,
+                    "code": code,
+                    "codeText": code_text,
+                    "result": result_text,
+                    "durationMs": duration_ms,
+                    "url": url,
+                }),
+                is_error: false,
+            });
+        }
         match apply_prompt_to_markdown(&prompt, &result_text, is_preapproved, cancel.clone()).await
         {
             Ok(Some(summary)) => Ok(ToolResultData {
@@ -320,7 +624,6 @@ impl ToolExecutor for WebFetchTool {
                     "result": summary,
                     "durationMs": duration_ms,
                     "url": url,
-                    "promptApplied": true,
                 }),
                 is_error: false,
             }),
@@ -330,10 +633,8 @@ impl ToolExecutor for WebFetchTool {
                     "code": code,
                     "codeText": code_text,
                     "result": result_text,
-                    "prompt": prompt,
                     "durationMs": duration_ms,
                     "url": url,
-                    "promptApplied": false,
                 }),
                 is_error: false,
             }),
@@ -346,11 +647,8 @@ impl ToolExecutor for WebFetchTool {
                         "code": code,
                         "codeText": code_text,
                         "result": result_text,
-                        "prompt": prompt,
                         "durationMs": duration_ms,
                         "url": url,
-                        "promptApplied": false,
-                        "secondaryModelError": e.to_string(),
                     }),
                     is_error: false,
                 })
@@ -362,6 +660,7 @@ impl ToolExecutor for WebFetchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn preapproved_guidelines_are_terser() {
@@ -381,5 +680,81 @@ mod tests {
                 .await
                 .expect("no error when model absent");
         assert!(out.is_none());
+    }
+
+    #[test]
+    fn url_validation_matches_ts_security_shape() {
+        assert!(validate_url("https://example.com/docs"));
+        assert!(validate_url("http://example.com/docs"));
+        assert!(!validate_url("not a url"));
+        assert!(!validate_url("https://localhost/docs"));
+        assert!(!validate_url("https://user:pass@example.com/docs"));
+    }
+
+    #[test]
+    fn http_urls_are_upgraded_to_https() {
+        assert_eq!(
+            upgrade_http_to_https("http://example.com/a?q=1")
+                .unwrap()
+                .as_str(),
+            "https://example.com/a?q=1"
+        );
+        assert_eq!(
+            upgrade_http_to_https("https://example.com/a")
+                .unwrap()
+                .as_str(),
+            "https://example.com/a"
+        );
+    }
+
+    #[test]
+    fn redirect_rules_match_ts_host_boundary() {
+        assert!(is_permitted_redirect(
+            "https://example.com/a",
+            "https://www.example.com/b"
+        ));
+        assert!(is_permitted_redirect(
+            "https://www.example.com/a",
+            "https://example.com/b"
+        ));
+        assert!(!is_permitted_redirect(
+            "https://example.com/a",
+            "https://evil.example/b"
+        ));
+        assert!(!is_permitted_redirect(
+            "https://example.com/a",
+            "http://example.com/b"
+        ));
+    }
+
+    #[test]
+    fn permission_rules_are_domain_scoped_like_ts() {
+        let tool = WebFetchTool;
+        let input = json!({"url": "https://example.com/a", "prompt": "summarise"});
+        let mut allow_rules = HashMap::new();
+        allow_rules.insert(
+            PermissionRuleSource::LocalSettings,
+            vec!["WebFetch(domain:example.com)".to_string()],
+        );
+        let context = ToolPermissionContext {
+            always_allow_rules: allow_rules,
+            ..Default::default()
+        };
+        assert!(matches!(
+            tool.check_permissions(&input, &context),
+            PermissionResult::Allow(_)
+        ));
+
+        let context = ToolPermissionContext::default();
+        match tool.check_permissions(&input, &context) {
+            PermissionResult::Ask(ask) => {
+                assert!(ask.message.contains("haven't granted it yet"));
+                assert!(ask
+                    .suggestions
+                    .as_ref()
+                    .is_some_and(|suggestions| !suggestions.is_empty()));
+            }
+            other => panic!("expected ask, got {other:?}"),
+        }
     }
 }
