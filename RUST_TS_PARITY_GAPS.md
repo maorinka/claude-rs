@@ -516,6 +516,8 @@ Improved:
   non-error informational exit codes such as `grep` no-match stay successful
   with `returnCodeInterpretation`, real non-zero failures become error tool
   results, and silent commands set `noOutputExpected`.
+- Bash assistant auto-background model-facing text now uses the TS 15-second
+  blocking budget wording.
 
 ### FileEditTool
 

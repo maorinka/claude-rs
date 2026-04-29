@@ -1749,7 +1749,7 @@ mod tests {
                     "assistantAutoBackgrounded": true
                 })
             ),
-            "Command exceeded the assistant-mode blocking budget (10s) and was moved to the background with ID: bg-3. It is still running — you will be notified when it completes. Output is being written to: /tmp/bg-3.output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
+            "Command exceeded the assistant-mode blocking budget (15s) and was moved to the background with ID: bg-3. It is still running — you will be notified when it completes. Output is being written to: /tmp/bg-3.output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
         );
     }
 
@@ -2830,7 +2830,7 @@ fn format_bash_tool_result_for_model(data: &serde_json::Value) -> String {
             .and_then(|value| value.as_bool())
             .unwrap_or(false)
         {
-            format!("Command exceeded the assistant-mode blocking budget (10s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to: {output_path}. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive.")
+            format!("Command exceeded the assistant-mode blocking budget (15s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to: {output_path}. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive.")
         } else if obj
             .get("backgroundedByUser")
             .and_then(|value| value.as_bool())
