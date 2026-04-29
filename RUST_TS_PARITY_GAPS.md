@@ -704,7 +704,9 @@ Improved:
 - Rust print mode now accepts the TS `--json-schema` flag, injects a
   schema-specific `StructuredOutput` tool, validates its input with a JSON
   Schema validator, and includes `structured_output` on successful JSON and
-  stream-json result events.
+  stream-json result events. It also enforces the TS stop-hook retry loop that
+  requires the model to call `StructuredOutput`, honoring
+  `MAX_STRUCTURED_OUTPUT_RETRIES` with the TS error subtype.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like

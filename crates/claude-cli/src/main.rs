@@ -2984,6 +2984,7 @@ struct StreamJsonResultMeta<'a> {
 enum PrintTerminalOutcome {
     Completed { stop_reason: String },
     MaxTurns { max_turns: u32, turn_count: u32 },
+    StructuredOutputRetries { max_retries: u32 },
 }
 
 fn stream_json_result_event_with_meta(
@@ -4403,6 +4404,11 @@ async fn main() -> Result<()> {
         // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
         let mut final_text = String::new();
         let mut structured_output: Option<serde_json::Value> = None;
+        let mut structured_output_retry_count: u32 = 0;
+        let max_structured_output_retries = std::env::var("MAX_STRUCTURED_OUTPUT_RETRIES")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(5);
         let session_id = api_session_id.clone();
         let started_at = std::time::Instant::now();
         let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
@@ -4464,6 +4470,19 @@ async fn main() -> Result<()> {
 
             match result {
                 TurnResult::Done(stop_reason) => {
+                    if cli.json_schema.is_some() && structured_output.is_none() {
+                        if structured_output_retry_count >= max_structured_output_retries {
+                            break PrintTerminalOutcome::StructuredOutputRetries {
+                                max_retries: max_structured_output_retries,
+                            };
+                        }
+                        structured_output_retry_count += 1;
+                        query_engine.add_user_message(
+                            "You MUST call the StructuredOutput tool to complete this request. \
+                             Call this tool now.",
+                        );
+                        continue;
+                    }
                     let stop_reason = serde_json::to_string(&stop_reason)
                         .ok()
                         .and_then(|value| serde_json::from_str::<String>(&value).ok())
@@ -5077,6 +5096,13 @@ async fn main() -> Result<()> {
                             "is_error": true,
                             "errors": [format!("Reached maximum number of turns ({max_turns})")],
                         }))?,
+                    PrintTerminalOutcome::StructuredOutputRetries { max_retries } =>
+                        serde_json::to_string(&serde_json::json!({
+                            "type": "result",
+                            "subtype": "error_max_structured_output_retries",
+                            "is_error": true,
+                            "errors": [format!("Failed to produce valid structured output after {max_retries} retries")],
+                        }))?,
                 }
             );
         } else if cli.output_format == OutputFormat::StreamJson {
@@ -5094,6 +5120,7 @@ async fn main() -> Result<()> {
             let meta_num_turns = match terminal_outcome {
                 PrintTerminalOutcome::Completed { .. } => num_turns,
                 PrintTerminalOutcome::MaxTurns { turn_count, .. } => turn_count,
+                PrintTerminalOutcome::StructuredOutputRetries { .. } => num_turns,
             };
             let meta = StreamJsonResultMeta {
                 duration_ms,
@@ -5101,6 +5128,7 @@ async fn main() -> Result<()> {
                 stop_reason: match &terminal_outcome {
                     PrintTerminalOutcome::Completed { stop_reason } => stop_reason,
                     PrintTerminalOutcome::MaxTurns { .. } => "tool_use",
+                    PrintTerminalOutcome::StructuredOutputRetries { .. } => "end_turn",
                 },
                 total_usage: total_usage.as_ref(),
                 latest_usage: latest_usage.as_ref(),
@@ -5125,6 +5153,16 @@ async fn main() -> Result<()> {
                         meta,
                     ));
                 }
+                PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
+                    let mut event =
+                        stream_json_max_turns_event_with_meta(max_retries, &session_id, meta);
+                    event["subtype"] = serde_json::json!("error_max_structured_output_retries");
+                    event["terminal_reason"] = serde_json::json!("max_structured_output_retries");
+                    event["errors"] = serde_json::json!([format!(
+                        "Failed to produce valid structured output after {max_retries} retries"
+                    )]);
+                    emit_stream_json(event);
+                }
             }
         } else {
             match terminal_outcome {
@@ -5135,6 +5173,11 @@ async fn main() -> Result<()> {
                 }
                 PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
                     println!("Error: Reached max turns ({max_turns})");
+                }
+                PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
+                    println!(
+                        "Error: Failed to produce valid structured output after {max_retries} retries"
+                    );
                 }
             }
         }
