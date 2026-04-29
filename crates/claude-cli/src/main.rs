@@ -97,9 +97,21 @@ pub struct Cli {
     #[arg(long)]
     pub max_turns: Option<u32>,
 
+    /// System prompt to use for the session
+    #[arg(long = "system-prompt")]
+    pub system_prompt: Option<String>,
+
+    /// Read system prompt from a file
+    #[arg(long = "system-prompt-file", hide = true)]
+    pub system_prompt_file: Option<PathBuf>,
+
     /// Append text to system prompt
-    #[arg(long)]
+    #[arg(long = "append-system-prompt")]
     pub append_system_prompt: Option<String>,
+
+    /// Read text from a file and append to the default system prompt
+    #[arg(long = "append-system-prompt-file", hide = true)]
+    pub append_system_prompt_file: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<SubCommand>,
@@ -110,6 +122,29 @@ pub enum OutputFormat {
     Text,
     Json,
     StreamJson,
+}
+
+fn resolve_prompt_file_option(
+    inline: &Option<String>,
+    file: &Option<PathBuf>,
+    both_error: &str,
+    missing_prefix: &str,
+    read_prefix: &str,
+) -> Result<Option<String>> {
+    if let Some(path) = file {
+        if inline.is_some() {
+            anyhow::bail!("{both_error}");
+        }
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        return match std::fs::read_to_string(&resolved) {
+            Ok(content) => Ok(Some(content)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                anyhow::bail!("{missing_prefix}: {}", resolved.display())
+            }
+            Err(err) => anyhow::bail!("{read_prefix}: {err}"),
+        };
+    }
+    Ok(inline.clone())
 }
 
 #[derive(clap::Subcommand)]
@@ -3974,30 +4009,50 @@ async fn main() -> Result<()> {
         project_root.display(),
     );
 
+    let custom_system_prompt = resolve_prompt_file_option(
+        &cli.system_prompt,
+        &cli.system_prompt_file,
+        "Cannot use both --system-prompt and --system-prompt-file. Please use only one.",
+        "System prompt file not found",
+        "Error reading system prompt file",
+    )?;
+    let append_system_prompt = resolve_prompt_file_option(
+        &cli.append_system_prompt,
+        &cli.append_system_prompt_file,
+        "Cannot use both --append-system-prompt and --append-system-prompt-file. Please use only one.",
+        "Append system prompt file not found",
+        "Error reading append system prompt file",
+    )?;
+
     // Build system prompt
     let tool_descriptions: Vec<(String, String)> = tools
         .all()
         .iter()
         .map(|t| (t.name().to_string(), t.description()))
         .collect();
-    let system_prompt_values = claude_core::context::system_prompt::build_system_prompt(
-        &project_root,
-        &tool_descriptions,
-        &model,
-    )
-    .await?;
+    let system_prompt: Vec<claude_core::types::content::ContentBlock> =
+        if let Some(prompt) = custom_system_prompt {
+            vec![claude_core::types::content::ContentBlock::Text { text: prompt }]
+        } else {
+            let system_prompt_values = claude_core::context::system_prompt::build_system_prompt(
+                &project_root,
+                &tool_descriptions,
+                &model,
+            )
+            .await?;
 
-    // Convert Vec<Value> to Vec<ContentBlock> for the engine
-    let system_prompt: Vec<claude_core::types::content::ContentBlock> = system_prompt_values
-        .into_iter()
-        .filter_map(|v| {
-            v.get("text").and_then(|t| t.as_str()).map(|text| {
-                claude_core::types::content::ContentBlock::Text {
-                    text: text.to_string(),
-                }
-            })
-        })
-        .collect();
+            // Convert Vec<Value> to Vec<ContentBlock> for the engine
+            system_prompt_values
+                .into_iter()
+                .filter_map(|v| {
+                    v.get("text").and_then(|t| t.as_str()).map(|text| {
+                        claude_core::types::content::ContentBlock::Text {
+                            text: text.to_string(),
+                        }
+                    })
+                })
+                .collect()
+        };
 
     // Create API client
     let model_display = model.clone();
@@ -4215,9 +4270,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Append --append-system-prompt text (M2: was parsed but never applied)
-    if let Some(ref extra) = cli.append_system_prompt {
-        query_engine.append_system_prompt(extra.clone());
+    // Append --append-system-prompt text or --append-system-prompt-file content.
+    if let Some(extra) = append_system_prompt {
+        query_engine.append_system_prompt(extra);
     }
 
     // Determine permission mode.

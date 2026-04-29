@@ -707,6 +707,10 @@ Improved:
   stream-json result events. It also enforces the TS stop-hook retry loop that
   requires the model to call `StructuredOutput`, honoring
   `MAX_STRUCTURED_OUTPUT_RETRIES` with the TS error subtype.
+- Rust print mode now accepts `--system-prompt`, `--system-prompt-file`, and
+  `--append-system-prompt-file` with the same mutual-exclusion/file-read
+  behavior as TS; a custom system prompt replaces the default prompt and append
+  prompt content is appended afterward.
 
 Still needs work:
 - Persist and render full Stop hook progress/summary attachment messages like
