@@ -934,6 +934,57 @@ mod tests {
     }
 
     #[test]
+    fn parses_markdown_agent_frontmatter_like_ts() {
+        let mut frontmatter = claude_core::frontmatter::Frontmatter::new();
+        frontmatter.insert(
+            "name".into(),
+            claude_core::frontmatter::FrontmatterValue::String("reviewer".into()),
+        );
+        frontmatter.insert(
+            "description".into(),
+            claude_core::frontmatter::FrontmatterValue::String("Review\\nchanges".into()),
+        );
+        frontmatter.insert(
+            "tools".into(),
+            claude_core::frontmatter::FrontmatterValue::List(vec![
+                claude_core::frontmatter::FrontmatterValue::String("Read".into()),
+                claude_core::frontmatter::FrontmatterValue::String("Bash(git status)".into()),
+            ]),
+        );
+        frontmatter.insert(
+            "background".into(),
+            claude_core::frontmatter::FrontmatterValue::Bool(true),
+        );
+        frontmatter.insert(
+            "permissionMode".into(),
+            claude_core::frontmatter::FrontmatterValue::String("acceptEdits".into()),
+        );
+
+        let file = claude_core::markdown_config_loader::MarkdownFile {
+            file_path: std::path::PathBuf::from("/tmp/reviewer.md"),
+            base_dir: std::path::PathBuf::from("/tmp"),
+            frontmatter,
+            content: "System prompt body\n".into(),
+            source: claude_core::markdown_config_loader::MarkdownSource::Project,
+        };
+
+        let agent = parse_markdown_agent(&file).expect("agent should parse");
+        assert_eq!(agent.agent_type, "reviewer");
+        assert_eq!(agent.when_to_use, "Review\nchanges");
+        assert_eq!(
+            agent.source,
+            claude_tools::agent_tool::AgentSource::ProjectSettings
+        );
+        assert_eq!(
+            agent.tools.as_ref().unwrap(),
+            &vec!["Read".to_string(), "Bash(git status)".to_string()]
+        );
+        assert_eq!(agent.system_prompt.as_deref(), Some("System prompt body"));
+        assert_eq!(agent.background, Some(true));
+        assert_eq!(agent.permission_mode.as_deref(), Some("acceptEdits"));
+    }
+
+    #[test]
     fn stream_json_stdin_seed_reads_user_and_initialize_messages() {
         let input = concat!(
             "{\"type\":\"control_request\",\"request\":{\"subtype\":\"initialize\",\"systemPrompt\":\"sys\",\"appendSystemPrompt\":\"append\",\"jsonSchema\":{\"type\":\"object\"}}}\n",
@@ -1803,6 +1854,96 @@ fn parse_cli_agents_json(raw: &str) -> Vec<claude_tools::agent_tool::RuntimeAgen
             agent.isolation = parsed.isolation;
             Some(agent)
         })
+        .collect()
+}
+
+fn parse_agent_frontmatter_tools(
+    value: Option<&claude_core::frontmatter::FrontmatterValue>,
+) -> Option<Vec<String>> {
+    let parsed = claude_core::markdown_config_loader::parse_tool_list(value)?;
+    if parsed.iter().any(|tool| tool == "*") {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+fn frontmatter_string<'a>(
+    frontmatter: &'a claude_core::frontmatter::Frontmatter,
+    key: &str,
+) -> Option<&'a str> {
+    frontmatter.get(key).and_then(|value| value.as_str())
+}
+
+fn frontmatter_bool(
+    frontmatter: &claude_core::frontmatter::Frontmatter,
+    key: &str,
+) -> Option<bool> {
+    frontmatter.get(key).and_then(|value| {
+        value.as_bool().or_else(|| match value.as_str()? {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        })
+    })
+}
+
+fn parse_markdown_agent(
+    file: &claude_core::markdown_config_loader::MarkdownFile,
+) -> Option<claude_tools::agent_tool::RuntimeAgentDefinition> {
+    let agent_type = frontmatter_string(&file.frontmatter, "name")?;
+    let when_to_use = frontmatter_string(&file.frontmatter, "description")?.replace("\\n", "\n");
+    if agent_type.is_empty() || when_to_use.is_empty() {
+        return None;
+    }
+
+    let model = frontmatter_string(&file.frontmatter, "model").and_then(|model| {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.eq_ignore_ascii_case("inherit") {
+            Some("inherit".to_string())
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let source = match file.source {
+        claude_core::markdown_config_loader::MarkdownSource::User => {
+            claude_tools::agent_tool::AgentSource::UserSettings
+        }
+        claude_core::markdown_config_loader::MarkdownSource::Project => {
+            claude_tools::agent_tool::AgentSource::ProjectSettings
+        }
+    };
+
+    Some(claude_tools::agent_tool::RuntimeAgentDefinition {
+        agent_type: agent_type.to_string(),
+        when_to_use,
+        source,
+        tools: parse_agent_frontmatter_tools(file.frontmatter.get("tools")),
+        disallowed_tools: if file.frontmatter.contains_key("disallowedTools") {
+            parse_agent_frontmatter_tools(file.frontmatter.get("disallowedTools"))
+        } else {
+            None
+        },
+        system_prompt: Some(file.content.trim().to_string()),
+        model,
+        permission_mode: frontmatter_string(&file.frontmatter, "permissionMode")
+            .map(str::to_string),
+        background: frontmatter_bool(&file.frontmatter, "background"),
+        isolation: frontmatter_string(&file.frontmatter, "isolation").map(str::to_string),
+    })
+}
+
+fn load_markdown_agents(
+    cwd: &std::path::Path,
+) -> Vec<claude_tools::agent_tool::RuntimeAgentDefinition> {
+    if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_SIMPLE") {
+        return Vec::new();
+    }
+    claude_core::markdown_config_loader::load_markdown_files_for_subdir("agents", cwd)
+        .iter()
+        .filter_map(parse_markdown_agent)
         .collect()
 }
 
@@ -4443,12 +4584,14 @@ async fn main() -> Result<()> {
         merge_json_values(&mut raw_settings, overlay_value.clone());
         merge_json_values(&mut permission_settings, overlay_value);
     }
+    let mut runtime_agents = load_markdown_agents(&cwd);
     let cli_agents = cli
         .agents
         .as_deref()
         .map(parse_cli_agents_json)
         .unwrap_or_default();
-    claude_tools::agent_tool::set_runtime_agents(cli_agents);
+    runtime_agents.extend(cli_agents);
+    claude_tools::agent_tool::set_runtime_agents(runtime_agents);
 
     // Build tool registry
     let mut tools =
