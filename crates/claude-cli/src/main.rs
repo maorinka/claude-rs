@@ -1160,6 +1160,26 @@ mod tests {
     }
 
     #[test]
+    fn stream_json_partial_messages_gate_raw_sse_events() {
+        let raw = claude_core::types::events::StreamEvent::RawSse {
+            event: serde_json::json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 42},
+            }),
+        };
+
+        assert!(stream_event_to_stream_json_events(&raw, "session-1", false).is_empty());
+
+        let events = stream_event_to_stream_json_events(&raw, "session-1", true);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "stream_event");
+        assert_eq!(events[0]["session_id"], "session-1");
+        assert_eq!(events[0]["parent_tool_use_id"], serde_json::Value::Null);
+        assert_eq!(events[0]["event"]["type"], "message_delta");
+    }
+
+    #[test]
     fn stream_json_usage_matches_sdk_shape() {
         let usage = claude_core::types::usage::Usage {
             input_tokens: 6,
@@ -3706,6 +3726,7 @@ fn hook_blocking_errors_text(errors: &[claude_core::hooks::HookBlockingError]) -
 fn stream_event_to_stream_json_events(
     ev: &claude_core::types::events::StreamEvent,
     session_id: &str,
+    include_partial_messages: bool,
 ) -> Vec<serde_json::Value> {
     use claude_core::types::events::StreamEvent;
     use serde_json::json;
@@ -3714,6 +3735,19 @@ fn stream_event_to_stream_json_events(
         // TS stream-json exposes model messages, user tool-result turns, system
         // records, and the final result. It does not print Rust's internal
         // request/delta/progress bookkeeping events as first-class records.
+        StreamEvent::RawSse { event } => {
+            if include_partial_messages {
+                json!({
+                    "type": "stream_event",
+                    "event": event,
+                    "parent_tool_use_id": serde_json::Value::Null,
+                    "session_id": session_id,
+                    "uuid": uuid::Uuid::new_v4().to_string(),
+                })
+            } else {
+                return Vec::new();
+            }
+        }
         StreamEvent::RequestStart { .. }
         | StreamEvent::ToolStart { .. }
         | StreamEvent::ToolProgress { .. }
@@ -4181,6 +4215,16 @@ fn stream_json_rate_limit_event(session_id: &str) -> serde_json::Value {
     })
 }
 
+fn stream_json_status_event(session_id: &str, status: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "type": "system",
+        "subtype": "status",
+        "status": status,
+        "session_id": session_id,
+        "uuid": uuid::Uuid::new_v4().to_string(),
+    })
+}
+
 struct StreamJsonInitMeta<'a> {
     cwd: &'a std::path::Path,
     session_id: &'a str,
@@ -4480,8 +4524,9 @@ async fn main() -> Result<()> {
         );
         std::process::exit(1);
     }
-    if cli.include_partial_messages && (!cli.print || cli.output_format != OutputFormat::StreamJson)
-    {
+    let include_partial_messages = cli.include_partial_messages
+        || claude_core::errors_util::is_env_truthy("CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES");
+    if include_partial_messages && (!cli.print || cli.output_format != OutputFormat::StreamJson) {
         eprintln!(
             "Error: --include-partial-messages requires --print and --output-format=stream-json."
         );
@@ -5650,6 +5695,7 @@ async fn main() -> Result<()> {
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
             let output_format = cli.output_format.clone();
             let stream_session_id = session_id.clone();
+            let include_partial_messages = include_partial_messages;
 
             // Spawn a task to print streamed text to stdout
             let print_handle = tokio::spawn(async move {
@@ -5674,8 +5720,11 @@ async fn main() -> Result<()> {
                             if let StreamEvent::UsageUpdate(usage) = &ev {
                                 merge_stream_usage(&mut state.latest_usage, usage.clone());
                             }
-                            for value in stream_event_to_stream_json_events(&ev, &stream_session_id)
-                            {
+                            for value in stream_event_to_stream_json_events(
+                                &ev,
+                                &stream_session_id,
+                                include_partial_messages,
+                            ) {
                                 emit_stream_json(value);
                             }
                         }
@@ -5685,6 +5734,9 @@ async fn main() -> Result<()> {
             });
 
             num_turns += 1;
+            if cli.output_format == OutputFormat::StreamJson && include_partial_messages {
+                emit_stream_json(stream_json_status_event(&session_id, Some("requesting")));
+            }
             let result = query_engine.run_turn(&stream_tx).await?;
             drop(stream_tx);
             if let Ok(state) = print_handle.await {

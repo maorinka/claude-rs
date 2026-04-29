@@ -758,174 +758,200 @@ impl QueryEngine {
                                     e
                                 );
                             }
-                            Ok(event) => match event {
-                                SseEvent::ContentBlockStart { index, block } => {
-                                    accumulator.on_start(index, block);
-                                }
-                                SseEvent::ContentBlockDelta { index, delta } => {
-                                    // Emit streaming deltas
-                                    match &delta {
-                                        ContentDelta::TextDelta { text } => {
-                                            let _ = event_tx
-                                                .send(StreamEvent::TextDelta { text: text.clone() })
-                                                .await;
-                                        }
-                                        ContentDelta::ThinkingDelta { thinking } => {
-                                            let _ = event_tx
-                                                .send(StreamEvent::ThinkingDelta {
-                                                    text: thinking.clone(),
-                                                })
-                                                .await;
-                                        }
-                                        _ => {}
+                            Ok(event) => {
+                                let raw_event =
+                                    serde_json::from_str::<serde_json::Value>(&data).ok();
+                                if !matches!(
+                                    event,
+                                    SseEvent::ContentBlockStop { .. } | SseEvent::Ping
+                                ) {
+                                    if let Some(raw_event) = raw_event.clone() {
+                                        let _ = event_tx
+                                            .send(StreamEvent::RawSse { event: raw_event })
+                                            .await;
                                     }
-                                    accumulator.on_delta(index, delta);
                                 }
-                                SseEvent::ContentBlockStop { index } => {
-                                    if let Ok(block) = accumulator.on_stop(index) {
-                                        match &block {
-                                            ContentBlock::ToolUse { id, name, input } => {
+                                match event {
+                                    SseEvent::ContentBlockStart { index, block } => {
+                                        accumulator.on_start(index, block);
+                                    }
+                                    SseEvent::ContentBlockDelta { index, delta } => {
+                                        // Emit streaming deltas
+                                        match &delta {
+                                            ContentDelta::TextDelta { text } => {
                                                 let _ = event_tx
-                                                    .send(StreamEvent::ToolStart {
-                                                        tool_use_id: id.clone(),
-                                                        name: name.clone(),
-                                                        input: input.clone(),
+                                                    .send(StreamEvent::TextDelta {
+                                                        text: text.clone(),
                                                     })
                                                     .await;
-                                                tool_use_blocks.push(ToolUseInfo {
-                                                    id: id.clone(),
-                                                    name: name.clone(),
-                                                    input: input.clone(),
-                                                    message_id: response_message
-                                                        .as_ref()
-                                                        .map(|message| message.id.clone()),
-                                                    model: response_message
-                                                        .as_ref()
-                                                        .map(|message| message.model.clone()),
-                                                    usage: response_usage.clone(),
-                                                });
-                                                // Issue 6: set needs_follow_up regardless of
-                                                // stop_reason (stop_reason == "tool_use" is
-                                                // unreliable per API docs — mirrors TS needsFollowUp).
-                                                needs_follow_up = true;
-                                                assistant_content.push(serde_json::json!({
-                                                    "type": "tool_use",
-                                                    "id": id,
-                                                    "name": name,
-                                                    "input": input,
-                                                }));
                                             }
-                                            ContentBlock::ServerToolUse { id, name, input } => {
-                                                assistant_content.push(serde_json::json!({
-                                                    "type": "server_tool_use",
-                                                    "id": id,
-                                                    "name": name,
-                                                    "input": input,
-                                                }));
-                                            }
-                                            ContentBlock::Text { text } => {
-                                                assistant_content.push(serde_json::json!({
-                                                    "type": "text",
-                                                    "text": text,
-                                                }));
-                                            }
-                                            ContentBlock::Thinking {
-                                                thinking,
-                                                signature,
-                                            } => {
-                                                assistant_content.push(serde_json::json!({
-                                                    "type": "thinking",
-                                                    "thinking": thinking,
-                                                    "signature": signature,
-                                                }));
+                                            ContentDelta::ThinkingDelta { thinking } => {
+                                                let _ = event_tx
+                                                    .send(StreamEvent::ThinkingDelta {
+                                                        text: thinking.clone(),
+                                                    })
+                                                    .await;
                                             }
                                             _ => {}
                                         }
-                                        if !matches!(block, ContentBlock::ToolUse { .. }) {
-                                            if let Some(message) = response_message.clone() {
-                                                let mut partial = message;
-                                                partial.content = vec![block.clone()];
-                                                partial.stop_reason = None;
-                                                if let Some(usage) = response_usage.clone() {
-                                                    partial.usage = usage;
+                                        accumulator.on_delta(index, delta);
+                                    }
+                                    SseEvent::ContentBlockStop { index } => {
+                                        if let Ok(block) = accumulator.on_stop(index) {
+                                            match &block {
+                                                ContentBlock::ToolUse { id, name, input } => {
+                                                    let _ = event_tx
+                                                        .send(StreamEvent::ToolStart {
+                                                            tool_use_id: id.clone(),
+                                                            name: name.clone(),
+                                                            input: input.clone(),
+                                                        })
+                                                        .await;
+                                                    tool_use_blocks.push(ToolUseInfo {
+                                                        id: id.clone(),
+                                                        name: name.clone(),
+                                                        input: input.clone(),
+                                                        message_id: response_message
+                                                            .as_ref()
+                                                            .map(|message| message.id.clone()),
+                                                        model: response_message
+                                                            .as_ref()
+                                                            .map(|message| message.model.clone()),
+                                                        usage: response_usage.clone(),
+                                                    });
+                                                    // Issue 6: set needs_follow_up regardless of
+                                                    // stop_reason (stop_reason == "tool_use" is
+                                                    // unreliable per API docs — mirrors TS needsFollowUp).
+                                                    needs_follow_up = true;
+                                                    assistant_content.push(serde_json::json!({
+                                                        "type": "tool_use",
+                                                        "id": id,
+                                                        "name": name,
+                                                        "input": input,
+                                                    }));
                                                 }
-                                                let _ = event_tx
-                                                    .send(StreamEvent::AssistantMessage(
-                                                        AssistantMessage {
-                                                            uuid: uuid::Uuid::new_v4(),
-                                                            message: partial,
-                                                            request_id: None,
-                                                            timestamp: chrono::Utc::now(),
-                                                        },
-                                                    ))
-                                                    .await;
+                                                ContentBlock::ServerToolUse { id, name, input } => {
+                                                    assistant_content.push(serde_json::json!({
+                                                        "type": "server_tool_use",
+                                                        "id": id,
+                                                        "name": name,
+                                                        "input": input,
+                                                    }));
+                                                }
+                                                ContentBlock::Text { text } => {
+                                                    assistant_content.push(serde_json::json!({
+                                                        "type": "text",
+                                                        "text": text,
+                                                    }));
+                                                }
+                                                ContentBlock::Thinking {
+                                                    thinking,
+                                                    signature,
+                                                } => {
+                                                    assistant_content.push(serde_json::json!({
+                                                        "type": "thinking",
+                                                        "thinking": thinking,
+                                                        "signature": signature,
+                                                    }));
+                                                }
+                                                _ => {}
+                                            }
+                                            if !matches!(block, ContentBlock::ToolUse { .. }) {
+                                                if let Some(message) = response_message.clone() {
+                                                    let mut partial = message;
+                                                    partial.content = vec![block.clone()];
+                                                    partial.stop_reason = None;
+                                                    if let Some(usage) = response_usage.clone() {
+                                                        partial.usage = usage;
+                                                    }
+                                                    let _ = event_tx
+                                                        .send(StreamEvent::AssistantMessage(
+                                                            AssistantMessage {
+                                                                uuid: uuid::Uuid::new_v4(),
+                                                                message: partial,
+                                                                request_id: None,
+                                                                timestamp: chrono::Utc::now(),
+                                                            },
+                                                        ))
+                                                        .await;
+                                                }
                                             }
                                         }
-                                    }
-                                }
-                                SseEvent::MessageDelta {
-                                    stop_reason: sr,
-                                    usage,
-                                } => {
-                                    if let Some(sr_str) = sr {
-                                        stop_reason = match sr_str.as_str() {
-                                            "end_turn" => StopReason::EndTurn,
-                                            "tool_use" => StopReason::ToolUse,
-                                            "max_tokens" => StopReason::MaxTokens,
-                                            "stop_sequence" => StopReason::StopSequence,
-                                            // Issue 6: route model_context_window_exceeded
-                                            // through same path as max_tokens.
-                                            "model_context_window_exceeded" => {
-                                                StopReason::ModelContextWindowExceeded
-                                            }
-                                            "pause_turn" => StopReason::PauseTurn,
-                                            _ => StopReason::EndTurn,
-                                        };
-                                    }
-                                    if let Some(u) = usage {
-                                        if let Some(accumulated) = response_usage.as_mut() {
-                                            accumulated.output_tokens = u.output_tokens;
+                                        if let Some(raw_event) = raw_event {
+                                            let _ = event_tx
+                                                .send(StreamEvent::RawSse { event: raw_event })
+                                                .await;
                                         }
+                                    }
+                                    SseEvent::MessageDelta {
+                                        stop_reason: sr,
+                                        usage,
+                                    } => {
+                                        if let Some(sr_str) = sr {
+                                            stop_reason = match sr_str.as_str() {
+                                                "end_turn" => StopReason::EndTurn,
+                                                "tool_use" => StopReason::ToolUse,
+                                                "max_tokens" => StopReason::MaxTokens,
+                                                "stop_sequence" => StopReason::StopSequence,
+                                                // Issue 6: route model_context_window_exceeded
+                                                // through same path as max_tokens.
+                                                "model_context_window_exceeded" => {
+                                                    StopReason::ModelContextWindowExceeded
+                                                }
+                                                "pause_turn" => StopReason::PauseTurn,
+                                                _ => StopReason::EndTurn,
+                                            };
+                                        }
+                                        if let Some(u) = usage {
+                                            if let Some(accumulated) = response_usage.as_mut() {
+                                                accumulated.output_tokens = u.output_tokens;
+                                            }
+                                            let _ = event_tx
+                                                .send(StreamEvent::UsageUpdate(
+                                                    crate::types::usage::Usage {
+                                                        input_tokens: 0,
+                                                        output_tokens: u.output_tokens,
+                                                        cache_creation_input_tokens: None,
+                                                        cache_read_input_tokens: None,
+                                                    },
+                                                ))
+                                                .await;
+                                        }
+                                    }
+                                    SseEvent::MessageStart { message } => {
+                                        response_usage = Some(message.usage.clone());
+                                        response_message = Some(message.clone());
                                         let _ = event_tx
-                                            .send(StreamEvent::UsageUpdate(
-                                                crate::types::usage::Usage {
-                                                    input_tokens: 0,
-                                                    output_tokens: u.output_tokens,
-                                                    cache_creation_input_tokens: None,
-                                                    cache_read_input_tokens: None,
-                                                },
-                                            ))
+                                            .send(StreamEvent::UsageUpdate(message.usage.clone()))
                                             .await;
                                     }
-                                    break 'stream;
+                                    SseEvent::Error { message } => {
+                                        tracing::error!(
+                                            "Streaming API error mid-stream: {}",
+                                            message
+                                        );
+                                        let _ = crate::hooks::fire_stop_failure(&message).await;
+                                        let error = crate::types::error::QueryError::Api {
+                                            status: 0,
+                                            message,
+                                        };
+                                        let _ =
+                                            event_tx.send(StreamEvent::Error(error.clone())).await;
+                                        self.state = QueryState::Terminal {
+                                            stop_reason: StopReason::EndTurn,
+                                            transition: TransitionReason::Error(error.clone()),
+                                        };
+                                        return Err(anyhow::anyhow!(
+                                            "Streaming API error received mid-stream: {}",
+                                            error
+                                        ));
+                                    }
+                                    SseEvent::MessageStop => {
+                                        break 'stream;
+                                    }
+                                    _ => {}
                                 }
-                                SseEvent::MessageStart { message } => {
-                                    response_usage = Some(message.usage.clone());
-                                    response_message = Some(message.clone());
-                                    let _ = event_tx
-                                        .send(StreamEvent::UsageUpdate(message.usage.clone()))
-                                        .await;
-                                }
-                                SseEvent::Error { message } => {
-                                    tracing::error!("Streaming API error mid-stream: {}", message);
-                                    let _ = crate::hooks::fire_stop_failure(&message).await;
-                                    let error =
-                                        crate::types::error::QueryError::Api { status: 0, message };
-                                    let _ = event_tx.send(StreamEvent::Error(error.clone())).await;
-                                    self.state = QueryState::Terminal {
-                                        stop_reason: StopReason::EndTurn,
-                                        transition: TransitionReason::Error(error.clone()),
-                                    };
-                                    return Err(anyhow::anyhow!(
-                                        "Streaming API error received mid-stream: {}",
-                                        error
-                                    ));
-                                }
-                                SseEvent::MessageStop => {
-                                    break 'stream;
-                                }
-                                _ => {}
-                            },
+                            }
                         }
                     }
                 }

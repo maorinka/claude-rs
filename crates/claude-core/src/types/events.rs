@@ -7,6 +7,9 @@ pub enum StreamEvent {
     RequestStart {
         request_id: String,
     },
+    RawSse {
+        event: serde_json::Value,
+    },
     AssistantMessage(AssistantMessage),
     ToolStart {
         tool_use_id: String,
