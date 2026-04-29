@@ -64,6 +64,21 @@ async fn test_edit_replace_string() {
     assert_eq!(data["oldString"], "hello");
     assert_eq!(data["newString"], "goodbye");
     assert!(!data["replaceAll"].as_bool().unwrap_or(true));
+    assert_eq!(data["userModified"], false);
+    let patch = data["structuredPatch"]
+        .as_array()
+        .expect("structuredPatch must be an array");
+    assert!(!patch.is_empty(), "edits must include a structured diff");
+    assert!(patch[0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line == "-hello world"));
+    assert!(patch[0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line == "+goodbye world"));
 }
 
 #[tokio::test]
@@ -184,6 +199,35 @@ async fn test_edit_nonexistent_file() {
     .await;
 
     assert!(result.is_error, "Expected error for nonexistent file");
+}
+
+#[tokio::test]
+async fn test_edit_create_new_file_returns_ts_output_shape() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("created.txt");
+
+    let tool = FileEditTool;
+    let ctx = make_ctx(&dir);
+
+    let result = call_tool(
+        &tool,
+        json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "",
+            "new_string": "created\ncontent\n"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(!result.is_error);
+    assert_eq!(result.data["originalFile"], "");
+    assert_eq!(result.data["userModified"], false);
+    assert!(result.data["structuredPatch"].is_array());
+    assert_eq!(
+        std::fs::read_to_string(&file_path).unwrap(),
+        "created\ncontent\n"
+    );
 }
 
 #[test]

@@ -12,6 +12,7 @@ pub mod config_tool;
 pub mod cron_tool;
 pub mod ctx_inspect_tool;
 pub mod destructive_command_warning;
+mod diff_utils;
 pub mod edit;
 pub mod edit_quote_style;
 pub mod glob_tool;

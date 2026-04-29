@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+use crate::diff_utils::structured_patch_for_display;
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use crate::write::FILE_HISTORY;
 use claude_core::types::events::ToolResultData;
@@ -196,6 +197,8 @@ Usage:
                         "oldString": old_string,
                         "newString": new_string,
                         "originalFile": "",
+                        "structuredPatch": structured_patch_for_display("", new_string),
+                        "userModified": false,
                         "replaceAll": replace_all
                     }),
                     is_error: false,
@@ -294,6 +297,8 @@ Usage:
                 "oldString": old_string,
                 "newString": new_string,
                 "originalFile": original, // LF-normalised form; TS parity
+                "structuredPatch": structured_patch_for_display(&original, &new_content),
+                "userModified": false,
                 "replaceAll": replace_all
             }),
             is_error: false,

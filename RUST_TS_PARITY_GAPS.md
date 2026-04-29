@@ -494,9 +494,7 @@ Files:
 - TS reference: `src/tools/FileEditTool/*`
 
 Needs work:
-- Exact TS diff output shape.
 - Original-file capture in file history.
-- CRLF preservation checks.
 - LSP diagnostic clearing after edit.
 - Settings-file validation.
 - Multi-edit behavior and error messages parity.
@@ -506,6 +504,10 @@ Needs work:
 Improved:
 - Conditional and nested dynamic skill activation now runs after Read/Edit/Write
   paths and registers newly discovered skills for the Skill tool.
+- Rust `Edit` results now include the TS output keys `structuredPatch` and
+  `userModified`, using the same shared display-diff helper as `Write`.
+- CRLF preservation and LF-normalized `originalFile` behavior are covered by
+  focused tests.
 
 ### FileWriteTool
 
