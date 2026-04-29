@@ -1,9 +1,9 @@
 //! Work-secret decode + session URL helpers.
 //!
 //! Port of TS `src/bridge/workSecret.ts` — the pure-logic half.
-//! `registerWorker` (HTTP POST to the CCR v2 worker-register endpoint)
-//! lives with the bridge's HTTP client; it'll land with the rest of
-//! the bridge runtime port.
+//! `register_worker` (HTTP POST to the CCR v2 worker-register endpoint) is
+//! included here because TS keeps it with the URL helpers in
+//! `src/bridge/workSecret.ts`.
 //!
 //! The TS bridge hands this module a base64url blob out of the CLI's
 //! `work_secret` env var / flag; `decode_work_secret` parses it into
@@ -120,6 +120,45 @@ pub fn build_sdk_url(api_base_url: &str, session_id: &str) -> String {
 pub fn build_ccr_v2_sdk_url(api_base_url: &str, session_id: &str) -> String {
     let base = api_base_url.trim_end_matches('/');
     format!("{base}/v1/code/sessions/{session_id}")
+}
+
+/// Register this bridge as the worker for a CCR v2 session.
+///
+/// Mirrors TS `registerWorker`: POST `{session_url}/worker/register` with the
+/// session-ingress bearer token and parse `worker_epoch`, accepting either a
+/// JSON number or protojson's int64 string form.
+pub async fn register_worker(
+    http: &reqwest::Client,
+    session_url: &str,
+    access_token: &str,
+) -> anyhow::Result<u64> {
+    let response = http
+        .post(format!(
+            "{}/worker/register",
+            session_url.trim_end_matches('/')
+        ))
+        .bearer_auth(access_token)
+        .header("content-type", "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("registerWorker failed: {}", response.status());
+    }
+
+    let data: serde_json::Value = response.json().await?;
+    parse_worker_epoch(&data)
+        .ok_or_else(|| anyhow::anyhow!("registerWorker: invalid worker_epoch in response: {data}"))
+}
+
+fn parse_worker_epoch(data: &serde_json::Value) -> Option<u64> {
+    match data.get("worker_epoch")? {
+        serde_json::Value::Number(n) => n.as_u64(),
+        serde_json::Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    }
 }
 
 fn strip_scheme_and_trailing_slashes(url: &str) -> String {
@@ -258,6 +297,14 @@ mod tests {
     fn build_ccr_v2_sdk_url_basic() {
         let url = build_ccr_v2_sdk_url("https://api.example.com", "abc");
         assert_eq!(url, "https://api.example.com/v1/code/sessions/abc");
+    }
+
+    #[test]
+    fn parses_worker_epoch_like_ts() {
+        assert_eq!(parse_worker_epoch(&json!({"worker_epoch": 42})), Some(42));
+        assert_eq!(parse_worker_epoch(&json!({"worker_epoch": "42"})), Some(42));
+        assert_eq!(parse_worker_epoch(&json!({"worker_epoch": "no"})), None);
+        assert_eq!(parse_worker_epoch(&json!({"worker_epoch": 1.5})), None);
     }
 
     #[test]

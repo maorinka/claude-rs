@@ -1,5 +1,8 @@
+pub mod api;
+pub mod direct_connect;
 pub mod jwt_utils;
 pub mod protocol;
 pub mod server;
+pub mod session_id_compat;
 pub mod types;
 pub mod work_secret;

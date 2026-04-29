@@ -58,6 +58,19 @@ impl ProxyConfig {
         }
         env
     }
+
+    /// TS `shouldBypassProxy` parity for callers that need to decide before
+    /// constructing a request/transport, especially WebSocket paths.
+    pub fn should_bypass_proxy(&self, url: &str) -> bool {
+        should_bypass_proxy(url, self.no_proxy.as_deref())
+    }
+
+    /// TS `getWebSocketProxyUrl` parity: return the active proxy unless the
+    /// destination is covered by NO_PROXY.
+    pub fn websocket_proxy_url(&self, url: &str) -> Option<&str> {
+        let proxy = self.active_proxy_url()?;
+        (!self.should_bypass_proxy(url)).then_some(proxy)
+    }
 }
 
 pub const DEFAULT_NO_PROXY: &str = "localhost,127.0.0.1,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,anthropic.com,.anthropic.com,*.anthropic.com,github.com,api.github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,pypi.org,files.pythonhosted.org,index.crates.io,proxy.golang.org";
@@ -73,6 +86,45 @@ fn read_env_any(names: &[&str]) -> Option<String> {
     names
         .iter()
         .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+}
+
+/// TS `shouldBypassProxy` parity.
+///
+/// Supports wildcard `*`, comma/space-separated entries, exact host/IP matches,
+/// leading-dot domain suffixes, and port-specific `host:port` entries. Invalid
+/// URLs do not bypass.
+pub fn should_bypass_proxy(url_string: &str, no_proxy: Option<&str>) -> bool {
+    let Some(no_proxy) = no_proxy.filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    if no_proxy == "*" {
+        return true;
+    }
+
+    let Ok(url) = url::Url::parse(url_string) else {
+        return false;
+    };
+    let Some(hostname) = url.host_str().map(|host| host.to_ascii_lowercase()) else {
+        return false;
+    };
+    let port =
+        url.port_or_known_default()
+            .unwrap_or_else(|| if url.scheme() == "https" { 443 } else { 80 });
+    let host_with_port = format!("{hostname}:{port}");
+
+    no_proxy
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|pattern| !pattern.is_empty())
+        .any(|pattern| {
+            let pattern = pattern.trim().to_ascii_lowercase();
+            if pattern.contains(':') {
+                return host_with_port == pattern;
+            }
+            if let Some(suffix) = pattern.strip_prefix('.') {
+                return hostname == suffix || hostname.ends_with(&pattern);
+            }
+            hostname == pattern
+        })
 }
 
 #[cfg(test)]
@@ -126,5 +178,59 @@ mod tests {
         assert!(DEFAULT_NO_PROXY.contains("localhost"));
         assert!(DEFAULT_NO_PROXY.contains("anthropic.com"));
         assert!(DEFAULT_NO_PROXY.contains("index.crates.io"));
+    }
+
+    #[test]
+    fn should_bypass_proxy_matches_ts_rules() {
+        assert!(!should_bypass_proxy("https://example.com", None));
+        assert!(should_bypass_proxy("https://example.com", Some("*")));
+        assert!(should_bypass_proxy(
+            "https://localhost:8443/path",
+            Some("localhost")
+        ));
+        assert!(should_bypass_proxy(
+            "https://api.example.com",
+            Some(".example.com")
+        ));
+        assert!(should_bypass_proxy(
+            "https://example.com",
+            Some(".example.com")
+        ));
+        assert!(!should_bypass_proxy(
+            "https://notexample.com",
+            Some(".example.com")
+        ));
+        assert!(should_bypass_proxy(
+            "https://example.com:8443",
+            Some("example.com:8443")
+        ));
+        assert!(!should_bypass_proxy(
+            "https://example.com:443",
+            Some("example.com:8443")
+        ));
+        assert!(should_bypass_proxy(
+            "http://127.0.0.1:8080",
+            Some("localhost, 127.0.0.1")
+        ));
+        assert!(should_bypass_proxy("not a url", Some("*")));
+        assert!(!should_bypass_proxy("not a url", Some("localhost")));
+    }
+
+    #[test]
+    fn websocket_proxy_url_respects_no_proxy() {
+        let cfg = ProxyConfig {
+            https_proxy: Some("http://proxy:8080".into()),
+            no_proxy: Some("localhost,.internal".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.websocket_proxy_url("wss://api.example.com/session"),
+            Some("http://proxy:8080")
+        );
+        assert_eq!(cfg.websocket_proxy_url("ws://localhost:3000"), None);
+        assert_eq!(
+            cfg.websocket_proxy_url("wss://worker.service.internal/ws"),
+            None
+        );
     }
 }

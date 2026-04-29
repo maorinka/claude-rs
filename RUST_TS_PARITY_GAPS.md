@@ -484,6 +484,33 @@ Improved:
   single active proxy URL for HTTP clients.
 - Rust now reads/exports `NODE_EXTRA_CA_CERTS` alongside `SSL_CERT_FILE`,
   `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE`.
+- Rust proxy matching now includes the TS `shouldBypassProxy` / WebSocket proxy
+  decision rules: `no_proxy > NO_PROXY`, wildcard `*`, comma/space-separated
+  entries, exact host/IP matches, leading-dot domain suffixes, and
+  port-specific `host:port` entries.
+- Rust now has TS-shaped direct-connect session creation and StructuredIO
+  framing helpers for the `src/server/createDirectConnectSession.ts` /
+  `directConnectManager.ts` contract: `POST /sessions`, bearer auth, optional
+  `dangerously_skip_permissions`, SDK user-message encoding, permission
+  response encoding, interrupt encoding, ignored stdout message filtering, and
+  unsupported control-request classification.
+- Rust direct-connect now includes a WebSocket runtime loop that applies bearer
+  auth, reads newline-delimited StructuredIO frames, emits parsed inbound
+  messages/permission requests, and writes TS-shaped user, permission,
+  interrupt, and error responses.
+- Rust now has a general bridge environments API client matching
+  `src/bridge/bridgeApi.ts` for registration, polling, ack, stop, deregister,
+  archive, reconnect, heartbeat, and permission response events, including the
+  TS bridge beta/version headers, trusted-device header slot, safe path-ID
+  validation, 409 archive idempotency, and TS-style fatal error mapping.
+- Rust now has the org-scoped bridge Sessions API surface from
+  `src/bridge/createSession.ts`: create/fetch/archive/title-update session
+  calls, `ccr-byoc-2025-07-29` headers, organization UUID header, remote-control
+  session body shape, GitHub source/outcome context building, `cse_*` to
+  `session_*` title-update compatibility, and best-effort archive/title update
+  behavior.
+- Rust now includes CCR session-ID tag helpers (`cse_*` ⇄ `session_*`) and the
+  CCR v2 `registerWorker` call next to the existing work-secret URL helpers.
 
 Missing or partial:
 - Full bridge messaging.
@@ -492,18 +519,17 @@ Missing or partial:
 - Session runner integration.
 - Bridge permission callbacks.
 - Trusted-device flow.
-- Work secret lifecycle.
+- Full work secret lifecycle and token-refresh scheduling.
 - Capacity wake.
 - Flush gate.
 - Poll config.
 - Inbound attachments/messages.
 - Bridge UI.
-- Direct WebSocket session manager.
+- Direct WebSocket session manager integration into CLI/TUI entrypoints.
 - Upstream relay/proxy.
-- Proxy `NO_PROXY` URL matching, WebSocket proxy helpers, global HTTP-agent
-  configuration, keepalive disable-on-reset behavior, mTLS helpers, AWS client
-  proxy config, Anthropic unix-socket tunneling, and sandbox/upstream relay
-  proxy integration.
+- Proxy global HTTP-agent configuration, keepalive disable-on-reset behavior,
+  mTLS helpers, AWS client proxy config, Anthropic unix-socket tunneling, and
+  sandbox/upstream relay proxy integration.
 
 Needs work:
 - Decide whether Rust aims to support the same bridge/server product surface.
