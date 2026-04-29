@@ -679,7 +679,7 @@ Files:
   `src/tools/TodoWriteTool/*`, `src/utils/tasks.ts`
 
 Needs work:
-- Persistent task store parity.
+- TS file-lock/high-water-mark task ID allocation.
 - Owner/team awareness.
 - `blocks` / `blockedBy`.
 - Active spinner verb / active form behavior.
@@ -696,6 +696,11 @@ Improved:
 - TaskCreate and TaskUpdate are now marked concurrency-safe like TS.
 - Rust task tools now fire `TaskCreated` and `TaskCompleted` hooks around task
   create/update.
+- Tasks are now persisted under the Claude config task directory keyed by
+  `CLAUDE_CODE_TASK_LIST_ID`, `CLAUDE_CODE_TEAM_NAME`, or the session id,
+  matching the TS task-list resolution shape for standalone sessions and
+  process-based teammates. Full TS file-lock/high-water-mark behavior remains
+  to be ported.
 
 ### MCPAuthTool
 

@@ -1,8 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -23,16 +25,19 @@ pub const TASK_UPDATE_PROMPT: &str = include_str!("prompts/task_update.md");
 // ─── Shared state ─────────────────────────────────────────────────────────────
 
 /// A task entry with optional real process tracking.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaskEntry {
     pub id: String,
     pub subject: String,
     pub description: String,
     pub status: String, // "pending", "in_progress", "completed", "stopped"
+    #[serde(rename = "createdAt")]
     pub created_at: String,
     /// Captured stdout/stderr output from the background process (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     /// Process ID for background tasks spawned by the system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
 }
 
@@ -59,7 +64,20 @@ fn now_iso() -> String {
 }
 
 fn new_task_id() -> String {
-    NEXT_TASK_ID.fetch_add(1, Ordering::SeqCst).to_string()
+    let disk_max = list_task_entries()
+        .into_iter()
+        .filter_map(|task| task.id.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0);
+    let minimum = disk_max + 1;
+    let candidate = NEXT_TASK_ID
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            let next = current.max(minimum);
+            Some(next + 1)
+        })
+        .unwrap_or(minimum)
+        .max(minimum);
+    candidate.to_string()
 }
 
 fn error_result(msg: impl Into<String>) -> ToolResultData {
@@ -69,15 +87,113 @@ fn error_result(msg: impl Into<String>) -> ToolResultData {
     }
 }
 
+fn task_list_id() -> String {
+    std::env::var("CLAUDE_CODE_TASK_LIST_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("CLAUDE_CODE_TEAM_NAME")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| claude_core::api::client::get_session_id().clone())
+}
+
+fn sanitize_path_component(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn tasks_dir() -> PathBuf {
+    let root = {
+        #[cfg(test)]
+        {
+            std::env::var("CLAUDE_RS_TEST_TASKS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| std::env::temp_dir().join("claude-rs-test-tasks"))
+        }
+        #[cfg(not(test))]
+        {
+            claude_core::errors_util::get_claude_config_home_dir().join("tasks")
+        }
+    };
+    root.join(sanitize_path_component(&task_list_id()))
+}
+
+fn task_path(task_id: &str) -> PathBuf {
+    tasks_dir().join(format!("{}.json", sanitize_path_component(task_id)))
+}
+
+fn read_task_file(path: &Path) -> Option<TaskEntry> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn load_task_entry(task_id: &str) -> Option<TaskEntry> {
+    if let Some(entry) = TASK_STORE.lock().ok()?.get(task_id).cloned() {
+        return Some(entry);
+    }
+    read_task_file(&task_path(task_id))
+}
+
+fn list_task_entries() -> Vec<TaskEntry> {
+    let mut tasks = HashMap::new();
+    let dir = tasks_dir();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(task) = read_task_file(&path) {
+                tasks.insert(task.id.clone(), task);
+            }
+        }
+    }
+    if let Ok(store) = TASK_STORE.lock() {
+        for task in store.values() {
+            tasks.insert(task.id.clone(), task.clone());
+        }
+    }
+    tasks.into_values().collect()
+}
+
+fn save_task_entry(entry: &TaskEntry) {
+    let dir = tasks_dir();
+    if std::fs::create_dir_all(&dir).is_ok() {
+        if let Ok(text) = serde_json::to_string_pretty(entry) {
+            let _ = std::fs::write(task_path(&entry.id), text);
+        }
+    }
+    if let Ok(mut store) = TASK_STORE.lock() {
+        store.insert(entry.id.clone(), entry.clone());
+    }
+}
+
+fn delete_task_entry(task_id: &str) {
+    let _ = std::fs::remove_file(task_path(task_id));
+    if let Ok(mut store) = TASK_STORE.lock() {
+        store.remove(task_id);
+    }
+}
+
 // ─── Public helpers for process-tracking integration ──────────────────────────
 
 /// Update a task's output and PID.  Called by the agent/background-spawn
 /// infrastructure after it launches a child process.
 pub fn register_process(task_id: &str, pid: u32) {
-    let mut store = TASK_STORE.lock().unwrap();
-    if let Some(entry) = store.get_mut(task_id) {
+    if let Some(mut entry) = load_task_entry(task_id) {
         entry.pid = Some(pid);
         entry.status = "in_progress".to_string();
+        save_task_entry(&entry);
     }
 }
 
@@ -102,23 +218,22 @@ pub fn create_task_entry(subject: &str, description: &str) -> String {
 
 /// Look up a task entry by ID.
 pub fn get_task_entry(task_id: &str) -> Option<TaskEntry> {
-    let store = TASK_STORE.lock().unwrap();
-    store.get(task_id).cloned()
+    load_task_entry(task_id)
 }
 
 /// Append captured output to a task entry.
 pub fn append_output(task_id: &str, text: &str) {
-    let mut store = TASK_STORE.lock().unwrap();
-    if let Some(entry) = store.get_mut(task_id) {
+    if let Some(mut entry) = load_task_entry(task_id) {
         let buf = entry.output.get_or_insert_with(String::new);
         buf.push_str(text);
+        save_task_entry(&entry);
     }
 }
 
 pub fn update_task_status(task_id: &str, status: &str) {
-    let mut store = TASK_STORE.lock().unwrap();
-    if let Some(entry) = store.get_mut(task_id) {
+    if let Some(mut entry) = load_task_entry(task_id) {
         entry.status = status.to_string();
+        save_task_entry(&entry);
     }
 }
 
@@ -187,10 +302,7 @@ impl ToolExecutor for TaskCreateTool {
             pid: None,
         };
 
-        {
-            let mut store = TASK_STORE.lock().unwrap();
-            store.insert(id.clone(), entry.clone());
-        }
+        save_task_entry(&entry);
 
         // Fire TaskCreated hooks if a runner has been installed. Ports TS
         // TaskCreateTool.ts lines 93-113 (executeTaskCreatedHooks). If a hook
@@ -208,7 +320,7 @@ impl ToolExecutor for TaskCreateTool {
                 .await;
             if !aggregated.blocking_errors.is_empty() {
                 // Roll the task back so failed hooks don't leave a dangling entry.
-                TASK_STORE.lock().unwrap().remove(&id);
+                delete_task_entry(&id);
                 let msg = aggregated
                     .blocking_errors
                     .iter()
@@ -266,8 +378,7 @@ impl ToolExecutor for TaskListTool {
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
-        let store = TASK_STORE.lock().unwrap();
-        let mut entries: Vec<_> = store.values().collect();
+        let mut entries = list_task_entries();
         entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         let tasks = entries
             .into_iter()
@@ -348,21 +459,18 @@ impl ToolExecutor for TaskUpdateTool {
         };
 
         let requested_status = input["status"].as_str().map(str::to_string);
-        let task_before_update = {
-            let store = TASK_STORE.lock().unwrap();
-            match store.get(&task_id) {
-                Some(entry) => entry.clone(),
-                None => {
-                    return Ok(ToolResultData {
-                        data: json!({
-                            "success": false,
-                            "taskId": task_id,
-                            "updatedFields": [],
-                            "error": "Task not found",
-                        }),
-                        is_error: false,
-                    });
-                }
+        let task_before_update = match load_task_entry(&task_id) {
+            Some(entry) => entry,
+            None => {
+                return Ok(ToolResultData {
+                    data: json!({
+                        "success": false,
+                        "taskId": task_id,
+                        "updatedFields": [],
+                        "error": "Task not found",
+                    }),
+                    is_error: false,
+                });
             }
         };
 
@@ -398,8 +506,7 @@ impl ToolExecutor for TaskUpdateTool {
             }
         }
 
-        let mut store = TASK_STORE.lock().unwrap();
-        let entry = match store.get_mut(&task_id) {
+        let mut entry = match load_task_entry(&task_id) {
             Some(e) => e,
             None => {
                 return Ok(ToolResultData {
@@ -418,7 +525,7 @@ impl ToolExecutor for TaskUpdateTool {
         let mut updated_fields = Vec::new();
         if let Some(status) = requested_status {
             if status == "deleted" {
-                store.remove(&task_id);
+                delete_task_entry(&task_id);
                 return Ok(ToolResultData {
                     data: json!({
                         "success": true,
@@ -458,6 +565,7 @@ impl ToolExecutor for TaskUpdateTool {
         } else {
             Value::Null
         };
+        save_task_entry(&entry);
         Ok(ToolResultData {
             data: json!({
                 "success": true,
@@ -517,8 +625,7 @@ impl ToolExecutor for TaskGetTool {
             None => return Ok(error_result("missing required parameter: taskId")),
         };
 
-        let store = TASK_STORE.lock().unwrap();
-        match store.get(&task_id) {
+        match load_task_entry(&task_id) {
             Some(entry) => Ok(ToolResultData {
                 data: json!({
                     "task": {
@@ -588,10 +695,7 @@ impl ToolExecutor for TaskStopTool {
         };
 
         // Extract PID before taking the mutable borrow for status update.
-        let pid: Option<u32> = {
-            let store = TASK_STORE.lock().unwrap();
-            store.get(&task_id).and_then(|e| e.pid)
-        };
+        let pid = load_task_entry(&task_id).and_then(|entry| entry.pid);
 
         // Kill the process if we have a PID.
         let kill_msg: Option<String> = if let Some(pid) = pid {
@@ -600,14 +704,14 @@ impl ToolExecutor for TaskStopTool {
             None
         };
 
-        let mut store = TASK_STORE.lock().unwrap();
-        match store.get_mut(&task_id) {
-            Some(entry) => {
+        match load_task_entry(&task_id) {
+            Some(mut entry) => {
                 entry.status = "stopped".to_string();
                 let mut data = entry.to_json();
                 if let Some(msg) = kill_msg {
                     data["killMessage"] = json!(msg);
                 }
+                save_task_entry(&entry);
                 Ok(ToolResultData {
                     data,
                     is_error: false,
@@ -710,8 +814,7 @@ impl ToolExecutor for TaskOutputTool {
             None => return Ok(error_result("missing required parameter: taskId")),
         };
 
-        let store = TASK_STORE.lock().unwrap();
-        match store.get(&task_id) {
+        match load_task_entry(&task_id) {
             Some(entry) => {
                 // Return real captured output if available, otherwise fall back
                 // to the task description so callers always get some context.
@@ -732,5 +835,66 @@ impl ToolExecutor for TaskOutputTool {
             }
             None => Ok(error_result(format!("task not found: {}", task_id))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    struct EnvGuard {
+        config: Option<std::ffi::OsString>,
+        task_list: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.config {
+                Some(value) => std::env::set_var("CLAUDE_RS_TEST_TASKS_DIR", value),
+                None => std::env::remove_var("CLAUDE_RS_TEST_TASKS_DIR"),
+            }
+            match &self.task_list {
+                Some(value) => std::env::set_var("CLAUDE_CODE_TASK_LIST_ID", value),
+                None => std::env::remove_var("CLAUDE_CODE_TASK_LIST_ID"),
+            }
+        }
+    }
+
+    fn set_task_test_env() -> (tempfile::TempDir, EnvGuard) {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = EnvGuard {
+            config: std::env::var_os("CLAUDE_RS_TEST_TASKS_DIR"),
+            task_list: std::env::var_os("CLAUDE_CODE_TASK_LIST_ID"),
+        };
+        std::env::set_var("CLAUDE_RS_TEST_TASKS_DIR", dir.path());
+        std::env::set_var("CLAUDE_CODE_TASK_LIST_ID", "task-test");
+        if let Ok(mut store) = TASK_STORE.lock() {
+            store.clear();
+        }
+        (dir, guard)
+    }
+
+    #[test]
+    fn task_entries_persist_to_ts_config_task_dir() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (_dir, _guard) = set_task_test_env();
+        let entry = TaskEntry {
+            id: "1".into(),
+            subject: "Persisted".into(),
+            description: "On disk".into(),
+            status: "pending".into(),
+            created_at: "2026-04-29T00:00:00Z".into(),
+            output: None,
+            pid: None,
+        };
+        save_task_entry(&entry);
+        TASK_STORE.lock().unwrap().clear();
+
+        let loaded = load_task_entry("1").expect("task should load from disk");
+        assert_eq!(loaded.subject, "Persisted");
+        assert!(task_path("1").ends_with("task-test/1.json"));
     }
 }
