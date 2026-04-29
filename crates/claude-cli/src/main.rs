@@ -53,7 +53,7 @@ pub struct Cli {
     pub model: Option<String>,
 
     /// Effort level for the current session
-    #[arg(long = "effort", value_parser = ["low", "medium", "high", "max"])]
+    #[arg(long = "effort", value_parser = ["low", "medium", "high", "max", "auto", "unset"])]
     pub effort: Option<String>,
 
     /// Beta headers to include in API requests (API key users only)
@@ -625,6 +625,24 @@ fn resolve_max_output_tokens(
     claude_core::api::client::get_max_output_tokens_for_model(model)
 }
 
+fn resolve_effort_for_api(
+    cli_effort: Option<&str>,
+    settings: &claude_core::config::settings::Settings,
+) -> Option<String> {
+    let raw = std::env::var("CLAUDE_CODE_EFFORT_LEVEL")
+        .ok()
+        .or_else(|| cli_effort.map(ToString::to_string))
+        .or_else(|| settings.effort_level.clone())?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("auto")
+        || trimmed.eq_ignore_ascii_case("unset")
+    {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
 fn is_env_defined_falsy(name: &str) -> bool {
     std::env::var(name)
         .map(|value| {
@@ -1120,6 +1138,32 @@ mod tests {
         .unwrap();
         assert_eq!(cli.model.as_deref(), Some("opus"));
         assert_eq!(cli.fallback_model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn effort_resolution_matches_ts_precedence_and_auto_escape() {
+        std::env::remove_var("CLAUDE_CODE_EFFORT_LEVEL");
+        let settings = claude_core::config::settings::Settings {
+            effort_level: Some("medium".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_effort_for_api(Some("high"), &settings).as_deref(),
+            Some("high")
+        );
+
+        std::env::set_var("CLAUDE_CODE_EFFORT_LEVEL", "low");
+        assert_eq!(
+            resolve_effort_for_api(Some("high"), &settings).as_deref(),
+            Some("low")
+        );
+
+        std::env::set_var("CLAUDE_CODE_EFFORT_LEVEL", "auto");
+        assert!(resolve_effort_for_api(Some("high"), &settings).is_none());
+        std::env::remove_var("CLAUDE_CODE_EFFORT_LEVEL");
+
+        let cli = Cli::try_parse_from(["claude-rs", "--effort", "auto", "-p", "hi"]).unwrap();
+        assert_eq!(cli.effort.as_deref(), Some("auto"));
     }
 
     #[test]
@@ -5345,11 +5389,7 @@ async fn main() -> Result<()> {
             .clone()
             .unwrap_or_else(|| claude_core::api::client::get_session_id().clone()),
         account_uuid,
-        effort: cli
-            .effort
-            .clone()
-            .or_else(|| settings.effort_level.clone())
-            .filter(|value| !value.trim().is_empty()),
+        effort: resolve_effort_for_api(cli.effort.as_deref(), &settings),
         task_budget_total: cli.task_budget,
         fallback_model: fallback_model.clone(),
         workload: cli

@@ -44,8 +44,8 @@ Captured through `scripts/run_parity_capture.py` on 2026-04-28:
 Now matching:
 
 - `model`, `max_tokens`, `stream`, `thinking`, and `context_management`.
-- `output_config` including the installed TS `xhigh` effort value for the
-  current Opus path.
+- `output_config` effort now uses TS-supported values only; stale `xhigh`
+  settings/env values are coerced before reaching the API.
 - Message shape.
 - Prompt cache marker count.
 - Tool count: 87 vs 87.
@@ -306,6 +306,9 @@ Improved:
 - Rust effort handling now follows TS levels (`low`, `medium`, `high`,
   `max`), no longer accepts/sends stale `xhigh`, and downgrades `max` to
   `high` unless the model supports max effort.
+- Rust CLI effort resolution now follows TS precedence:
+  `CLAUDE_CODE_EFFORT_LEVEL` overrides CLI/settings, and `auto`/`unset` clears
+  explicit effort for the session.
 - The `/effort` command and settings comments now expose the same supported
   effort set, so `xhigh` is rejected before it can become an API 400.
 - The embedded TS tool-contract snapshot now matches the installed TS Bash
