@@ -33,11 +33,14 @@ pub use filesystem::{
 
 pub use settings::{
     allow_managed_permission_rules_only, load_permission_rules_from_disk_by_source,
-    load_permission_settings_value, load_raw_settings_value,
-    load_raw_settings_value_with_plugin_hooks, merge_enabled_plugin_hooks,
+    load_permission_settings_value, load_permission_settings_value_for_sources,
+    load_raw_settings_value, load_raw_settings_value_for_sources,
+    load_raw_settings_value_with_plugin_hooks,
+    load_raw_settings_value_with_plugin_hooks_for_sources, merge_enabled_plugin_hooks,
     parse_permission_rules_from_settings_value,
     permission_additional_directories_from_settings_value, permission_mode_from_settings_value,
-    raw_settings_paths, settings_change_fingerprint, SettingsFileStamp, SettingsFingerprint,
+    raw_settings_paths, settings_change_fingerprint, SettingSource, SettingsFileStamp,
+    SettingsFingerprint,
 };
 
 pub use setup::{

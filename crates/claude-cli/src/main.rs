@@ -106,6 +106,10 @@ pub struct Cli {
     #[arg(long = "settings")]
     pub settings: Option<String>,
 
+    /// Comma-separated setting sources to load: user, project, local
+    #[arg(long = "setting-sources")]
+    pub setting_sources: Option<String>,
+
     /// MCP tool to use for permission prompts in print mode
     #[arg(long = "permission-prompt-tool", hide = true)]
     pub permission_prompt_tool: Option<String>,
@@ -341,6 +345,41 @@ fn load_settings_overlay(
     let settings = serde_json::from_value::<claude_core::config::settings::Settings>(value.clone())
         .map_err(|err| anyhow::anyhow!("Error parsing --settings: {err}"))?;
     Ok(Some((settings, value)))
+}
+
+fn parse_setting_sources_flag(
+    raw: &Option<String>,
+) -> Result<Vec<claude_core::permissions::SettingSource>> {
+    let Some(raw) = raw else {
+        return Ok(claude_core::permissions::SettingSource::defaults().to_vec());
+    };
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut sources = Vec::new();
+    for name in raw.split(',').map(str::trim) {
+        match name {
+            "user" => sources.push(claude_core::permissions::SettingSource::User),
+            "project" => sources.push(claude_core::permissions::SettingSource::Project),
+            "local" => sources.push(claude_core::permissions::SettingSource::Local),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Error processing --setting-sources: Invalid setting source: {name}. Valid options are: user, project, local"
+                ));
+            }
+        }
+    }
+    Ok(sources)
+}
+
+fn load_settings_from_sources(
+    project_root: &std::path::Path,
+    sources: &[claude_core::permissions::SettingSource],
+) -> claude_core::config::settings::Settings {
+    let value =
+        claude_core::permissions::load_permission_settings_value_for_sources(project_root, sources);
+    serde_json::from_value(value).unwrap_or_default()
 }
 
 fn load_dynamic_mcp_configs(
@@ -870,6 +909,29 @@ mod tests {
             other => panic!("expected http config, got {other:?}"),
         }
         std::env::remove_var("CLAUDE_RS_TEST_MCP_TOKEN");
+    }
+
+    #[test]
+    fn setting_sources_flag_matches_ts_names() {
+        assert_eq!(
+            parse_setting_sources_flag(&None).unwrap(),
+            vec![
+                claude_core::permissions::SettingSource::User,
+                claude_core::permissions::SettingSource::Project,
+                claude_core::permissions::SettingSource::Local,
+            ]
+        );
+        assert_eq!(
+            parse_setting_sources_flag(&Some("project,local".to_string())).unwrap(),
+            vec![
+                claude_core::permissions::SettingSource::Project,
+                claude_core::permissions::SettingSource::Local,
+            ]
+        );
+        assert!(parse_setting_sources_flag(&Some("".to_string()))
+            .unwrap()
+            .is_empty());
+        assert!(parse_setting_sources_flag(&Some("workspace".to_string())).is_err());
     }
 
     #[test]
@@ -4060,15 +4122,22 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Load settings from ~/.claude/settings.json, then layer --settings on top.
-    let mut settings = match claude_core::config::paths::user_settings_path() {
-        Ok(path) => claude_core::config::settings::Settings::load_from_file(&path),
-        Err(_) => claude_core::config::settings::Settings::default(),
-    };
+    // Load settings from the same source buckets as TS (`--setting-sources`).
+    // Policy and flag settings are always layered separately in TS; the Rust
+    // permission loader applies the policy overlay, and `--settings` is merged
+    // immediately below.
+    let setting_sources = parse_setting_sources_flag(&cli.setting_sources)?;
+    let mut settings = load_settings_from_sources(&project_root, &setting_sources);
     let mut raw_settings =
-        claude_core::permissions::load_raw_settings_value_with_plugin_hooks(&project_root);
+        claude_core::permissions::load_raw_settings_value_with_plugin_hooks_for_sources(
+            &project_root,
+            &setting_sources,
+        );
     let mut permission_settings =
-        claude_core::permissions::load_permission_settings_value(&project_root);
+        claude_core::permissions::load_permission_settings_value_for_sources(
+            &project_root,
+            &setting_sources,
+        );
     if let Some((overlay, overlay_value)) = load_settings_overlay(&cli.settings)? {
         settings = settings.merge(&overlay);
         merge_json_values(&mut raw_settings, overlay_value.clone());

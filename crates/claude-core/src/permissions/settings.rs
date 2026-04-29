@@ -23,6 +23,19 @@ pub struct SettingsFileStamp {
 
 pub type SettingsFingerprint = BTreeMap<PathBuf, SettingsFileStamp>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingSource {
+    User,
+    Project,
+    Local,
+}
+
+impl SettingSource {
+    pub fn defaults() -> [Self; 3] {
+        [Self::User, Self::Project, Self::Local]
+    }
+}
+
 fn merge_json_objects(base: &mut Value, overlay: Value) {
     let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) else {
         *base = overlay;
@@ -41,30 +54,59 @@ fn merge_json_objects(base: &mut Value, overlay: Value) {
 }
 
 pub fn raw_settings_paths(project_root: &Path) -> Vec<PathBuf> {
+    raw_settings_paths_for_sources(project_root, &SettingSource::defaults())
+}
+
+pub fn raw_settings_paths_for_sources(
+    project_root: &Path,
+    sources: &[SettingSource],
+) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Ok(claude_dir) = crate::config::paths::claude_dir() {
-        paths.push(claude_dir.join("settings.json"));
-        paths.push(claude_dir.join("settings.local.json"));
+    for source in sources {
+        match source {
+            SettingSource::User => {
+                if let Ok(path) = crate::config::paths::user_settings_path() {
+                    paths.push(path);
+                }
+            }
+            SettingSource::Project => {
+                paths.push(project_root.join(".claude").join("settings.json"));
+            }
+            SettingSource::Local => {
+                paths.push(project_root.join(".claude").join("settings.local.json"));
+            }
+        }
     }
-    paths.push(project_root.join(".claude").join("settings.json"));
-    paths.push(project_root.join(".claude").join("settings.local.json"));
     paths
 }
 
 pub fn permission_rule_paths(project_root: &Path) -> Vec<(PermissionRuleSource, PathBuf)> {
-    let mut sources = Vec::new();
-    if let Ok(user_path) = crate::config::paths::user_settings_path() {
-        sources.push((PermissionRuleSource::UserSettings, user_path));
+    permission_rule_paths_for_sources(project_root, &SettingSource::defaults())
+}
+
+pub fn permission_rule_paths_for_sources(
+    project_root: &Path,
+    sources: &[SettingSource],
+) -> Vec<(PermissionRuleSource, PathBuf)> {
+    let mut paths = Vec::new();
+    for source in sources {
+        match source {
+            SettingSource::User => {
+                if let Ok(user_path) = crate::config::paths::user_settings_path() {
+                    paths.push((PermissionRuleSource::UserSettings, user_path));
+                }
+            }
+            SettingSource::Project => paths.push((
+                PermissionRuleSource::ProjectSettings,
+                project_root.join(".claude").join("settings.json"),
+            )),
+            SettingSource::Local => paths.push((
+                PermissionRuleSource::LocalSettings,
+                project_root.join(".claude").join("settings.local.json"),
+            )),
+        }
     }
-    sources.push((
-        PermissionRuleSource::ProjectSettings,
-        project_root.join(".claude").join("settings.json"),
-    ));
-    sources.push((
-        PermissionRuleSource::LocalSettings,
-        project_root.join(".claude").join("settings.local.json"),
-    ));
-    sources
+    paths
 }
 
 pub fn settings_change_fingerprint(project_root: &Path) -> SettingsFingerprint {
@@ -94,8 +136,15 @@ pub fn settings_change_fingerprint(project_root: &Path) -> SettingsFingerprint {
 }
 
 pub fn load_raw_settings_value(project_root: &Path) -> Value {
+    load_raw_settings_value_for_sources(project_root, &SettingSource::defaults())
+}
+
+pub fn load_raw_settings_value_for_sources(
+    project_root: &Path,
+    sources: &[SettingSource],
+) -> Value {
     let mut merged = serde_json::json!({});
-    for path in raw_settings_paths(project_root) {
+    for path in raw_settings_paths_for_sources(project_root, sources) {
         let Some(value) = load_settings_json_value(&path) else {
             continue;
         };
@@ -105,7 +154,14 @@ pub fn load_raw_settings_value(project_root: &Path) -> Value {
 }
 
 pub fn load_raw_settings_value_with_plugin_hooks(project_root: &Path) -> Value {
-    let mut settings = load_raw_settings_value(project_root);
+    load_raw_settings_value_with_plugin_hooks_for_sources(project_root, &SettingSource::defaults())
+}
+
+pub fn load_raw_settings_value_with_plugin_hooks_for_sources(
+    project_root: &Path,
+    sources: &[SettingSource],
+) -> Value {
+    let mut settings = load_raw_settings_value_for_sources(project_root, sources);
     merge_enabled_plugin_hooks(&mut settings, project_root);
     settings
 }
@@ -197,7 +253,14 @@ pub fn load_settings_json_value(path: &Path) -> Option<Value> {
 }
 
 pub fn load_permission_settings_value(project_root: &Path) -> Value {
-    let user_project_local = load_raw_settings_value(project_root);
+    load_permission_settings_value_for_sources(project_root, &SettingSource::defaults())
+}
+
+pub fn load_permission_settings_value_for_sources(
+    project_root: &Path,
+    sources: &[SettingSource],
+) -> Value {
+    let user_project_local = load_raw_settings_value_for_sources(project_root, sources);
     if let Some(policy) = crate::remote_managed_settings::load_from_disk() {
         crate::remote_managed_settings::apply_policy_overlay(&user_project_local, &policy)
     } else {
@@ -347,5 +410,21 @@ mod tests {
         assert_eq!(base["permissions"]["allow"], serde_json::json!(["Bash"]));
         assert_eq!(base["permissions"]["deny"], serde_json::json!(["Write"]));
         assert_eq!(base["model"], serde_json::json!("x"));
+    }
+
+    #[test]
+    fn setting_sources_filter_project_and_local_paths() {
+        let root = Path::new("/tmp/project");
+        let paths = raw_settings_paths_for_sources(root, &[SettingSource::Project]);
+        assert_eq!(paths, vec![root.join(".claude").join("settings.json")]);
+
+        let paths = permission_rule_paths_for_sources(root, &[SettingSource::Local]);
+        assert_eq!(
+            paths,
+            vec![(
+                PermissionRuleSource::LocalSettings,
+                root.join(".claude").join("settings.local.json")
+            )]
+        );
     }
 }

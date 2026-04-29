@@ -23,7 +23,8 @@ as Teams/Sandbox/VCR/File History.
 The largest remaining gaps are behavioral depth, not just missing files:
 
 - Tool exposure/gating does not match TS in several cases.
-- MCP resource tools are registered but stubbed.
+- MCP resource tools are manager-backed, but still need deeper integration
+  coverage against real resource-capable and resource-incapable servers.
 - Slash commands are broad but many are manual/link-only replacements for TS
   interactive flows.
 - Query execution is much thinner than TS around context, compaction, hooks,
@@ -728,6 +729,10 @@ Improved:
   of only the legacy stdio shape, so user/project/runtime settings can define
   `stdio`, `http`, `sse`, `sse-ide`, `ws`, and `ws-ide` entries through the
   same general MCP config path.
+- Rust startup now accepts TS `--setting-sources` and applies the same source
+  names (`user`, `project`, `local`) to typed settings, raw permission settings,
+  MCP settings, and hook input. Policy settings and `--settings` remain
+  always-on layers like TS.
 - Rust print mode now accepts TS `--task-budget` and `--workload`: task
   budgets are sent as `output_config.task_budget` with the task-budgets beta,
   and workload tags are threaded into the OAuth billing attribution block as
