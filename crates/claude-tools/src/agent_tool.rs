@@ -153,7 +153,7 @@ fn ts_agent_contract_order() -> Vec<String> {
         .lines()
         .filter_map(|line| {
             let line = line.strip_prefix("- ")?;
-            line.split_once(':')
+            line.split_once(": ")
                 .map(|(agent_type, _)| agent_type.to_string())
         })
         .collect()
@@ -780,7 +780,19 @@ mod tests {
     #[test]
     fn active_agent_names_follow_embedded_ts_contract_order() {
         let _guard = AGENT_TEST_LOCK.lock().unwrap();
-        set_runtime_agents(Vec::new());
+        set_runtime_agents(vec![RuntimeAgentDefinition {
+            agent_type: "hookify:conversation-analyzer".into(),
+            when_to_use: "Analyze conversations".into(),
+            source: AgentSource::Plugin,
+            tools: None,
+            disallowed_tools: None,
+            system_prompt: Some("prompt".into()),
+            model: None,
+            permission_mode: None,
+            background: None,
+            isolation: None,
+            initial_prompt: None,
+        }]);
 
         let names = active_agent_names();
         let explore = names.iter().position(|name| name == "Explore").unwrap();
@@ -788,11 +800,21 @@ mod tests {
             .iter()
             .position(|name| name == "general-purpose")
             .unwrap();
+        let hookify = names
+            .iter()
+            .position(|name| name == "hookify:conversation-analyzer")
+            .unwrap();
+        let plan = names.iter().position(|name| name == "Plan").unwrap();
 
         assert!(
             explore < general,
             "TS contract lists Explore before general-purpose"
         );
+        assert!(
+            hookify < plan,
+            "TS contract keeps plugin agents in the embedded Agent description order"
+        );
+        set_runtime_agents(Vec::new());
     }
 
     #[test]

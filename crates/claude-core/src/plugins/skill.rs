@@ -1248,7 +1248,7 @@ fn load_plugin_command_source(
         PluginCommandSource::Path { path, .. } => {
             let jobs = collect_plugin_command_jobs(path);
             let jobs = filter_plugin_jobs_by_path(jobs, loaded_paths);
-            read_plugin_jobs_in_completion_order(plugin_name, source, jobs)
+            read_plugin_jobs_in_input_order(plugin_name, source, jobs)
         }
     };
     push_plugin_skills_in_order(loaded, skills);
