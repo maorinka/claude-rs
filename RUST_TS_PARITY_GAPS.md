@@ -724,6 +724,9 @@ Improved:
   the high-water mark, matching TS delete cleanup semantics.
 - Task tool auto-classifier projections now match TS (`subject`, task id, and
   update id/status/subject summaries).
+- TaskStop and TaskOutput now use TS-style `task_id` input contracts and
+  model-facing output envelopes, while still accepting the older Rust `taskId`
+  field for compatibility.
 
 ### MCPAuthTool
 

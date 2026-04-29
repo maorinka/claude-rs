@@ -146,14 +146,19 @@ async fn test_task_stop_sets_status_stopped() {
     let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskStopTool;
-    let input = json!({ "taskId": id });
+    let input = json!({ "task_id": id });
     let result = tool
         .call(&input, &make_ctx(), CancellationToken::new(), None)
         .await
         .unwrap();
 
     assert!(!result.is_error, "stop should succeed");
-    assert_eq!(result.data["status"], "stopped");
+    assert_eq!(result.data["task_id"], id);
+    assert_eq!(result.data["task_type"], "task");
+    assert!(result.data["message"]
+        .as_str()
+        .unwrap()
+        .contains("Successfully stopped task"));
 
     // Verify via get
     let get_tool = TaskGetTool;
@@ -175,15 +180,16 @@ async fn test_task_output_returns_description() {
     let id = created["task"]["id"].as_str().unwrap().to_string();
 
     let tool = TaskOutputTool;
-    let input = json!({ "taskId": id });
+    let input = json!({ "task_id": id });
     let result = tool
         .call(&input, &make_ctx(), CancellationToken::new(), None)
         .await
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(result.data["taskId"], id);
-    let output = result.data["output"].as_str().unwrap_or("");
+    assert_eq!(result.data["retrieval_status"], "success");
+    assert_eq!(result.data["task"]["task_id"], id);
+    let output = result.data["task"]["output"].as_str().unwrap_or("");
     assert!(
         output.contains("output description"),
         "output should contain description text"
@@ -213,7 +219,7 @@ async fn test_task_output_returns_real_output_when_set() {
         .unwrap();
 
     assert!(!result.is_error);
-    let output = result.data["output"].as_str().unwrap_or("");
+    let output = result.data["task"]["output"].as_str().unwrap_or("");
     assert_eq!(output, "hello world", "output should be the appended text");
 }
 
@@ -235,7 +241,7 @@ async fn test_task_output_falls_back_to_description() {
         .unwrap();
 
     assert!(!result.is_error);
-    let output = result.data["output"].as_str().unwrap_or("");
+    let output = result.data["task"]["output"].as_str().unwrap_or("");
     assert!(
         output.contains("description fallback"),
         "should fall back to description"
@@ -288,9 +294,9 @@ async fn test_task_output_includes_pid() {
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(result.data["pid"], 99999);
+    assert_eq!(result.data["task"]["task_type"], "local_bash");
     assert_eq!(
-        result.data["output"].as_str().unwrap_or(""),
+        result.data["task"]["output"].as_str().unwrap_or(""),
         "some process output"
     );
 }
@@ -304,7 +310,7 @@ async fn test_task_stop_with_no_pid() {
     let tool = TaskStopTool;
     let result = tool
         .call(
-            &json!({ "taskId": id }),
+            &json!({ "task_id": id }),
             &make_ctx(),
             CancellationToken::new(),
             None,
@@ -313,7 +319,8 @@ async fn test_task_stop_with_no_pid() {
         .unwrap();
 
     assert!(!result.is_error, "stop should succeed even without a PID");
-    assert_eq!(result.data["status"], "stopped");
+    assert_eq!(result.data["task_id"], id);
+    assert_eq!(result.data["task_type"], "task");
 }
 
 #[test]
@@ -343,8 +350,8 @@ fn test_task_tool_properties() {
     assert!(update.is_concurrency_safe(&dummy));
     assert!(!update.is_read_only(&dummy));
 
-    // Stop: not safe, not read-only
-    assert!(!stop.is_concurrency_safe(&dummy));
+    // Stop: safe in TS, not read-only
+    assert!(stop.is_concurrency_safe(&dummy));
     assert!(!stop.is_read_only(&dummy));
 
     // Output: safe, read-only

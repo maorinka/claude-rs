@@ -55,25 +55,6 @@ pub struct TaskEntry {
     pub pid: Option<u32>,
 }
 
-impl TaskEntry {
-    fn to_json(&self) -> Value {
-        json!({
-            "id": self.id,
-            "subject": self.subject,
-            "description": self.description,
-            "activeForm": self.active_form,
-            "owner": self.owner,
-            "status": self.status,
-            "blocks": self.blocks,
-            "blockedBy": self.blocked_by,
-            "metadata": self.metadata,
-            "createdAt": self.created_at,
-            "output": self.output,
-            "pid": self.pid,
-        })
-    }
-}
-
 fn new_task_entry(id: String, subject: String, description: String) -> TaskEntry {
     TaskEntry {
         id,
@@ -901,25 +882,27 @@ impl ToolExecutor for TaskStopTool {
     }
 
     fn description(&self) -> String {
-        "Stop a running task by its ID. If the task has an associated process, kills it."
-            .to_string()
+        "Stop a running background task by ID".to_string()
     }
 
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "taskId": {
+                "task_id": {
                     "type": "string",
-                    "description": "ID of the task to stop"
+                    "description": "The ID of the background task to stop"
+                },
+                "shell_id": {
+                    "type": "string",
+                    "description": "Deprecated: use task_id instead"
                 }
-            },
-            "required": ["taskId"]
+            }
         })
     }
 
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
-        false
+        true
     }
     fn is_read_only(&self, _input: &Value) -> bool {
         false
@@ -943,9 +926,13 @@ impl ToolExecutor for TaskStopTool {
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
-        let task_id = match input["taskId"].as_str() {
+        let task_id = match input["task_id"]
+            .as_str()
+            .or_else(|| input["shell_id"].as_str())
+            .or_else(|| input["taskId"].as_str())
+        {
             Some(id) => id.to_string(),
-            None => return Ok(error_result("missing required parameter: taskId")),
+            None => return Ok(error_result("Missing required parameter: task_id")),
         };
 
         // Extract PID before taking the mutable borrow for status update.
@@ -961,13 +948,19 @@ impl ToolExecutor for TaskStopTool {
         match load_task_entry(&task_id) {
             Some(mut entry) => {
                 entry.status = "stopped".to_string();
-                let mut data = entry.to_json();
+                let command = entry.description.clone();
+                let mut message = format!("Successfully stopped task: {} ({})", entry.id, command);
                 if let Some(msg) = kill_msg {
-                    data["killMessage"] = json!(msg);
+                    message.push_str(&format!("\n{}", msg));
                 }
                 save_task_entry(&entry);
                 Ok(ToolResultData {
-                    data,
+                    data: json!({
+                        "message": message,
+                        "task_id": task_id,
+                        "task_type": if entry.pid.is_some() { "local_bash" } else { "task" },
+                        "command": command,
+                    }),
                     is_error: false,
                 })
             }
@@ -1035,17 +1028,22 @@ impl ToolExecutor for TaskOutputTool {
         json!({
             "type": "object",
             "properties": {
-                "taskId": {
+                "task_id": {
                     "type": "string",
-                    "description": "ID of the task to get output for"
+                    "description": "The task ID to get output from"
                 },
                 "block": {
                     "type": "boolean",
                     "description": "When true (default), wait for the task to complete before returning. When false, return the current status and partial output without waiting.",
                     "default": true
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Max wait time in ms",
+                    "default": 30000
                 }
             },
-            "required": ["taskId"]
+            "required": ["task_id"]
         })
     }
 
@@ -1073,9 +1071,12 @@ impl ToolExecutor for TaskOutputTool {
         _cancel: CancellationToken,
         _progress: Option<ProgressSender>,
     ) -> Result<ToolResultData> {
-        let task_id = match input["taskId"].as_str() {
+        let task_id = match input["task_id"]
+            .as_str()
+            .or_else(|| input["taskId"].as_str())
+        {
             Some(id) => id.to_string(),
-            None => return Ok(error_result("missing required parameter: taskId")),
+            None => return Ok(error_result("Task ID is required")),
         };
 
         match load_task_entry(&task_id) {
@@ -1089,15 +1090,19 @@ impl ToolExecutor for TaskOutputTool {
 
                 Ok(ToolResultData {
                     data: json!({
-                        "taskId": entry.id,
-                        "status": entry.status,
-                        "output": output,
-                        "pid": entry.pid,
+                        "retrieval_status": "success",
+                        "task": {
+                            "task_id": entry.id,
+                            "task_type": if entry.pid.is_some() { "local_bash" } else { "task" },
+                            "status": entry.status,
+                            "description": entry.description,
+                            "output": output,
+                        },
                     }),
                     is_error: false,
                 })
             }
-            None => Ok(error_result(format!("task not found: {}", task_id))),
+            None => Ok(error_result(format!("No task found with ID: {}", task_id))),
         }
     }
 }

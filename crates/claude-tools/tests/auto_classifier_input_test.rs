@@ -102,7 +102,7 @@ fn task_tools_project_ts_classifier_text() {
     );
     assert_eq!(
         TaskOutputTool
-            .to_auto_classifier_input(&json!({"taskId": "3"}))
+            .to_auto_classifier_input(&json!({"task_id": "3"}))
             .as_deref(),
         Some("3")
     );
