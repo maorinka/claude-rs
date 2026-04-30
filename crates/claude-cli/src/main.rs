@@ -381,6 +381,18 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
     let _ = REMOTE_CCR_DELIVERY_TX.set(delivery_tx);
     tokio::spawn(async move {
         let client = reqwest::Client::new();
+        report_remote_ccr_worker_patch(
+            &client,
+            &config,
+            serde_json::json!({
+                "worker_status": "idle",
+                "external_metadata": {
+                    "pending_action": null,
+                    "task_summary": null,
+                },
+            }),
+        )
+        .await;
         let mut buffer: Vec<Value> = Vec::new();
         let mut delivery_buffer: Vec<CcrDeliveryUpdate> = Vec::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -564,23 +576,59 @@ fn ccr_worker_state_for_event(event: &Value) -> Option<Value> {
                 == Some("can_use_tool") =>
         {
             let request = event.get("request").unwrap_or(&Value::Null);
+            let mut details = serde_json::json!({
+                "tool_name": request
+                    .get("tool_name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default(),
+                "action_description": request
+                    .get("decision_reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default(),
+                "request_id": event
+                    .get("request_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default(),
+            });
+            if let Some(tool_use_id) = request.get("tool_use_id").and_then(|value| value.as_str()) {
+                details["tool_use_id"] = serde_json::json!(tool_use_id);
+            }
+            if let Some(input) = request.get("input").filter(|value| value.is_object()) {
+                details["input"] = input.clone();
+            }
             Some(serde_json::json!({
                 "worker_status": "requires_action",
-                "requires_action_details": {
-                    "tool_name": request.get("tool_name").and_then(|value| value.as_str()).unwrap_or_default(),
-                    "action_description": request.get("decision_reason").and_then(|value| value.as_str()).unwrap_or_default(),
-                    "request_id": event.get("request_id").and_then(|value| value.as_str()).unwrap_or_default(),
-                },
+                "requires_action_details": details,
             }))
         }
         _ => None,
     }
 }
 
-async fn report_remote_stream_json_state(
+fn ccr_worker_patch_for_event(event: &Value) -> Option<Value> {
+    let mut body = ccr_worker_state_for_event(event)?;
+    match body.get("worker_status").and_then(|value| value.as_str()) {
+        Some("requires_action") => {
+            if let Some(details) = body.get("requires_action_details").cloned() {
+                body["external_metadata"] = serde_json::json!({
+                    "pending_action": details,
+                });
+            }
+        }
+        Some("running") | Some("idle") => {
+            body["external_metadata"] = serde_json::json!({
+                "pending_action": null,
+            });
+        }
+        _ => {}
+    }
+    Some(body)
+}
+
+async fn report_remote_ccr_worker_patch(
     client: &reqwest::Client,
     config: &RemotePostConfig,
-    event: &Value,
+    mut body: Value,
 ) {
     let RemotePostConfig::CcrV2 {
         worker_url,
@@ -588,9 +636,6 @@ async fn report_remote_stream_json_state(
         ..
     } = config
     else {
-        return;
-    };
-    let Some(mut body) = ccr_worker_state_for_event(event) else {
         return;
     };
     let Some(token) = session_ingress_auth_token() else {
@@ -605,6 +650,17 @@ async fn report_remote_stream_json_state(
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await;
+}
+
+async fn report_remote_stream_json_state(
+    client: &reqwest::Client,
+    config: &RemotePostConfig,
+    event: &Value,
+) {
+    let Some(body) = ccr_worker_patch_for_event(event) else {
+        return;
+    };
+    report_remote_ccr_worker_patch(client, config, body).await;
 }
 
 async fn post_remote_stream_json_batch(
@@ -9222,6 +9278,30 @@ mod remote_control_tests {
                     "request_id": "req-1",
                 },
             })
+        );
+    }
+
+    #[test]
+    fn remote_ccr_worker_patch_mirrors_pending_action_metadata() {
+        assert_eq!(
+            ccr_worker_patch_for_event(&serde_json::json!({
+                "type": "control_request",
+                "request_id": "req-1",
+                "request": {
+                    "subtype": "can_use_tool",
+                    "tool_name": "Bash",
+                    "decision_reason": "Bash needs permission"
+                }
+            }))
+            .unwrap()["external_metadata"]["pending_action"]["request_id"],
+            "req-1"
+        );
+        assert_eq!(
+            ccr_worker_patch_for_event(&serde_json::json!({
+                "type": "result",
+            }))
+            .unwrap()["external_metadata"],
+            serde_json::json!({"pending_action": null})
         );
     }
 
