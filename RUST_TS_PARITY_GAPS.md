@@ -528,6 +528,13 @@ Improved:
   generic SDK messages, bounded UUID echo/redelivery dedup, server
   control-response shaping for initialize/model/thinking/permission/interrupt
   requests, outbound-only errors, and archival result-message construction.
+- Rust now has the shared bridge permission-callback contract from
+  `src/bridge/bridgePermissionCallbacks.ts` plus the REPL/remote bridge event
+  shapes used by `useReplBridge.tsx` and `remoteBridgeCore.ts`: allow/deny
+  response validation, TS-cased `updatedInput` / `updatedPermissions`,
+  `can_use_tool` control-request construction with suggestions and blocked
+  path, success `control_response` wrapping, and `control_cancel_request`
+  construction with `session_id`.
 - Rust now has pure bridge `FlushGate` and poll-interval config modules matching
   TS `flushGate.ts`, `pollConfig.ts`, and `pollConfigDefaults.ts`: queued
   history/live write ordering, deactivate-vs-drop semantics, TS default
@@ -615,8 +622,9 @@ Missing or partial:
   needs the remaining TS `CCRClient` depth around the parent/hosted bridge
   lifecycle.
 - Bridge permission callbacks are partially wired for remote child
-  `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
-  through the hosted bridge permission API and cancellation/delivery lifecycle.
+  `can_use_tool` requests/responses, and the parent-side callback event shapes
+  are now available as shared helpers. Remaining depth is wiring those helpers
+  into the hosted parent bridge runtime plus cancellation/delivery lifecycle.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling in REPL/v2 bridge
   paths.

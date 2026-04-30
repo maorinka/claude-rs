@@ -4,6 +4,7 @@ pub mod direct_connect;
 pub mod flush_gate;
 pub mod jwt_utils;
 pub mod messaging;
+pub mod permission_callbacks;
 pub mod poll_config;
 pub mod protocol;
 pub mod server;
