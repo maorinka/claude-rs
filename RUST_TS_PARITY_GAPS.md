@@ -538,9 +538,10 @@ Improved:
   transport also reports worker state transitions (`running`, `requires_action`,
   `idle`) from the same event classes TS uses and sends periodic
   `/worker/heartbeat` requests with the session id and worker epoch. CCR v2 SSE
-  `client_event` frames now preserve the server `event_id` and enqueue
-  `received` delivery updates to `/worker/events/delivery` using the same batch
-  body shape as TS.
+  `client_event` frames now preserve the server `event_id`, enqueue `received`
+  delivery updates to `/worker/events/delivery` using the same batch body shape
+  as TS, and carry user-message event ids through the prompt loop so turn start
+  and completion report `processing`/`processed`.
 
 Missing or partial:
 - Full bridge messaging.
@@ -548,8 +549,7 @@ Missing or partial:
 - `remoteBridgeCore` parity.
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
   `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
-  needs the full TS `CCRClient` lifecycle depth: command lifecycle delivery
-  transitions (`processing`/`processed`), external metadata reporting,
+  needs the full TS `CCRClient` lifecycle depth: external metadata reporting,
   internal-event persistence/restore, and text-delta coalescing.
 - Bridge permission callbacks are partially wired for remote child
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
@@ -1184,7 +1184,8 @@ Missing or partial:
   `/bridge/reconnect`, and `--continue` bridge-pointer lookup/write/clear for
   single-session standalone remote control, are now wired to the general bridge
   API/session clients. CCR v2 child sessions now also send `/worker/heartbeat`
-  and `received` delivery updates for SSE `client_event` ids.
+  and delivery updates for SSE `client_event` ids (`received`, plus
+  user-message `processing`/`processed`).
   Still missing:
   entitlement/policy checks, full CCR v2 lifecycle reporting, parent-side
   hosted permission callback forwarding, trusted-device flow, and

@@ -217,13 +217,20 @@ pub enum InputFormat {
 #[derive(Default)]
 struct StreamJsonStdinSeed {
     prompt: Option<String>,
+    prompt_delivery_event_id: Option<String>,
     system_prompt: Option<String>,
     append_system_prompt: Option<String>,
     json_schema: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct RemotePrompt {
+    text: String,
+    delivery_event_id: Option<String>,
+}
+
 enum RemoteSdkInbound {
-    User(String),
+    User(RemotePrompt),
     ControlResponse(Value),
     EndSession,
 }
@@ -748,7 +755,7 @@ fn remote_permission_request(
 async fn wait_remote_permission_response(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteSdkInbound>,
     request_id: &str,
-    queued_prompts: &mut std::collections::VecDeque<String>,
+    queued_prompts: &mut std::collections::VecDeque<RemotePrompt>,
 ) -> Option<Value> {
     while let Some(inbound) = rx.recv().await {
         match inbound {
@@ -885,7 +892,10 @@ fn spawn_remote_sdk_background_reader(
                             .and_then(|message| message.get("content"))
                             .and_then(sdk_content_to_prompt)
                         {
-                            let _ = tx.send(RemoteSdkInbound::User(content));
+                            let _ = tx.send(RemoteSdkInbound::User(RemotePrompt {
+                                text: content,
+                                delivery_event_id: None,
+                            }));
                         }
                     }
                     Some("control_response") => {
@@ -1020,7 +1030,10 @@ fn spawn_remote_ccr_background_reader(
                             .and_then(|message| message.get("content"))
                             .and_then(sdk_content_to_prompt)
                         {
-                            let _ = tx.send(RemoteSdkInbound::User(content));
+                            let _ = tx.send(RemoteSdkInbound::User(RemotePrompt {
+                                text: content,
+                                delivery_event_id: event.event_id.clone(),
+                            }));
                         }
                     }
                     Some("control_response") => {
@@ -1073,6 +1086,7 @@ async fn read_remote_ccr_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
                 continue;
             };
             if handle_remote_sdk_seed_line(payload, &mut seed)? {
+                seed.prompt_delivery_event_id = event.event_id.clone();
                 spawn_remote_ccr_background_reader(stream, buffer, tx);
                 return Ok(RemoteSdkSeed { seed, rx });
             }
@@ -6610,6 +6624,7 @@ async fn main() -> Result<()> {
         }
     }
     let mut prompt_arg = cli.prompt.clone();
+    let mut prompt_delivery_event_id: Option<String> = None;
     let mut remote_sdk_rx = None;
     if cli.print && prompt_arg.is_none() {
         if let Some(sdk_url) = cli.sdk_url.clone() {
@@ -6618,6 +6633,7 @@ async fn main() -> Result<()> {
             remote_sdk_rx = Some(remote.rx);
             if prompt_arg.is_none() {
                 prompt_arg = seed.prompt;
+                prompt_delivery_event_id = seed.prompt_delivery_event_id;
             }
             if seed.system_prompt.is_some() {
                 cli.system_prompt = seed.system_prompt;
@@ -7652,11 +7668,19 @@ async fn main() -> Result<()> {
         ));
         let mut perm_ctx = initial_permission_context.clone();
 
-        let mut pending_remote_prompt = prompt;
+        let mut pending_remote_prompt = RemotePrompt {
+            text: prompt,
+            delivery_event_id: prompt_delivery_event_id.take(),
+        };
         let mut add_session_start_message = true;
         let mut queued_remote_prompts = std::collections::VecDeque::new();
         loop {
-            let prompt = pending_remote_prompt;
+            let current_remote_prompt = pending_remote_prompt;
+            if let Some(event_id) = current_remote_prompt.delivery_event_id.as_deref() {
+                report_remote_ccr_delivery(event_id, "processing");
+            }
+            let current_delivery_event_id = current_remote_prompt.delivery_event_id.clone();
+            let prompt = current_remote_prompt.text;
 
             // Check if prompt is a skill invocation (e.g. "/commit fix typo")
             let mut effective_prompt = prompt.clone();
@@ -8769,6 +8793,10 @@ async fn main() -> Result<()> {
                     );
                     }
                 }
+            }
+
+            if let Some(event_id) = current_delivery_event_id.as_deref() {
+                report_remote_ccr_delivery(event_id, "processed");
             }
 
             // Gracefully disconnect MCP servers
