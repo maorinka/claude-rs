@@ -1,4 +1,5 @@
 pub mod api;
+pub mod capacity_wake;
 pub mod direct_connect;
 pub mod flush_gate;
 pub mod jwt_utils;

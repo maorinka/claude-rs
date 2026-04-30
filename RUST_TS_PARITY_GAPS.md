@@ -522,6 +522,10 @@ Improved:
   history/live write ordering, deactivate-vs-drop semantics, TS default
   intervals, optional defaulted fields, 0-or-≥100 at-capacity validation, and
   liveness fallback to defaults for malformed configs.
+- Rust now has the shared bridge capacity-wake primitive from
+  `capacityWake.ts`: at-capacity sleeps can resolve either because the outer
+  loop was cancelled or because capacity changed, without waiting for the full
+  poll interval.
 - `claude remote-control` now consumes those bridge clients directly: it builds
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
@@ -591,7 +595,7 @@ Missing or partial:
   through the hosted bridge permission API and cancellation/delivery lifecycle.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
-- Capacity wake.
+- Capacity wake runtime integration.
 - Flush gate runtime integration.
 - Poll config runtime integration.
 - Inbound attachments/messages.
