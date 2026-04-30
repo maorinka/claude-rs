@@ -511,6 +511,11 @@ Improved:
   behavior.
 - Rust now includes CCR session-ID tag helpers (`cse_*` ⇄ `session_*`) and the
   CCR v2 `registerWorker` call next to the existing work-secret URL helpers.
+- `claude remote-control` now consumes those bridge clients directly: it builds
+  the TS-shaped runtime config from the current directory, branch, origin
+  remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
+  registers the environment, optionally pre-creates the initial session, prints
+  the compat session URL, polls for bridge work, and acknowledges healthchecks.
 
 Missing or partial:
 - Full bridge messaging.
@@ -1132,13 +1137,17 @@ Missing or partial:
 - Empty usage helpers.
 - Detailed logging/diagnostics depth.
 - Full remote-control/session manager behavior. Rust now exposes the
-  `remote-control` / `rc` CLI surface and `/remote-control` TUI command, but
-  it is intentionally a guarded stub until the real TS bridge runtime is
-  ported. The CLI entrypoint shape, help text, accepted flags, hidden root-help
-  behavior, and bridge flag validation now match the installed TS fast path.
-  Still missing: entitlement/policy checks, environment registration, session
-  creation/reconnect, session-ingress WebSocket forwarding, inbound web/mobile
-  prompt queueing, and connected/disconnect lifecycle.
+  `remote-control` / `rc` CLI surface and `/remote-control` TUI command. The
+  CLI entrypoint shape, help text, accepted flags, hidden root-help behavior,
+  bridge flag validation, TS-shaped spawn/capacity defaults, sandbox/debug/
+  timeout option mapping, OS hostname/current-branch/remote collection,
+  environment registration, initial session creation, remote session URL
+  printing, bridge work polling, and healthcheck ack are now wired to the
+  general bridge API/session clients. Still missing: entitlement/policy checks,
+  session-id/continue reconnect, session-ingress WebSocket forwarding, inbound
+  web/mobile prompt queueing, permission callback forwarding, session runner
+  spawn/stop/archive lifecycle, trusted-device flow, and connected/disconnect
+  TUI state.
 - Remote managed settings.
 - Settings sync.
 - Policy limits.

@@ -4718,6 +4718,228 @@ fn validate_remote_control_fast_path_args(args: &[String]) -> Result<(), String>
     validate_remote_control_bridge_options(spawn.as_deref(), capacity.as_deref()).map(|_| ())
 }
 
+fn remote_control_hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "localhost".to_string())
+}
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git").args(args).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn remote_control_git_branch() -> String {
+    git_output(&["branch", "--show-current"]).unwrap_or_else(|| "HEAD".to_string())
+}
+
+fn remote_control_git_remote() -> Option<String> {
+    git_output(&["remote", "get-url", "origin"])
+}
+
+fn remote_control_title(
+    explicit_name: Option<&str>,
+    prefix: Option<&str>,
+    hostname: &str,
+) -> Option<String> {
+    explicit_name
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+        .or_else(|| {
+            prefix
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("{}-{}", value.trim(), hostname))
+        })
+}
+
+struct RemoteControlCommandOptions<'a> {
+    name: Option<&'a String>,
+    remote_control_session_name_prefix: Option<&'a String>,
+    permission_mode: Option<&'a String>,
+    debug_file: Option<&'a PathBuf>,
+    sandbox: bool,
+    no_sandbox: bool,
+    session_timeout: Option<&'a String>,
+    verbose: bool,
+    spawn: Option<&'a String>,
+    capacity: Option<&'a String>,
+    _create_session_in_dir: bool,
+    no_create_session_in_dir: bool,
+}
+
+async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) -> Result<()> {
+    let (spawn_mode_raw, capacity) = match validate_remote_control_bridge_options(
+        options.spawn.map(String::as_str),
+        options.capacity.map(String::as_str),
+    ) {
+        Ok(validated) => validated,
+        Err(message) => {
+            eprintln!("Error: {message}");
+            std::process::exit(1);
+        }
+    };
+    let spawn_mode = match spawn_mode_raw.unwrap_or("same-dir") {
+        "single-session" => claude_core::bridge::api::SpawnMode::SingleSession,
+        "worktree" => claude_core::bridge::api::SpawnMode::Worktree,
+        _ => claude_core::bridge::api::SpawnMode::SameDir,
+    };
+    let max_sessions = if matches!(
+        spawn_mode,
+        claude_core::bridge::api::SpawnMode::SingleSession
+    ) {
+        1
+    } else {
+        capacity.unwrap_or(32)
+    };
+
+    let tokens = claude_core::auth::storage::load_tokens().await?;
+    let Some(tokens) = tokens.filter(|tokens| !tokens.access_token.trim().is_empty()) else {
+        eprintln!("{}", claude_core::bridge::api::BRIDGE_LOGIN_INSTRUCTION);
+        std::process::exit(1);
+    };
+
+    let global = claude_core::config::global::load_global_config()?;
+    let Some(organization_uuid) = global
+        .oauth_account
+        .as_ref()
+        .and_then(|account| account.organization_uuid.clone())
+        .filter(|value| !value.is_empty())
+    else {
+        eprintln!(
+            "Unable to determine your organization for Remote Control eligibility. Run `claude login` to refresh your account information."
+        );
+        std::process::exit(1);
+    };
+
+    let oauth = claude_core::constants::oauth::get_oauth_config()
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let http = claude_core::proxy::build_proxy_client_from_env()?;
+    let api = claude_core::bridge::api::BridgeApiClient::new(
+        http,
+        oauth.base_api_url.clone(),
+        Some(tokens.access_token.clone()),
+        env!("CARGO_PKG_VERSION"),
+    );
+
+    let cwd = std::env::current_dir()?;
+    let hostname = remote_control_hostname();
+    let branch = remote_control_git_branch();
+    let git_repo_url = remote_control_git_remote();
+    let bridge_id = uuid::Uuid::new_v4().to_string();
+    let environment_id = uuid::Uuid::new_v4().to_string();
+    let title = remote_control_title(
+        options.name.map(String::as_str),
+        options
+            .remote_control_session_name_prefix
+            .map(String::as_str),
+        &hostname,
+    );
+    let session_timeout_ms = options
+        .session_timeout
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|seconds| seconds.saturating_mul(1000));
+    let pre_create_session = !options.no_create_session_in_dir;
+
+    let config = claude_core::bridge::api::BridgeRuntimeConfig {
+        dir: cwd.display().to_string(),
+        machine_name: hostname.clone(),
+        branch: branch.clone(),
+        git_repo_url: git_repo_url.clone(),
+        max_sessions,
+        spawn_mode,
+        verbose: options.verbose,
+        sandbox: options.sandbox && !options.no_sandbox,
+        bridge_id,
+        worker_type: "claude_code".to_string(),
+        environment_id,
+        reuse_environment_id: None,
+        api_base_url: oauth.base_api_url.clone(),
+        session_ingress_url: oauth.base_api_url.clone(),
+        debug_file: options.debug_file.map(|path| path.display().to_string()),
+        session_timeout_ms,
+    };
+
+    let (registered_environment_id, environment_secret) = api
+        .register_bridge_environment(&config)
+        .await
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+
+    let mut session_id = None;
+    if pre_create_session {
+        session_id = api
+            .create_bridge_session(&claude_core::bridge::api::CreateBridgeSessionRequest {
+                environment_id: registered_environment_id.clone(),
+                organization_uuid: organization_uuid.clone(),
+                title: title.clone(),
+                events: Vec::new(),
+                git_repo_url,
+                branch,
+                model: default_main_loop_model_setting().await,
+                permission_mode: options.permission_mode.cloned(),
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    }
+
+    println!("Remote Control is active.");
+    println!("Environment: {registered_environment_id}");
+    if let Some(session_id) = session_id.as_deref() {
+        let compat_id =
+            claude_core::bridge::session_id_compat::to_compat_session_id(session_id, true);
+        println!(
+            "Code in CLI or at {}",
+            claude_core::constants::product::get_remote_session_url(
+                &compat_id,
+                Some(&config.session_ingress_url),
+            )
+        );
+    } else {
+        println!("No session was pre-created because --no-create-session-in-dir was set.");
+    }
+    println!("Press Ctrl-C to stop.");
+
+    loop {
+        match api
+            .poll_for_work(&registered_environment_id, &environment_secret, None)
+            .await
+        {
+            Ok(Some(work)) => {
+                println!(
+                    "Received remote work: {} {} ({})",
+                    work.data.kind, work.data.id, work.id
+                );
+                if work.data.kind == "healthcheck" {
+                    let _ = api
+                        .acknowledge_work(&registered_environment_id, &work.id, &work.secret)
+                        .await;
+                } else {
+                    eprintln!(
+                        "Remote session work was received, but session runner integration is still pending."
+                    );
+                }
+            }
+            Ok(None) => {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            Err(err) => {
+                eprintln!("Remote Control poll failed: {err}");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
 fn maybe_handle_remote_control_fast_path_args() {
     let mut args = std::env::args().skip(1);
     let Some(first) = args.next() else {
@@ -4899,71 +5121,22 @@ async fn main() -> Result<()> {
             create_session_in_dir,
             no_create_session_in_dir,
         }) => {
-            let (_spawn_mode, _capacity) =
-                match validate_remote_control_bridge_options(spawn.as_deref(), capacity.as_deref())
-                {
-                    Ok(validated) => validated,
-                    Err(message) => {
-                        eprintln!("Error: {message}");
-                        std::process::exit(1);
-                    }
-                };
-            let name_suffix = name
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .map(|value| format!(" for `{value}`"))
-                .unwrap_or_default();
-            let mut accepted_options = Vec::new();
-            if remote_control_session_name_prefix.is_some() {
-                accepted_options.push("--remote-control-session-name-prefix");
-            }
-            if permission_mode.is_some() {
-                accepted_options.push("--permission-mode");
-            }
-            if debug_file.is_some() {
-                accepted_options.push("--debug-file");
-            }
-            if *sandbox {
-                accepted_options.push("--sandbox");
-            }
-            if *no_sandbox {
-                accepted_options.push("--no-sandbox");
-            }
-            if session_timeout.is_some() {
-                accepted_options.push("--session-timeout");
-            }
-            if *verbose {
-                accepted_options.push("--verbose");
-            }
-            if spawn.is_some() {
-                accepted_options.push("--spawn");
-            }
-            if capacity.is_some() {
-                accepted_options.push("--capacity");
-            }
-            if *create_session_in_dir {
-                accepted_options.push("--create-session-in-dir");
-            }
-            if *no_create_session_in_dir {
-                accepted_options.push("--no-create-session-in-dir");
-            }
-            let option_suffix = if accepted_options.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\nAccepted TS bridge option(s): {}",
-                    accepted_options.join(", ")
-                )
-            };
-            eprintln!(
-                "Remote Control{name_suffix} is not fully ported in claude-rs yet.{option_suffix}\n\n\
-                 The original TS path starts a Claude.ai bridge runtime here: \
-                 entitlement/policy checks, environment registration, session creation, \
-                 session-ingress WebSocket forwarding, and inbound prompt queueing.\n\n\
-                 Current Rust support is limited to the local IDE bridge server via \
-                 `claude-rs server --port <N>` and the in-TUI `/remote-control` status command."
-            );
-            std::process::exit(1);
+            run_remote_control_command(RemoteControlCommandOptions {
+                name: name.as_ref(),
+                remote_control_session_name_prefix: remote_control_session_name_prefix.as_ref(),
+                permission_mode: permission_mode.as_ref(),
+                debug_file: debug_file.as_ref(),
+                sandbox: *sandbox,
+                no_sandbox: *no_sandbox,
+                session_timeout: session_timeout.as_ref(),
+                verbose: *verbose,
+                spawn: spawn.as_ref(),
+                capacity: capacity.as_ref(),
+                _create_session_in_dir: *create_session_in_dir,
+                no_create_session_in_dir: *no_create_session_in_dir,
+            })
+            .await?;
+            return Ok(());
         }
         None => {}
     }
