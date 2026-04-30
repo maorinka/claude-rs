@@ -25,6 +25,12 @@ struct CcrInternalEvent {
     agent_id: Option<String>,
 }
 
+#[derive(Default)]
+struct RemoteStreamAccumulator {
+    by_message: HashMap<String, Vec<Vec<String>>>,
+    scope_to_message: HashMap<String, String>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "claude-rs",
@@ -382,6 +388,153 @@ fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
     }
 }
 
+fn remote_post_config_is_ccr_v2(config: &RemotePostConfig) -> bool {
+    matches!(config, RemotePostConfig::CcrV2 { .. })
+}
+
+fn is_stream_event_value(value: &Value) -> bool {
+    value.get("type").and_then(|value| value.as_str()) == Some("stream_event")
+}
+
+fn remote_stream_scope_key(value: &Value) -> String {
+    let session_id = value
+        .get("session_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let parent_tool_use_id = value
+        .get("parent_tool_use_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    format!("{session_id}:{parent_tool_use_id}")
+}
+
+fn clear_remote_stream_accumulator_for_assistant(
+    state: &mut RemoteStreamAccumulator,
+    value: &Value,
+) {
+    if value.get("type").and_then(|value| value.as_str()) != Some("assistant") {
+        return;
+    }
+    let Some(message_id) = value
+        .get("message")
+        .and_then(|message| message.get("id"))
+        .and_then(|value| value.as_str())
+    else {
+        return;
+    };
+    state.by_message.remove(message_id);
+    let scope = remote_stream_scope_key(value);
+    if state.scope_to_message.get(&scope).map(String::as_str) == Some(message_id) {
+        state.scope_to_message.remove(&scope);
+    }
+}
+
+fn accumulate_remote_stream_events(
+    buffered: Vec<Value>,
+    state: &mut RemoteStreamAccumulator,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut touched: HashMap<(String, usize), usize> = HashMap::new();
+    for msg in buffered {
+        let event_type = msg
+            .get("event")
+            .and_then(|event| event.get("type"))
+            .and_then(|value| value.as_str());
+        match event_type {
+            Some("message_start") => {
+                if let Some(message_id) = msg
+                    .get("event")
+                    .and_then(|event| event.get("message"))
+                    .and_then(|message| message.get("id"))
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned)
+                {
+                    let scope = remote_stream_scope_key(&msg);
+                    if let Some(prev_id) = state.scope_to_message.insert(scope, message_id.clone())
+                    {
+                        state.by_message.remove(&prev_id);
+                    }
+                    state.by_message.insert(message_id, Vec::new());
+                }
+                out.push(msg);
+            }
+            Some("content_block_delta")
+                if msg
+                    .get("event")
+                    .and_then(|event| event.get("delta"))
+                    .and_then(|delta| delta.get("type"))
+                    .and_then(|value| value.as_str())
+                    == Some("text_delta") =>
+            {
+                let Some(message_id) = state
+                    .scope_to_message
+                    .get(&remote_stream_scope_key(&msg))
+                    .cloned()
+                else {
+                    out.push(msg);
+                    continue;
+                };
+                let Some(block_index) = msg
+                    .get("event")
+                    .and_then(|event| event.get("index"))
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| usize::try_from(value).ok())
+                else {
+                    out.push(msg);
+                    continue;
+                };
+                let Some(delta_text) = msg
+                    .get("event")
+                    .and_then(|event| event.get("delta"))
+                    .and_then(|delta| delta.get("text"))
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned)
+                else {
+                    out.push(msg);
+                    continue;
+                };
+                let Some(blocks) = state.by_message.get_mut(&message_id) else {
+                    out.push(msg);
+                    continue;
+                };
+                if blocks.len() <= block_index {
+                    blocks.resize_with(block_index + 1, Vec::new);
+                }
+                blocks[block_index].push(delta_text);
+                let full_text = blocks[block_index].join("");
+                let key = (message_id, block_index);
+                if let Some(out_index) = touched.get(&key).copied() {
+                    if let Some(snapshot) = out.get_mut(out_index) {
+                        snapshot["event"]["delta"]["text"] = serde_json::json!(full_text);
+                    }
+                    continue;
+                }
+                let mut snapshot = msg;
+                snapshot["event"]["delta"]["text"] = serde_json::json!(full_text);
+                touched.insert(key, out.len());
+                out.push(snapshot);
+            }
+            _ => out.push(msg),
+        }
+    }
+    out
+}
+
+fn flush_remote_stream_event_buffer(
+    stream_event_buffer: &mut Vec<Value>,
+    stream_accumulator: &mut RemoteStreamAccumulator,
+    post_buffer: &mut Vec<Value>,
+) {
+    if stream_event_buffer.is_empty() {
+        return;
+    }
+    let buffered = std::mem::take(stream_event_buffer);
+    post_buffer.extend(accumulate_remote_stream_events(
+        buffered,
+        stream_accumulator,
+    ));
+}
+
 fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
     let config = remote_post_config_for_sdk_url(sdk_url)?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
@@ -409,6 +562,8 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         )
         .await;
         let mut buffer: Vec<Value> = Vec::new();
+        let mut stream_event_buffer: Vec<Value> = Vec::new();
+        let mut stream_accumulator = RemoteStreamAccumulator::default();
         let mut delivery_buffer: Vec<CcrDeliveryUpdate> = Vec::new();
         let mut internal_buffer: Vec<InternalTranscriptEvent> = Vec::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -424,6 +579,18 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                         break;
                     };
                     report_remote_stream_json_state(&client, &config, &value).await;
+                    if remote_post_config_is_ccr_v2(&config) && is_stream_event_value(&value) {
+                        stream_event_buffer.push(value);
+                        continue;
+                    }
+                    if remote_post_config_is_ccr_v2(&config) {
+                        flush_remote_stream_event_buffer(
+                            &mut stream_event_buffer,
+                            &mut stream_accumulator,
+                            &mut buffer,
+                        );
+                        clear_remote_stream_accumulator_for_assistant(&mut stream_accumulator, &value);
+                    }
                     buffer.push(value);
                     if buffer.len() >= 500 {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
@@ -448,6 +615,13 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                     }
                 }
                 _ = interval.tick() => {
+                    if remote_post_config_is_ccr_v2(&config) {
+                        flush_remote_stream_event_buffer(
+                            &mut stream_event_buffer,
+                            &mut stream_accumulator,
+                            &mut buffer,
+                        );
+                    }
                     if !buffer.is_empty() {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
                     }
@@ -463,6 +637,13 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                     heartbeat.as_mut().reset(tokio::time::Instant::now() + heartbeat_delay);
                 }
             }
+        }
+        if !stream_event_buffer.is_empty() {
+            flush_remote_stream_event_buffer(
+                &mut stream_event_buffer,
+                &mut stream_accumulator,
+                &mut buffer,
+            );
         }
         if !buffer.is_empty() {
             post_remote_stream_json_batch(&client, &config, &mut buffer).await;
@@ -9520,6 +9701,80 @@ mod remote_control_tests {
             .unwrap(),
             "https://api.example.com/v1/code/sessions/session-123/worker/internal-events?subagents=true&cursor=cursor-1"
         );
+    }
+
+    #[test]
+    fn remote_ccr_stream_text_deltas_coalesce_like_ts_transport() {
+        let mut state = RemoteStreamAccumulator::default();
+        let events = vec![
+            serde_json::json!({
+                "type": "stream_event",
+                "uuid": "start-1",
+                "session_id": "session-1",
+                "parent_tool_use_id": null,
+                "event": {
+                    "type": "message_start",
+                    "message": {"id": "msg-1"}
+                }
+            }),
+            serde_json::json!({
+                "type": "stream_event",
+                "uuid": "delta-1",
+                "session_id": "session-1",
+                "parent_tool_use_id": null,
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hel"}
+                }
+            }),
+            serde_json::json!({
+                "type": "stream_event",
+                "uuid": "delta-2",
+                "session_id": "session-1",
+                "parent_tool_use_id": null,
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "lo"}
+                }
+            }),
+        ];
+
+        let out = accumulate_remote_stream_events(events, &mut state);
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["event"]["type"], "message_start");
+        assert_eq!(out[1]["uuid"], "delta-1");
+        assert_eq!(out[1]["event"]["delta"]["text"], "hello");
+
+        let more = accumulate_remote_stream_events(
+            vec![serde_json::json!({
+                "type": "stream_event",
+                "uuid": "delta-3",
+                "session_id": "session-1",
+                "parent_tool_use_id": null,
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "!"}
+                }
+            })],
+            &mut state,
+        );
+        assert_eq!(more[0]["event"]["delta"]["text"], "hello!");
+
+        clear_remote_stream_accumulator_for_assistant(
+            &mut state,
+            &serde_json::json!({
+                "type": "assistant",
+                "session_id": "session-1",
+                "parent_tool_use_id": null,
+                "message": {"id": "msg-1"}
+            }),
+        );
+        assert!(state.by_message.is_empty());
+        assert!(state.scope_to_message.is_empty());
     }
 
     #[test]

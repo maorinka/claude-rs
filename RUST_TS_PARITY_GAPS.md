@@ -551,7 +551,11 @@ Improved:
   In CCR v2 print-mode resume with `--sdk-url`, Rust now also reads paginated
   foreground internal events from `/worker/internal-events` before loading the
   transcript and rewrites the local transcript from the returned payloads like
-  TS `hydrateFromCCRv2InternalEvents`.
+  TS `hydrateFromCCRv2InternalEvents`. CCR v2 outbound `stream_event` writes now
+  also use the TS 100ms delay/coalescing mechanism for text deltas: each flush
+  emits one full-so-far snapshot per touched text block, non-stream messages
+  flush pending stream events first, and the final assistant message clears the
+  active accumulator.
 
 Missing or partial:
 - Full bridge messaging.
@@ -560,8 +564,7 @@ Missing or partial:
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
   `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
   needs the full TS `CCRClient` lifecycle depth: model/permission-mode metadata
-  updates from every AppState mutation path, subagent internal-event restore,
-  and text-delta coalescing.
+  updates from every AppState mutation path and subagent internal-event restore.
 - Bridge permission callbacks are partially wired for remote child
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
   through the hosted bridge permission API and cancellation/delivery lifecycle.
