@@ -1250,6 +1250,7 @@ mod tests {
                 config: McpServerConfig::Http(McpHttpServerConfig {
                     url: "http://127.0.0.1:9/mcp".into(),
                     headers: None,
+                    oauth: None,
                 }),
                 scope: ConfigScope::User,
             },

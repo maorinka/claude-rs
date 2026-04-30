@@ -154,6 +154,7 @@ mod tests {
             config: McpServerConfig::Sse(McpSseServerConfig {
                 url: "https://example.invalid".into(),
                 headers: None,
+                oauth: None,
             }),
             scope: ConfigScope::Project,
         }
@@ -164,6 +165,7 @@ mod tests {
             config: McpServerConfig::Http(McpHttpServerConfig {
                 url: "https://example.invalid".into(),
                 headers: None,
+                oauth: None,
             }),
             scope: ConfigScope::Project,
         }

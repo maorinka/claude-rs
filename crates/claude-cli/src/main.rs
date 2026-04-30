@@ -4783,6 +4783,7 @@ async fn fetch_claude_ai_mcp_configs_if_eligible() -> ClaudeAiMcpDiscovery {
                 config: McpServerConfig::Http(McpHttpServerConfig {
                     url: proxy_url,
                     headers: Some(headers),
+                    oauth: None,
                 }),
                 scope: ConfigScope::ClaudeAi,
             },

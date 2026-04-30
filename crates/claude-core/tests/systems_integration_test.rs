@@ -421,6 +421,7 @@ mod mcp_transports {
             config: McpServerConfig::Sse(McpSseServerConfig {
                 url: "http://127.0.0.1:1/sse".to_string(),
                 headers: None,
+                oauth: None,
             }),
             scope: ConfigScope::User,
         };
@@ -452,6 +453,7 @@ mod mcp_transports {
             config: McpServerConfig::Http(McpHttpServerConfig {
                 url: "http://127.0.0.1:1/mcp".to_string(),
                 headers: None,
+                oauth: None,
             }),
             scope: ConfigScope::User,
         };
@@ -484,6 +486,7 @@ mod mcp_transports {
                         h.insert("Authorization".to_string(), "Bearer token".to_string());
                         h
                     }),
+                    oauth: None,
                 }),
                 scope: ConfigScope::User,
             },
@@ -495,6 +498,7 @@ mod mcp_transports {
                 config: McpServerConfig::Http(McpHttpServerConfig {
                     url: "http://127.0.0.1:1/http".to_string(),
                     headers: None,
+                    oauth: None,
                 }),
                 scope: ConfigScope::Project,
             },

@@ -682,8 +682,8 @@ Missing or partial:
   secure-storage maps and issuer-key normalization; the CLI `claude mcp xaa`
   command surface is wired for setup/show/clear/login; OIDC browser login uses
   the same discovery, PKCE, callback, token exchange, and id_token cache rules
-  as TS. SEP-990 MCP server token exchange still needs wiring into remote MCP
-  auth.
+  as TS; SSE/HTTP configs now preserve TS `oauth` metadata including `xaa`.
+  SEP-990 MCP server token exchange still needs wiring into remote MCP auth.
 - Official registry integration.
 - Elicitation dialog/UI integration.
 - Parsing warnings UI.
@@ -724,6 +724,9 @@ Improved:
   callback with TS-style HTML/error handling, selects `client_secret_post` only
   when metadata requires it, exchanges authorization codes, and caches the
   returned id_token.
+- Rust now preserves the TS remote MCP `oauth` config object on SSE/HTTP
+  servers (`clientId`, `callbackPort`, `authServerMetadataUrl`, `xaa`) instead
+  of dropping it during settings/dynamic config parse and typed conversion.
 - MCP auto-mode classifier input encoding now follows the TS
   `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
   keys and JavaScript `String(value)` coercion for arrays and nested objects.

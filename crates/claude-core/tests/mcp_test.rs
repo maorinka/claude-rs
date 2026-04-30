@@ -659,12 +659,14 @@ fn test_config_transport_type() {
     let sse = McpServerConfig::Sse(McpSseServerConfig {
         url: "https://example.com".to_string(),
         headers: None,
+        oauth: None,
     });
     assert_eq!(sse.transport_type(), TransportType::Sse);
 
     let http = McpServerConfig::Http(McpHttpServerConfig {
         url: "https://example.com".to_string(),
         headers: None,
+        oauth: None,
     });
     assert_eq!(http.transport_type(), TransportType::Http);
 }
@@ -681,6 +683,7 @@ fn test_sse_config_with_headers_roundtrip() {
             h.insert("X-Custom".to_string(), "value".to_string());
             h
         }),
+        oauth: None,
     });
 
     assert_eq!(config.transport_type(), TransportType::Sse);
@@ -703,6 +706,7 @@ fn test_http_config_with_headers_roundtrip() {
             h.insert("mcp-session-id".to_string(), "sess-abc".to_string());
             h
         }),
+        oauth: None,
     });
 
     assert_eq!(config.transport_type(), TransportType::Http);
@@ -759,6 +763,7 @@ async fn test_manager_connect_sse_fail_no_server() {
             config: McpServerConfig::Sse(McpSseServerConfig {
                 url: "http://127.0.0.1:1/nonexistent".to_string(),
                 headers: None,
+                oauth: None,
             }),
             scope: ConfigScope::Local,
         },
@@ -780,6 +785,7 @@ async fn test_manager_connect_http_fail_no_server() {
             config: McpServerConfig::Http(McpHttpServerConfig {
                 url: "http://127.0.0.1:1/nonexistent".to_string(),
                 headers: None,
+                oauth: None,
             }),
             scope: ConfigScope::Local,
         },

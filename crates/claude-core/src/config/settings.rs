@@ -49,6 +49,8 @@ pub struct McpServerSettingsEntry {
     pub headers: HashMap<String, String>,
     #[serde(rename = "authToken", default)]
     pub auth_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<crate::mcp::types::McpOAuthConfig>,
 }
 
 impl McpServerSettingsEntry {

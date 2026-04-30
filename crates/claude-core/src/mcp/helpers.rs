@@ -467,11 +467,13 @@ mod tests {
         let sse = scoped(McpServerConfig::Sse(McpSseServerConfig {
             url: "https://x".into(),
             headers: None,
+            oauth: None,
         }));
         assert!(!is_local_mcp_server(&sse));
         let http = scoped(McpServerConfig::Http(McpHttpServerConfig {
             url: "https://x".into(),
             headers: None,
+            oauth: None,
         }));
         assert!(!is_local_mcp_server(&http));
         // G9: sse-ide is a remote transport too — it wires the
@@ -481,6 +483,7 @@ mod tests {
         let sse_ide = scoped(McpServerConfig::SseIde(McpSseServerConfig {
             url: "http://127.0.0.1:3000".into(),
             headers: None,
+            oauth: None,
         }));
         assert!(!is_local_mcp_server(&sse_ide));
     }
@@ -495,14 +498,17 @@ mod tests {
         let sse = scoped(McpServerConfig::Sse(McpSseServerConfig {
             url: "https://remote".into(),
             headers: None,
+            oauth: None,
         }));
         let http = scoped(McpServerConfig::Http(McpHttpServerConfig {
             url: "https://remote".into(),
             headers: None,
+            oauth: None,
         }));
         let sse_ide = scoped(McpServerConfig::SseIde(McpSseServerConfig {
             url: "http://127.0.0.1:3000".into(),
             headers: None,
+            oauth: None,
         }));
         assert!(!is_ide_mcp_server(&stdio));
         assert!(!is_ide_mcp_server(&sse));
@@ -594,6 +600,7 @@ mod tests {
         let cfg = McpServerConfig::SseIde(McpSseServerConfig {
             url: "http://127.0.0.1:9000".into(),
             headers: None,
+            oauth: None,
         });
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(
@@ -849,6 +856,7 @@ mod tests {
         let sse = scoped(McpServerConfig::Sse(McpSseServerConfig {
             url: "https://x".into(),
             headers: None,
+            oauth: None,
         }));
         // Discriminant check rejects before the serialize path.
         assert!(!are_mcp_configs_equal(&stdio, &sse));
@@ -920,10 +928,12 @@ mod tests {
         let a = scoped(McpServerConfig::Sse(McpSseServerConfig {
             url: "https://x".into(),
             headers: Some(h_a),
+            oauth: None,
         }));
         let b = scoped(McpServerConfig::Sse(McpSseServerConfig {
             url: "https://x".into(),
             headers: Some(h_b),
+            oauth: None,
         }));
         assert!(are_mcp_configs_equal(&a, &b));
     }

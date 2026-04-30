@@ -49,6 +49,8 @@ pub struct McpSseServerConfig {
     pub url: String,
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub oauth: Option<McpOAuthConfig>,
 }
 
 /// HTTP server configuration.
@@ -58,6 +60,22 @@ pub struct McpHttpServerConfig {
     pub url: String,
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub oauth: Option<McpOAuthConfig>,
+}
+
+/// Remote MCP OAuth settings. Matches TS `McpOAuthConfigSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthConfig {
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub callback_port: Option<u32>,
+    #[serde(default)]
+    pub auth_server_metadata_url: Option<String>,
+    #[serde(default)]
+    pub xaa: Option<bool>,
 }
 
 /// WebSocket server configuration, shared shape for `ws` and
@@ -507,4 +525,45 @@ pub struct McpPromptResult {
     /// see it.
     #[serde(default, rename = "_meta")]
     pub meta: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn remote_mcp_oauth_xaa_config_round_trips_like_ts() {
+        let value = json!({
+            "type": "http",
+            "url": "https://mcp.example.com/mcp",
+            "oauth": {
+                "clientId": "as-client",
+                "callbackPort": 49152,
+                "authServerMetadataUrl": "https://as.example.com/.well-known/oauth-authorization-server",
+                "xaa": true
+            }
+        });
+        let parsed = McpServerConfig::from_value(value).unwrap();
+        let McpServerConfig::Http(http) = parsed else {
+            panic!("expected http config");
+        };
+        let oauth = http.oauth.unwrap();
+        assert_eq!(oauth.client_id.as_deref(), Some("as-client"));
+        assert_eq!(oauth.callback_port, Some(49152));
+        assert_eq!(
+            oauth.auth_server_metadata_url.as_deref(),
+            Some("https://as.example.com/.well-known/oauth-authorization-server")
+        );
+        assert_eq!(oauth.xaa, Some(true));
+
+        let serialized = serde_json::to_value(McpServerConfig::Http(McpHttpServerConfig {
+            url: http.url,
+            headers: None,
+            oauth: Some(oauth),
+        }))
+        .unwrap();
+        assert_eq!(serialized["oauth"]["clientId"], "as-client");
+        assert_eq!(serialized["oauth"]["xaa"], true);
+    }
 }
