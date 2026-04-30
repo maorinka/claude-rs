@@ -526,6 +526,12 @@ Improved:
   `capacityWake.ts`: at-capacity sleeps can resolve either because the outer
   loop was cancelled or because capacity changed, without waiting for the full
   poll interval.
+- The standalone `claude remote-control` poll loop now consumes the same
+  `getPollIntervalConfig()` feature value path as TS `bridgeMain.ts`, passes
+  `reclaim_older_than_ms` into `/work/poll`, uses the multi-session
+  not-at-capacity/partial/at-capacity intervals instead of fixed sleeps, sends
+  at-capacity heartbeats on the non-exclusive heartbeat interval, and wakes
+  at-capacity sleeps when a child session exits.
 - `claude remote-control` now consumes those bridge clients directly: it builds
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
@@ -595,9 +601,9 @@ Missing or partial:
   through the hosted bridge permission API and cancellation/delivery lifecycle.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
-- Capacity wake runtime integration.
+- Capacity wake runtime integration in REPL/v2 bridge paths.
 - Flush gate runtime integration.
-- Poll config runtime integration.
+- Poll config runtime integration in REPL/v2 bridge paths.
 - Inbound attachments/messages.
 - Bridge UI.
 - Direct WebSocket session manager integration into CLI/TUI entrypoints.

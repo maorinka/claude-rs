@@ -1,8 +1,8 @@
 //! Bridge poll interval defaults and validation.
 //!
-//! Ports the pure validation contract from TS `src/bridge/pollConfig.ts` and
-//! `pollConfigDefaults.ts`. GrowthBook fetching remains outside this module;
-//! callers can pass any JSON object and receive defaults on malformed input.
+//! Ports the validation contract from TS `src/bridge/pollConfig.ts` and
+//! `pollConfigDefaults.ts`, including TS's default-value fallback semantics
+//! when GrowthBook has no value or serves malformed JSON.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,6 +29,14 @@ pub const DEFAULT_POLL_CONFIG: PollIntervalConfig = PollIntervalConfig {
     reclaim_older_than_ms: 5_000,
     session_keepalive_interval_v2_ms: 120_000,
 };
+
+pub fn get_poll_interval_config() -> PollIntervalConfig {
+    let raw = crate::growthbook::get_feature_value_cached_may_be_stale_json(
+        "tengu_bridge_poll_interval_config",
+        serde_json::to_value(&DEFAULT_POLL_CONFIG).unwrap_or(Value::Null),
+    );
+    parse_poll_interval_config(&raw)
+}
 
 pub fn parse_poll_interval_config(raw: &Value) -> PollIntervalConfig {
     let Some(obj) = raw.as_object() else {
@@ -146,6 +154,25 @@ mod tests {
             DEFAULT_POLL_CONFIG.session_keepalive_interval_v2_ms,
             120_000
         );
+    }
+
+    #[test]
+    fn get_poll_interval_config_reads_growthbook_feature_value() {
+        let _guard = crate::constants::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(
+            "CLAUDE_CODE_GROWTHBOOK_FEATURES",
+            r#"{"tengu_bridge_poll_interval_config":{"poll_interval_ms_not_at_capacity":2500,"poll_interval_ms_at_capacity":600000,"multisession_poll_interval_ms_partial_capacity":3000}}"#,
+        );
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_TENGU_BRIDGE_POLL_INTERVAL_CONFIG");
+
+        let parsed = get_poll_interval_config();
+
+        assert_eq!(parsed.poll_interval_ms_not_at_capacity, 2_500);
+        assert_eq!(parsed.multisession_poll_interval_ms_partial_capacity, 3_000);
+        assert_eq!(parsed.reclaim_older_than_ms, 5_000);
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_FEATURES");
     }
 
     #[test]

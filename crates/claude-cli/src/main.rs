@@ -6537,6 +6537,7 @@ struct RemoteSessionSpawnOptions<'a> {
     sandbox: bool,
     debug_file: Option<&'a str>,
     permission_mode: Option<&'a str>,
+    capacity_wake: Option<claude_core::bridge::capacity_wake::CapacityWake>,
 }
 
 fn safe_filename_id(id: &str) -> String {
@@ -6677,21 +6678,29 @@ async fn spawn_remote_session(
         });
     }
 
+    let capacity_wake = options.capacity_wake.clone();
     let done = tokio::spawn(async move {
-        let Ok(status) = child.wait().await else {
-            return RemoteSessionDoneStatus::Failed;
-        };
-        if status.success() {
-            return RemoteSessionDoneStatus::Completed;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            if matches!(status.signal(), Some(15) | Some(2)) {
-                return RemoteSessionDoneStatus::Interrupted;
+        let result = async {
+            let Ok(status) = child.wait().await else {
+                return RemoteSessionDoneStatus::Failed;
+            };
+            if status.success() {
+                return RemoteSessionDoneStatus::Completed;
             }
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if matches!(status.signal(), Some(15) | Some(2)) {
+                    return RemoteSessionDoneStatus::Interrupted;
+                }
+            }
+            RemoteSessionDoneStatus::Failed
         }
-        RemoteSessionDoneStatus::Failed
+        .await;
+        if let Some(wake) = capacity_wake {
+            wake.wake();
+        }
+        result
     });
 
     Ok(RemoteSessionHandle {
@@ -6746,6 +6755,23 @@ async fn stop_work_with_retry(
             }
         }
     }
+}
+
+async fn sleep_until_shutdown(
+    shutdown: &tokio_util::sync::CancellationToken,
+    duration: std::time::Duration,
+) -> bool {
+    tokio::select! {
+        _ = shutdown.cancelled() => false,
+        _ = tokio::time::sleep(duration) => true,
+    }
+}
+
+async fn sleep_for_remote_capacity(
+    wake: &claude_core::bridge::capacity_wake::CapacityWake,
+    duration: std::time::Duration,
+) -> Option<claude_core::bridge::capacity_wake::CapacityWakeReason> {
+    wake.sleep_or_wake(duration).await
 }
 
 async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) -> Result<()> {
@@ -6988,9 +7014,15 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
     let mut session_work_ids: HashMap<String, String> = HashMap::new();
     let mut session_tokens: HashMap<String, String> = HashMap::new();
     let mut known_sessions: Vec<String> = session_id.clone().into_iter().collect();
-    let mut shutdown = Box::pin(tokio::signal::ctrl_c());
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown_signal = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        shutdown_signal.cancel();
+    });
+    let capacity_wake = claude_core::bridge::capacity_wake::CapacityWake::new(shutdown.clone());
 
-    loop {
+    while !shutdown.is_cancelled() {
         let finished = active_sessions
             .iter()
             .filter_map(|(session_id, handle)| {
@@ -7037,9 +7069,14 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             }
         }
 
-        let poll = api.poll_for_work(&registered_environment_id, &environment_secret, None);
+        let poll_config = claude_core::bridge::poll_config::get_poll_interval_config();
+        let poll = api.poll_for_work(
+            &registered_environment_id,
+            &environment_secret,
+            Some(poll_config.reclaim_older_than_ms),
+        );
         tokio::select! {
-            _ = &mut shutdown => {
+            _ = shutdown.cancelled() => {
                 println!("Remote Control shutting down.");
                 break;
             }
@@ -7100,7 +7137,35 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                                             work.id
                                         );
                                     }
-                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    let at_capacity_ms = poll_config
+                                        .multisession_poll_interval_ms_at_capacity;
+                                    if poll_config.non_exclusive_heartbeat_interval_ms > 0 {
+                                        for (session_id, work_id) in session_work_ids.clone() {
+                                            if let Some(token) = session_tokens.get(&session_id) {
+                                                let _ = api
+                                                    .heartbeat_work(
+                                                        &registered_environment_id,
+                                                        &work_id,
+                                                        token,
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                        let _ = sleep_for_remote_capacity(
+                                            &capacity_wake,
+                                            std::time::Duration::from_millis(
+                                                poll_config
+                                                    .non_exclusive_heartbeat_interval_ms,
+                                            ),
+                                        )
+                                        .await;
+                                    } else if at_capacity_ms > 0 {
+                                        let _ = sleep_for_remote_capacity(
+                                            &capacity_wake,
+                                            std::time::Duration::from_millis(at_capacity_ms),
+                                        )
+                                        .await;
+                                    }
                                     continue;
                                 }
 
@@ -7161,6 +7226,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                                     sandbox: config.sandbox,
                                     debug_file: config.debug_file.as_deref(),
                                     permission_mode: options.permission_mode.map(String::as_str),
+                                    capacity_wake: Some(capacity_wake.clone()),
                                 })
                                 .await
                                 {
@@ -7194,24 +7260,75 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                         }
                     }
                     Ok(None) => {
-                        if !active_sessions.is_empty() {
-                            for (session_id, work_id) in session_work_ids.clone() {
-                                if let Some(token) = session_tokens.get(&session_id) {
-                                    let _ = api
-                                        .heartbeat_work(
-                                            &registered_environment_id,
-                                            &work_id,
-                                            token,
-                                        )
-                                        .await;
+                        if active_sessions.len() >= config.max_sessions as usize {
+                            let at_capacity_ms =
+                                poll_config.multisession_poll_interval_ms_at_capacity;
+                            if poll_config.non_exclusive_heartbeat_interval_ms > 0 {
+                                let poll_deadline = (at_capacity_ms > 0).then(|| {
+                                    tokio::time::Instant::now()
+                                        + std::time::Duration::from_millis(at_capacity_ms)
+                                });
+                                while !shutdown.is_cancelled()
+                                    && active_sessions.len() >= config.max_sessions as usize
+                                    && poll_deadline.is_none_or(|deadline| {
+                                        tokio::time::Instant::now() < deadline
+                                    })
+                                {
+                                    let hb_config =
+                                        claude_core::bridge::poll_config::get_poll_interval_config();
+                                    if hb_config.non_exclusive_heartbeat_interval_ms == 0 {
+                                        break;
+                                    }
+                                    for (session_id, work_id) in session_work_ids.clone() {
+                                        if let Some(token) = session_tokens.get(&session_id) {
+                                            let _ = api
+                                                .heartbeat_work(
+                                                    &registered_environment_id,
+                                                    &work_id,
+                                                    token,
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                    if sleep_for_remote_capacity(
+                                        &capacity_wake,
+                                        std::time::Duration::from_millis(
+                                            hb_config.non_exclusive_heartbeat_interval_ms,
+                                        ),
+                                    )
+                                    .await
+                                    .is_some()
+                                    {
+                                        break;
+                                    }
                                 }
+                            } else if at_capacity_ms > 0 {
+                                let _ = sleep_for_remote_capacity(
+                                    &capacity_wake,
+                                    std::time::Duration::from_millis(at_capacity_ms),
+                                )
+                                .await;
                             }
+                        } else {
+                            let interval = if active_sessions.is_empty() {
+                                poll_config.multisession_poll_interval_ms_not_at_capacity
+                            } else {
+                                poll_config.multisession_poll_interval_ms_partial_capacity
+                            };
+                            let _ = sleep_until_shutdown(
+                                &shutdown,
+                                std::time::Duration::from_millis(interval),
+                            )
+                            .await;
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                     Err(err) => {
                         eprintln!("Remote Control poll failed: {err}");
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let _ = sleep_until_shutdown(
+                            &shutdown,
+                            std::time::Duration::from_secs(5),
+                        )
+                        .await;
                     }
                 }
             }

@@ -34,6 +34,29 @@ pub fn get_feature_value_cached_may_be_stale_bool(name: &str, default_value: boo
     default_value
 }
 
+/// Return a cached JSON feature value, falling back to `default_value`.
+///
+/// This mirrors the same env-backed injection path as the boolean helper so
+/// typed feature-specific modules can preserve TS default-value semantics.
+pub fn get_feature_value_cached_may_be_stale_json(name: &str, default_value: Value) -> Value {
+    let env_name = format!("CLAUDE_CODE_GROWTHBOOK_{}", env_feature_name(name));
+    if let Ok(raw) = std::env::var(&env_name) {
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            return value;
+        }
+    }
+
+    if let Ok(raw) = std::env::var("CLAUDE_CODE_GROWTHBOOK_FEATURES") {
+        if let Ok(Value::Object(features)) = serde_json::from_str::<Value>(&raw) {
+            if let Some(value) = features.get(name) {
+                return value.clone();
+            }
+        }
+    }
+
+    default_value
+}
+
 fn env_feature_name(name: &str) -> String {
     name.chars()
         .map(|ch| {
@@ -103,5 +126,42 @@ mod tests {
         ));
         std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_FEATURES");
         std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_TENGU_QUARTZ_LANTERN");
+    }
+
+    #[test]
+    fn reads_json_feature_value() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(
+            "CLAUDE_CODE_GROWTHBOOK_FEATURES",
+            r#"{"tengu_poll":{"interval":2000}}"#,
+        );
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_TENGU_POLL");
+        assert_eq!(
+            get_feature_value_cached_may_be_stale_json(
+                "tengu_poll",
+                serde_json::json!({"interval": 100})
+            ),
+            serde_json::json!({"interval": 2000})
+        );
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_FEATURES");
+    }
+
+    #[test]
+    fn per_feature_json_env_overrides_map() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(
+            "CLAUDE_CODE_GROWTHBOOK_FEATURES",
+            r#"{"tengu_poll":{"interval":2000}}"#,
+        );
+        std::env::set_var("CLAUDE_CODE_GROWTHBOOK_TENGU_POLL", r#"{"interval":3000}"#);
+        assert_eq!(
+            get_feature_value_cached_may_be_stale_json(
+                "tengu_poll",
+                serde_json::json!({"interval": 100})
+            ),
+            serde_json::json!({"interval": 3000})
+        );
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_FEATURES");
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_TENGU_POLL");
     }
 }
