@@ -517,6 +517,11 @@ Improved:
   generic SDK messages, bounded UUID echo/redelivery dedup, server
   control-response shaping for initialize/model/thinking/permission/interrupt
   requests, outbound-only errors, and archival result-message construction.
+- Rust now has pure bridge `FlushGate` and poll-interval config modules matching
+  TS `flushGate.ts`, `pollConfig.ts`, and `pollConfigDefaults.ts`: queued
+  history/live write ordering, deactivate-vs-drop semantics, TS default
+  intervals, optional defaulted fields, 0-or-≥100 at-capacity validation, and
+  liveness fallback to defaults for malformed configs.
 - `claude remote-control` now consumes those bridge clients directly: it builds
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
@@ -587,8 +592,8 @@ Missing or partial:
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
 - Capacity wake.
-- Flush gate.
-- Poll config.
+- Flush gate runtime integration.
+- Poll config runtime integration.
 - Inbound attachments/messages.
 - Bridge UI.
 - Direct WebSocket session manager integration into CLI/TUI entrypoints.
