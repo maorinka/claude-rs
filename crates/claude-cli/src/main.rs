@@ -18,6 +18,13 @@ struct CcrDeliveryUpdate {
     status: &'static str,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct CcrInternalEvent {
+    payload: Value,
+    #[serde(default)]
+    agent_id: Option<String>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "claude-rs",
@@ -655,6 +662,111 @@ async fn post_remote_ccr_internal_event_batch(
             }
         }
     }
+}
+
+fn ccr_internal_events_read_url(
+    sdk_url: &str,
+    subagents: bool,
+    cursor: Option<&str>,
+) -> Result<String> {
+    let mut url = reqwest::Url::parse(sdk_url)?;
+    let mut pathname = url.path().trim_end_matches('/').to_string();
+    pathname.push_str("/worker/internal-events");
+    url.set_path(&pathname);
+    url.set_query(None);
+    if subagents || cursor.is_some_and(|value| !value.is_empty()) {
+        let mut query = url.query_pairs_mut();
+        if subagents {
+            query.append_pair("subagents", "true");
+        }
+        if let Some(cursor) = cursor.filter(|value| !value.is_empty()) {
+            query.append_pair("cursor", cursor);
+        }
+    }
+    Ok(url.to_string())
+}
+
+async fn get_remote_ccr_internal_events_page(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<Option<Value>> {
+    for attempt in 1..=10u32 {
+        let response = client
+            .get(url)
+            .bearer_auth(token)
+            .header("anthropic-version", "2023-06-01")
+            .header(
+                "User-Agent",
+                claude_core::user_agent::get_claude_code_user_agent(),
+            )
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await;
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                return Ok(Some(resp.json::<Value>().await?));
+            }
+            Ok(resp) if resp.status() == reqwest::StatusCode::CONFLICT => {
+                anyhow::bail!("CCRClient: Epoch mismatch (409)");
+            }
+            Ok(_) | Err(_) if attempt < 10 => {
+                let delay_ms = 500u64
+                    .saturating_mul(2u64.saturating_pow(attempt - 1))
+                    .min(30_000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            Ok(_) | Err(_) => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+async fn read_remote_ccr_internal_events(
+    sdk_url: &str,
+    subagents: bool,
+) -> Result<Option<Vec<CcrInternalEvent>>> {
+    let Some(token) = session_ingress_auth_token() else {
+        return Ok(None);
+    };
+    let client = reqwest::Client::new();
+    let mut cursor: Option<String> = None;
+    let mut events = Vec::new();
+    loop {
+        let url = ccr_internal_events_read_url(sdk_url, subagents, cursor.as_deref())?;
+        let Some(page) = get_remote_ccr_internal_events_page(&client, &url, &token).await? else {
+            return Ok(None);
+        };
+        if let Some(data) = page.get("data").and_then(|value| value.as_array()) {
+            for item in data {
+                if let Ok(event) = serde_json::from_value::<CcrInternalEvent>(item.clone()) {
+                    events.push(event);
+                }
+            }
+        }
+        cursor = page
+            .get("next_cursor")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(Some(events))
+}
+
+async fn hydrate_remote_ccr_internal_events(sdk_url: &str, session_id: &str) -> Result<bool> {
+    let Some(events) = read_remote_ccr_internal_events(sdk_url, false).await? else {
+        return Ok(false);
+    };
+    let entries = events
+        .into_iter()
+        .map(|event| event.payload)
+        .collect::<Vec<_>>();
+    let storage = claude_core::session::storage::SessionStorage::new(session_id)?;
+    storage.replace_transcript(&entries)?;
+    Ok(!entries.is_empty())
 }
 
 fn ccr_worker_state_for_event(event: &Value) -> Option<Value> {
@@ -7683,17 +7795,26 @@ async fn main() -> Result<()> {
         query_engine.set_max_turns(max);
     }
     let mut resumed_history_has_user_context = false;
+    let mut ccr_v2_resume_attempted = false;
 
     // Handle --resume: load transcript from a previous session.
     // Supports `--resume <session-id>` or `--resume last` to pick the most recent.
     if let Some(resolved_id) = resolved_resume_session_id.as_deref() {
+        if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_USE_CCR_V2") {
+            if let Some(sdk_url) = cli.sdk_url.as_deref() {
+                ccr_v2_resume_attempted = true;
+                let _ = hydrate_remote_ccr_internal_events(sdk_url, resolved_id).await?;
+            }
+        }
         let session_mgr = claude_core::session::manager::SessionManager::resume(resolved_id)?;
         let transcript = session_mgr.storage().load_transcript()?;
         if transcript.is_empty() {
-            eprintln!(
-                "Warning: session '{}' has no transcript to resume",
-                resolved_id
-            );
+            if !ccr_v2_resume_attempted {
+                eprintln!(
+                    "Warning: session '{}' has no transcript to resume",
+                    resolved_id
+                );
+            }
         } else {
             tracing::info!(
                 "Resuming session '{}' with {} messages",
@@ -9376,6 +9497,28 @@ mod remote_control_tests {
                     },
                 ],
             })
+        );
+    }
+
+    #[test]
+    fn remote_ccr_internal_events_read_url_matches_ts_transport() {
+        assert_eq!(
+            ccr_internal_events_read_url(
+                "https://api.example.com/v1/code/sessions/session-123?ignored=1",
+                false,
+                None,
+            )
+            .unwrap(),
+            "https://api.example.com/v1/code/sessions/session-123/worker/internal-events"
+        );
+        assert_eq!(
+            ccr_internal_events_read_url(
+                "https://api.example.com/v1/code/sessions/session-123",
+                true,
+                Some("cursor-1"),
+            )
+            .unwrap(),
+            "https://api.example.com/v1/code/sessions/session-123/worker/internal-events?subagents=true&cursor=cursor-1"
         );
     }
 

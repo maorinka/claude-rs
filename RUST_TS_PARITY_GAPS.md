@@ -548,6 +548,10 @@ Improved:
   `SessionStorage` path to enqueue TS-shaped worker internal events to
   `/worker/internal-events`, preserving the original transcript payload type,
   adding a `uuid` when missing, and carrying generic compaction/agent metadata.
+  In CCR v2 print-mode resume with `--sdk-url`, Rust now also reads paginated
+  foreground internal events from `/worker/internal-events` before loading the
+  transcript and rewrites the local transcript from the returned payloads like
+  TS `hydrateFromCCRv2InternalEvents`.
 
 Missing or partial:
 - Full bridge messaging.
@@ -556,8 +560,8 @@ Missing or partial:
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
   `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
   needs the full TS `CCRClient` lifecycle depth: model/permission-mode metadata
-  updates from every AppState mutation path, internal-event restore, and
-  text-delta coalescing.
+  updates from every AppState mutation path, subagent internal-event restore,
+  and text-delta coalescing.
 - Bridge permission callbacks are partially wired for remote child
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
   through the hosted bridge permission API and cancellation/delivery lifecycle.

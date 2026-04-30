@@ -87,6 +87,20 @@ impl SessionStorage {
         Ok(())
     }
 
+    pub fn replace_transcript(&self, entries: &[serde_json::Value]) -> Result<()> {
+        use std::io::Write;
+        let path = self.transcript_path();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)?;
+        for entry in entries {
+            writeln!(file, "{}", serde_json::to_string(entry)?)?;
+        }
+        Ok(())
+    }
+
     /// Load the transcript as a list of JSON values (one per line).
     /// Each line is expected to be a JSON object representing a message.
     pub fn load_transcript(&self) -> Result<Vec<serde_json::Value>> {
@@ -199,6 +213,27 @@ mod tests {
         // Verify content is preserved
         let first_text = messages[0]["content"][0]["text"].as_str().unwrap();
         assert_eq!(first_text, "what is 2+2?");
+    }
+
+    #[test]
+    fn replace_transcript_overwrites_existing_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let storage = SessionStorage::from_dir(tmp.path().to_path_buf());
+
+        storage
+            .append_transcript(r#"{"role":"user","content":"old"}"#)
+            .unwrap();
+        storage
+            .replace_transcript(&[
+                json!({"role": "user", "content": "new"}),
+                json!({"role": "assistant", "content": "fresh"}),
+            ])
+            .unwrap();
+
+        let messages = storage.load_transcript().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["content"], "new");
+        assert_eq!(messages[1]["content"], "fresh");
     }
 
     #[test]
