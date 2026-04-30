@@ -527,7 +527,14 @@ Improved:
   Session-Ingress HTTP POST batches. It also selects the CCR v2 shape when
   `CLAUDE_CODE_USE_CCR_V2` is set: the child reads `client_event` payloads from
   `{sessionUrl}/worker/events/stream` and posts wrapped client events to
-  `{sessionUrl}/worker/events` with the worker epoch.
+  `{sessionUrl}/worker/events` with the worker epoch. Remote child print mode
+  now keeps the input stream alive after the first prompt, queues later remote
+  `user` messages for subsequent turns, forwards `can_use_tool` permission
+  requests with the SDK control-request shape including suggestions/blocked
+  path, and applies matching remote `control_response` allow/deny decisions.
+  Remote allow responses now apply updated input, persist updated permissions,
+  preserve EnterWorktree/ExitWorktree cwd side effects, and keep user messages
+  that arrive during a permission wait queued for later turns.
 
 Missing or partial:
 - Full bridge messaging.
@@ -538,7 +545,9 @@ Missing or partial:
   needs the full TS `CCRClient` lifecycle: heartbeat, worker state/metadata
   reporting, delivery acknowledgements, internal-event persistence/restore, and
   text-delta coalescing.
-- Bridge permission callbacks.
+- Bridge permission callbacks are partially wired for remote child
+  `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
+  through the hosted bridge permission API and cancellation/delivery lifecycle.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
 - Capacity wake.
@@ -1160,11 +1169,13 @@ Missing or partial:
   environment registration, initial session creation, remote session URL
   printing, bridge work polling, healthcheck ack, session work-secret decode,
   TS-shaped child process launch, token update forwarding, heartbeat, stopWork,
-  archive, deregister, v1 child Session-Ingress WebSocket/POST bridge, and
-  basic CCR v2 child SSE/client-event POST bridge are now wired to the general
-  bridge API/session clients. Still missing: entitlement/policy checks,
-  session-id/continue reconnect, full CCR v2 lifecycle reporting, multi-turn
-  inbound web/mobile prompt queueing, permission callback forwarding,
+  archive, deregister, v1 child Session-Ingress WebSocket/POST bridge, basic
+  CCR v2 child SSE/client-event POST bridge, multi-turn remote child prompt
+  queueing, and child-side `can_use_tool` permission control responses
+  including updated input/permissions and worktree cwd side effects are now
+  wired to the general bridge API/session clients. Still missing:
+  entitlement/policy checks, session-id/continue reconnect, full CCR v2
+  lifecycle reporting, parent-side hosted permission callback forwarding,
   trusted-device flow, and
   connected/disconnect TUI state.
 - Remote managed settings.

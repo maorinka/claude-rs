@@ -214,6 +214,17 @@ struct StreamJsonStdinSeed {
     json_schema: Option<String>,
 }
 
+enum RemoteSdkInbound {
+    User(String),
+    ControlResponse(Value),
+    EndSession,
+}
+
+struct RemoteSdkSeed {
+    seed: StreamJsonStdinSeed,
+    rx: tokio::sync::mpsc::UnboundedReceiver<RemoteSdkInbound>,
+}
+
 fn sdk_content_to_prompt(content: &serde_json::Value) -> Option<String> {
     match content {
         serde_json::Value::String(text) => Some(text.clone()),
@@ -488,7 +499,111 @@ fn remote_control_response_success(request_id: &str, response: Value) -> Value {
     })
 }
 
-fn handle_remote_sdk_non_user_line(value: &Value) -> Result<Option<StreamJsonStdinSeed>> {
+fn remote_permission_request(
+    request_id: &str,
+    tool_name: &str,
+    tool_use_id: &str,
+    input: &Value,
+    message: &str,
+    suggestions: &Option<Vec<claude_core::permissions::types::PermissionUpdate>>,
+    blocked_path: &Option<String>,
+) -> Value {
+    let mut request = serde_json::json!({
+        "subtype": "can_use_tool",
+        "tool_name": tool_name,
+        "input": input,
+        "decision_reason": message,
+        "tool_use_id": tool_use_id,
+    });
+    if let Some(suggestions) = suggestions {
+        request["permission_suggestions"] =
+            serde_json::to_value(suggestions).unwrap_or_else(|_| serde_json::json!([]));
+    }
+    if let Some(blocked_path) = blocked_path {
+        request["blocked_path"] = serde_json::json!(blocked_path);
+    }
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": request,
+    })
+}
+
+async fn wait_remote_permission_response(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteSdkInbound>,
+    request_id: &str,
+    queued_prompts: &mut std::collections::VecDeque<String>,
+) -> Option<Value> {
+    while let Some(inbound) = rx.recv().await {
+        match inbound {
+            RemoteSdkInbound::User(prompt) => queued_prompts.push_back(prompt),
+            RemoteSdkInbound::EndSession => return None,
+            RemoteSdkInbound::ControlResponse(value) => {
+                let matches_request = value
+                    .get("response")
+                    .and_then(|response| response.get("request_id"))
+                    .and_then(|value| value.as_str())
+                    == Some(request_id);
+                if matches_request {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_remote_permission_response(
+    value: &Value,
+) -> Result<(
+    bool,
+    Option<Value>,
+    Option<Vec<claude_core::permissions::types::PermissionUpdate>>,
+    String,
+)> {
+    let response = value.get("response").unwrap_or(&Value::Null);
+    if response.get("subtype").and_then(|value| value.as_str()) == Some("error") {
+        let message = response
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Permission response error")
+            .to_string();
+        return Ok((false, None, None, message));
+    }
+    let result = response.get("response").unwrap_or(&Value::Null);
+    match result.get("behavior").and_then(|value| value.as_str()) {
+        Some("allow") => {
+            let updated_input = result
+                .get("updatedInput")
+                .or_else(|| result.get("updated_input"))
+                .filter(|value| value.as_object().is_some_and(|obj| !obj.is_empty()))
+                .cloned();
+            let updated_permissions = result
+                .get("updatedPermissions")
+                .or_else(|| result.get("updated_permissions"))
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()?;
+            Ok((true, updated_input, updated_permissions, String::new()))
+        }
+        Some("deny") => {
+            let message = result
+                .get("message")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Permission denied")
+                .to_string();
+            Ok((false, None, None, message))
+        }
+        other => Err(anyhow::anyhow!(
+            "Invalid permission response behavior: {}",
+            other.unwrap_or("missing")
+        )),
+    }
+}
+
+fn handle_remote_sdk_non_user_line(
+    value: &Value,
+    tx: Option<&tokio::sync::mpsc::UnboundedSender<RemoteSdkInbound>>,
+) -> Result<Option<StreamJsonStdinSeed>> {
     match value.get("type").and_then(|value| value.as_str()) {
         Some("update_environment_variables") => {
             apply_update_environment_variables(value);
@@ -514,6 +629,9 @@ fn handle_remote_sdk_non_user_line(value: &Value) -> Result<Option<StreamJsonStd
                         serde_json::json!({}),
                     ));
                 }
+                if let Some(tx) = tx {
+                    let _ = tx.send(RemoteSdkInbound::EndSession);
+                }
                 Ok(None)
             } else {
                 Ok(None)
@@ -530,6 +648,7 @@ fn spawn_remote_sdk_background_reader(
         >,
     >,
     mut buffered: String,
+    tx: tokio::sync::mpsc::UnboundedSender<RemoteSdkInbound>,
 ) {
     tokio::spawn(async move {
         use futures_util::StreamExt;
@@ -543,7 +662,23 @@ fn spawn_remote_sdk_background_reader(
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
                     continue;
                 };
-                let _ = handle_remote_sdk_non_user_line(&value);
+                match value.get("type").and_then(|value| value.as_str()) {
+                    Some("user") => {
+                        if let Some(content) = value
+                            .get("message")
+                            .and_then(|message| message.get("content"))
+                            .and_then(sdk_content_to_prompt)
+                        {
+                            let _ = tx.send(RemoteSdkInbound::User(content));
+                        }
+                    }
+                    Some("control_response") => {
+                        let _ = tx.send(RemoteSdkInbound::ControlResponse(value));
+                    }
+                    _ => {
+                        let _ = handle_remote_sdk_non_user_line(&value, Some(&tx));
+                    }
+                }
             }
 
             let Some(message) = read.next().await else {
@@ -587,7 +722,7 @@ fn handle_remote_sdk_seed_line(value: Value, seed: &mut StreamJsonStdinSeed) -> 
             Ok(true)
         }
         _ => {
-            if let Some(parsed) = handle_remote_sdk_non_user_line(&value)? {
+            if let Some(parsed) = handle_remote_sdk_non_user_line(&value, None)? {
                 if parsed.system_prompt.is_some() {
                     seed.system_prompt = parsed.system_prompt;
                 }
@@ -636,6 +771,7 @@ fn spawn_remote_ccr_background_reader(
         + Send
         + 'static,
     mut buffer: String,
+    tx: tokio::sync::mpsc::UnboundedSender<RemoteSdkInbound>,
 ) {
     tokio::spawn(async move {
         use futures_util::StreamExt;
@@ -645,13 +781,29 @@ fn spawn_remote_ccr_background_reader(
             };
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             for payload in parse_sse_payloads(&mut buffer) {
-                let _ = handle_remote_sdk_non_user_line(&payload);
+                match payload.get("type").and_then(|value| value.as_str()) {
+                    Some("user") => {
+                        if let Some(content) = payload
+                            .get("message")
+                            .and_then(|message| message.get("content"))
+                            .and_then(sdk_content_to_prompt)
+                        {
+                            let _ = tx.send(RemoteSdkInbound::User(content));
+                        }
+                    }
+                    Some("control_response") => {
+                        let _ = tx.send(RemoteSdkInbound::ControlResponse(payload));
+                    }
+                    _ => {
+                        let _ = handle_remote_sdk_non_user_line(&payload, Some(&tx));
+                    }
+                }
             }
         }
     });
 }
 
-async fn read_remote_ccr_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
+async fn read_remote_ccr_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
     use futures_util::StreamExt;
 
     install_remote_stream_json_poster(sdk_url)?;
@@ -677,20 +829,21 @@ async fn read_remote_ccr_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
     let mut stream = response.bytes_stream();
     let mut seed = StreamJsonStdinSeed::default();
     let mut buffer = String::new();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("reading remote CCR v2 SSE message")?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         for payload in parse_sse_payloads(&mut buffer) {
             if handle_remote_sdk_seed_line(payload, &mut seed)? {
-                spawn_remote_ccr_background_reader(stream, buffer);
-                return Ok(seed);
+                spawn_remote_ccr_background_reader(stream, buffer, tx);
+                return Ok(RemoteSdkSeed { seed, rx });
             }
         }
     }
-    Ok(seed)
+    Ok(RemoteSdkSeed { seed, rx })
 }
 
-async fn read_remote_sdk_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
+async fn read_remote_sdk_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -727,6 +880,7 @@ async fn read_remote_sdk_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
     let (_, mut read) = stream.split();
     let mut seed = StreamJsonStdinSeed::default();
     let mut buffered = String::new();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
     while let Some(message) = read.next().await {
         let message = message.context("reading remote SDK WebSocket message")?;
@@ -746,11 +900,11 @@ async fn read_remote_sdk_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
                 Some("user") => {
                     let parsed = parse_stream_json_stdin(&(line + "\n"))?;
                     seed.prompt = parsed.prompt;
-                    spawn_remote_sdk_background_reader(read, buffered);
-                    return Ok(seed);
+                    spawn_remote_sdk_background_reader(read, buffered, tx);
+                    return Ok(RemoteSdkSeed { seed, rx });
                 }
                 _ => {
-                    if let Some(parsed) = handle_remote_sdk_non_user_line(&value)? {
+                    if let Some(parsed) = handle_remote_sdk_non_user_line(&value, None)? {
                         if parsed.system_prompt.is_some() {
                             seed.system_prompt = parsed.system_prompt;
                         }
@@ -766,7 +920,7 @@ async fn read_remote_sdk_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
         }
     }
 
-    Ok(seed)
+    Ok(RemoteSdkSeed { seed, rx })
 }
 
 fn read_json_arg_or_file(raw: &str, label: &str) -> Result<Value> {
@@ -5963,9 +6117,12 @@ async fn main() -> Result<()> {
         }
     }
     let mut prompt_arg = cli.prompt.clone();
+    let mut remote_sdk_rx = None;
     if cli.print && prompt_arg.is_none() {
         if let Some(sdk_url) = cli.sdk_url.clone() {
-            let seed = read_remote_sdk_seed(&sdk_url).await?;
+            let remote = read_remote_sdk_seed(&sdk_url).await?;
+            let seed = remote.seed;
+            remote_sdk_rx = Some(remote.rx);
             if prompt_arg.is_none() {
                 prompt_arg = seed.prompt;
             }
@@ -6998,272 +7155,283 @@ async fn main() -> Result<()> {
         ));
         let mut perm_ctx = initial_permission_context.clone();
 
-        // Check if prompt is a skill invocation (e.g. "/commit fix typo")
-        let mut effective_prompt = prompt.clone();
-        for skill in &skills {
-            if let Some(args) = claude_core::plugins::skill::match_skill(&prompt, skill) {
-                let mut content = skill.content.clone();
-                if !args.is_empty() {
-                    content.push_str(&format!("\n\nArguments: {}", args));
-                }
-                effective_prompt = content;
-                break;
-            }
-        }
+        let mut pending_remote_prompt = prompt;
+        let mut add_session_start_message = true;
+        let mut queued_remote_prompts = std::collections::VecDeque::new();
+        loop {
+            let prompt = pending_remote_prompt;
 
-        let user_prompt_submit = hook_runner
-            .run_hooks(
-                &claude_core::hooks::types::HookEvent::UserPromptSubmit,
-                serde_json::json!({ "prompt": effective_prompt.clone() }),
-                Some(permission_mode_hook_name(&permission_mode)),
-                None,
-                None,
-                None,
-            )
-            .await;
-        if !user_prompt_submit.blocking_errors.is_empty() {
-            let blocking = user_prompt_submit
-                .blocking_errors
-                .iter()
-                .map(claude_core::hooks::get_user_prompt_submit_hook_blocking_message)
-                .collect::<Vec<_>>()
-                .join("\n");
-            let message = format!("{blocking}\n\nOriginal prompt: {effective_prompt}");
-            match cli.output_format {
-                OutputFormat::Text => println!("{message}"),
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string(&serde_json::json!({
+            // Check if prompt is a skill invocation (e.g. "/commit fix typo")
+            let mut effective_prompt = prompt.clone();
+            for skill in &skills {
+                if let Some(args) = claude_core::plugins::skill::match_skill(&prompt, skill) {
+                    let mut content = skill.content.clone();
+                    if !args.is_empty() {
+                        content.push_str(&format!("\n\nArguments: {}", args));
+                    }
+                    effective_prompt = content;
+                    break;
+                }
+            }
+
+            let user_prompt_submit = hook_runner
+                .run_hooks(
+                    &claude_core::hooks::types::HookEvent::UserPromptSubmit,
+                    serde_json::json!({ "prompt": effective_prompt.clone() }),
+                    Some(permission_mode_hook_name(&permission_mode)),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+            if !user_prompt_submit.blocking_errors.is_empty() {
+                let blocking = user_prompt_submit
+                    .blocking_errors
+                    .iter()
+                    .map(claude_core::hooks::get_user_prompt_submit_hook_blocking_message)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let message = format!("{blocking}\n\nOriginal prompt: {effective_prompt}");
+                match cli.output_format {
+                    OutputFormat::Text => println!("{message}"),
+                    OutputFormat::Json => println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "type": "result",
+                            "subtype": "error",
+                            "is_error": true,
+                            "errors": [message],
+                        }))?
+                    ),
+                    OutputFormat::StreamJson => emit_stream_json(serde_json::json!({
                         "type": "result",
                         "subtype": "error",
                         "is_error": true,
                         "errors": [message],
-                    }))?
-                ),
-                OutputFormat::StreamJson => emit_stream_json(serde_json::json!({
-                    "type": "result",
-                    "subtype": "error",
-                    "is_error": true,
-                    "errors": [message],
-                    "session_id": api_session_id,
-                })),
+                        "session_id": api_session_id,
+                    })),
+                }
+                let mgr = mcp_manager.read().await;
+                mgr.disconnect_all().await;
+                return Ok(());
             }
-            let mgr = mcp_manager.read().await;
-            mgr.disconnect_all().await;
-            return Ok(());
-        }
-        if user_prompt_submit.prevent_continuation {
-            let message = user_prompt_submit
-                .stop_reason
-                .unwrap_or_else(|| "Operation stopped by hook".to_string());
-            match cli.output_format {
-                OutputFormat::Text => println!("{message}"),
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string(&serde_json::json!({
+            if user_prompt_submit.prevent_continuation {
+                let message = user_prompt_submit
+                    .stop_reason
+                    .unwrap_or_else(|| "Operation stopped by hook".to_string());
+                match cli.output_format {
+                    OutputFormat::Text => println!("{message}"),
+                    OutputFormat::Json => println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "type": "result",
+                            "subtype": "error",
+                            "is_error": true,
+                            "errors": [message],
+                        }))?
+                    ),
+                    OutputFormat::StreamJson => emit_stream_json(serde_json::json!({
                         "type": "result",
                         "subtype": "error",
                         "is_error": true,
                         "errors": [message],
-                    }))?
-                ),
-                OutputFormat::StreamJson => emit_stream_json(serde_json::json!({
-                    "type": "result",
-                    "subtype": "error",
-                    "is_error": true,
-                    "errors": [message],
-                    "session_id": api_session_id,
-                })),
+                        "session_id": api_session_id,
+                    })),
+                }
+                let mgr = mcp_manager.read().await;
+                mgr.disconnect_all().await;
+                return Ok(());
             }
-            let mgr = mcp_manager.read().await;
-            mgr.disconnect_all().await;
-            return Ok(());
-        }
-        for context in user_prompt_submit.additional_contexts {
-            query_engine.append_user_context_block(format!(
+            for context in user_prompt_submit.additional_contexts {
+                query_engine.append_user_context_block(format!(
                 "<system-reminder>\nUserPromptSubmit hook additional context: {}\n</system-reminder>",
                 context
             ));
-        }
+            }
 
-        if cli.output_format == OutputFormat::StreamJson {
-            let (mcp_servers, mcp_prompt_commands) = {
-                let mgr = mcp_manager.read().await;
-                (
-                    stream_json_mcp_servers_in_order(mgr.connections().await, &mcp_server_order),
-                    mgr.prompt_command_names_in_order(&mcp_server_order).await,
-                )
-            };
-            emit_stream_json(stream_json_init_event(StreamJsonInitMeta {
-                cwd: &cwd,
-                session_id: &api_session_id,
-                tool_names: stream_json_tool_names.clone(),
-                mcp_servers,
-                model_display: &model_display,
-                permission_mode: &permission_mode,
-                registered_skills: &registered_skills,
-                discovered_skills: &discovered_skills,
-                stream_skill_names: &stream_skill_names,
-                mcp_prompt_commands: &mcp_prompt_commands,
-                output_style: settings.output_style.as_deref(),
-                auth: &auth,
-            }));
-        }
+            if cli.output_format == OutputFormat::StreamJson {
+                let (mcp_servers, mcp_prompt_commands) = {
+                    let mgr = mcp_manager.read().await;
+                    (
+                        stream_json_mcp_servers_in_order(
+                            mgr.connections().await,
+                            &mcp_server_order,
+                        ),
+                        mgr.prompt_command_names_in_order(&mcp_server_order).await,
+                    )
+                };
+                emit_stream_json(stream_json_init_event(StreamJsonInitMeta {
+                    cwd: &cwd,
+                    session_id: &api_session_id,
+                    tool_names: stream_json_tool_names.clone(),
+                    mcp_servers,
+                    model_display: &model_display,
+                    permission_mode: &permission_mode,
+                    registered_skills: &registered_skills,
+                    discovered_skills: &discovered_skills,
+                    stream_skill_names: &stream_skill_names,
+                    mcp_prompt_commands: &mcp_prompt_commands,
+                    output_style: settings.output_style.as_deref(),
+                    auth: &auth,
+                }));
+            }
 
-        if let Some(initial) = &session_start_initial_user_message {
-            query_engine.add_user_message(initial);
-        }
-        query_engine.add_user_message(&effective_prompt);
+            if add_session_start_message {
+                if let Some(initial) = &session_start_initial_user_message {
+                    query_engine.add_user_message(initial);
+                }
+                add_session_start_message = false;
+            }
+            query_engine.add_user_message(&effective_prompt);
 
-        // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
-        let mut final_text = String::new();
-        let mut structured_output: Option<serde_json::Value> = None;
-        let mut structured_output_retry_count: u32 = 0;
-        let max_structured_output_retries = std::env::var("MAX_STRUCTURED_OUTPUT_RETRIES")
-            .ok()
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(5);
-        let session_id = api_session_id.clone();
-        let started_at = std::time::Instant::now();
-        let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
-        let mut total_usage: Option<claude_core::types::usage::Usage> = None;
-        let mut num_turns: u32 = 0;
-        let terminal_outcome = loop {
-            let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
-            let output_format = cli.output_format.clone();
-            let stream_session_id = session_id.clone();
-            let include_partial_messages = include_partial_messages;
+            // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
+            let mut final_text = String::new();
+            let mut structured_output: Option<serde_json::Value> = None;
+            let mut structured_output_retry_count: u32 = 0;
+            let max_structured_output_retries = std::env::var("MAX_STRUCTURED_OUTPUT_RETRIES")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(5);
+            let session_id = api_session_id.clone();
+            let started_at = std::time::Instant::now();
+            let mut latest_usage: Option<claude_core::types::usage::Usage> = None;
+            let mut total_usage: Option<claude_core::types::usage::Usage> = None;
+            let mut num_turns: u32 = 0;
+            let terminal_outcome = loop {
+                let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(128);
+                let output_format = cli.output_format.clone();
+                let stream_session_id = session_id.clone();
 
-            // Spawn a task to print streamed text to stdout
-            let print_handle = tokio::spawn(async move {
-                let mut state = StreamJsonPrintState::default();
-                while let Some(ev) = stream_rx.recv().await {
-                    match &output_format {
-                        OutputFormat::Text => match ev {
-                            StreamEvent::TextDelta { text } => {
-                                state.text.push_str(&text);
+                // Spawn a task to print streamed text to stdout
+                let print_handle = tokio::spawn(async move {
+                    let mut state = StreamJsonPrintState::default();
+                    while let Some(ev) = stream_rx.recv().await {
+                        match &output_format {
+                            OutputFormat::Text => {
+                                if let StreamEvent::TextDelta { text } = ev {
+                                    state.text.push_str(&text);
+                                }
                             }
-                            _ => {}
-                        },
-                        OutputFormat::Json => {
-                            if let StreamEvent::TextDelta { text: delta } = ev {
-                                state.text.push_str(&delta);
+                            OutputFormat::Json => {
+                                if let StreamEvent::TextDelta { text: delta } = ev {
+                                    state.text.push_str(&delta);
+                                }
                             }
-                        }
-                        OutputFormat::StreamJson => {
-                            if let StreamEvent::TextDelta { text: delta } = &ev {
-                                state.text.push_str(delta);
-                            }
-                            if let StreamEvent::UsageUpdate(usage) = &ev {
-                                merge_stream_usage(&mut state.latest_usage, usage.clone());
-                            }
-                            for value in stream_event_to_stream_json_events(
-                                &ev,
-                                &stream_session_id,
-                                include_partial_messages,
-                            ) {
-                                emit_stream_json(value);
+                            OutputFormat::StreamJson => {
+                                if let StreamEvent::TextDelta { text: delta } = &ev {
+                                    state.text.push_str(delta);
+                                }
+                                if let StreamEvent::UsageUpdate(usage) = &ev {
+                                    merge_stream_usage(&mut state.latest_usage, usage.clone());
+                                }
+                                for value in stream_event_to_stream_json_events(
+                                    &ev,
+                                    &stream_session_id,
+                                    include_partial_messages,
+                                ) {
+                                    emit_stream_json(value);
+                                }
                             }
                         }
                     }
-                }
-                state
-            });
+                    state
+                });
 
-            num_turns += 1;
-            if cli.output_format == OutputFormat::StreamJson && include_partial_messages {
-                emit_stream_json(stream_json_status_event(&session_id, Some("requesting")));
-            }
-            let result = query_engine.run_turn(&stream_tx).await?;
-            drop(stream_tx);
-            if let Ok(state) = print_handle.await {
-                final_text.push_str(&state.text);
-                if let Some(usage) = state.latest_usage {
-                    accumulate_stream_usage(&mut total_usage, &usage);
-                    latest_usage = Some(usage);
+                num_turns += 1;
+                if cli.output_format == OutputFormat::StreamJson && include_partial_messages {
+                    emit_stream_json(stream_json_status_event(&session_id, Some("requesting")));
                 }
-            }
-            if let Some(max_budget_usd) = cli.max_budget_usd {
-                if total_cost_for_usage(&model, total_usage.as_ref()) >= max_budget_usd {
-                    break PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd };
+                let result = query_engine.run_turn(&stream_tx).await?;
+                drop(stream_tx);
+                if let Ok(state) = print_handle.await {
+                    final_text.push_str(&state.text);
+                    if let Some(usage) = state.latest_usage {
+                        accumulate_stream_usage(&mut total_usage, &usage);
+                        latest_usage = Some(usage);
+                    }
                 }
-            }
+                if let Some(max_budget_usd) = cli.max_budget_usd {
+                    if total_cost_for_usage(&model, total_usage.as_ref()) >= max_budget_usd {
+                        break PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd };
+                    }
+                }
 
-            match result {
-                TurnResult::Done(stop_reason) => {
-                    if cli.json_schema.is_some() && structured_output.is_none() {
-                        if structured_output_retry_count >= max_structured_output_retries {
-                            break PrintTerminalOutcome::StructuredOutputRetries {
-                                max_retries: max_structured_output_retries,
-                            };
-                        }
-                        structured_output_retry_count += 1;
-                        query_engine.add_user_message(
+                match result {
+                    TurnResult::Done(stop_reason) => {
+                        if cli.json_schema.is_some() && structured_output.is_none() {
+                            if structured_output_retry_count >= max_structured_output_retries {
+                                break PrintTerminalOutcome::StructuredOutputRetries {
+                                    max_retries: max_structured_output_retries,
+                                };
+                            }
+                            structured_output_retry_count += 1;
+                            query_engine.add_user_message(
                             "You MUST call the StructuredOutput tool to complete this request. \
                              Call this tool now.",
                         );
-                        continue;
+                            continue;
+                        }
+                        let stop_reason = serde_json::to_string(&stop_reason)
+                            .ok()
+                            .and_then(|value| serde_json::from_str::<String>(&value).ok())
+                            .unwrap_or_else(|| "end_turn".to_string());
+                        break PrintTerminalOutcome::Completed { stop_reason };
                     }
-                    let stop_reason = serde_json::to_string(&stop_reason)
-                        .ok()
-                        .and_then(|value| serde_json::from_str::<String>(&value).ok())
-                        .unwrap_or_else(|| "end_turn".to_string());
-                    break PrintTerminalOutcome::Completed { stop_reason };
-                }
-                TurnResult::MaxTurns {
-                    max_turns,
-                    turn_count,
-                } => {
-                    break PrintTerminalOutcome::MaxTurns {
+                    TurnResult::MaxTurns {
                         max_turns,
                         turn_count,
-                    };
-                }
-                TurnResult::ContinueRecovery => {
-                    // max_tokens recovery — run again immediately
-                    continue;
-                }
-                TurnResult::Continue => {
-                    continue;
-                }
-                TurnResult::ToolUse(tool_uses) => {
-                    // Execute each tool, check permissions, feed results back
-                    for tool_info in &tool_uses {
-                        if cli.output_format == OutputFormat::StreamJson {
-                            emit_stream_json(stream_json_assistant_tool_use_event(
-                                tool_info,
-                                &session_id,
-                                &model,
-                                latest_usage.as_ref(),
-                            ));
-                        }
-                        let mut tool_input = tool_info.input.clone();
-                        let mut forced_permission: Option<Result<(), String>> = None;
-                        if let Some(runner) = get_global_runner() {
-                            let pre = run_pre_tool_use_hooks(
-                                &runner,
-                                &tool_info.name,
-                                &tool_info.id,
-                                &tool_input,
-                                Some(permission_mode_hook_name(&permission_mode)),
-                                None,
-                                None,
-                            )
-                            .await;
-                            for context in &pre.additional_contexts {
-                                query_engine.append_user_context_block(context.clone());
+                    } => {
+                        break PrintTerminalOutcome::MaxTurns {
+                            max_turns,
+                            turn_count,
+                        };
+                    }
+                    TurnResult::ContinueRecovery => {
+                        // max_tokens recovery — run again immediately
+                        continue;
+                    }
+                    TurnResult::Continue => {
+                        continue;
+                    }
+                    TurnResult::ToolUse(tool_uses) => {
+                        // Execute each tool, check permissions, feed results back
+                        for tool_info in &tool_uses {
+                            if cli.output_format == OutputFormat::StreamJson {
+                                emit_stream_json(stream_json_assistant_tool_use_event(
+                                    tool_info,
+                                    &session_id,
+                                    &model,
+                                    latest_usage.as_ref(),
+                                ));
                             }
-                            if let Some(message) = hook_blocking_errors_text(&pre.blocking_errors)
-                                .or_else(|| pre.denial_message.clone())
-                            {
-                                forced_permission = Some(Err(message));
-                            } else if pre.prevent_continuation {
-                                forced_permission =
-                                    Some(Err(pre.stop_reason.unwrap_or_else(|| {
-                                        "PreToolUse hook stopped tool execution".to_string()
-                                    })));
-                            } else {
-                                let resolved = resolve_hook_permission_decision(
+                            let mut tool_input = tool_info.input.clone();
+                            let mut forced_permission: Option<Result<(), String>> = None;
+                            if let Some(runner) = get_global_runner() {
+                                let pre = run_pre_tool_use_hooks(
+                                    &runner,
+                                    &tool_info.name,
+                                    &tool_info.id,
+                                    &tool_input,
+                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                                for context in &pre.additional_contexts {
+                                    query_engine.append_user_context_block(context.clone());
+                                }
+                                if let Some(message) =
+                                    hook_blocking_errors_text(&pre.blocking_errors)
+                                        .or_else(|| pre.denial_message.clone())
+                                {
+                                    forced_permission = Some(Err(message));
+                                } else if pre.prevent_continuation {
+                                    forced_permission =
+                                        Some(Err(pre.stop_reason.unwrap_or_else(|| {
+                                            "PreToolUse hook stopped tool execution".to_string()
+                                        })));
+                                } else {
+                                    let resolved = resolve_hook_permission_decision(
                                     &pre,
                                     &tool_input,
                                     |candidate_input| {
@@ -7301,34 +7469,38 @@ async fn main() -> Result<()> {
                                     },
                                 )
                                 .await;
-                                match resolved {
-                                    ResolvedPermission::Allow { updated_input }
-                                    | ResolvedPermission::NormalFlow { updated_input } => {
-                                        tool_input =
-                                            merge_hook_updated_input(&tool_input, &updated_input);
-                                    }
-                                    ResolvedPermission::Deny { message } => {
-                                        forced_permission =
-                                            Some(Err(message.unwrap_or_else(|| {
-                                                "PreToolUse hook denied this tool".to_string()
-                                            })));
-                                    }
-                                    ResolvedPermission::RequiresUserConfirmation {
-                                        updated_input,
-                                        force_decision,
-                                    } => {
-                                        tool_input =
-                                            merge_hook_updated_input(&tool_input, &updated_input);
-                                        forced_permission = Some(Err(force_decision
-                                            .unwrap_or_else(|| {
-                                                "Tool requires user confirmation".to_string()
-                                            })));
+                                    match resolved {
+                                        ResolvedPermission::Allow { updated_input }
+                                        | ResolvedPermission::NormalFlow { updated_input } => {
+                                            tool_input = merge_hook_updated_input(
+                                                &tool_input,
+                                                &updated_input,
+                                            );
+                                        }
+                                        ResolvedPermission::Deny { message } => {
+                                            forced_permission =
+                                                Some(Err(message.unwrap_or_else(|| {
+                                                    "PreToolUse hook denied this tool".to_string()
+                                                })));
+                                        }
+                                        ResolvedPermission::RequiresUserConfirmation {
+                                            updated_input,
+                                            force_decision,
+                                        } => {
+                                            tool_input = merge_hook_updated_input(
+                                                &tool_input,
+                                                &updated_input,
+                                            );
+                                            forced_permission = Some(Err(force_decision
+                                                .unwrap_or_else(|| {
+                                                    "Tool requires user confirmation".to_string()
+                                                })));
+                                        }
                                     }
                                 }
                             }
-                        }
-                        let decision = if let Some(forced) = forced_permission {
-                            match forced {
+                            let decision = if let Some(forced) = forced_permission {
+                                match forced {
                                 Ok(()) => PermissionDecision::allow(),
                                 Err(message) => PermissionDecision::deny(
                                     message,
@@ -7339,8 +7511,7 @@ async fn main() -> Result<()> {
                                     },
                                 ),
                             }
-                        } else {
-                            if let Some(tool) = tools.get(&tool_info.name) {
+                            } else if let Some(tool) = tools.get(&tool_info.name) {
                                 let tool_perms =
                                     claude_tools::registry::ExecutorToolPermissions::new(
                                         tool,
@@ -7350,32 +7521,202 @@ async fn main() -> Result<()> {
                             } else {
                                 let tool_perms = SimpleToolPermissions::new(&tool_info.name, false);
                                 evaluate_permission(&tool_perms, &tool_input, &perm_ctx)
-                            }
-                        };
+                            };
 
-                        let (mut result_text, mut is_error, mut result_json) = match decision {
-                            PermissionDecision::Ask(ask) => {
-                                if let Some(permission_prompt_tool) = &permission_prompt_tool {
-                                    match run_permission_prompt_tool(
-                                        permission_prompt_tool,
-                                        &tool_info.name,
-                                        &tool_info.id,
-                                        &tool_input,
-                                        &cwd,
-                                        read_file_state.clone(),
-                                        permission_mode.clone(),
-                                        &model,
-                                        cancel.clone(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(output) if output.behavior == "allow" => {
-                                            if let Some(updates) = output.updated_permissions {
-                                                perm_ctx = claude_core::permissions::evaluator::apply_permission_updates(
+                            let (mut result_text, mut is_error, mut result_json) = match decision {
+                                PermissionDecision::Ask(ask) => {
+                                    if let Some(rx) = remote_sdk_rx.as_mut() {
+                                        let request_id = uuid::Uuid::new_v4().to_string();
+                                        emit_stream_json(remote_permission_request(
+                                            &request_id,
+                                            &tool_info.name,
+                                            &tool_info.id,
+                                            &tool_input,
+                                            &ask.message,
+                                            &ask.suggestions,
+                                            &ask.blocked_path,
+                                        ));
+                                        match wait_remote_permission_response(
+                                            rx,
+                                            &request_id,
+                                            &mut queued_remote_prompts,
+                                        )
+                                        .await
+                                        .map(|value| parse_remote_permission_response(&value))
+                                        {
+                                            Some(Ok((
+                                                true,
+                                                updated_input,
+                                                updated_permissions,
+                                                _,
+                                            ))) => {
+                                                if let Some(updates) = updated_permissions {
+                                                    perm_ctx = claude_core::permissions::evaluator::apply_permission_updates(
                                                     perm_ctx,
                                                     &updates,
                                                 );
-                                                if let Err(err) = claude_core::permissions::evaluator::persist_permission_updates(
+                                                    if let Err(err) = claude_core::permissions::evaluator::persist_permission_updates(
+                                                    &updates,
+                                                    &cwd,
+                                                ) {
+                                                    tracing::warn!(
+                                                        error = %err,
+                                                        "failed to persist remote permission updates"
+                                                    );
+                                                }
+                                                }
+                                                if let Some(updated_input) = updated_input {
+                                                    tool_input = updated_input;
+                                                }
+                                                let executor = tools.get(&tool_info.name);
+                                                match executor {
+                                                    Some(exec) => {
+                                                        let ctx = ToolUseContext::new(
+                                                            cwd.clone(),
+                                                            read_file_state.clone(),
+                                                            permission_mode.clone(),
+                                                            perm_ctx.clone(),
+                                                            std::sync::Arc::new({
+                                                                let mut options =
+                                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                                options.session_id =
+                                                                    Some(api_session_id.clone());
+                                                                options
+                                                            }),
+                                                            std::sync::Arc::new(
+                                                                claude_core::tool_host::NullToolHost,
+                                                            ),
+                                                        );
+                                                        match exec
+                                                            .call(
+                                                                &tool_input,
+                                                                &ctx,
+                                                                cancel.clone(),
+                                                                None,
+                                                            )
+                                                            .await
+                                                        {
+                                                            Ok(data) => {
+                                                                if !data.is_error {
+                                                                    match tool_info.name.as_str() {
+                                                                        "EnterWorktree" => {
+                                                                            if let Some(path) = data
+                                                                                .data
+                                                                                ["worktreePath"]
+                                                                                .as_str()
+                                                                            {
+                                                                                let old_cwd =
+                                                                                    cwd.clone();
+                                                                                let new_cwd =
+                                                                                    PathBuf::from(
+                                                                                        path,
+                                                                                    );
+                                                                                claude_core::hooks::fire_cwd_changed(
+                                                                                &old_cwd.display().to_string(),
+                                                                                &new_cwd.display().to_string(),
+                                                                            )
+                                                                            .await;
+                                                                                cwd = new_cwd;
+                                                                                tracing::info!(
+                                                                                "Session cwd switched to worktree: {}",
+                                                                                path
+                                                                            );
+                                                                            }
+                                                                        }
+                                                                        "ExitWorktree" => {
+                                                                            let old_cwd =
+                                                                                cwd.clone();
+                                                                            let new_cwd =
+                                                                                original_cwd
+                                                                                    .clone();
+                                                                            claude_core::hooks::fire_cwd_changed(
+                                                                            &old_cwd.display().to_string(),
+                                                                            &new_cwd.display().to_string(),
+                                                                        )
+                                                                        .await;
+                                                                            cwd = new_cwd;
+                                                                            tracing::info!(
+                                                                            "Session cwd restored to: {}",
+                                                                            original_cwd.display()
+                                                                        );
+                                                                        }
+                                                                        _ => {}
+                                                                    }
+                                                                }
+                                                                let text = format_tool_result_for_model(
+                                                                    &tool_info.name,
+                                                                    &data.data,
+                                                                );
+                                                                (text, data.is_error, data.data)
+                                                            }
+                                                            Err(e) => {
+                                                                let message = format!("Error: {}", e);
+                                                                (
+                                                                    message.clone(),
+                                                                    true,
+                                                                    serde_json::json!({"error": message}),
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                    None => {
+                                                        let message =
+                                                            claude_core::tool_result_format::unknown_tool_error_text(
+                                                                &tool_info.name,
+                                                            );
+                                                        (
+                                                            claude_core::tool_result_format::unknown_tool_error_content(
+                                                                &tool_info.name,
+                                                            ),
+                                                            true,
+                                                            serde_json::json!({"error": message}),
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Some(Ok((false, _, _, message))) => (
+                                                format!("Permission denied: {}", message),
+                                                true,
+                                                serde_json::json!({"error": message}),
+                                            ),
+                                            Some(Err(err)) => {
+                                                let message = err.to_string();
+                                                (
+                                                    format!("Permission prompt error: {}", message),
+                                                    true,
+                                                    serde_json::json!({"error": message}),
+                                                )
+                                            }
+                                            None => (
+                                                "Permission denied: remote permission stream closed"
+                                                    .to_string(),
+                                                true,
+                                                serde_json::json!({"error": "remote permission stream closed"}),
+                                            ),
+                                        }
+                                    } else if let Some(permission_prompt_tool) =
+                                        &permission_prompt_tool
+                                    {
+                                        match run_permission_prompt_tool(
+                                            permission_prompt_tool,
+                                            &tool_info.name,
+                                            &tool_info.id,
+                                            &tool_input,
+                                            &cwd,
+                                            read_file_state.clone(),
+                                            permission_mode.clone(),
+                                            &model,
+                                            cancel.clone(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(output) if output.behavior == "allow" => {
+                                                if let Some(updates) = output.updated_permissions {
+                                                    perm_ctx = claude_core::permissions::evaluator::apply_permission_updates(
+                                                    perm_ctx,
+                                                    &updates,
+                                                );
+                                                    if let Err(err) = claude_core::permissions::evaluator::persist_permission_updates(
                                                     &updates,
                                                     &cwd,
                                                 ) {
@@ -7384,22 +7725,22 @@ async fn main() -> Result<()> {
                                                         "failed to persist permission prompt tool updates"
                                                     );
                                                 }
-                                            }
-                                            let updated_input = output
-                                                .updated_input
-                                                .unwrap_or_else(|| tool_input.clone());
-                                            tool_input = if updated_input
-                                                .as_object()
-                                                .is_some_and(|obj| obj.is_empty())
-                                            {
-                                                tool_input
-                                            } else {
-                                                updated_input
-                                            };
-                                            let executor = tools.get(&tool_info.name);
-                                            match executor {
-                                                Some(exec) => {
-                                                    let ctx = ToolUseContext::new(
+                                                }
+                                                let updated_input = output
+                                                    .updated_input
+                                                    .unwrap_or_else(|| tool_input.clone());
+                                                tool_input = if updated_input
+                                                    .as_object()
+                                                    .is_some_and(|obj| obj.is_empty())
+                                                {
+                                                    tool_input
+                                                } else {
+                                                    updated_input
+                                                };
+                                                let executor = tools.get(&tool_info.name);
+                                                match executor {
+                                                    Some(exec) => {
+                                                        let ctx = ToolUseContext::new(
                                                         cwd.clone(),
                                                         read_file_state.clone(),
                                                         permission_mode.clone(),
@@ -7415,516 +7756,553 @@ async fn main() -> Result<()> {
                                                             claude_core::tool_host::NullToolHost,
                                                         ),
                                                     );
-                                                    match exec
-                                                        .call(
-                                                            &tool_input,
-                                                            &ctx,
-                                                            cancel.clone(),
-                                                            None,
-                                                        )
-                                                        .await
-                                                    {
-                                                        Ok(data) => {
-                                                            if !data.is_error {
-                                                                match tool_info.name.as_str() {
-                                                                    "EnterWorktree" => {
-                                                                        if let Some(path) = data
-                                                                            .data["worktreePath"]
-                                                                            .as_str()
-                                                                        {
-                                                                            let old_cwd =
-                                                                                cwd.clone();
-                                                                            let new_cwd =
-                                                                                PathBuf::from(path);
-                                                                            claude_core::hooks::fire_cwd_changed(
+                                                        match exec
+                                                            .call(
+                                                                &tool_input,
+                                                                &ctx,
+                                                                cancel.clone(),
+                                                                None,
+                                                            )
+                                                            .await
+                                                        {
+                                                            Ok(data) => {
+                                                                if !data.is_error {
+                                                                    match tool_info.name.as_str() {
+                                                                        "EnterWorktree" => {
+                                                                            if let Some(path) = data
+                                                                                .data
+                                                                                ["worktreePath"]
+                                                                                .as_str()
+                                                                            {
+                                                                                let old_cwd =
+                                                                                    cwd.clone();
+                                                                                let new_cwd =
+                                                                                    PathBuf::from(
+                                                                                        path,
+                                                                                    );
+                                                                                claude_core::hooks::fire_cwd_changed(
                                                                                 &old_cwd.display().to_string(),
                                                                                 &new_cwd.display().to_string(),
                                                                             )
                                                                             .await;
-                                                                            cwd = new_cwd;
-                                                                            tracing::info!(
+                                                                                cwd = new_cwd;
+                                                                                tracing::info!(
                                                                                 "Session cwd switched to worktree: {}",
                                                                                 path
                                                                             );
+                                                                            }
                                                                         }
-                                                                    }
-                                                                    "ExitWorktree" => {
-                                                                        let old_cwd = cwd.clone();
-                                                                        let new_cwd =
-                                                                            original_cwd.clone();
-                                                                        claude_core::hooks::fire_cwd_changed(
+                                                                        "ExitWorktree" => {
+                                                                            let old_cwd =
+                                                                                cwd.clone();
+                                                                            let new_cwd =
+                                                                                original_cwd
+                                                                                    .clone();
+                                                                            claude_core::hooks::fire_cwd_changed(
                                                                             &old_cwd.display().to_string(),
                                                                             &new_cwd.display().to_string(),
                                                                         )
                                                                         .await;
-                                                                        cwd = new_cwd;
-                                                                        tracing::info!(
+                                                                            cwd = new_cwd;
+                                                                            tracing::info!(
                                                                             "Session cwd restored to: {}",
                                                                             original_cwd.display()
                                                                         );
+                                                                        }
+                                                                        _ => {}
                                                                     }
-                                                                    _ => {}
                                                                 }
+                                                                let text =
+                                                                    format_tool_result_for_model(
+                                                                        &tool_info.name,
+                                                                        &data.data,
+                                                                    );
+                                                                (text, data.is_error, data.data)
                                                             }
-                                                            let text = format_tool_result_for_model(
-                                                                &tool_info.name,
-                                                                &data.data,
-                                                            );
-                                                            (text, data.is_error, data.data)
-                                                        }
-                                                        Err(e) => {
-                                                            let message = format!("Error: {}", e);
-                                                            (
-                                                                message.clone(),
-                                                                true,
-                                                                serde_json::json!({"error": message}),
-                                                            )
+                                                            Err(e) => {
+                                                                let message =
+                                                                    format!("Error: {}", e);
+                                                                (
+                                                                    message.clone(),
+                                                                    true,
+                                                                    serde_json::json!({"error": message}),
+                                                                )
+                                                            }
                                                         }
                                                     }
-                                                }
-                                                None => {
-                                                    let message =
+                                                    None => {
+                                                        let message =
                                                         claude_core::tool_result_format::unknown_tool_error_text(
                                                             &tool_info.name,
                                                         );
-                                                    (
+                                                        (
                                                         claude_core::tool_result_format::unknown_tool_error_content(
                                                             &tool_info.name,
                                                         ),
                                                         true,
                                                         serde_json::json!({"error": message}),
                                                     )
-                                                }
-                                            }
-                                        }
-                                        Ok(output) => {
-                                            let message = output.message.unwrap_or_else(|| {
-                                                "Permission denied by permission prompt tool"
-                                                    .to_string()
-                                            });
-                                            (
-                                                format!("Permission denied: {}", message),
-                                                true,
-                                                serde_json::json!({"error": message}),
-                                            )
-                                        }
-                                        Err(err) => {
-                                            let message = err.to_string();
-                                            (
-                                                format!(
-                                                    "Permission prompt tool error: {}",
-                                                    message
-                                                ),
-                                                true,
-                                                serde_json::json!({"error": message}),
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    // In non-interactive / headless mode, Ask decisions are DENIED
-                                    // (matching TS headless behavior). Auto-allowing would bypass
-                                    // permission semantics when running unattended.
-                                    tracing::warn!(
-                                        tool = %tool_info.name,
-                                        reason = %ask.message,
-                                        "Non-interactive mode: denying tool requiring user confirmation"
-                                    );
-                                    (
-                                        format!(
-                                            "Permission denied (non-interactive): {}",
-                                            ask.message
-                                        ),
-                                        true,
-                                        serde_json::json!({"error": ask.message}),
-                                    )
-                                }
-                            }
-                            PermissionDecision::Allow(_) => {
-                                let executor = tools.get(&tool_info.name);
-                                match executor {
-                                    Some(exec) => {
-                                        // Explicit construction (not `for_test`) so the session's
-                                        // live `model` reaches `ctx.options.main_loop_model` —
-                                        // consumed by e.g. the command adapter at
-                                        // `claude-core/src/command_adapter.rs:114`.
-                                        let ctx = ToolUseContext::new(
-                                            cwd.clone(),
-                                            read_file_state.clone(),
-                                            permission_mode.clone(),
-                                            perm_ctx.clone(),
-                                            std::sync::Arc::new({
-                                                let mut options =
-                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
-                                                options.session_id = Some(api_session_id.clone());
-                                                options
-                                            }),
-                                            std::sync::Arc::new(
-                                                claude_core::tool_host::NullToolHost,
-                                            ),
-                                        );
-                                        match exec
-                                            .call(&tool_input, &ctx, cancel.clone(), None)
-                                            .await
-                                        {
-                                            Ok(data) => {
-                                                // Update cwd when entering/exiting a worktree.
-                                                if !data.is_error {
-                                                    match tool_info.name.as_str() {
-                                                        "EnterWorktree" => {
-                                                            if let Some(path) =
-                                                                data.data["worktreePath"].as_str()
-                                                            {
-                                                                let old_cwd = cwd.clone();
-                                                                let new_cwd = PathBuf::from(path);
-                                                                claude_core::hooks::fire_cwd_changed(
-                                                                    &old_cwd.display().to_string(),
-                                                                    &new_cwd.display().to_string(),
-                                                                )
-                                                                .await;
-                                                                cwd = new_cwd;
-                                                                tracing::info!(
-                                                                    "Session cwd switched to worktree: {}",
-                                                                    path
-                                                                );
-                                                            }
-                                                        }
-                                                        "ExitWorktree" => {
-                                                            let old_cwd = cwd.clone();
-                                                            let new_cwd = original_cwd.clone();
-                                                            claude_core::hooks::fire_cwd_changed(
-                                                                &old_cwd.display().to_string(),
-                                                                &new_cwd.display().to_string(),
-                                                            )
-                                                            .await;
-                                                            cwd = new_cwd;
-                                                            tracing::info!(
-                                                                "Session cwd restored to: {}",
-                                                                original_cwd.display()
-                                                            );
-                                                        }
-                                                        _ => {}
                                                     }
                                                 }
-                                                let text = format_tool_result_for_model(
-                                                    &tool_info.name,
-                                                    &data.data,
-                                                );
-                                                (text, data.is_error, data.data)
                                             }
-                                            Err(e) => {
-                                                let message = format!("Error: {}", e);
+                                            Ok(output) => {
+                                                let message = output.message.unwrap_or_else(|| {
+                                                    "Permission denied by permission prompt tool"
+                                                        .to_string()
+                                                });
                                                 (
-                                                    message.clone(),
+                                                    format!("Permission denied: {}", message),
+                                                    true,
+                                                    serde_json::json!({"error": message}),
+                                                )
+                                            }
+                                            Err(err) => {
+                                                let message = err.to_string();
+                                                (
+                                                    format!(
+                                                        "Permission prompt tool error: {}",
+                                                        message
+                                                    ),
                                                     true,
                                                     serde_json::json!({"error": message}),
                                                 )
                                             }
                                         }
+                                    } else {
+                                        // In non-interactive / headless mode, Ask decisions are DENIED
+                                        // (matching TS headless behavior). Auto-allowing would bypass
+                                        // permission semantics when running unattended.
+                                        tracing::warn!(
+                                            tool = %tool_info.name,
+                                            reason = %ask.message,
+                                            "Non-interactive mode: denying tool requiring user confirmation"
+                                        );
+                                        (
+                                            format!(
+                                                "Permission denied (non-interactive): {}",
+                                                ask.message
+                                            ),
+                                            true,
+                                            serde_json::json!({"error": ask.message}),
+                                        )
                                     }
-                                    None => {
-                                        let message =
+                                }
+                                PermissionDecision::Allow(_) => {
+                                    let executor = tools.get(&tool_info.name);
+                                    match executor {
+                                        Some(exec) => {
+                                            // Explicit construction (not `for_test`) so the session's
+                                            // live `model` reaches `ctx.options.main_loop_model` —
+                                            // consumed by e.g. the command adapter at
+                                            // `claude-core/src/command_adapter.rs:114`.
+                                            let ctx = ToolUseContext::new(
+                                                cwd.clone(),
+                                                read_file_state.clone(),
+                                                permission_mode.clone(),
+                                                perm_ctx.clone(),
+                                                std::sync::Arc::new({
+                                                    let mut options =
+                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                    options.session_id =
+                                                        Some(api_session_id.clone());
+                                                    options
+                                                }),
+                                                std::sync::Arc::new(
+                                                    claude_core::tool_host::NullToolHost,
+                                                ),
+                                            );
+                                            match exec
+                                                .call(&tool_input, &ctx, cancel.clone(), None)
+                                                .await
+                                            {
+                                                Ok(data) => {
+                                                    // Update cwd when entering/exiting a worktree.
+                                                    if !data.is_error {
+                                                        match tool_info.name.as_str() {
+                                                            "EnterWorktree" => {
+                                                                if let Some(path) = data.data
+                                                                    ["worktreePath"]
+                                                                    .as_str()
+                                                                {
+                                                                    let old_cwd = cwd.clone();
+                                                                    let new_cwd =
+                                                                        PathBuf::from(path);
+                                                                    claude_core::hooks::fire_cwd_changed(
+                                                                    &old_cwd.display().to_string(),
+                                                                    &new_cwd.display().to_string(),
+                                                                )
+                                                                .await;
+                                                                    cwd = new_cwd;
+                                                                    tracing::info!(
+                                                                    "Session cwd switched to worktree: {}",
+                                                                    path
+                                                                );
+                                                                }
+                                                            }
+                                                            "ExitWorktree" => {
+                                                                let old_cwd = cwd.clone();
+                                                                let new_cwd = original_cwd.clone();
+                                                                claude_core::hooks::fire_cwd_changed(
+                                                                &old_cwd.display().to_string(),
+                                                                &new_cwd.display().to_string(),
+                                                            )
+                                                            .await;
+                                                                cwd = new_cwd;
+                                                                tracing::info!(
+                                                                    "Session cwd restored to: {}",
+                                                                    original_cwd.display()
+                                                                );
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                    let text = format_tool_result_for_model(
+                                                        &tool_info.name,
+                                                        &data.data,
+                                                    );
+                                                    (text, data.is_error, data.data)
+                                                }
+                                                Err(e) => {
+                                                    let message = format!("Error: {}", e);
+                                                    (
+                                                        message.clone(),
+                                                        true,
+                                                        serde_json::json!({"error": message}),
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            let message =
                                             claude_core::tool_result_format::unknown_tool_error_text(
                                                 &tool_info.name,
                                             );
-                                        (
+                                            (
                                             claude_core::tool_result_format::unknown_tool_error_content(
                                                 &tool_info.name,
                                             ),
                                             true,
                                             serde_json::json!({"error": message}),
                                         )
+                                        }
+                                    }
+                                }
+                                PermissionDecision::Deny(deny) => (
+                                    format!("Permission denied: {}", deny.message),
+                                    true,
+                                    serde_json::json!({"error": deny.message}),
+                                ),
+                            };
+
+                            if let Some(runner) = get_global_runner() {
+                                if is_error {
+                                    let failure = run_post_tool_use_failure_hooks(
+                                        &runner,
+                                        &tool_info.name,
+                                        &tool_info.id,
+                                        &tool_input,
+                                        &result_text,
+                                        None,
+                                        Some(permission_mode_hook_name(&permission_mode)),
+                                        None,
+                                        None,
+                                    )
+                                    .await;
+                                    for context in &failure.additional_contexts {
+                                        query_engine.append_user_context_block(context.clone());
+                                    }
+                                    if let Some(message) =
+                                        hook_blocking_errors_text(&failure.blocking_errors)
+                                    {
+                                        result_text = message;
+                                        is_error = true;
+                                    }
+                                } else {
+                                    let post = run_post_tool_use_hooks(
+                                        &runner,
+                                        &tool_info.name,
+                                        &tool_info.id,
+                                        &tool_input,
+                                        &result_json,
+                                        Some(permission_mode_hook_name(&permission_mode)),
+                                        None,
+                                        None,
+                                    )
+                                    .await;
+                                    for context in &post.additional_contexts {
+                                        query_engine.append_user_context_block(context.clone());
+                                    }
+                                    if let Some(updated) = post.updated_mcp_tool_output {
+                                        result_json = updated;
+                                        result_text = result_json
+                                            .as_str()
+                                            .unwrap_or(&result_json.to_string())
+                                            .to_string();
+                                    }
+                                    if let Some(message) =
+                                        hook_blocking_errors_text(&post.blocking_errors)
+                                    {
+                                        result_text = message;
+                                        is_error = true;
+                                    } else if post.prevent_continuation {
+                                        result_text = post.stop_reason.unwrap_or_else(|| {
+                                            "PostToolUse hook stopped continuation".to_string()
+                                        });
+                                        is_error = true;
                                     }
                                 }
                             }
-                            PermissionDecision::Deny(deny) => (
-                                format!("Permission denied: {}", deny.message),
-                                true,
-                                serde_json::json!({"error": deny.message}),
-                            ),
-                        };
 
-                        if let Some(runner) = get_global_runner() {
-                            if is_error {
-                                let failure = run_post_tool_use_failure_hooks(
-                                    &runner,
-                                    &tool_info.name,
-                                    &tool_info.id,
-                                    &tool_input,
-                                    &result_text,
-                                    None,
-                                    Some(permission_mode_hook_name(&permission_mode)),
-                                    None,
-                                    None,
-                                )
-                                .await;
-                                for context in &failure.additional_contexts {
-                                    query_engine.append_user_context_block(context.clone());
-                                }
-                                if let Some(message) =
-                                    hook_blocking_errors_text(&failure.blocking_errors)
-                                {
-                                    result_text = message;
-                                    is_error = true;
-                                }
-                            } else {
-                                let post = run_post_tool_use_hooks(
-                                    &runner,
-                                    &tool_info.name,
-                                    &tool_info.id,
-                                    &tool_input,
-                                    &result_json,
-                                    Some(permission_mode_hook_name(&permission_mode)),
-                                    None,
-                                    None,
-                                )
-                                .await;
-                                for context in &post.additional_contexts {
-                                    query_engine.append_user_context_block(context.clone());
-                                }
-                                if let Some(updated) = post.updated_mcp_tool_output {
-                                    result_json = updated;
-                                    result_text = result_json
-                                        .as_str()
-                                        .unwrap_or(&result_json.to_string())
-                                        .to_string();
-                                }
-                                if let Some(message) =
-                                    hook_blocking_errors_text(&post.blocking_errors)
-                                {
-                                    result_text = message;
-                                    is_error = true;
-                                } else if post.prevent_continuation {
-                                    result_text = post.stop_reason.unwrap_or_else(|| {
-                                        "PostToolUse hook stopped continuation".to_string()
-                                    });
-                                    is_error = true;
-                                }
-                            }
-                        }
-
-                        let mut pending_skill_reminder = None;
-                        if !is_error {
-                            let touched_paths =
-                                dynamic_skill_file_paths(&tool_info.name, &tool_input);
-                            if !touched_paths.is_empty() {
-                                let skill_dirs =
-                                    claude_core::plugins::skill::discover_skill_dirs_for_paths(
-                                        &touched_paths,
-                                        &cwd,
-                                    );
-                                let mut newly_available =
-                                    claude_core::plugins::skill::add_skill_directories(&skill_dirs);
-                                newly_available.extend(
+                            let mut pending_skill_reminder = None;
+                            if !is_error {
+                                let touched_paths =
+                                    dynamic_skill_file_paths(&tool_info.name, &tool_input);
+                                if !touched_paths.is_empty() {
+                                    let skill_dirs =
+                                        claude_core::plugins::skill::discover_skill_dirs_for_paths(
+                                            &touched_paths,
+                                            &cwd,
+                                        );
+                                    let mut newly_available =
+                                        claude_core::plugins::skill::add_skill_directories(
+                                            &skill_dirs,
+                                        );
+                                    newly_available.extend(
                                     claude_core::plugins::skill::activate_conditional_skills_for_paths(
                                         &touched_paths,
                                         &cwd,
                                     ),
                                 );
-                                if !newly_available.is_empty() {
-                                    let mut seen = skills
-                                        .iter()
-                                        .map(|skill| skill.name.clone())
-                                        .collect::<std::collections::HashSet<_>>();
-                                    let mut unique_new = Vec::new();
-                                    for skill in newly_available {
-                                        if !skill.disable_model_invocation
-                                            && seen.insert(skill.name.clone())
-                                        {
-                                            claude_tools::skill_tool::register_discovered_skill(
-                                                &skill,
-                                            );
-                                            unique_new.push(skill.clone());
-                                            skills.push(skill);
+                                    if !newly_available.is_empty() {
+                                        let mut seen = skills
+                                            .iter()
+                                            .map(|skill| skill.name.clone())
+                                            .collect::<std::collections::HashSet<_>>();
+                                        let mut unique_new = Vec::new();
+                                        for skill in newly_available {
+                                            if !skill.disable_model_invocation
+                                                && seen.insert(skill.name.clone())
+                                            {
+                                                claude_tools::skill_tool::register_discovered_skill(
+                                                    &skill,
+                                                );
+                                                unique_new.push(skill.clone());
+                                                skills.push(skill);
+                                            }
                                         }
-                                    }
-                                    if !unique_new.is_empty() {
-                                        pending_skill_reminder =
-                                            Some(skills_reminder_block(&unique_new));
+                                        if !unique_new.is_empty() {
+                                            pending_skill_reminder =
+                                                Some(skills_reminder_block(&unique_new));
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        let result_content = if is_error {
-                            serde_json::Value::String(result_text.clone())
-                        } else {
-                            format_tool_result_content_for_model(&tool_info.name, &result_json)
-                        };
-                        if !is_error && tool_info.name == "StructuredOutput" {
-                            structured_output = result_json.get("structured_output").cloned();
-                        }
-
-                        if cli.output_format == OutputFormat::StreamJson {
-                            emit_stream_json(stream_json_user_tool_result_event(
-                                vec![serde_json::json!({
-                                "type": "tool_result",
-                                "tool_use_id": tool_info.id,
-                                "content": result_content.clone(),
-                                "is_error": is_error,
-                                })],
-                                vec![result_json.clone()],
-                                &session_id,
-                            ));
-                        }
-                        let max_result_size_chars = tools
-                            .get(&tool_info.name)
-                            .map(|tool| tool.max_result_size_chars())
-                            .unwrap_or(100_000);
-                        query_engine.add_tool_result_content_with_error_field_and_name(
-                            &tool_info.id,
-                            Some(&tool_info.name),
-                            Some(max_result_size_chars),
-                            result_content,
-                            is_error,
-                            is_error || tool_info.name == "Bash",
-                        );
-                        if let Some(reminder) = pending_skill_reminder {
-                            query_engine.add_user_context_message(reminder);
-                        }
-                    }
-                    if let Some(max_turns) = cli.max_turns.filter(|max_turns| *max_turns > 0) {
-                        if num_turns >= max_turns {
-                            break PrintTerminalOutcome::MaxTurns {
-                                max_turns,
-                                turn_count: num_turns + 1,
+                            let result_content = if is_error {
+                                serde_json::Value::String(result_text.clone())
+                            } else {
+                                format_tool_result_content_for_model(&tool_info.name, &result_json)
                             };
-                        }
-                    }
-                    // Continue the loop to call run_turn again with the tool results
-                }
-            }
-        };
+                            if !is_error && tool_info.name == "StructuredOutput" {
+                                structured_output = result_json.get("structured_output").cloned();
+                            }
 
-        if cli.output_format == OutputFormat::Json {
-            println!(
-                "{}",
+                            if cli.output_format == OutputFormat::StreamJson {
+                                emit_stream_json(stream_json_user_tool_result_event(
+                                    vec![serde_json::json!({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_info.id,
+                                    "content": result_content.clone(),
+                                    "is_error": is_error,
+                                    })],
+                                    vec![result_json.clone()],
+                                    &session_id,
+                                ));
+                            }
+                            let max_result_size_chars = tools
+                                .get(&tool_info.name)
+                                .map(|tool| tool.max_result_size_chars())
+                                .unwrap_or(100_000);
+                            query_engine.add_tool_result_content_with_error_field_and_name(
+                                &tool_info.id,
+                                Some(&tool_info.name),
+                                Some(max_result_size_chars),
+                                result_content,
+                                is_error,
+                                is_error || tool_info.name == "Bash",
+                            );
+                            if let Some(reminder) = pending_skill_reminder {
+                                query_engine.add_user_context_message(reminder);
+                            }
+                        }
+                        if let Some(max_turns) = cli.max_turns.filter(|max_turns| *max_turns > 0) {
+                            if num_turns >= max_turns {
+                                break PrintTerminalOutcome::MaxTurns {
+                                    max_turns,
+                                    turn_count: num_turns + 1,
+                                };
+                            }
+                        }
+                        // Continue the loop to call run_turn again with the tool results
+                    }
+                }
+            };
+
+            if cli.output_format == OutputFormat::Json {
+                println!(
+                    "{}",
+                    match terminal_outcome {
+                        PrintTerminalOutcome::Completed { .. } => {
+                            let mut value = serde_json::json!({
+                            "type": "result",
+                            "subtype": "success",
+                            "is_error": false,
+                            "result": final_text,
+                            });
+                            if let Some(ref structured) = structured_output {
+                                value["structured_output"] = structured.clone();
+                            }
+                            serde_json::to_string(&value)?
+                        }
+                        PrintTerminalOutcome::MaxTurns { max_turns, .. } =>
+                            serde_json::to_string(&serde_json::json!({
+                                "type": "result",
+                                "subtype": "error_max_turns",
+                                "is_error": true,
+                                "errors": [format!("Reached maximum number of turns ({max_turns})")],
+                            }))?,
+                        PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } =>
+                            serde_json::to_string(&serde_json::json!({
+                                "type": "result",
+                                "subtype": "error_max_budget_usd",
+                                "is_error": true,
+                                "errors": [format!("Reached maximum budget (${max_budget_usd})")],
+                            }))?,
+                        PrintTerminalOutcome::StructuredOutputRetries { max_retries } =>
+                            serde_json::to_string(&serde_json::json!({
+                                "type": "result",
+                                "subtype": "error_max_structured_output_retries",
+                                "is_error": true,
+                                "errors": [format!("Failed to produce valid structured output after {max_retries} retries")],
+                            }))?,
+                    }
+                );
+            } else if cli.output_format == OutputFormat::StreamJson {
+                let total_cost_usd = total_cost_for_usage(&model, total_usage.as_ref());
+                let context_window =
+                    if model_display.contains("[1M]") || model_display.contains("[1m]") {
+                        1_000_000
+                    } else {
+                        claude_core::compact::compactor::default_context_window()
+                    };
+                let duration_ms = started_at.elapsed().as_millis();
+                let meta_num_turns = match terminal_outcome {
+                    PrintTerminalOutcome::Completed { .. } => num_turns,
+                    PrintTerminalOutcome::MaxTurns { turn_count, .. } => turn_count,
+                    PrintTerminalOutcome::MaxBudgetUsd { .. } => num_turns,
+                    PrintTerminalOutcome::StructuredOutputRetries { .. } => num_turns,
+                };
+                let meta = StreamJsonResultMeta {
+                    duration_ms,
+                    num_turns: meta_num_turns,
+                    stop_reason: match &terminal_outcome {
+                        PrintTerminalOutcome::Completed { stop_reason } => stop_reason,
+                        PrintTerminalOutcome::MaxTurns { .. } => "tool_use",
+                        PrintTerminalOutcome::MaxBudgetUsd { .. } => "end_turn",
+                        PrintTerminalOutcome::StructuredOutputRetries { .. } => "end_turn",
+                    },
+                    total_usage: total_usage.as_ref(),
+                    latest_usage: latest_usage.as_ref(),
+                    model_display: &model_display,
+                    max_tokens: resolve_max_output_tokens(&model, &settings),
+                    context_window,
+                    total_cost_usd,
+                };
                 match terminal_outcome {
                     PrintTerminalOutcome::Completed { .. } => {
-                        let mut value = serde_json::json!({
-                        "type": "result",
-                        "subtype": "success",
-                        "is_error": false,
-                        "result": final_text,
-                        });
+                        let mut event =
+                            stream_json_result_event_with_meta(&final_text, &session_id, meta);
                         if let Some(ref structured) = structured_output {
-                            value["structured_output"] = structured.clone();
+                            event["structured_output"] = structured.clone();
                         }
-                        serde_json::to_string(&value)?
+                        emit_stream_json(event);
                     }
-                    PrintTerminalOutcome::MaxTurns { max_turns, .. } =>
-                        serde_json::to_string(&serde_json::json!({
-                            "type": "result",
-                            "subtype": "error_max_turns",
-                            "is_error": true,
-                            "errors": [format!("Reached maximum number of turns ({max_turns})")],
-                        }))?,
-                    PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } =>
-                        serde_json::to_string(&serde_json::json!({
-                            "type": "result",
-                            "subtype": "error_max_budget_usd",
-                            "is_error": true,
-                            "errors": [format!("Reached maximum budget (${max_budget_usd})")],
-                        }))?,
-                    PrintTerminalOutcome::StructuredOutputRetries { max_retries } =>
-                        serde_json::to_string(&serde_json::json!({
-                            "type": "result",
-                            "subtype": "error_max_structured_output_retries",
-                            "is_error": true,
-                            "errors": [format!("Failed to produce valid structured output after {max_retries} retries")],
-                        }))?,
+                    PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
+                        emit_stream_json(stream_json_max_turns_event_with_meta(
+                            max_turns,
+                            &session_id,
+                            meta,
+                        ));
+                    }
+                    PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } => {
+                        emit_stream_json(stream_json_max_budget_usd_event_with_meta(
+                            max_budget_usd,
+                            &session_id,
+                            meta,
+                        ));
+                    }
+                    PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
+                        let mut event =
+                            stream_json_max_turns_event_with_meta(max_retries, &session_id, meta);
+                        event["subtype"] = serde_json::json!("error_max_structured_output_retries");
+                        event["terminal_reason"] =
+                            serde_json::json!("max_structured_output_retries");
+                        event["errors"] = serde_json::json!([format!(
+                            "Failed to produce valid structured output after {max_retries} retries"
+                        )]);
+                        emit_stream_json(event);
+                    }
                 }
-            );
-        } else if cli.output_format == OutputFormat::StreamJson {
-            let total_cost_usd = total_cost_for_usage(&model, total_usage.as_ref());
-            let context_window = if model_display.contains("[1M]") || model_display.contains("[1m]")
-            {
-                1_000_000
             } else {
-                claude_core::compact::compactor::default_context_window()
-            };
-            let duration_ms = started_at.elapsed().as_millis();
-            let meta_num_turns = match terminal_outcome {
-                PrintTerminalOutcome::Completed { .. } => num_turns,
-                PrintTerminalOutcome::MaxTurns { turn_count, .. } => turn_count,
-                PrintTerminalOutcome::MaxBudgetUsd { .. } => num_turns,
-                PrintTerminalOutcome::StructuredOutputRetries { .. } => num_turns,
-            };
-            let meta = StreamJsonResultMeta {
-                duration_ms,
-                num_turns: meta_num_turns,
-                stop_reason: match &terminal_outcome {
-                    PrintTerminalOutcome::Completed { stop_reason } => stop_reason,
-                    PrintTerminalOutcome::MaxTurns { .. } => "tool_use",
-                    PrintTerminalOutcome::MaxBudgetUsd { .. } => "end_turn",
-                    PrintTerminalOutcome::StructuredOutputRetries { .. } => "end_turn",
-                },
-                total_usage: total_usage.as_ref(),
-                latest_usage: latest_usage.as_ref(),
-                model_display: &model_display,
-                max_tokens: resolve_max_output_tokens(&model, &settings),
-                context_window,
-                total_cost_usd,
-            };
-            match terminal_outcome {
-                PrintTerminalOutcome::Completed { .. } => {
-                    let mut event =
-                        stream_json_result_event_with_meta(&final_text, &session_id, meta);
-                    if let Some(ref structured) = structured_output {
-                        event["structured_output"] = structured.clone();
+                match terminal_outcome {
+                    PrintTerminalOutcome::Completed { .. } => {
+                        if !final_text.is_empty() {
+                            println!("{final_text}");
+                        }
                     }
-                    emit_stream_json(event);
-                }
-                PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
-                    emit_stream_json(stream_json_max_turns_event_with_meta(
-                        max_turns,
-                        &session_id,
-                        meta,
-                    ));
-                }
-                PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } => {
-                    emit_stream_json(stream_json_max_budget_usd_event_with_meta(
-                        max_budget_usd,
-                        &session_id,
-                        meta,
-                    ));
-                }
-                PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
-                    let mut event =
-                        stream_json_max_turns_event_with_meta(max_retries, &session_id, meta);
-                    event["subtype"] = serde_json::json!("error_max_structured_output_retries");
-                    event["terminal_reason"] = serde_json::json!("max_structured_output_retries");
-                    event["errors"] = serde_json::json!([format!(
-                        "Failed to produce valid structured output after {max_retries} retries"
-                    )]);
-                    emit_stream_json(event);
-                }
-            }
-        } else {
-            match terminal_outcome {
-                PrintTerminalOutcome::Completed { .. } => {
-                    if !final_text.is_empty() {
-                        println!("{final_text}");
+                    PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
+                        println!("Error: Reached max turns ({max_turns})");
                     }
-                }
-                PrintTerminalOutcome::MaxTurns { max_turns, .. } => {
-                    println!("Error: Reached max turns ({max_turns})");
-                }
-                PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } => {
-                    println!("Error: Exceeded USD budget ({max_budget_usd})");
-                }
-                PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
-                    println!(
+                    PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd } => {
+                        println!("Error: Exceeded USD budget ({max_budget_usd})");
+                    }
+                    PrintTerminalOutcome::StructuredOutputRetries { max_retries } => {
+                        println!(
                         "Error: Failed to produce valid structured output after {max_retries} retries"
                     );
+                    }
                 }
             }
+
+            // Gracefully disconnect MCP servers
+            let Some(rx) = remote_sdk_rx.as_mut() else {
+                let mgr = mcp_manager.read().await;
+                mgr.disconnect_all().await;
+
+                return Ok(());
+            };
+            if let Some(next_prompt) = queued_remote_prompts.pop_front() {
+                pending_remote_prompt = next_prompt;
+                continue;
+            }
+            loop {
+                match rx.recv().await {
+                    Some(RemoteSdkInbound::User(next_prompt)) => {
+                        pending_remote_prompt = next_prompt;
+                        break;
+                    }
+                    Some(RemoteSdkInbound::ControlResponse(_)) => {
+                        continue;
+                    }
+                    Some(RemoteSdkInbound::EndSession) | None => {
+                        let mgr = mcp_manager.read().await;
+                        mgr.disconnect_all().await;
+                        return Ok(());
+                    }
+                }
+            }
+            continue;
         }
-
-        // Gracefully disconnect MCP servers
-        let mgr = mcp_manager.read().await;
-        mgr.disconnect_all().await;
-
-        return Ok(());
     }
 
     // Interactive TUI mode
@@ -8205,6 +8583,71 @@ mod remote_control_tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn remote_permission_request_shape_matches_sdk_can_use_tool() {
+        assert_eq!(
+            remote_permission_request(
+                "req-1",
+                "Bash",
+                "toolu_1",
+                &serde_json::json!({"command": "cargo build"}),
+                "Bash needs permission",
+                &None,
+                &None,
+            ),
+            serde_json::json!({
+                "type": "control_request",
+                "request_id": "req-1",
+                "request": {
+                    "subtype": "can_use_tool",
+                    "tool_name": "Bash",
+                    "input": {"command": "cargo build"},
+                    "decision_reason": "Bash needs permission",
+                    "tool_use_id": "toolu_1",
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn remote_permission_response_parses_allow_and_deny() {
+        let allow = serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "req-1",
+                "response": {
+                    "behavior": "allow",
+                    "updatedInput": {"command": "cargo test"}
+                }
+            }
+        });
+        let (allowed, updated, updated_permissions, message) =
+            parse_remote_permission_response(&allow).unwrap();
+        assert!(allowed);
+        assert_eq!(updated, Some(serde_json::json!({"command": "cargo test"})));
+        assert!(updated_permissions.is_none());
+        assert!(message.is_empty());
+
+        let deny = serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "req-1",
+                "response": {
+                    "behavior": "deny",
+                    "message": "No"
+                }
+            }
+        });
+        let (allowed, updated, updated_permissions, message) =
+            parse_remote_permission_response(&deny).unwrap();
+        assert!(!allowed);
+        assert_eq!(updated, None);
+        assert!(updated_permissions.is_none());
+        assert_eq!(message, "No");
     }
 
     #[test]
