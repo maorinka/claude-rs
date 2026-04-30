@@ -72,6 +72,27 @@ impl McpServerSettingsEntry {
     }
 }
 
+/// XAA IdP connection settings. Mirrors TS `settings.xaaIdp`; secrets and
+/// id_tokens live in secure storage under issuer-keyed maps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XaaIdpSettings {
+    pub issuer: String,
+    pub client_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u32>,
+}
+
+impl Default for XaaIdpSettings {
+    fn default() -> Self {
+        Self {
+            issuer: String::new(),
+            client_id: String::new(),
+            callback_port: None,
+        }
+    }
+}
+
 /// Top-level settings structure. All fields are optional so that partial
 /// configurations can be layered via `merge`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -139,6 +160,12 @@ pub struct Settings {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub mcp_servers: HashMap<String, McpServerSettingsEntry>,
+
+    /// Enterprise XAA IdP connection. TS gates this field from public docs/types
+    /// behind `CLAUDE_CODE_ENABLE_XAA`, but the serialized key is still
+    /// `xaaIdp` when configured.
+    #[serde(rename = "xaaIdp", skip_serializing_if = "Option::is_none")]
+    pub xaa_idp: Option<XaaIdpSettings>,
 
     /// Sandbox configuration for isolated bash command execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -298,6 +325,7 @@ impl Settings {
             skip_web_fetch_preflight: overlay
                 .skip_web_fetch_preflight
                 .or(self.skip_web_fetch_preflight),
+            xaa_idp: overlay.xaa_idp.clone().or_else(|| self.xaa_idp.clone()),
             extra: {
                 let mut extra = self.extra.clone();
                 extra.extend(overlay.extra.clone());
@@ -334,5 +362,52 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(base.merge(&overlay).skip_web_fetch_preflight, Some(false));
+    }
+
+    #[test]
+    fn xaa_idp_uses_ts_camel_case_key_and_merges_as_scalar() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"xaaIdp":{"issuer":"https://idp.example.com","clientId":"client","callbackPort":8080}}"#,
+        )
+        .unwrap();
+        let idp = settings.xaa_idp.as_ref().unwrap();
+        assert_eq!(idp.issuer, "https://idp.example.com");
+        assert_eq!(idp.client_id, "client");
+        assert_eq!(idp.callback_port, Some(8080));
+
+        let serialized = serde_json::to_string(&settings).unwrap();
+        assert!(serialized.contains("xaaIdp"));
+        assert!(serialized.contains("clientId"));
+        assert!(serialized.contains("callbackPort"));
+
+        let base = Settings {
+            xaa_idp: Some(XaaIdpSettings {
+                issuer: "https://old.example.com".into(),
+                client_id: "old".into(),
+                callback_port: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            base.merge(&Settings::default())
+                .xaa_idp
+                .as_ref()
+                .unwrap()
+                .issuer,
+            "https://old.example.com"
+        );
+
+        let overlay = Settings {
+            xaa_idp: Some(XaaIdpSettings {
+                issuer: "https://new.example.com".into(),
+                client_id: "new".into(),
+                callback_port: Some(9000),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            base.merge(&overlay).xaa_idp.as_ref().unwrap().client_id,
+            "new"
+        );
     }
 }

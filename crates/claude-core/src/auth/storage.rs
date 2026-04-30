@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Credentials keychain service suffix, matching TS `CREDENTIALS_SERVICE_SUFFIX`.
@@ -73,6 +75,23 @@ pub struct OAuthStoredTokens {
     pub rate_limit_tier: Option<String>,
 }
 
+/// XAA IdP id_token cache entry. Matches TS secure storage:
+/// `mcpXaaIdp[issuerKey] = { idToken, expiresAt }`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XaaIdpTokenEntry {
+    pub id_token: String,
+    pub expires_at: u64,
+}
+
+/// XAA IdP client-secret cache entry. Matches TS secure storage:
+/// `mcpXaaIdpConfig[issuerKey] = { clientSecret }`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XaaIdpConfigEntry {
+    pub client_secret: String,
+}
+
 /// Top-level secure storage structure, matching the TS `SecureStorageData`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +100,12 @@ struct SecureStorageData {
     claude_ai_oauth: Option<OAuthStoredTokens>,
     #[serde(skip_serializing_if = "Option::is_none")]
     trusted_device_token: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    mcp_xaa_idp: HashMap<String, XaaIdpTokenEntry>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    mcp_xaa_idp_config: HashMap<String, XaaIdpConfigEntry>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 /// Load OAuth tokens from the macOS Keychain (same location as real Claude Code).
@@ -226,6 +251,57 @@ pub async fn clear_trusted_device_token() -> Result<()> {
     Ok(())
 }
 
+pub async fn load_xaa_idp_token_entry(issuer_key: &str) -> Result<Option<XaaIdpTokenEntry>> {
+    Ok(load_secure_storage_data()
+        .await?
+        .and_then(|data| data.mcp_xaa_idp.get(issuer_key).cloned()))
+}
+
+pub async fn store_xaa_idp_token_entry(issuer_key: &str, entry: XaaIdpTokenEntry) -> Result<()> {
+    update_secure_storage_data(|mut data| {
+        data.mcp_xaa_idp.insert(issuer_key.to_string(), entry);
+        data
+    })
+    .await
+}
+
+pub async fn clear_xaa_idp_token_entry(issuer_key: &str) -> Result<()> {
+    update_secure_storage_data(|mut data| {
+        data.mcp_xaa_idp.remove(issuer_key);
+        data
+    })
+    .await
+}
+
+pub async fn load_xaa_idp_client_secret(issuer_key: &str) -> Result<Option<String>> {
+    Ok(load_secure_storage_data().await?.and_then(|data| {
+        data.mcp_xaa_idp_config
+            .get(issuer_key)
+            .map(|entry| entry.client_secret.clone())
+    }))
+}
+
+pub async fn store_xaa_idp_client_secret(issuer_key: &str, client_secret: &str) -> Result<()> {
+    update_secure_storage_data(|mut data| {
+        data.mcp_xaa_idp_config.insert(
+            issuer_key.to_string(),
+            XaaIdpConfigEntry {
+                client_secret: client_secret.to_string(),
+            },
+        );
+        data
+    })
+    .await
+}
+
+pub async fn clear_xaa_idp_client_secret(issuer_key: &str) -> Result<()> {
+    update_secure_storage_data(|mut data| {
+        data.mcp_xaa_idp_config.remove(issuer_key);
+        data
+    })
+    .await
+}
+
 /// Load the `/login`-managed API key.
 ///
 /// Matches the TS `getApiKeyFromConfigOrMacOSKeychain()` behavior:
@@ -295,6 +371,30 @@ async fn store_to_keychain(json: &str) -> Result<()> {
     let hex_value = hex::encode(json.as_bytes());
 
     store_hex_value_in_keychain(&service, &username, &hex_value).await
+}
+
+async fn update_secure_storage_data<F>(updater: F) -> Result<()>
+where
+    F: FnOnce(SecureStorageData) -> SecureStorageData,
+{
+    let data = load_secure_storage_data().await?.unwrap_or_default();
+    let data = updater(data);
+    write_secure_storage_data(&data).await
+}
+
+async fn write_secure_storage_data(data: &SecureStorageData) -> Result<()> {
+    let json = serde_json::to_string(data)?;
+    let path = credentials_path()?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, &json).await?;
+    if cfg!(target_os = "macos") {
+        if let Err(e) = store_to_keychain(&json).await {
+            tracing::warn!("Failed to store secure storage data in keychain: {}", e);
+        }
+    }
+    Ok(())
 }
 
 async fn store_api_key_to_keychain(api_key: &str) -> Result<()> {
@@ -428,6 +528,9 @@ mod tests {
         let data = SecureStorageData {
             claude_ai_oauth: Some(tokens),
             trusted_device_token: None,
+            mcp_xaa_idp: HashMap::new(),
+            mcp_xaa_idp_config: HashMap::new(),
+            extra: Map::new(),
         };
 
         let json = serde_json::to_string(&data).unwrap();
@@ -471,5 +574,46 @@ mod tests {
         assert_eq!(oauth.scopes.len(), 3);
         assert_eq!(oauth.subscription_type.as_deref(), Some("pro"));
         assert_eq!(oauth.rate_limit_tier.as_deref(), Some("tier1"));
+    }
+
+    #[test]
+    fn test_xaa_secure_storage_shape_matches_ts() {
+        let ts_json = r#"{
+            "mcpXaaIdp": {
+                "https://idp.example.com/tenant": {
+                    "idToken": "jwt",
+                    "expiresAt": 1700000000000
+                }
+            },
+            "mcpXaaIdpConfig": {
+                "https://idp.example.com/tenant": {
+                    "clientSecret": "secret"
+                }
+            },
+            "futureKey": {"kept": true}
+        }"#;
+
+        let data: SecureStorageData = serde_json::from_str(ts_json).unwrap();
+        let token = data
+            .mcp_xaa_idp
+            .get("https://idp.example.com/tenant")
+            .unwrap();
+        assert_eq!(token.id_token, "jwt");
+        assert_eq!(token.expires_at, 1700000000000);
+        assert_eq!(
+            data.mcp_xaa_idp_config
+                .get("https://idp.example.com/tenant")
+                .unwrap()
+                .client_secret,
+            "secret"
+        );
+        assert!(data.extra.contains_key("futureKey"));
+
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(json.contains("mcpXaaIdp"));
+        assert!(json.contains("mcpXaaIdpConfig"));
+        assert!(json.contains("idToken"));
+        assert!(json.contains("clientSecret"));
+        assert!(json.contains("futureKey"));
     }
 }

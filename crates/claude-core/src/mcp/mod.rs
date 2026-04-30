@@ -12,3 +12,4 @@ pub mod manager;
 pub mod output_storage;
 pub mod result_transform;
 pub mod types;
+pub mod xaa_idp;
