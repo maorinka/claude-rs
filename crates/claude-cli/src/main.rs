@@ -238,6 +238,7 @@ struct StreamJsonStdinSeed {
     append_system_prompt: Option<String>,
     json_schema: Option<String>,
     control_requests: Vec<Value>,
+    restored_worker_metadata: Option<Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +328,18 @@ fn parse_stream_json_stdin(stdin: &str) -> Result<StreamJsonStdinSeed> {
         }
     }
     Ok(seed)
+}
+
+fn apply_restored_worker_metadata_to_cli(cli: &mut Cli, metadata: &Value) {
+    if let Some(model) = metadata.get("model").and_then(|value| value.as_str()) {
+        cli.model = Some(model.to_string());
+    }
+    if let Some(permission_mode) = metadata
+        .get("permission_mode")
+        .and_then(|value| value.as_str())
+    {
+        cli.permission_mode = Some(permission_mode.to_string());
+    }
 }
 
 fn session_ingress_auth_token() -> Option<String> {
@@ -918,6 +931,30 @@ fn ccr_internal_events_read_url(
         }
     }
     Ok(url.to_string())
+}
+
+fn ccr_worker_read_url(sdk_url: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(sdk_url)?;
+    let mut pathname = url.path().trim_end_matches('/').to_string();
+    pathname.push_str("/worker");
+    url.set_path(&pathname);
+    url.set_query(None);
+    Ok(url.to_string())
+}
+
+async fn read_remote_ccr_worker_metadata(sdk_url: &str) -> Result<Option<Value>> {
+    let Some(token) = session_ingress_auth_token() else {
+        return Ok(None);
+    };
+    let url = ccr_worker_read_url(sdk_url)?;
+    let client = reqwest::Client::new();
+    let Some(page) = get_remote_ccr_internal_events_page(&client, &url, &token).await? else {
+        return Ok(None);
+    };
+    Ok(page
+        .get("worker")
+        .and_then(|worker| worker.get("external_metadata"))
+        .cloned())
 }
 
 async fn get_remote_ccr_internal_events_page(
@@ -1702,6 +1739,7 @@ fn spawn_remote_ccr_background_reader(
 async fn read_remote_ccr_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
     use futures_util::StreamExt;
 
+    let restored_worker_metadata = read_remote_ccr_worker_metadata(sdk_url).await?;
     install_remote_stream_json_poster(sdk_url)?;
     spawn_remote_stdin_environment_updater();
 
@@ -1723,7 +1761,10 @@ async fn read_remote_ccr_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
     }
 
     let mut stream = response.bytes_stream();
-    let mut seed = StreamJsonStdinSeed::default();
+    let mut seed = StreamJsonStdinSeed {
+        restored_worker_metadata,
+        ..Default::default()
+    };
     let mut buffer = String::new();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     while let Some(chunk) = stream.next().await {
@@ -7260,6 +7301,7 @@ async fn main() -> Result<()> {
     let mut prompt_arg = cli.prompt.clone();
     let mut prompt_delivery_event_id: Option<String> = None;
     let mut initial_remote_control_requests = Vec::new();
+    let mut restored_remote_worker_metadata: Option<Value> = None;
     let mut remote_sdk_rx = None;
     if cli.print && prompt_arg.is_none() {
         if let Some(sdk_url) = cli.sdk_url.clone() {
@@ -7271,6 +7313,7 @@ async fn main() -> Result<()> {
                 prompt_delivery_event_id = seed.prompt_delivery_event_id;
             }
             initial_remote_control_requests = seed.control_requests;
+            restored_remote_worker_metadata = seed.restored_worker_metadata;
             if seed.system_prompt.is_some() {
                 cli.system_prompt = seed.system_prompt;
                 cli.system_prompt_file = None;
@@ -7299,6 +7342,7 @@ async fn main() -> Result<()> {
                         prompt_arg = seed.prompt;
                     }
                     initial_remote_control_requests = seed.control_requests;
+                    restored_remote_worker_metadata = seed.restored_worker_metadata;
                     if seed.system_prompt.is_some() {
                         cli.system_prompt = seed.system_prompt;
                         cli.system_prompt_file = None;
@@ -7322,6 +7366,9 @@ async fn main() -> Result<()> {
     // Set working directory if specified
     if let Some(dir) = &cli.working_dir {
         std::env::set_current_dir(dir)?;
+    }
+    if let Some(metadata) = restored_remote_worker_metadata.as_ref() {
+        apply_restored_worker_metadata_to_cli(&mut cli, metadata);
     }
     let is_interactive_session = prompt_arg.is_none();
     initialize_entrypoint(is_interactive_session);
@@ -9923,6 +9970,15 @@ mod remote_control_tests {
     }
 
     #[test]
+    fn remote_ccr_worker_read_url_matches_ts_transport() {
+        assert_eq!(
+            ccr_worker_read_url("https://api.example.com/v1/code/sessions/session-123?ignored=1")
+                .unwrap(),
+            "https://api.example.com/v1/code/sessions/session-123/worker"
+        );
+    }
+
+    #[test]
     fn remote_ccr_subagent_internal_events_group_by_agent_id() {
         let grouped = group_ccr_subagent_internal_events(vec![
             CcrInternalEvent {
@@ -10144,6 +10200,21 @@ mod remote_control_tests {
             seed.control_requests[0]["request"]["subtype"],
             serde_json::json!("set_model")
         );
+    }
+
+    #[test]
+    fn restored_worker_metadata_applies_model_and_permission_mode_like_ts() {
+        let mut cli = Cli::parse_from(["claude-rs", "--print", "hi"]);
+        apply_restored_worker_metadata_to_cli(
+            &mut cli,
+            &serde_json::json!({
+                "model": "claude-opus-4-7[1m]",
+                "permission_mode": "acceptEdits",
+                "pending_action": null,
+            }),
+        );
+        assert_eq!(cli.model.as_deref(), Some("claude-opus-4-7[1m]"));
+        assert_eq!(cli.permission_mode.as_deref(), Some("acceptEdits"));
     }
 
     #[test]

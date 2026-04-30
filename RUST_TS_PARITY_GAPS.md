@@ -562,7 +562,10 @@ Improved:
   `permission_mode`, and `is_ultraplan_mode` through the worker metadata path.
   CCR v2 resume also reads `subagents=true` internal events, groups them by
   `agent_id`, and restores each agent transcript with the same event-sourced
-  mechanism TS uses.
+  mechanism TS uses. On CCR worker restart, Rust now also reads `/worker`
+  `external_metadata` and restores the active model and external permission
+  mode before building the next turn, matching TS `externalMetadataToAppState`
+  plus `setMainLoopModelOverride`.
 
 Missing or partial:
 - Full bridge messaging.
