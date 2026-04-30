@@ -19,3 +19,4 @@ chrono.workspace = true
 dirs = "6"
 textwrap = "0.16"
 unicode-width = "0.2"
+uuid.workspace = true

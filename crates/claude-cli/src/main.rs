@@ -259,6 +259,93 @@ struct RemoteSdkSeed {
     rx: tokio::sync::mpsc::UnboundedReceiver<RemoteSdkInbound>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParsedConnectUrl {
+    server_url: String,
+    auth_token: Option<String>,
+}
+
+fn parse_direct_connect_url(raw: &str) -> Result<ParsedConnectUrl> {
+    let url = reqwest::Url::parse(raw).with_context(|| format!("Invalid connect URL: {raw}"))?;
+    match url.scheme() {
+        "cc" | "cc+unix" => {}
+        other => anyhow::bail!("Unsupported connect URL scheme: {other}"),
+    }
+    let query_server_url = url
+        .query_pairs()
+        .find_map(|(key, value)| {
+            matches!(key.as_ref(), "serverUrl" | "server_url" | "url").then(|| value.into_owned())
+        })
+        .filter(|value| !value.trim().is_empty());
+    let auth_token = url
+        .query_pairs()
+        .find_map(|(key, value)| {
+            matches!(key.as_ref(), "authToken" | "auth_token" | "token").then(|| value.into_owned())
+        })
+        .filter(|value| !value.trim().is_empty());
+
+    let server_url = if let Some(server_url) = query_server_url {
+        server_url
+    } else if url.scheme() == "cc" {
+        let host = url
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid connect URL: missing server URL"))?;
+        let mut server_url = if host == "http" || host == "https" {
+            format!("{host}:{}", url.path())
+        } else {
+            format!("https://{host}{}", url.path())
+        };
+        if server_url.ends_with('/') {
+            server_url.pop();
+        }
+        server_url
+    } else {
+        anyhow::bail!("cc+unix connect URLs must include a serverUrl query parameter");
+    };
+
+    Ok(ParsedConnectUrl {
+        server_url,
+        auth_token,
+    })
+}
+
+fn rewrite_direct_connect_args(
+    args: impl IntoIterator<Item = String>,
+) -> Result<(Vec<String>, Option<ParsedConnectUrl>, bool)> {
+    let mut args = args.into_iter().collect::<Vec<_>>();
+    if args.len() <= 1 {
+        return Ok((args, None, false));
+    }
+    let Some(index) = args
+        .iter()
+        .skip(1)
+        .position(|arg| arg.starts_with("cc://") || arg.starts_with("cc+unix://"))
+        .map(|idx| idx + 1)
+    else {
+        return Ok((args, None, false));
+    };
+    let raw = args[index].clone();
+    let parsed = parse_direct_connect_url(&raw)?;
+    let print_mode = args.iter().any(|arg| arg == "-p" || arg == "--print");
+    let dsp_flag = "--dangerously-skip-permissions";
+    let dangerously_skip_permissions = args.iter().any(|arg| arg == dsp_flag);
+    if print_mode {
+        let bin = args[0].clone();
+        let stripped = args
+            .into_iter()
+            .enumerate()
+            .skip(1)
+            .filter_map(|(i, arg)| (i != index && arg != dsp_flag).then_some(arg));
+        let mut rewritten = vec![bin, "open".to_string(), raw];
+        rewritten.extend(stripped);
+        args = rewritten;
+    } else {
+        args.remove(index);
+        args.retain(|arg| arg != dsp_flag);
+    }
+    Ok((args, Some(parsed), dangerously_skip_permissions))
+}
+
 fn sdk_content_to_prompt(content: &serde_json::Value) -> Option<String> {
     match content {
         serde_json::Value::String(text) => Some(text.clone()),
@@ -1850,6 +1937,107 @@ async fn read_remote_sdk_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
     Ok(RemoteSdkSeed { seed, rx })
 }
 
+fn direct_connect_message_text(value: &Value) -> String {
+    let content = value.pointer("/message/content").unwrap_or(&Value::Null);
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block.get("type").and_then(Value::as_str) {
+                Some("text") => block.get("text").and_then(Value::as_str),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
+
+async fn run_direct_connect_headless(
+    config: claude_core::bridge::direct_connect::DirectConnectConfig,
+    prompt: String,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<
+        claude_core::bridge::direct_connect::DirectConnectInbound,
+    >(128);
+    let ws =
+        claude_core::bridge::direct_connect::DirectConnectWebSocket::connect(&config, inbound_tx)
+            .await?;
+    if !prompt.is_empty() {
+        ws.send_message(serde_json::json!(prompt)).await?;
+    }
+
+    let started_at = std::time::Instant::now();
+    let mut final_text = String::new();
+    while let Some(inbound) = inbound_rx.recv().await {
+        match inbound {
+            claude_core::bridge::direct_connect::DirectConnectInbound::Ignored => {}
+            claude_core::bridge::direct_connect::DirectConnectInbound::UnsupportedControlRequest {
+                request_id,
+                subtype,
+            } => {
+                let error = format!(
+                    "Unsupported control request subtype: {}",
+                    subtype.as_deref().unwrap_or_default()
+                );
+                let _ = ws.send_error_response(&request_id, &error).await;
+            }
+            claude_core::bridge::direct_connect::DirectConnectInbound::PermissionRequest {
+                request_id,
+                ..
+            } => {
+                let _ = ws
+                    .respond_to_permission_request(
+                        &request_id,
+                        "deny",
+                        None,
+                        Some("Permission denied in headless direct-connect mode"),
+                    )
+                    .await;
+            }
+            claude_core::bridge::direct_connect::DirectConnectInbound::Message(value) => {
+                match output_format {
+                    OutputFormat::StreamJson => {
+                        println!("{}", serde_json::to_string(&value)?);
+                    }
+                    OutputFormat::Text | OutputFormat::Json => {}
+                }
+                match value.get("type").and_then(Value::as_str) {
+                    Some("assistant") => {
+                        let text = direct_connect_message_text(&value);
+                        if output_format == OutputFormat::Text && !text.is_empty() {
+                            print!("{text}");
+                        }
+                        final_text.push_str(&text);
+                    }
+                    Some("result") => {
+                        if output_format == OutputFormat::Json {
+                            println!(
+                                "{}",
+                                serde_json::to_string(&serde_json::json!({
+                                    "type": "result",
+                                    "subtype": "success",
+                                    "is_error": false,
+                                    "result": final_text,
+                                    "duration_ms": started_at.elapsed().as_millis(),
+                                    "session_id": config.session_id,
+                                }))?
+                            );
+                        }
+                        if output_format == OutputFormat::Text && !final_text.ends_with('\n') {
+                            println!();
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn read_json_arg_or_file(raw: &str, label: &str) -> Result<Value> {
     if let Ok(value) = serde_json::from_str::<Value>(raw) {
         return Ok(value);
@@ -2122,6 +2310,15 @@ pub enum SubCommand {
         /// Do not pre-create a session in the current directory
         #[arg(long = "no-create-session-in-dir")]
         no_create_session_in_dir: bool,
+    },
+    /// Connect to a Claude Code server (internal — use cc:// URLs)
+    #[command(hide = true)]
+    Open {
+        cc_url: String,
+        #[arg(short = 'p', long = "print")]
+        print: Option<Option<String>>,
+        #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
+        output_format: OutputFormat,
     },
 }
 
@@ -7528,7 +7725,9 @@ fn maybe_handle_remote_control_fast_path_args() {
 #[tokio::main]
 async fn main() -> Result<()> {
     maybe_handle_remote_control_fast_path_args();
-    let mut cli = Cli::parse();
+    let (rewritten_args, pending_direct_connect, pending_direct_skip_permissions) =
+        rewrite_direct_connect_args(std::env::args())?;
+    let mut cli = Cli::parse_from(rewritten_args);
     if cli.bare {
         std::env::set_var("CLAUDE_CODE_SIMPLE", "1");
     }
@@ -7744,7 +7943,51 @@ async fn main() -> Result<()> {
             .await?;
             return Ok(());
         }
+        Some(SubCommand::Open {
+            cc_url,
+            print,
+            output_format,
+        }) => {
+            let parsed = parse_direct_connect_url(cc_url)?;
+            let session = claude_core::bridge::direct_connect::create_direct_connect_session(
+                &reqwest::Client::new(),
+                &parsed.server_url,
+                parsed.auth_token.as_deref(),
+                &std::env::current_dir()?.display().to_string(),
+                cli.dangerously_skip_permissions || pending_direct_skip_permissions,
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+            if let Some(work_dir) = session.work_dir.as_deref() {
+                std::env::set_current_dir(work_dir)?;
+            }
+            let prompt = print
+                .as_ref()
+                .and_then(|value| value.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            run_direct_connect_headless(session.config, prompt, output_format.clone()).await?;
+            return Ok(());
+        }
         None => {}
+    }
+
+    let mut direct_connect_config = None;
+    if let Some(parsed) = pending_direct_connect {
+        let session = claude_core::bridge::direct_connect::create_direct_connect_session(
+            &reqwest::Client::new(),
+            &parsed.server_url,
+            parsed.auth_token.as_deref(),
+            &std::env::current_dir()?.display().to_string(),
+            cli.dangerously_skip_permissions || pending_direct_skip_permissions,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        if let Some(work_dir) = session.work_dir.as_deref() {
+            std::env::set_current_dir(work_dir)?;
+        }
+        direct_connect_config = Some(session.config);
+        prompt_arg = None;
     }
 
     // Resolve authentication (reads keychain, refreshes OAuth tokens)
@@ -9821,6 +10064,9 @@ async fn main() -> Result<()> {
     let mut app = claude_tui::app::App::new()?;
     app.set_model_name(&model_display);
     app.set_skills(skills);
+    if let Some(config) = direct_connect_config {
+        app.set_direct_connect_config(config);
+    }
     app.run_with_engine(
         query_engine,
         tools,
@@ -10539,6 +10785,38 @@ mod remote_control_tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn direct_connect_rewrite_matches_ts_cc_url_flow() {
+        let args = vec![
+            "claude-rs".to_string(),
+            "cc://connect?serverUrl=http%3A%2F%2F127.0.0.1%3A4141&authToken=tok".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+        ];
+        let (rewritten, parsed, skip) = rewrite_direct_connect_args(args).unwrap();
+        assert_eq!(rewritten, vec!["claude-rs"]);
+        assert!(skip);
+        let parsed = parsed.unwrap();
+        assert_eq!(parsed.server_url, "http://127.0.0.1:4141");
+        assert_eq!(parsed.auth_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn direct_connect_print_rewrites_to_internal_open_subcommand() {
+        let args = vec![
+            "claude-rs".to_string(),
+            "-p".to_string(),
+            "hello".to_string(),
+            "cc://connect?serverUrl=http%3A%2F%2F127.0.0.1%3A4141".to_string(),
+        ];
+        let (rewritten, parsed, skip) = rewrite_direct_connect_args(args).unwrap();
+        assert!(!skip);
+        assert!(parsed.is_some());
+        assert_eq!(rewritten[1], "open");
+        assert!(rewritten[2].starts_with("cc://"));
+        assert_eq!(rewritten[3], "-p");
+        assert_eq!(rewritten[4], "hello");
     }
 
     #[test]

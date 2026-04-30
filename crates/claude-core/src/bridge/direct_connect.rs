@@ -107,6 +107,7 @@ pub async fn create_direct_connect_session(
     })
 }
 
+#[derive(Clone)]
 pub struct DirectConnectWebSocket {
     write_tx: mpsc::Sender<String>,
 }

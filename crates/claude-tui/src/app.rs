@@ -35,6 +35,9 @@ use claude_core::query::engine::{QueryEngine, ToolUseInfo, TurnResult};
 use claude_core::types::events::{StreamEvent, ToolResultData};
 use claude_tools::{ToolRegistry, ToolUseContext};
 
+use claude_core::bridge::direct_connect::{
+    DirectConnectConfig, DirectConnectInbound, DirectConnectWebSocket,
+};
 use claude_core::commands::builtin::build_default_commands;
 use claude_core::commands::registry::{
     CommandContext, CommandRegistry, CommandResult, SharedCommandState,
@@ -191,6 +194,10 @@ pub enum AppEvent {
     /// `Some(text)` populates the dialog's explanation field; `None`
     /// silently leaves it unset (no model registered, or the call failed).
     PermissionExplanation(Option<String>),
+    /// Direct-connect WebSocket delivered a StructuredIO frame from the server.
+    DirectConnectInbound(DirectConnectInbound),
+    /// Direct-connect transport failed before or during the session.
+    DirectConnectError(String),
 }
 
 /// Commands sent to the dedicated engine task via a channel.
@@ -327,6 +334,14 @@ pub struct App {
     context_window: u64,
     /// Viewport height (updated on render, used for page-up/down)
     viewport_height: u16,
+    /// Remote direct-connect session config for `cc://` interactive mode.
+    direct_connect_config: Option<DirectConnectConfig>,
+    /// Direct-connect WebSocket writer once connected.
+    direct_connect_ws: Option<DirectConnectWebSocket>,
+    /// TS useDirectConnect suppresses duplicate init messages sent per turn.
+    direct_connect_received_init: bool,
+    /// Direct-connect permission request currently shown in the shared dialog.
+    direct_connect_pending_permission: Option<(String, serde_json::Value)>,
 }
 
 impl App {
@@ -361,6 +376,10 @@ impl App {
             _session_start: std::time::Instant::now(),
             context_window: 200_000,
             viewport_height: 24,
+            direct_connect_config: None,
+            direct_connect_ws: None,
+            direct_connect_received_init: false,
+            direct_connect_pending_permission: None,
         })
     }
 
@@ -434,6 +453,11 @@ impl App {
     /// Set discovered skills for the command picker.
     pub fn set_skills(&mut self, skills: Vec<Skill>) {
         self.skills = skills;
+    }
+
+    /// Switch the TUI submit path to the TS direct-connect remote transport.
+    pub fn set_direct_connect_config(&mut self, config: DirectConnectConfig) {
+        self.direct_connect_config = Some(config);
     }
 
     /// Build command picker entries from the command registry and discovered skills.
@@ -781,6 +805,34 @@ impl App {
         execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
+        if let Some(config) = self.direct_connect_config.clone() {
+            let (inbound_tx, mut inbound_rx) = mpsc::channel::<DirectConnectInbound>(128);
+            match DirectConnectWebSocket::connect(&config, inbound_tx).await {
+                Ok(ws) => {
+                    self.direct_connect_ws = Some(ws);
+                    let tx_direct = tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(inbound) = inbound_rx.recv().await {
+                            if tx_direct
+                                .send(AppEvent::DirectConnectInbound(inbound))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    let _ = tx
+                        .send(AppEvent::DirectConnectError(format!(
+                            "Failed to connect to server at {}: {err}",
+                            config.ws_url
+                        )))
+                        .await;
+                }
+            }
+        }
 
         // Channel-based engine: the engine lives in its own task and receives
         // commands via `engine_tx`.  Sends are non-blocking so the event loop
@@ -1329,7 +1381,15 @@ impl App {
                         // Escape: cancel in-progress response (does not quit).
                         if k.code == KeyCode::Esc && k.modifiers.is_empty() {
                             if self.engine_busy {
-                                cancel.cancel();
+                                if let Some(ws) = self.direct_connect_ws.clone() {
+                                    tokio::spawn(async move {
+                                        let _ = ws
+                                            .send_interrupt(&uuid::Uuid::new_v4().to_string())
+                                            .await;
+                                    });
+                                } else {
+                                    cancel.cancel();
+                                }
                                 // Preserve any partial streaming text already in the
                                 // message list (appended incrementally by TextDelta handlers).
                                 self.engine_busy = false;
@@ -1644,6 +1704,23 @@ impl App {
                         }
                     }
 
+                    if let Some(ws) = self.direct_connect_ws.clone() {
+                        self.message_list
+                            .push(MessageEntry::User { text: text.clone() });
+                        self.engine_busy = true;
+                        self.spinner.start(SpinnerMode::Requesting);
+                        let tx_direct = tx.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = ws.send_message(serde_json::json!(text.trim())).await
+                            {
+                                let _ = tx_direct
+                                    .send(AppEvent::DirectConnectError(err.to_string()))
+                                    .await;
+                            }
+                        });
+                        continue;
+                    }
+
                     // Regular user message
                     if let Some(runner) = get_global_runner() {
                         let user_prompt_submit = runner
@@ -1717,8 +1794,56 @@ impl App {
                 AppEvent::Stream(stream_event) => {
                     self.handle_stream_event(stream_event);
                 }
+                AppEvent::DirectConnectInbound(inbound) => {
+                    self.handle_direct_connect_inbound(inbound);
+                    if !self.engine_busy && self.direct_connect_ws.is_some() {
+                        self.spinner.queued_count = 0;
+                        if let Some(queued) = self.pop_queued_message() {
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                            });
+                        }
+                    }
+                }
+                AppEvent::DirectConnectError(message) => {
+                    self.spinner.stop();
+                    self.spinner.queued_count = 0;
+                    self.engine_busy = false;
+                    self.message_list.push(MessageEntry::System {
+                        text: format!("Error: {message}"),
+                    });
+                }
                 AppEvent::PermissionResponse(response) => {
                     self.permission_dialog = None;
+
+                    if let Some((request_id, _input)) =
+                        self.direct_connect_pending_permission.take()
+                    {
+                        if let Some(ws) = self.direct_connect_ws.clone() {
+                            let behavior = if matches!(response.as_str(), "allow" | "always") {
+                                "allow"
+                            } else {
+                                "deny"
+                            };
+                            let message = (behavior == "deny").then_some("User denied permission");
+                            tokio::spawn(async move {
+                                let _ = ws
+                                    .respond_to_permission_request(
+                                        &request_id,
+                                        behavior,
+                                        None,
+                                        message,
+                                    )
+                                    .await;
+                            });
+                            if behavior == "allow" {
+                                self.engine_busy = true;
+                                self.spinner.start(SpinnerMode::Requesting);
+                            }
+                        }
+                        continue;
+                    }
 
                     if pending_tool_index == 0 || pending_tool_index > pending_tools.len() {
                         // Safety: if we get a stale/orphan permission response,
@@ -2527,6 +2652,101 @@ impl App {
         }
     }
 
+    fn handle_direct_connect_inbound(&mut self, inbound: DirectConnectInbound) {
+        match inbound {
+            DirectConnectInbound::Ignored => {}
+            DirectConnectInbound::UnsupportedControlRequest {
+                request_id,
+                subtype,
+            } => {
+                if let Some(ws) = self.direct_connect_ws.clone() {
+                    let error = format!(
+                        "Unsupported control request subtype: {}",
+                        subtype.as_deref().unwrap_or_default()
+                    );
+                    tokio::spawn(async move {
+                        let _ = ws.send_error_response(&request_id, &error).await;
+                    });
+                }
+            }
+            DirectConnectInbound::PermissionRequest {
+                request,
+                request_id,
+            } => {
+                let tool_name = request
+                    .get("tool_name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                let message = request
+                    .get("description")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| format!("{tool_name} requires permission"));
+                let input_preview = request
+                    .get("input")
+                    .map(|value| value.to_string())
+                    .unwrap_or_default();
+                self.direct_connect_pending_permission = Some((
+                    request_id.clone(),
+                    request
+                        .get("input")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                ));
+                self.permission_dialog =
+                    Some(PermissionDialog::new(tool_name, message, input_preview));
+                self.message_list.push(MessageEntry::System {
+                    text: format!("Permission request: {request_id}"),
+                });
+                self.spinner.stop();
+                self.engine_busy = false;
+            }
+            DirectConnectInbound::Message(value) => {
+                match value.get("type").and_then(|value| value.as_str()) {
+                    Some("system")
+                        if value.get("subtype").and_then(|v| v.as_str()) == Some("init") =>
+                    {
+                        if self.direct_connect_received_init {
+                            return;
+                        }
+                        self.direct_connect_received_init = true;
+                    }
+                    Some("assistant") => {
+                        let text = value
+                            .get("message")
+                            .and_then(|message| message.get("content"))
+                            .and_then(sdk_content_to_text)
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            self.message_list.push(MessageEntry::Assistant { text });
+                            self.spinner.set_mode(SpinnerMode::Responding);
+                        }
+                    }
+                    Some("result") => {
+                        self.spinner.stop();
+                        self.engine_busy = false;
+                    }
+                    Some("user") => {}
+                    Some(other) => {
+                        if let Some(text) = value.get("result").and_then(|value| value.as_str()) {
+                            if !text.is_empty() {
+                                self.message_list.push(MessageEntry::Assistant {
+                                    text: text.to_string(),
+                                });
+                            }
+                        } else {
+                            self.message_list.push(MessageEntry::System {
+                                text: format!("Remote {other}"),
+                            });
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
     fn handle_key_standalone(&mut self, key: KeyEvent) {
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => self.should_quit = true,
@@ -3272,6 +3492,10 @@ fn reconstruct_engine_messages(entries: &[MessageEntry]) -> Vec<serde_json::Valu
 
 fn message_text(message: &serde_json::Value) -> Option<String> {
     let content = message.get("content")?;
+    sdk_content_to_text(content)
+}
+
+fn sdk_content_to_text(content: &serde_json::Value) -> Option<String> {
     match content {
         serde_json::Value::String(text) => Some(text.clone()),
         serde_json::Value::Array(blocks) => Some(
