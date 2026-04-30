@@ -17,6 +17,8 @@ pub struct PermissionRuleConfig {
 pub struct SettingsPermissions {
     pub allow: Vec<PermissionRuleConfig>,
     pub deny: Vec<PermissionRuleConfig>,
+    #[serde(rename = "defaultMode", skip_serializing_if = "Option::is_none")]
+    pub default_mode: Option<String>,
 }
 
 /// Configuration for a single MCP server entry in settings.json.
@@ -97,6 +99,35 @@ pub struct Settings {
     pub api_key_helper: Option<String>,
 
     pub permissions: SettingsPermissions,
+
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+
+    #[serde(
+        rename = "enableAllProjectMcpServers",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enable_all_project_mcp_servers: Option<bool>,
+
+    #[serde(
+        rename = "enabledMcpjsonServers",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub enabled_mcpjson_servers: Vec<String>,
+
+    #[serde(
+        rename = "disabledMcpjsonServers",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub disabled_mcpjson_servers: Vec<String>,
+
+    #[serde(
+        rename = "skipAutoPermissionPrompt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub skip_auto_permission_prompt: Option<bool>,
 
     /// MCP server configurations keyed by server name.
     ///
@@ -213,7 +244,33 @@ impl Settings {
                 } else {
                     overlay.permissions.deny.clone()
                 },
+                default_mode: overlay
+                    .permissions
+                    .default_mode
+                    .clone()
+                    .or_else(|| self.permissions.default_mode.clone()),
             },
+            env: {
+                let mut env = self.env.clone();
+                env.extend(overlay.env.clone());
+                env
+            },
+            enable_all_project_mcp_servers: overlay
+                .enable_all_project_mcp_servers
+                .or(self.enable_all_project_mcp_servers),
+            enabled_mcpjson_servers: if overlay.enabled_mcpjson_servers.is_empty() {
+                self.enabled_mcpjson_servers.clone()
+            } else {
+                overlay.enabled_mcpjson_servers.clone()
+            },
+            disabled_mcpjson_servers: if overlay.disabled_mcpjson_servers.is_empty() {
+                self.disabled_mcpjson_servers.clone()
+            } else {
+                overlay.disabled_mcpjson_servers.clone()
+            },
+            skip_auto_permission_prompt: overlay
+                .skip_auto_permission_prompt
+                .or(self.skip_auto_permission_prompt),
             mcp_servers: merged_mcp,
             sandbox: overlay.sandbox.clone().or_else(|| self.sandbox.clone()),
             output_style: overlay

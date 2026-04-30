@@ -1333,15 +1333,14 @@ Rust currently runs a subset:
 - `migrateSonnet45ToSonnet46`
 - `migrateBypassPermissionsAcceptedToSettings`
 - `migrateSonnet1mToSonnet45`
+- `migrateAutoUpdatesToSettings`
+- `migrateOpusToOpus1m`
+- `resetProToOpusDefault`
+- `resetAutoModeOptInForDefaultOffer`
+- Pure project-config helper for
+  `migrateEnableAllProjectMcpServersToSettings` field movement.
 
 Needs work:
-- Port or explicitly mark out-of-scope the remaining TS migrations:
-  - auto-updates settings migration
-  - enable-all-project-MCP-servers migration
-  - opus-to-opus1m migration if still relevant
-  - auto-mode opt-in reset
-  - pro-to-opus default reset
-  - any subscriber/feature-gated migrations skipped due to missing state
 - Confirm migrations run at CLI startup and are persisted.
 - Add fixture tests using real TS config examples.
 

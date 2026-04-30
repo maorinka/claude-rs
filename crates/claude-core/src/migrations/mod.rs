@@ -30,6 +30,11 @@ pub struct MigrationContext {
     /// USER_TYPE=ant check; matches TS `process.env.USER_TYPE === 'ant'`.
     /// Callers should populate via [`crate::user_type::is_ant`].
     pub is_ant_user: bool,
+    /// Build-time `TRANSCRIPT_CLASSIFIER` feature gate in TS.
+    pub transcript_classifier_enabled: bool,
+    /// TS `getAutoModeEnabledState()` result. Only `"enabled"` runs the
+    /// auto-mode opt-in reset.
+    pub auto_mode_enabled_state: Option<String>,
 }
 
 /// Run every migration in the canonical order. Each migration is idempotent
@@ -47,12 +52,22 @@ pub fn run_all(
     let mut applied = Vec::new();
     for (name, result) in [
         (
-            "migrateReplBridgeEnabledToRemoteControlAtStartup",
-            repl_bridge::migrate_repl_bridge_to_remote_control(global),
+            "migrateAutoUpdatesToSettings",
+            settings_moves::migrate_auto_updates_to_settings(global, settings),
         ),
         (
-            "migrateFennecToOpus",
-            model_aliases::migrate_fennec_to_opus(ctx, settings),
+            "migrateBypassPermissionsAcceptedToSettings",
+            settings_moves::migrate_bypass_permissions(global, settings),
+        ),
+        // `migrateEnableAllProjectMcpServersToSettings` operates on project
+        // config + local settings, so it is exposed as a separate helper.
+        (
+            "resetProToOpusDefault",
+            model_aliases::reset_pro_to_opus_default(ctx, global, settings),
+        ),
+        (
+            "migrateSonnet1mToSonnet45",
+            model_aliases::migrate_sonnet_1m_to_sonnet_45(global, settings),
         ),
         (
             "migrateLegacyOpusToCurrent",
@@ -63,12 +78,20 @@ pub fn run_all(
             model_aliases::migrate_sonnet45_to_sonnet46(ctx, settings),
         ),
         (
-            "migrateBypassPermissionsAcceptedToSettings",
-            settings_moves::migrate_bypass_permissions(global, settings),
+            "migrateOpusToOpus1m",
+            model_aliases::migrate_opus_to_opus_1m(ctx, settings),
         ),
         (
-            "migrateSonnet1mToSonnet45",
-            model_aliases::migrate_sonnet_1m_to_sonnet_45(global, settings),
+            "migrateReplBridgeEnabledToRemoteControlAtStartup",
+            repl_bridge::migrate_repl_bridge_to_remote_control(global),
+        ),
+        (
+            "resetAutoModeOptInForDefaultOffer",
+            settings_moves::reset_auto_mode_opt_in_for_default_offer(ctx, global, settings),
+        ),
+        (
+            "migrateFennecToOpus",
+            model_aliases::migrate_fennec_to_opus(ctx, settings),
         ),
     ] {
         if result {

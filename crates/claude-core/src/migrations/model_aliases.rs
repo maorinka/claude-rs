@@ -123,6 +123,48 @@ pub fn migrate_sonnet_1m_to_sonnet_45(global: &mut GlobalConfig, settings: &mut 
     true
 }
 
+/// Port of `migrateOpusToOpus1m`: Max / Team Premium first-party users with
+/// an explicit `opus` setting move to the merged `opus[1m]` option.
+pub fn migrate_opus_to_opus_1m(ctx: &MigrationContext, settings: &mut Settings) -> bool {
+    if !ctx.is_first_party || !(ctx.is_max || ctx.is_team_premium) {
+        return false;
+    }
+    if settings.model.as_deref() != Some("opus") {
+        return false;
+    }
+    settings.model = Some("opus[1m]".into());
+    true
+}
+
+/// Port of `resetProToOpusDefault`: mark the one-shot migration complete for
+/// everyone, and record a timestamp only for first-party Pro users on the
+/// default model.
+pub fn reset_pro_to_opus_default(
+    ctx: &MigrationContext,
+    global: &mut GlobalConfig,
+    settings: &Settings,
+) -> bool {
+    if matches!(
+        global.extra.get("opusProMigrationComplete"),
+        Some(Value::Bool(true))
+    ) {
+        return false;
+    }
+
+    global
+        .extra
+        .insert("opusProMigrationComplete".into(), Value::Bool(true));
+    if ctx.is_first_party && ctx.is_pro && settings.model.is_none() {
+        global.extra.insert(
+            "opusProMigrationTimestamp".into(),
+            Value::Number(serde_json::Number::from(
+                chrono::Utc::now().timestamp_millis(),
+            )),
+        );
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +283,42 @@ mod tests {
         };
         assert!(migrate_sonnet45_to_sonnet46(&ctx, &mut settings));
         assert_eq!(settings.model.as_deref(), Some("sonnet[1m]"));
+    }
+
+    #[test]
+    fn opus_to_opus_1m_only_for_eligible_users() {
+        let mut settings = settings_with_model("opus");
+        let free_ctx = MigrationContext {
+            is_first_party: true,
+            ..Default::default()
+        };
+        assert!(!migrate_opus_to_opus_1m(&free_ctx, &mut settings));
+        assert_eq!(settings.model.as_deref(), Some("opus"));
+
+        let max_ctx = MigrationContext {
+            is_first_party: true,
+            is_max: true,
+            ..Default::default()
+        };
+        assert!(migrate_opus_to_opus_1m(&max_ctx, &mut settings));
+        assert_eq!(settings.model.as_deref(), Some("opus[1m]"));
+    }
+
+    #[test]
+    fn pro_default_reset_marks_and_timestamps_default_model() {
+        let ctx = MigrationContext {
+            is_first_party: true,
+            is_pro: true,
+            ..Default::default()
+        };
+        let mut global = GlobalConfig::default();
+        let settings = Settings::default();
+        assert!(reset_pro_to_opus_default(&ctx, &mut global, &settings));
+        assert_eq!(
+            global.extra.get("opusProMigrationComplete"),
+            Some(&Value::Bool(true))
+        );
+        assert!(global.extra.get("opusProMigrationTimestamp").is_some());
+        assert!(!reset_pro_to_opus_default(&ctx, &mut global, &settings));
     }
 }
