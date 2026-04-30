@@ -534,6 +534,11 @@ Improved:
   at-capacity sleeps when a child session exits. It also tracks completed work
   IDs like TS `bridgeMain.ts`, so stale server redeliveries during reclaim lag
   do not spawn duplicate child sessions.
+- Standalone remote-control now mirrors TS proactive session-ingress token
+  refresh scheduling: it decodes the child JWT `exp`, schedules refresh 5
+  minutes before expiry, sends refreshed OAuth tokens to v1 child sessions, and
+  calls `reconnectSession` for CCR v2 sessions so the server redelivers work
+  with a fresh worker JWT.
 - `claude remote-control` now consumes those bridge clients directly: it builds
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
@@ -602,7 +607,8 @@ Missing or partial:
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
   through the hosted bridge permission API and cancellation/delivery lifecycle.
 - Trusted-device flow.
-- Full work secret lifecycle and token-refresh scheduling.
+- Full work secret lifecycle and token-refresh scheduling in REPL/v2 bridge
+  paths.
 - Capacity wake runtime integration in REPL/v2 bridge paths.
 - Flush gate runtime integration.
 - Poll config runtime integration in REPL/v2 bridge paths.

@@ -6737,6 +6737,49 @@ async fn update_remote_session_token(handle: &mut RemoteSessionHandle, token: &s
     }
 }
 
+const REMOTE_TOKEN_REFRESH_BUFFER: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+fn remote_token_refresh_delay(
+    token: &str,
+    now: std::time::SystemTime,
+) -> Option<std::time::Duration> {
+    let expiry = claude_core::bridge::jwt_utils::decode_jwt_expiry(token)?;
+    let expiry =
+        std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(expiry as u64))?;
+    let refresh_at = expiry
+        .checked_sub(REMOTE_TOKEN_REFRESH_BUFFER)
+        .unwrap_or(std::time::UNIX_EPOCH);
+    Some(
+        refresh_at
+            .duration_since(now)
+            .unwrap_or(std::time::Duration::ZERO),
+    )
+}
+
+fn schedule_remote_token_refresh(
+    tasks: &mut HashMap<String, tokio::task::JoinHandle<()>>,
+    tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    session_id: &str,
+    token: &str,
+) {
+    let Some(delay) = remote_token_refresh_delay(token, std::time::SystemTime::now()) else {
+        return;
+    };
+    if let Some(task) = tasks.remove(session_id) {
+        task.abort();
+    }
+    let session_id_owned = session_id.to_string();
+    let tx = tx.clone();
+    let task_session_id = session_id_owned.clone();
+    let task = tokio::spawn(async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        let _ = tx.send(task_session_id);
+    });
+    tasks.insert(session_id_owned, task);
+}
+
 async fn stop_work_with_retry(
     api: &claude_core::bridge::api::BridgeApiClient,
     environment_id: &str,
@@ -7015,6 +7058,9 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
     let mut session_tokens: HashMap<String, String> = HashMap::new();
     let mut completed_work_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    let mut v2_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let (token_refresh_tx, mut token_refresh_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let mut token_refresh_tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut known_sessions: Vec<String> = session_id.clone().into_iter().collect();
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_signal = shutdown.clone();
@@ -7035,6 +7081,10 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             if let Some(handle) = active_sessions.remove(&finished_id) {
                 let work_id = session_work_ids.remove(&finished_id);
                 session_tokens.remove(&finished_id);
+                v2_sessions.remove(&finished_id);
+                if let Some(task) = token_refresh_tasks.remove(&finished_id) {
+                    task.abort();
+                }
                 let stderr = handle.last_stderr.clone();
                 let status = handle.done.await.unwrap_or(RemoteSessionDoneStatus::Failed);
                 match status {
@@ -7082,6 +7132,40 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             _ = shutdown.cancelled() => {
                 println!("Remote Control shutting down.");
                 break;
+            }
+            maybe_session_id = token_refresh_rx.recv() => {
+                let Some(refresh_session_id) = maybe_session_id else {
+                    continue;
+                };
+                if !active_sessions.contains_key(&refresh_session_id) {
+                    continue;
+                }
+                if v2_sessions.contains(&refresh_session_id) {
+                    if let Err(err) = api
+                        .reconnect_session(&registered_environment_id, &refresh_session_id)
+                        .await
+                    {
+                        eprintln!(
+                            "Failed to refresh remote session {refresh_session_id} token via reconnect: {err}"
+                        );
+                    }
+                } else if let Some(handle) = active_sessions.get_mut(&refresh_session_id) {
+                    match claude_core::auth::resolve::resolve_stored_oauth_token(true).await {
+                        Ok(Some(oauth_token)) => {
+                            update_remote_session_token(handle, &oauth_token).await;
+                        }
+                        Ok(None) => {
+                            eprintln!(
+                                "Failed to refresh remote session {refresh_session_id} token: no OAuth token available"
+                            );
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "Failed to refresh remote session {refresh_session_id} token: {err}"
+                            );
+                        }
+                    }
+                }
             }
             result = poll => {
                 match result {
@@ -7171,6 +7255,12 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                                     update_remote_session_token(existing, &secret.session_ingress_token).await;
                                     session_tokens.insert(remote_session_id.clone(), secret.session_ingress_token.clone());
                                     session_work_ids.insert(remote_session_id.clone(), work.id.clone());
+                                    schedule_remote_token_refresh(
+                                        &mut token_refresh_tasks,
+                                        &token_refresh_tx,
+                                        &remote_session_id,
+                                        &secret.session_ingress_token,
+                                    );
                                     ack.await;
                                     continue;
                                 }
@@ -7283,6 +7373,15 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                                         if !known_sessions.iter().any(|id| id == &remote_session_id) {
                                             known_sessions.push(remote_session_id.clone());
                                         }
+                                        if use_ccr_v2 {
+                                            v2_sessions.insert(remote_session_id.clone());
+                                        }
+                                        schedule_remote_token_refresh(
+                                            &mut token_refresh_tasks,
+                                            &token_refresh_tx,
+                                            &remote_session_id,
+                                            &secret.session_ingress_token,
+                                        );
                                         session_work_ids.insert(remote_session_id.clone(), work.id.clone());
                                         session_tokens.insert(remote_session_id.clone(), secret.session_ingress_token);
                                         active_sessions.insert(remote_session_id, handle);
@@ -7386,6 +7485,9 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
 
     for (_, handle) in active_sessions.iter() {
         terminate_remote_session(handle, false).await;
+    }
+    for (_, task) in token_refresh_tasks {
+        task.abort();
     }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     for (_, handle) in active_sessions.iter() {
@@ -10353,6 +10455,24 @@ mod remote_control_tests {
             to_external_permission_mode(&PermissionMode::Bubble),
             "default"
         );
+    }
+
+    #[test]
+    fn remote_token_refresh_delay_matches_ts_buffer() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        let token = "sk-ant-si-eyJhbGciOiJub25lIn0.eyJleHAiOjE2MDB9.c2ln";
+        assert_eq!(
+            remote_token_refresh_delay(&token, now),
+            Some(std::time::Duration::from_secs(300))
+        );
+
+        let within_buffer = "sk-ant-si-eyJhbGciOiJub25lIn0.eyJleHAiOjExMDB9.c2ln";
+        assert_eq!(
+            remote_token_refresh_delay(&within_buffer, now),
+            Some(std::time::Duration::ZERO)
+        );
+
+        assert_eq!(remote_token_refresh_delay("not-a-jwt", now), None);
     }
 
     #[test]
