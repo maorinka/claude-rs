@@ -2367,6 +2367,11 @@ pub enum SubCommand {
     Logout,
     /// Show current configuration
     Config,
+    /// Manage MCP servers
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
     /// Start the IDE bridge server
     Server {
         #[arg(long)]
@@ -2427,6 +2432,246 @@ pub enum SubCommand {
         #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Text)]
         output_format: OutputFormat,
     },
+}
+
+#[derive(clap::Subcommand)]
+pub enum McpCommand {
+    /// Manage the XAA (SEP-990) IdP connection
+    Xaa {
+        #[command(subcommand)]
+        command: McpXaaCommand,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum McpXaaCommand {
+    /// Configure the IdP connection (one-time setup for all XAA-enabled servers)
+    Setup {
+        /// IdP issuer URL (OIDC discovery)
+        #[arg(long)]
+        issuer: String,
+        /// Claude Code's client_id at the IdP
+        #[arg(long = "client-id")]
+        client_id: String,
+        /// Read IdP client secret from MCP_XAA_IDP_CLIENT_SECRET env var
+        #[arg(long = "client-secret")]
+        client_secret: bool,
+        /// Fixed loopback callback port
+        #[arg(long = "callback-port")]
+        callback_port: Option<u32>,
+    },
+    /// Cache an IdP id_token so XAA-enabled MCP servers authenticate silently
+    Login {
+        /// Ignore any cached id_token and re-login
+        #[arg(long)]
+        force: bool,
+        /// Write this pre-obtained id_token directly to cache
+        #[arg(long = "id-token")]
+        id_token: Option<String>,
+    },
+    /// Show the current IdP connection config
+    Show,
+    /// Clear the IdP connection config and cached id_token
+    Clear,
+}
+
+async fn handle_mcp_command(command: &McpCommand) -> Result<()> {
+    match command {
+        McpCommand::Xaa { command } => handle_mcp_xaa_command(command).await,
+    }
+}
+
+async fn handle_mcp_xaa_command(command: &McpXaaCommand) -> Result<()> {
+    match command {
+        McpXaaCommand::Setup {
+            issuer,
+            client_id,
+            client_secret,
+            callback_port,
+        } => {
+            let input =
+                claude_core::mcp::xaa_idp::validate_setup_input(issuer, client_id, *callback_port)
+                    .map_err(|err| anyhow::anyhow!("Error: {err}"))?;
+            let secret = if *client_secret {
+                let secret = std::env::var("MCP_XAA_IDP_CLIENT_SECRET").ok();
+                if secret.as_deref().unwrap_or_default().is_empty() {
+                    anyhow::bail!(
+                        "Error: --client-secret requires MCP_XAA_IDP_CLIENT_SECRET env var"
+                    );
+                }
+                secret
+            } else {
+                None
+            };
+
+            let old = load_xaa_idp_user_setting()?;
+            save_xaa_idp_user_setting(Some(&claude_core::config::settings::XaaIdpSettings {
+                issuer: input.issuer.clone(),
+                client_id: input.client_id.clone(),
+                callback_port: input.callback_port,
+            }))?;
+
+            if let Some(old) = old {
+                if claude_core::mcp::xaa_idp::issuer_key(&old.issuer)
+                    != claude_core::mcp::xaa_idp::issuer_key(&input.issuer)
+                {
+                    claude_core::mcp::xaa_idp::clear_idp_id_token(&old.issuer).await?;
+                    claude_core::mcp::xaa_idp::clear_idp_client_secret(&old.issuer).await?;
+                } else if old.client_id != input.client_id {
+                    claude_core::mcp::xaa_idp::clear_idp_id_token(&old.issuer).await?;
+                    claude_core::mcp::xaa_idp::clear_idp_client_secret(&old.issuer).await?;
+                }
+            }
+
+            if let Some(secret) = secret {
+                claude_core::mcp::xaa_idp::save_idp_client_secret(&input.issuer, &secret).await?;
+            }
+
+            println!("XAA IdP connection configured for {}", input.issuer);
+            Ok(())
+        }
+        McpXaaCommand::Login { force, id_token } => {
+            let Some(idp) = load_xaa_idp_user_setting()? else {
+                anyhow::bail!("Error: no XAA IdP connection. Run 'claude mcp xaa setup' first.");
+            };
+
+            if let Some(id_token) = id_token {
+                let expires_at =
+                    claude_core::mcp::xaa_idp::save_idp_id_token_from_jwt(&idp.issuer, id_token)
+                        .await?;
+                println!(
+                    "id_token cached for {} (expires {})",
+                    idp.issuer,
+                    format_epoch_ms_iso(expires_at)
+                );
+                return Ok(());
+            }
+
+            if *force {
+                claude_core::mcp::xaa_idp::clear_idp_id_token(&idp.issuer).await?;
+            }
+
+            if claude_core::mcp::xaa_idp::get_cached_idp_id_token(&idp.issuer)
+                .await?
+                .is_some()
+            {
+                println!(
+                    "Already logged in to {} (cached id_token still valid). Use --force to re-login.",
+                    idp.issuer
+                );
+                return Ok(());
+            }
+
+            anyhow::bail!("IdP login failed: browser OIDC login is not implemented yet");
+        }
+        McpXaaCommand::Show => {
+            let Some(idp) = load_xaa_idp_user_setting()? else {
+                println!("No XAA IdP connection configured.");
+                return Ok(());
+            };
+            let has_secret = claude_core::mcp::xaa_idp::get_idp_client_secret(&idp.issuer)
+                .await?
+                .is_some();
+            let has_id_token = claude_core::mcp::xaa_idp::get_cached_idp_id_token(&idp.issuer)
+                .await?
+                .is_some();
+            println!("Issuer:        {}", idp.issuer);
+            println!("Client ID:     {}", idp.client_id);
+            if let Some(port) = idp.callback_port {
+                println!("Callback port: {port}");
+            }
+            println!(
+                "Client secret: {}",
+                if has_secret {
+                    "(stored in keychain)"
+                } else {
+                    "(not set — PKCE-only)"
+                }
+            );
+            println!(
+                "Logged in:     {}",
+                if has_id_token {
+                    "yes (id_token cached)"
+                } else {
+                    "no — run 'claude mcp xaa login'"
+                }
+            );
+            Ok(())
+        }
+        McpXaaCommand::Clear => {
+            let idp = load_xaa_idp_user_setting()?;
+            save_xaa_idp_user_setting(None)?;
+            if let Some(idp) = idp {
+                claude_core::mcp::xaa_idp::clear_idp_id_token(&idp.issuer).await?;
+                claude_core::mcp::xaa_idp::clear_idp_client_secret(&idp.issuer).await?;
+            }
+            println!("XAA IdP connection cleared");
+            Ok(())
+        }
+    }
+}
+
+fn load_xaa_idp_user_setting() -> Result<Option<claude_core::config::settings::XaaIdpSettings>> {
+    let path = claude_core::config::paths::user_settings_path()?;
+    let value = read_json_object_file(&path)?;
+    let Some(raw) = value.get("xaaIdp") else {
+        return Ok(None);
+    };
+    let idp = serde_json::from_value(raw.clone())
+        .map_err(|err| anyhow::anyhow!("Error parsing settings.xaaIdp: {err}"))?;
+    Ok(Some(idp))
+}
+
+fn save_xaa_idp_user_setting(
+    idp: Option<&claude_core::config::settings::XaaIdpSettings>,
+) -> Result<()> {
+    let path = claude_core::config::paths::user_settings_path()?;
+    let mut value = read_json_object_file(&path)?;
+    match idp {
+        Some(idp) => {
+            value.insert("xaaIdp".into(), serde_json::to_value(idp)?);
+        }
+        None => {
+            value.remove("xaaIdp");
+        }
+    }
+    write_json_object_file(&path, &value)
+}
+
+fn read_json_object_file(path: &std::path::Path) -> Result<serde_json::Map<String, Value>> {
+    if !path.exists() {
+        return Ok(serde_json::Map::new());
+    }
+    let text = std::fs::read_to_string(path)?;
+    if text.trim().is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    match serde_json::from_str::<Value>(&text)? {
+        Value::Object(map) => Ok(map),
+        _ => anyhow::bail!(
+            "Error: settings file must contain a JSON object: {}",
+            path.display()
+        ),
+    }
+}
+
+fn write_json_object_file(
+    path: &std::path::Path,
+    value: &serde_json::Map<String, Value>,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(value)?)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn format_epoch_ms_iso(ms: u64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms as i64)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// Resolve short model names to full API model IDs.
@@ -8009,6 +8254,10 @@ async fn main() -> Result<()> {
             );
             return Ok(());
         }
+        Some(SubCommand::Mcp { command }) => {
+            handle_mcp_command(command).await?;
+            return Ok(());
+        }
         Some(SubCommand::Server { port }) => {
             // Start the IDE bridge server
             let config = claude_core::bridge::types::BridgeConfig {
@@ -10292,6 +10541,65 @@ mod remote_control_tests {
                 assert!(no_create_session_in_dir);
             }
             _ => panic!("expected remote-control command"),
+        }
+    }
+
+    #[test]
+    fn mcp_xaa_subcommands_match_ts_shape() {
+        let cli = Cli::parse_from([
+            "claude-rs",
+            "mcp",
+            "xaa",
+            "setup",
+            "--issuer",
+            "https://idp.example.com",
+            "--client-id",
+            "client",
+            "--client-secret",
+            "--callback-port",
+            "8080",
+        ]);
+        match cli.command {
+            Some(SubCommand::Mcp {
+                command:
+                    McpCommand::Xaa {
+                        command:
+                            McpXaaCommand::Setup {
+                                issuer,
+                                client_id,
+                                client_secret,
+                                callback_port,
+                            },
+                    },
+            }) => {
+                assert_eq!(issuer, "https://idp.example.com");
+                assert_eq!(client_id, "client");
+                assert!(client_secret);
+                assert_eq!(callback_port, Some(8080));
+            }
+            _ => panic!("expected mcp xaa setup command"),
+        }
+
+        let cli = Cli::parse_from([
+            "claude-rs",
+            "mcp",
+            "xaa",
+            "login",
+            "--force",
+            "--id-token",
+            "jwt",
+        ]);
+        match cli.command {
+            Some(SubCommand::Mcp {
+                command:
+                    McpCommand::Xaa {
+                        command: McpXaaCommand::Login { force, id_token },
+                    },
+            }) => {
+                assert!(force);
+                assert_eq!(id_token.as_deref(), Some("jwt"));
+            }
+            _ => panic!("expected mcp xaa login command"),
         }
     }
 

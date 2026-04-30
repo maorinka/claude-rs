@@ -677,10 +677,11 @@ Rust has a real MCP client/manager, but TS still has broader behavior.
 
 Missing or partial:
 - In-process transport runtime wiring for Chrome/computer-use MCP servers.
-- OAuth/XAA IdP command/browser/runtime parity. The Rust core now has the
+- OAuth/XAA IdP browser/runtime parity. The Rust core now has the
   TS-compatible `settings.xaaIdp` shape plus `mcpXaaIdp` / `mcpXaaIdpConfig`
   secure-storage maps and issuer-key normalization; the CLI `claude mcp xaa`
-  commands, OIDC browser login, and SEP-990 token exchange still need wiring.
+  command surface is wired for setup/show/clear and direct `login --id-token`.
+  OIDC browser login and SEP-990 token exchange still need wiring.
 - Official registry integration.
 - Elicitation dialog/UI integration.
 - Parsing warnings UI.
@@ -709,6 +710,11 @@ Improved:
   live in `mcpXaaIdp`, IdP client secrets live in `mcpXaaIdpConfig`, unknown
   secure-storage keys are preserved, JWT `exp` drives cache TTL, and cached
   id_tokens use the same 60s expiry buffer as TS.
+- Rust now exposes the TS-shaped `claude mcp xaa` CLI command tree. `setup`
+  validates issuer/client/port before writing user settings, clears stale
+  issuer/client secure-storage slots after successful settings writes, and can
+  read `MCP_XAA_IDP_CLIENT_SECRET`; `show`, `clear`, and direct
+  `login --id-token` use the same general XAA settings/cache helpers.
 - MCP auto-mode classifier input encoding now follows the TS
   `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
   keys and JavaScript `String(value)` coercion for arrays and nested objects.
