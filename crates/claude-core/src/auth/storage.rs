@@ -92,6 +92,14 @@ pub struct XaaIdpConfigEntry {
     pub client_secret: String,
 }
 
+/// Per-server MCP OAuth client config. Matches TS secure storage:
+/// `mcpOAuthClientConfig[serverKey] = { clientSecret }`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthClientConfigEntry {
+    pub client_secret: String,
+}
+
 /// Top-level secure storage structure, matching the TS `SecureStorageData`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +112,12 @@ struct SecureStorageData {
     mcp_xaa_idp: HashMap<String, XaaIdpTokenEntry>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     mcp_xaa_idp_config: HashMap<String, XaaIdpConfigEntry>,
+    #[serde(
+        rename = "mcpOAuthClientConfig",
+        default,
+        skip_serializing_if = "HashMap::is_empty"
+    )]
+    mcp_oauth_client_config: HashMap<String, McpOAuthClientConfigEntry>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -297,6 +311,35 @@ pub async fn store_xaa_idp_client_secret(issuer_key: &str, client_secret: &str) 
 pub async fn clear_xaa_idp_client_secret(issuer_key: &str) -> Result<()> {
     update_secure_storage_data(|mut data| {
         data.mcp_xaa_idp_config.remove(issuer_key);
+        data
+    })
+    .await
+}
+
+pub async fn load_mcp_oauth_client_secret(server_key: &str) -> Result<Option<String>> {
+    Ok(load_secure_storage_data().await?.and_then(|data| {
+        data.mcp_oauth_client_config
+            .get(server_key)
+            .map(|entry| entry.client_secret.clone())
+    }))
+}
+
+pub async fn store_mcp_oauth_client_secret(server_key: &str, client_secret: &str) -> Result<()> {
+    update_secure_storage_data(|mut data| {
+        data.mcp_oauth_client_config.insert(
+            server_key.to_string(),
+            McpOAuthClientConfigEntry {
+                client_secret: client_secret.to_string(),
+            },
+        );
+        data
+    })
+    .await
+}
+
+pub async fn clear_mcp_oauth_client_secret(server_key: &str) -> Result<()> {
+    update_secure_storage_data(|mut data| {
+        data.mcp_oauth_client_config.remove(server_key);
         data
     })
     .await
@@ -530,6 +573,7 @@ mod tests {
             trusted_device_token: None,
             mcp_xaa_idp: HashMap::new(),
             mcp_xaa_idp_config: HashMap::new(),
+            mcp_oauth_client_config: HashMap::new(),
             extra: Map::new(),
         };
 
@@ -590,6 +634,11 @@ mod tests {
                     "clientSecret": "secret"
                 }
             },
+            "mcpOAuthClientConfig": {
+                "server|abc": {
+                    "clientSecret": "as-secret"
+                }
+            },
             "futureKey": {"kept": true}
         }"#;
 
@@ -607,11 +656,19 @@ mod tests {
                 .client_secret,
             "secret"
         );
+        assert_eq!(
+            data.mcp_oauth_client_config
+                .get("server|abc")
+                .unwrap()
+                .client_secret,
+            "as-secret"
+        );
         assert!(data.extra.contains_key("futureKey"));
 
         let json = serde_json::to_string(&data).unwrap();
         assert!(json.contains("mcpXaaIdp"));
         assert!(json.contains("mcpXaaIdpConfig"));
+        assert!(json.contains("mcpOAuthClientConfig"));
         assert!(json.contains("idToken"));
         assert!(json.contains("clientSecret"));
         assert!(json.contains("futureKey"));

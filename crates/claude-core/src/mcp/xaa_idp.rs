@@ -10,6 +10,8 @@ use base64::Engine as _;
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use url::Url;
@@ -179,6 +181,68 @@ pub async fn save_idp_client_secret(idp_issuer: &str, client_secret: &str) -> Re
 
 pub async fn clear_idp_client_secret(idp_issuer: &str) -> Result<()> {
     crate::auth::storage::clear_xaa_idp_client_secret(&issuer_key(idp_issuer)).await
+}
+
+pub fn mcp_oauth_server_key(
+    server_name: &str,
+    server_config: &crate::mcp::types::McpServerConfig,
+) -> Option<String> {
+    let (transport_type, url, headers) = match server_config {
+        crate::mcp::types::McpServerConfig::Sse(config) => {
+            ("sse", config.url.as_str(), config.headers.as_ref())
+        }
+        crate::mcp::types::McpServerConfig::Http(config) => {
+            ("http", config.url.as_str(), config.headers.as_ref())
+        }
+        _ => return None,
+    };
+    let headers = headers
+        .map(|headers| {
+            headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let config_json = serde_json::to_string(&serde_json::json!({
+        "type": transport_type,
+        "url": url,
+        "headers": headers,
+    }))
+    .ok()?;
+    let hash = Sha256::digest(config_json.as_bytes());
+    Some(format!("{}|{}", server_name, &hex::encode(hash)[..16]))
+}
+
+pub async fn get_mcp_client_secret(
+    server_name: &str,
+    server_config: &crate::mcp::types::McpServerConfig,
+) -> Result<Option<String>> {
+    let Some(server_key) = mcp_oauth_server_key(server_name, server_config) else {
+        return Ok(None);
+    };
+    crate::auth::storage::load_mcp_oauth_client_secret(&server_key).await
+}
+
+pub async fn save_mcp_client_secret(
+    server_name: &str,
+    server_config: &crate::mcp::types::McpServerConfig,
+    client_secret: &str,
+) -> Result<()> {
+    let Some(server_key) = mcp_oauth_server_key(server_name, server_config) else {
+        return Ok(());
+    };
+    crate::auth::storage::store_mcp_oauth_client_secret(&server_key, client_secret).await
+}
+
+pub async fn clear_mcp_client_secret(
+    server_name: &str,
+    server_config: &crate::mcp::types::McpServerConfig,
+) -> Result<()> {
+    let Some(server_key) = mcp_oauth_server_key(server_name, server_config) else {
+        return Ok(());
+    };
+    crate::auth::storage::clear_mcp_oauth_client_secret(&server_key).await
 }
 
 /// OIDC Discovery §4.1 appends `.well-known/openid-configuration` to the
@@ -619,5 +683,32 @@ mod tests {
             "client_secret_basic".into(),
             "client_secret_post".into()
         ]));
+    }
+
+    #[test]
+    fn mcp_oauth_server_key_uses_ts_shape_and_header_order_invariant_hash() {
+        let mut headers_a = std::collections::HashMap::new();
+        headers_a.insert("X-B".to_string(), "2".to_string());
+        headers_a.insert("X-A".to_string(), "1".to_string());
+        let mut headers_b = std::collections::HashMap::new();
+        headers_b.insert("X-A".to_string(), "1".to_string());
+        headers_b.insert("X-B".to_string(), "2".to_string());
+
+        let a = crate::mcp::types::McpServerConfig::Http(crate::mcp::types::McpHttpServerConfig {
+            url: "https://mcp.example.com/mcp".into(),
+            headers: Some(headers_a),
+            oauth: None,
+        });
+        let b = crate::mcp::types::McpServerConfig::Http(crate::mcp::types::McpHttpServerConfig {
+            url: "https://mcp.example.com/mcp".into(),
+            headers: Some(headers_b),
+            oauth: None,
+        });
+
+        let key_a = mcp_oauth_server_key("server", &a).unwrap();
+        let key_b = mcp_oauth_server_key("server", &b).unwrap();
+        assert_eq!(key_a, key_b);
+        assert!(key_a.starts_with("server|"));
+        assert_eq!(key_a.len(), "server|".len() + 16);
     }
 }

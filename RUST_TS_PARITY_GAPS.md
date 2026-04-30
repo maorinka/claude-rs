@@ -727,6 +727,11 @@ Improved:
 - Rust now preserves the TS remote MCP `oauth` config object on SSE/HTTP
   servers (`clientId`, `callbackPort`, `authServerMetadataUrl`, `xaa`) instead
   of dropping it during settings/dynamic config parse and typed conversion.
+- Rust now has the TS per-server MCP OAuth client-secret storage shape:
+  `mcpOAuthClientConfig[serverKey] = { clientSecret }`, plus the same
+  name+config-hash server-key mechanism for SSE/HTTP configs. This keeps AS
+  client secrets out of settings and gives XAA auth the same lookup layer TS
+  uses.
 - MCP auto-mode classifier input encoding now follows the TS
   `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
   keys and JavaScript `String(value)` coercion for arrays and nested objects.
