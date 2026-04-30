@@ -520,15 +520,19 @@ Improved:
   / stream-json flags and Session-Ingress environment variables, updates
   running child tokens on redelivery, heartbeats active work, stops work on
   failure/shutdown, archives known sessions, and deregisters the environment.
+  Rust print mode now also recognizes child `--sdk-url` sessions, connects to
+  the v1 Session-Ingress WebSocket, applies the same token-refresh environment
+  messages TS `StructuredIO` accepts, derives the TS `HybridTransport` POST
+  endpoint from the WebSocket URL, and mirrors stream-json stdout events to
+  Session-Ingress HTTP POST batches.
 
 Missing or partial:
 - Full bridge messaging.
 - `initReplBridge` / `replBridge` behavior.
 - `remoteBridgeCore` parity.
-- Child-side Session-Ingress/CCR transport. The parent now passes the same
-  `--sdk-url` and environment variables TS does, but Rust print mode still
-  needs the TS `HybridTransport`/`SSETransport` equivalent to consume remote
-  user messages and POST stream-json events through Session-Ingress.
+- CCR v2 child transport. Rust now has the v1 `HybridTransport` shape for
+  `--sdk-url` child sessions, but still needs the TS `SSETransport` +
+  `CCRClient` equivalent for `CLAUDE_CODE_USE_CCR_V2`.
 - Bridge permission callbacks.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
@@ -1151,10 +1155,11 @@ Missing or partial:
   environment registration, initial session creation, remote session URL
   printing, bridge work polling, healthcheck ack, session work-secret decode,
   TS-shaped child process launch, token update forwarding, heartbeat, stopWork,
-  archive, and deregister are now wired to the general bridge API/session
-  clients. Still missing: entitlement/policy checks, session-id/continue
-  reconnect, child-side Session-Ingress/CCR transport, inbound web/mobile prompt
-  queueing, permission callback forwarding, trusted-device flow, and
+  archive, deregister, and the v1 child Session-Ingress WebSocket/POST bridge
+  are now wired to the general bridge API/session clients. Still missing:
+  entitlement/policy checks, session-id/continue reconnect, CCR v2 child
+  transport, multi-turn inbound web/mobile prompt queueing, permission callback
+  forwarding, trusted-device flow, and
   connected/disconnect TUI state.
 - Remote managed settings.
 - Settings sync.

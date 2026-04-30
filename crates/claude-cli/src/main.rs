@@ -1,11 +1,13 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
+
+static REMOTE_STREAM_JSON_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<Value>> = OnceLock::new();
 
 #[derive(Parser)]
 #[command(
@@ -275,6 +277,297 @@ fn parse_stream_json_stdin(stdin: &str) -> Result<StreamJsonStdinSeed> {
             Some(_) | None => {}
         }
     }
+    Ok(seed)
+}
+
+fn session_ingress_auth_token() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+}
+
+fn convert_ws_url_to_session_ingress_post_url(ws_url: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(ws_url)?;
+    match url.scheme() {
+        "wss" => {
+            url.set_scheme("https")
+                .map_err(|_| anyhow::anyhow!("invalid sdk url scheme"))?;
+        }
+        "ws" => {
+            url.set_scheme("http")
+                .map_err(|_| anyhow::anyhow!("invalid sdk url scheme"))?;
+        }
+        "https" | "http" => {}
+        other => return Err(anyhow::anyhow!("Unsupported protocol: {other}:")),
+    }
+    let mut pathname = url.path().replace("/ws/", "/session/");
+    if !pathname.ends_with("/events") {
+        if pathname.ends_with('/') {
+            pathname.push_str("events");
+        } else {
+            pathname.push_str("/events");
+        }
+    }
+    url.set_path(&pathname);
+    Ok(url.to_string())
+}
+
+fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
+    let post_url = convert_ws_url_to_session_ingress_post_url(sdk_url)?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let _ = REMOTE_STREAM_JSON_TX.set(tx);
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let mut buffer: Vec<Value> = Vec::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                maybe_value = rx.recv() => {
+                    let Some(value) = maybe_value else {
+                        break;
+                    };
+                    buffer.push(value);
+                    if buffer.len() >= 500 {
+                        post_remote_stream_json_batch(&client, &post_url, &mut buffer).await;
+                    }
+                }
+                _ = interval.tick() => {
+                    if !buffer.is_empty() {
+                        post_remote_stream_json_batch(&client, &post_url, &mut buffer).await;
+                    }
+                }
+            }
+        }
+        if !buffer.is_empty() {
+            post_remote_stream_json_batch(&client, &post_url, &mut buffer).await;
+        }
+    });
+    Ok(())
+}
+
+async fn post_remote_stream_json_batch(
+    client: &reqwest::Client,
+    post_url: &str,
+    buffer: &mut Vec<Value>,
+) {
+    let Some(token) = session_ingress_auth_token() else {
+        buffer.clear();
+        return;
+    };
+    let events = std::mem::take(buffer);
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        let response = client
+            .post(post_url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "events": events.clone() }))
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await;
+        match response {
+            Ok(resp) if resp.status().is_success() => break,
+            Ok(resp)
+                if resp.status().is_client_error()
+                    && resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                break;
+            }
+            _ if attempt >= 5 => break,
+            _ => {
+                let delay_ms = 500u64
+                    .saturating_mul(2u64.saturating_pow(attempt - 1))
+                    .min(8_000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+        }
+    }
+}
+
+fn apply_update_environment_variables(message: &Value) {
+    let Some(vars) = message.get("variables").and_then(|value| value.as_object()) else {
+        return;
+    };
+    for (key, value) in vars {
+        if let Some(value) = value.as_str() {
+            std::env::set_var(key, value);
+        }
+    }
+}
+
+fn spawn_remote_stdin_environment_updater() {
+    tokio::task::spawn_blocking(|| {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines().map_while(|line| line.ok()) {
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if message.get("type").and_then(|value| value.as_str())
+                == Some("update_environment_variables")
+            {
+                apply_update_environment_variables(&message);
+            }
+        }
+    });
+}
+
+fn remote_control_response_success(request_id: &str, response: Value) -> Value {
+    serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": response,
+        },
+    })
+}
+
+fn handle_remote_sdk_non_user_line(value: &Value) -> Result<Option<StreamJsonStdinSeed>> {
+    match value.get("type").and_then(|value| value.as_str()) {
+        Some("update_environment_variables") => {
+            apply_update_environment_variables(value);
+            Ok(None)
+        }
+        Some("keep_alive") => Ok(None),
+        Some("control_request") => {
+            let request = value.get("request").unwrap_or(&Value::Null);
+            if request.get("subtype").and_then(|value| value.as_str()) == Some("initialize") {
+                let parsed = parse_stream_json_stdin(&(value.to_string() + "\n"))?;
+                if let Some(request_id) = value.get("request_id").and_then(|v| v.as_str()) {
+                    emit_stream_json(remote_control_response_success(
+                        request_id,
+                        serde_json::json!({}),
+                    ));
+                }
+                Ok(Some(parsed))
+            } else if request.get("subtype").and_then(|value| value.as_str()) == Some("end_session")
+            {
+                if let Some(request_id) = value.get("request_id").and_then(|v| v.as_str()) {
+                    emit_stream_json(remote_control_response_success(
+                        request_id,
+                        serde_json::json!({}),
+                    ));
+                }
+                Ok(None)
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn spawn_remote_sdk_background_reader(
+    mut read: futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+    mut buffered: String,
+) {
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+        loop {
+            while let Some(newline) = buffered.find('\n') {
+                let line = buffered[..newline].to_string();
+                buffered = buffered[newline + 1..].to_string();
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                let _ = handle_remote_sdk_non_user_line(&value);
+            }
+
+            let Some(message) = read.next().await else {
+                break;
+            };
+            let Ok(message) = message else {
+                break;
+            };
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+                buffered.push_str(&text);
+            }
+        }
+    });
+}
+
+async fn read_remote_sdk_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    install_remote_stream_json_poster(sdk_url)?;
+    spawn_remote_stdin_environment_updater();
+
+    let mut request = sdk_url.into_client_request()?;
+    if let Some(token) = session_ingress_auth_token() {
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {token}")
+                .parse()
+                .context("building session ingress authorization header")?,
+        );
+    }
+    if let Ok(version) = std::env::var("CLAUDE_CODE_ENVIRONMENT_RUNNER_VERSION") {
+        if !version.is_empty() {
+            request.headers_mut().insert(
+                "x-environment-runner-version",
+                version
+                    .parse()
+                    .context("building environment runner version header")?,
+            );
+        }
+    }
+
+    let (stream, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .with_context(|| format!("connecting remote SDK URL {sdk_url}"))?;
+    let (_, mut read) = stream.split();
+    let mut seed = StreamJsonStdinSeed::default();
+    let mut buffered = String::new();
+
+    while let Some(message) = read.next().await {
+        let message = message.context("reading remote SDK WebSocket message")?;
+        let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+            continue;
+        };
+        buffered.push_str(&text);
+        while let Some(newline) = buffered.find('\n') {
+            let line = buffered[..newline].to_string();
+            buffered = buffered[newline + 1..].to_string();
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_str(&line)
+                .map_err(|err| anyhow::anyhow!("Error parsing remote stream-json input: {err}"))?;
+            match value.get("type").and_then(|value| value.as_str()) {
+                Some("user") => {
+                    let parsed = parse_stream_json_stdin(&(line + "\n"))?;
+                    seed.prompt = parsed.prompt;
+                    spawn_remote_sdk_background_reader(read, buffered);
+                    return Ok(seed);
+                }
+                _ => {
+                    if let Some(parsed) = handle_remote_sdk_non_user_line(&value)? {
+                        if parsed.system_prompt.is_some() {
+                            seed.system_prompt = parsed.system_prompt;
+                        }
+                        if parsed.append_system_prompt.is_some() {
+                            seed.append_system_prompt = parsed.append_system_prompt;
+                        }
+                        if parsed.json_schema.is_some() {
+                            seed.json_schema = parsed.json_schema;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(seed)
 }
 
@@ -2839,6 +3132,9 @@ fn dedup_claude_ai_mcp_servers(
 }
 
 fn emit_stream_json(value: serde_json::Value) {
+    if let Some(tx) = REMOTE_STREAM_JSON_TX.get() {
+        let _ = tx.send(value.clone());
+    }
     println!(
         "{}",
         serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
@@ -5470,34 +5766,56 @@ async fn main() -> Result<()> {
     }
     let mut prompt_arg = cli.prompt.clone();
     if cli.print && prompt_arg.is_none() {
-        use std::io::Read;
-        let mut stdin = String::new();
-        std::io::stdin().read_to_string(&mut stdin)?;
-        match cli.input_format {
-            InputFormat::Text => {
-                let stdin = stdin.trim_end().to_string();
-                if !stdin.is_empty() {
-                    prompt_arg = Some(stdin);
-                }
+        if let Some(sdk_url) = cli.sdk_url.clone() {
+            let seed = read_remote_sdk_seed(&sdk_url).await?;
+            if prompt_arg.is_none() {
+                prompt_arg = seed.prompt;
             }
-            InputFormat::StreamJson => {
-                let seed = parse_stream_json_stdin(&stdin)?;
-                if prompt_arg.is_none() {
-                    prompt_arg = seed.prompt;
+            if seed.system_prompt.is_some() {
+                cli.system_prompt = seed.system_prompt;
+                cli.system_prompt_file = None;
+            }
+            if seed.append_system_prompt.is_some() {
+                cli.append_system_prompt = seed.append_system_prompt;
+                cli.append_system_prompt_file = None;
+            }
+            if seed.json_schema.is_some() {
+                cli.json_schema = seed.json_schema;
+            }
+        } else {
+            use std::io::Read;
+            let mut stdin = String::new();
+            std::io::stdin().read_to_string(&mut stdin)?;
+            match cli.input_format {
+                InputFormat::Text => {
+                    let stdin = stdin.trim_end().to_string();
+                    if !stdin.is_empty() {
+                        prompt_arg = Some(stdin);
+                    }
                 }
-                if seed.system_prompt.is_some() {
-                    cli.system_prompt = seed.system_prompt;
-                    cli.system_prompt_file = None;
-                }
-                if seed.append_system_prompt.is_some() {
-                    cli.append_system_prompt = seed.append_system_prompt;
-                    cli.append_system_prompt_file = None;
-                }
-                if seed.json_schema.is_some() {
-                    cli.json_schema = seed.json_schema;
+                InputFormat::StreamJson => {
+                    let seed = parse_stream_json_stdin(&stdin)?;
+                    if prompt_arg.is_none() {
+                        prompt_arg = seed.prompt;
+                    }
+                    if seed.system_prompt.is_some() {
+                        cli.system_prompt = seed.system_prompt;
+                        cli.system_prompt_file = None;
+                    }
+                    if seed.append_system_prompt.is_some() {
+                        cli.append_system_prompt = seed.append_system_prompt;
+                        cli.append_system_prompt_file = None;
+                    }
+                    if seed.json_schema.is_some() {
+                        cli.json_schema = seed.json_schema;
+                    }
                 }
             }
         }
+    }
+
+    if cli.print && cli.sdk_url.is_some() && prompt_arg.is_none() {
+        prompt_arg = Some(String::new());
     }
 
     // Set working directory if specified
@@ -7648,6 +7966,39 @@ mod remote_control_tests {
             Some("/tmp/bridge-session_abc")
         );
         assert!(debug_file_for_session(None, "session/abc", false).is_none());
+    }
+
+    #[test]
+    fn remote_hybrid_post_url_matches_ts_conversion() {
+        assert_eq!(
+            convert_ws_url_to_session_ingress_post_url(
+                "wss://api.example.com/v2/session_ingress/ws/session-123"
+            )
+            .unwrap(),
+            "https://api.example.com/v2/session_ingress/session/session-123/events"
+        );
+        assert_eq!(
+            convert_ws_url_to_session_ingress_post_url(
+                "ws://127.0.0.1:8787/v1/session_ingress/ws/session-123?debug=1"
+            )
+            .unwrap(),
+            "http://127.0.0.1:8787/v1/session_ingress/session/session-123/events?debug=1"
+        );
+    }
+
+    #[test]
+    fn remote_control_response_success_shape_matches_structured_io() {
+        assert_eq!(
+            remote_control_response_success("req-1", serde_json::json!({})),
+            serde_json::json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "req-1",
+                    "response": {},
+                },
+            })
+        );
     }
 
     #[test]
