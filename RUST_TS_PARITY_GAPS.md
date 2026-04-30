@@ -1175,9 +1175,11 @@ Missing or partial:
   CCR v2 child SSE/client-event POST bridge, multi-turn remote child prompt
   queueing, and child-side `can_use_tool` permission control responses
   including updated input/permissions and worktree cwd side effects, plus CCR
-  worker state reports for running/requires-action/idle, are now wired to the
-  general bridge API/session clients. Still missing:
-  entitlement/policy checks, session-id/continue reconnect, full CCR v2
+  worker state reports for running/requires-action/idle, and explicit
+  `--session-id` reconnect via `getBridgeSession` + environment reuse +
+  `/bridge/reconnect`, are now wired to the general bridge API/session clients.
+  Still missing:
+  entitlement/policy checks, `--continue` bridge-pointer resume, full CCR v2
   lifecycle reporting, parent-side hosted permission callback forwarding,
   trusted-device flow, and
   connected/disconnect TUI state.
