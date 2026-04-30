@@ -8,6 +8,14 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
 static REMOTE_STREAM_JSON_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<Value>> = OnceLock::new();
+static REMOTE_CCR_DELIVERY_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<CcrDeliveryUpdate>> =
+    OnceLock::new();
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CcrDeliveryUpdate {
+    event_id: String,
+    status: &'static str,
+}
 
 #[derive(Parser)]
 #[command(
@@ -330,6 +338,7 @@ enum RemotePostConfig {
     CcrV2 {
         session_url: String,
         events_url: String,
+        delivery_url: String,
         worker_url: String,
         worker_epoch: u64,
     },
@@ -344,6 +353,7 @@ fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
         let session_url = sdk_url.trim_end_matches('/').to_string();
         Ok(RemotePostConfig::CcrV2 {
             events_url: format!("{session_url}/worker/events"),
+            delivery_url: format!("{session_url}/worker/events/delivery"),
             worker_url: format!("{session_url}/worker"),
             session_url,
             worker_epoch,
@@ -358,10 +368,14 @@ fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
 fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
     let config = remote_post_config_for_sdk_url(sdk_url)?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let (delivery_tx, mut delivery_rx) =
+        tokio::sync::mpsc::unbounded_channel::<CcrDeliveryUpdate>();
     let _ = REMOTE_STREAM_JSON_TX.set(tx);
+    let _ = REMOTE_CCR_DELIVERY_TX.set(delivery_tx);
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         let mut buffer: Vec<Value> = Vec::new();
+        let mut delivery_buffer: Vec<CcrDeliveryUpdate> = Vec::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let heartbeat_delay = std::time::Duration::from_secs(20);
@@ -380,9 +394,21 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
                     }
                 }
+                maybe_delivery = delivery_rx.recv() => {
+                    let Some(update) = maybe_delivery else {
+                        continue;
+                    };
+                    delivery_buffer.push(update);
+                    if delivery_buffer.len() >= 64 {
+                        post_remote_ccr_delivery_batch(&client, &config, &mut delivery_buffer).await;
+                    }
+                }
                 _ = interval.tick() => {
                     if !buffer.is_empty() {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
+                    }
+                    if !delivery_buffer.is_empty() {
+                        post_remote_ccr_delivery_batch(&client, &config, &mut delivery_buffer).await;
                     }
                 }
                 _ = &mut heartbeat => {
@@ -394,8 +420,23 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         if !buffer.is_empty() {
             post_remote_stream_json_batch(&client, &config, &mut buffer).await;
         }
+        if !delivery_buffer.is_empty() {
+            post_remote_ccr_delivery_batch(&client, &config, &mut delivery_buffer).await;
+        }
     });
     Ok(())
+}
+
+fn report_remote_ccr_delivery(event_id: &str, status: &'static str) {
+    if event_id.is_empty() {
+        return;
+    }
+    if let Some(tx) = REMOTE_CCR_DELIVERY_TX.get() {
+        let _ = tx.send(CcrDeliveryUpdate {
+            event_id: event_id.to_string(),
+            status,
+        });
+    }
 }
 
 fn ccr_heartbeat_url(config: &RemotePostConfig) -> Option<String> {
@@ -438,6 +479,68 @@ async fn post_remote_ccr_heartbeat(client: &reqwest::Client, config: &RemotePost
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await;
+}
+
+fn ccr_delivery_body(worker_epoch: u64, updates: &[CcrDeliveryUpdate]) -> serde_json::Value {
+    serde_json::json!({
+        "worker_epoch": worker_epoch,
+        "updates": updates.iter().map(|update| {
+            serde_json::json!({
+                "event_id": update.event_id,
+                "status": update.status,
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+async fn post_remote_ccr_delivery_batch(
+    client: &reqwest::Client,
+    config: &RemotePostConfig,
+    buffer: &mut Vec<CcrDeliveryUpdate>,
+) {
+    let RemotePostConfig::CcrV2 {
+        delivery_url,
+        worker_epoch,
+        ..
+    } = config
+    else {
+        buffer.clear();
+        return;
+    };
+    let Some(token) = session_ingress_auth_token() else {
+        buffer.clear();
+        return;
+    };
+    let updates = std::mem::take(buffer);
+    let body = ccr_delivery_body(*worker_epoch, &updates);
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        let response = client
+            .post(delivery_url)
+            .bearer_auth(&token)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await;
+        match response {
+            Ok(resp) if resp.status().is_success() => break,
+            Ok(resp)
+                if resp.status().is_client_error()
+                    && resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                break;
+            }
+            _ if attempt >= 5 => break,
+            _ => {
+                let delay_ms = 500u64
+                    .saturating_mul(2u64.saturating_pow(attempt - 1))
+                    .min(8_000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+        }
+    }
 }
 
 fn ccr_worker_state_for_event(event: &Value) -> Option<Value> {
@@ -851,7 +954,13 @@ fn handle_remote_sdk_seed_line(value: Value, seed: &mut StreamJsonStdinSeed) -> 
     }
 }
 
-fn parse_sse_payloads(buffer: &mut String) -> Vec<Value> {
+#[derive(Clone, Debug)]
+struct CcrStreamEvent {
+    event_id: Option<String>,
+    payload: Option<Value>,
+}
+
+fn parse_sse_payloads(buffer: &mut String) -> Vec<CcrStreamEvent> {
     let mut out = Vec::new();
     while let Some(frame_end) = buffer.find("\n\n") {
         let frame = buffer[..frame_end].to_string();
@@ -871,9 +980,13 @@ fn parse_sse_payloads(buffer: &mut String) -> Vec<Value> {
         let Ok(event) = serde_json::from_str::<Value>(&data_lines.join("\n")) else {
             continue;
         };
-        if let Some(payload) = event.get("payload").cloned() {
-            out.push(payload);
-        }
+        out.push(CcrStreamEvent {
+            event_id: event
+                .get("event_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            payload: event.get("payload").cloned(),
+        });
     }
     out
 }
@@ -893,7 +1006,13 @@ fn spawn_remote_ccr_background_reader(
                 break;
             };
             buffer.push_str(&String::from_utf8_lossy(&chunk));
-            for payload in parse_sse_payloads(&mut buffer) {
+            for event in parse_sse_payloads(&mut buffer) {
+                if let Some(event_id) = event.event_id.as_deref() {
+                    report_remote_ccr_delivery(event_id, "received");
+                }
+                let Some(payload) = event.payload else {
+                    continue;
+                };
                 match payload.get("type").and_then(|value| value.as_str()) {
                     Some("user") => {
                         if let Some(content) = payload
@@ -946,7 +1065,13 @@ async fn read_remote_ccr_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("reading remote CCR v2 SSE message")?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
-        for payload in parse_sse_payloads(&mut buffer) {
+        for event in parse_sse_payloads(&mut buffer) {
+            if let Some(event_id) = event.event_id.as_deref() {
+                report_remote_ccr_delivery(event_id, "received");
+            }
+            let Some(payload) = event.payload else {
+                continue;
+            };
             if handle_remote_sdk_seed_line(payload, &mut seed)? {
                 spawn_remote_ccr_background_reader(stream, buffer, tx);
                 return Ok(RemoteSdkSeed { seed, rx });
@@ -8989,6 +9114,9 @@ mod remote_control_tests {
             session_url: "https://api.example.com/v1/code/sessions/session-123".to_string(),
             events_url: "https://api.example.com/v1/code/sessions/session-123/worker/events"
                 .to_string(),
+            delivery_url:
+                "https://api.example.com/v1/code/sessions/session-123/worker/events/delivery"
+                    .to_string(),
             worker_url: "https://api.example.com/v1/code/sessions/session-123/worker".to_string(),
             worker_epoch: 7,
         };
@@ -8996,6 +9124,39 @@ mod remote_control_tests {
             ccr_heartbeat_url(&config).unwrap(),
             "https://api.example.com/v1/code/sessions/session-123/worker/heartbeat"
         );
+    }
+
+    #[test]
+    fn remote_ccr_delivery_body_matches_ts_transport() {
+        let updates = vec![
+            CcrDeliveryUpdate {
+                event_id: "event-1".to_string(),
+                status: "received",
+            },
+            CcrDeliveryUpdate {
+                event_id: "event-2".to_string(),
+                status: "processed",
+            },
+        ];
+        assert_eq!(
+            ccr_delivery_body(7, &updates),
+            serde_json::json!({
+                "worker_epoch": 7,
+                "updates": [
+                    {"event_id": "event-1", "status": "received"},
+                    {"event_id": "event-2", "status": "processed"},
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn remote_ccr_sse_parser_preserves_event_id_for_delivery_ack() {
+        let mut buffer = "event: client_event\ndata: {\"event_id\":\"event-1\",\"sequence_num\":1,\"event_type\":\"user\",\"source\":\"web\",\"payload\":{\"type\":\"user\",\"message\":{\"content\":\"hi\"}},\"created_at\":\"now\"}\n\n".to_string();
+        let events = parse_sse_payloads(&mut buffer);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id.as_deref(), Some("event-1"));
+        assert_eq!(events[0].payload.as_ref().unwrap()["type"], "user");
     }
 
     #[test]
