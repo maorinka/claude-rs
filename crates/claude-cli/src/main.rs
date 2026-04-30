@@ -2188,6 +2188,96 @@ fn load_settings_from_sources(
     serde_json::from_value(value).unwrap_or_default()
 }
 
+async fn run_startup_migrations(project_root: &std::path::Path) {
+    const CURRENT_MIGRATION_VERSION: i64 = 11;
+
+    let mut global = match claude_core::config::global::load_global_config() {
+        Ok(global) => global,
+        Err(err) => {
+            tracing::debug!(error = %err, "failed to load global config for migrations");
+            return;
+        }
+    };
+    if global.extra.get("migrationVersion").and_then(Value::as_i64)
+        == Some(CURRENT_MIGRATION_VERSION)
+    {
+        return;
+    }
+
+    let user_settings_path = match claude_core::config::paths::user_settings_path() {
+        Ok(path) => path,
+        Err(err) => {
+            tracing::debug!(error = %err, "failed to resolve user settings path for migrations");
+            return;
+        }
+    };
+    let mut user_settings =
+        claude_core::config::settings::Settings::load_from_file(&user_settings_path);
+    let tokens = claude_core::auth::storage::load_tokens()
+        .await
+        .ok()
+        .flatten();
+    let subscription_type = tokens
+        .as_ref()
+        .and_then(|tokens| tokens.subscription_type.as_deref());
+    let rate_limit_tier = tokens
+        .as_ref()
+        .and_then(|tokens| tokens.rate_limit_tier.as_deref());
+    let ctx = claude_core::migrations::MigrationContext {
+        is_first_party: tokens.is_some() || claude_core::user_type::is_ant(),
+        is_pro: subscription_type == Some("pro"),
+        is_max: subscription_type == Some("max"),
+        is_team_premium: rate_limit_tier == Some("team_premium"),
+        is_ant_user: claude_core::user_type::is_ant(),
+        transcript_classifier_enabled: claude_core::errors_util::is_env_truthy(
+            "TRANSCRIPT_CLASSIFIER",
+        ),
+        auto_mode_enabled_state: std::env::var("CLAUDE_CODE_AUTO_MODE_ENABLED_STATE").ok(),
+    };
+    let applied = claude_core::migrations::run_all(&ctx, &mut global, &mut user_settings);
+
+    let project_config_path = project_root.join(".claude.json");
+    let local_settings_path = project_root.join(".claude").join("settings.local.json");
+    let mut project_migrated = false;
+    if let Ok(project_text) = std::fs::read_to_string(&project_config_path) {
+        if let Ok(mut project_value) = serde_json::from_str::<Value>(&project_text) {
+            if let Some(project_obj) = project_value.as_object_mut() {
+                let mut local_settings =
+                    claude_core::config::settings::Settings::load_from_file(&local_settings_path);
+                if claude_core::migrations::settings_moves::migrate_project_mcp_approval_fields(
+                    project_obj,
+                    &mut local_settings,
+                ) {
+                    if let Some(parent) = local_settings_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Ok(text) = serde_json::to_string_pretty(&local_settings) {
+                        let _ = std::fs::write(&local_settings_path, text);
+                    }
+                    if let Ok(text) = serde_json::to_string_pretty(&project_value) {
+                        let _ = std::fs::write(&project_config_path, text);
+                    }
+                    project_migrated = true;
+                }
+            }
+        }
+    }
+
+    global.extra.insert(
+        "migrationVersion".into(),
+        Value::Number(serde_json::Number::from(CURRENT_MIGRATION_VERSION)),
+    );
+    if !applied.is_empty() || project_migrated {
+        if let Some(parent) = user_settings_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(text) = serde_json::to_string_pretty(&user_settings) {
+            let _ = std::fs::write(&user_settings_path, text);
+        }
+    }
+    let _ = claude_core::config::global::save_global_config(|_| global);
+}
+
 fn load_dynamic_mcp_configs(
     values: &[String],
 ) -> Result<(
@@ -8050,6 +8140,8 @@ async fn main() -> Result<()> {
             claude_core::undercover::prime_repo_class_from_remote(&prime_root);
         });
     }
+
+    run_startup_migrations(&project_root).await;
 
     // Load settings from the same source buckets as TS (`--setting-sources`).
     // Policy and flag settings are always layered separately in TS; the Rust

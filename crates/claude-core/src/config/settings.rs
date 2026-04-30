@@ -1,5 +1,6 @@
 use crate::sandbox::types::SandboxSettings;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 /// A single permission rule referencing a tool, with an optional glob pattern.
@@ -182,6 +183,10 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub skip_web_fetch_preflight: Option<bool>,
+
+    /// Preserve settings keys Rust does not understand yet.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 impl Settings {
@@ -293,6 +298,11 @@ impl Settings {
             skip_web_fetch_preflight: overlay
                 .skip_web_fetch_preflight
                 .or(self.skip_web_fetch_preflight),
+            extra: {
+                let mut extra = self.extra.clone();
+                extra.extend(overlay.extra.clone());
+                extra
+            },
         }
     }
 }

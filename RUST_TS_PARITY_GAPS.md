@@ -1339,9 +1339,12 @@ Rust currently runs a subset:
 - `resetAutoModeOptInForDefaultOffer`
 - Pure project-config helper for
   `migrateEnableAllProjectMcpServersToSettings` field movement.
+- CLI startup now runs the versioned migration set before settings are loaded,
+  writes migrated user settings/global config, migrates project MCP approval
+  fields from project config to local settings, and records
+  `migrationVersion: 11` like TS.
 
 Needs work:
-- Confirm migrations run at CLI startup and are persisted.
 - Add fixture tests using real TS config examples.
 
 ## P1: UI / TUI
