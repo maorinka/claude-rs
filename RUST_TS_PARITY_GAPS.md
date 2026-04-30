@@ -524,15 +524,20 @@ Improved:
   the v1 Session-Ingress WebSocket, applies the same token-refresh environment
   messages TS `StructuredIO` accepts, derives the TS `HybridTransport` POST
   endpoint from the WebSocket URL, and mirrors stream-json stdout events to
-  Session-Ingress HTTP POST batches.
+  Session-Ingress HTTP POST batches. It also selects the CCR v2 shape when
+  `CLAUDE_CODE_USE_CCR_V2` is set: the child reads `client_event` payloads from
+  `{sessionUrl}/worker/events/stream` and posts wrapped client events to
+  `{sessionUrl}/worker/events` with the worker epoch.
 
 Missing or partial:
 - Full bridge messaging.
 - `initReplBridge` / `replBridge` behavior.
 - `remoteBridgeCore` parity.
-- CCR v2 child transport. Rust now has the v1 `HybridTransport` shape for
-  `--sdk-url` child sessions, but still needs the TS `SSETransport` +
-  `CCRClient` equivalent for `CLAUDE_CODE_USE_CCR_V2`.
+- Full CCR v2 client lifecycle depth. Rust now has the basic child
+  `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
+  needs the full TS `CCRClient` lifecycle: heartbeat, worker state/metadata
+  reporting, delivery acknowledgements, internal-event persistence/restore, and
+  text-delta coalescing.
 - Bridge permission callbacks.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
@@ -1155,11 +1160,12 @@ Missing or partial:
   environment registration, initial session creation, remote session URL
   printing, bridge work polling, healthcheck ack, session work-secret decode,
   TS-shaped child process launch, token update forwarding, heartbeat, stopWork,
-  archive, deregister, and the v1 child Session-Ingress WebSocket/POST bridge
-  are now wired to the general bridge API/session clients. Still missing:
-  entitlement/policy checks, session-id/continue reconnect, CCR v2 child
-  transport, multi-turn inbound web/mobile prompt queueing, permission callback
-  forwarding, trusted-device flow, and
+  archive, deregister, v1 child Session-Ingress WebSocket/POST bridge, and
+  basic CCR v2 child SSE/client-event POST bridge are now wired to the general
+  bridge API/session clients. Still missing: entitlement/policy checks,
+  session-id/continue reconnect, full CCR v2 lifecycle reporting, multi-turn
+  inbound web/mobile prompt queueing, permission callback forwarding,
+  trusted-device flow, and
   connected/disconnect TUI state.
 - Remote managed settings.
 - Settings sync.

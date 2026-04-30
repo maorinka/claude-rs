@@ -290,6 +290,7 @@ name = "claude-cli"
 version = "2.1.121"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "claude-core",

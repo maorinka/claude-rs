@@ -312,8 +312,35 @@ fn convert_ws_url_to_session_ingress_post_url(ws_url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+enum RemotePostConfig {
+    Hybrid {
+        post_url: String,
+    },
+    CcrV2 {
+        events_url: String,
+        worker_epoch: u64,
+    },
+}
+
+fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
+    if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_USE_CCR_V2") {
+        let worker_epoch = std::env::var("CLAUDE_CODE_WORKER_EPOCH")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        Ok(RemotePostConfig::CcrV2 {
+            events_url: format!("{}/worker/events", sdk_url.trim_end_matches('/')),
+            worker_epoch,
+        })
+    } else {
+        Ok(RemotePostConfig::Hybrid {
+            post_url: convert_ws_url_to_session_ingress_post_url(sdk_url)?,
+        })
+    }
+}
+
 fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
-    let post_url = convert_ws_url_to_session_ingress_post_url(sdk_url)?;
+    let config = remote_post_config_for_sdk_url(sdk_url)?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
     let _ = REMOTE_STREAM_JSON_TX.set(tx);
     tokio::spawn(async move {
@@ -330,18 +357,18 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                     };
                     buffer.push(value);
                     if buffer.len() >= 500 {
-                        post_remote_stream_json_batch(&client, &post_url, &mut buffer).await;
+                        post_remote_stream_json_batch(&client, &config, &mut buffer).await;
                     }
                 }
                 _ = interval.tick() => {
                     if !buffer.is_empty() {
-                        post_remote_stream_json_batch(&client, &post_url, &mut buffer).await;
+                        post_remote_stream_json_batch(&client, &config, &mut buffer).await;
                     }
                 }
             }
         }
         if !buffer.is_empty() {
-            post_remote_stream_json_batch(&client, &post_url, &mut buffer).await;
+            post_remote_stream_json_batch(&client, &config, &mut buffer).await;
         }
     });
     Ok(())
@@ -349,7 +376,7 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
 
 async fn post_remote_stream_json_batch(
     client: &reqwest::Client,
-    post_url: &str,
+    config: &RemotePostConfig,
     buffer: &mut Vec<Value>,
 ) {
     let Some(token) = session_ingress_auth_token() else {
@@ -360,10 +387,46 @@ async fn post_remote_stream_json_batch(
     let mut attempt = 0u32;
     loop {
         attempt += 1;
-        let response = client
-            .post(post_url)
-            .bearer_auth(&token)
-            .json(&serde_json::json!({ "events": events.clone() }))
+        let request = match config {
+            RemotePostConfig::Hybrid { post_url } => client
+                .post(post_url)
+                .bearer_auth(&token)
+                .json(&serde_json::json!({ "events": events.clone() })),
+            RemotePostConfig::CcrV2 {
+                events_url,
+                worker_epoch,
+            } => {
+                let wrapped = events
+                    .iter()
+                    .map(|event| {
+                        let mut payload = event.clone();
+                        if payload
+                            .get("uuid")
+                            .and_then(|value| value.as_str())
+                            .is_none()
+                        {
+                            payload["uuid"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+                        }
+                        let mut wrapped = serde_json::json!({ "payload": payload });
+                        if event.get("type").and_then(|value| value.as_str())
+                            == Some("stream_event")
+                        {
+                            wrapped["ephemeral"] = serde_json::json!(true);
+                        }
+                        wrapped
+                    })
+                    .collect::<Vec<_>>();
+                client
+                    .post(events_url)
+                    .bearer_auth(&token)
+                    .header("anthropic-version", "2023-06-01")
+                    .json(&serde_json::json!({
+                        "worker_epoch": worker_epoch,
+                        "events": wrapped,
+                    }))
+            }
+        };
+        let response = request
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await;
@@ -496,9 +559,144 @@ fn spawn_remote_sdk_background_reader(
     });
 }
 
+fn ccr_v2_sse_url(sdk_url: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(sdk_url)?;
+    match url.scheme() {
+        "https" | "http" => {}
+        "wss" => {
+            url.set_scheme("https")
+                .map_err(|_| anyhow::anyhow!("invalid sdk url scheme"))?;
+        }
+        "ws" => {
+            url.set_scheme("http")
+                .map_err(|_| anyhow::anyhow!("invalid sdk url scheme"))?;
+        }
+        other => return Err(anyhow::anyhow!("Unsupported protocol: {other}:")),
+    }
+    let mut path = url.path().trim_end_matches('/').to_string();
+    path.push_str("/worker/events/stream");
+    url.set_path(&path);
+    Ok(url.to_string())
+}
+
+fn handle_remote_sdk_seed_line(value: Value, seed: &mut StreamJsonStdinSeed) -> Result<bool> {
+    match value.get("type").and_then(|value| value.as_str()) {
+        Some("user") => {
+            let parsed = parse_stream_json_stdin(&(value.to_string() + "\n"))?;
+            seed.prompt = parsed.prompt;
+            Ok(true)
+        }
+        _ => {
+            if let Some(parsed) = handle_remote_sdk_non_user_line(&value)? {
+                if parsed.system_prompt.is_some() {
+                    seed.system_prompt = parsed.system_prompt;
+                }
+                if parsed.append_system_prompt.is_some() {
+                    seed.append_system_prompt = parsed.append_system_prompt;
+                }
+                if parsed.json_schema.is_some() {
+                    seed.json_schema = parsed.json_schema;
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
+fn parse_sse_payloads(buffer: &mut String) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Some(frame_end) = buffer.find("\n\n") {
+        let frame = buffer[..frame_end].to_string();
+        *buffer = buffer[frame_end + 2..].to_string();
+        let mut event_type = None;
+        let mut data_lines = Vec::new();
+        for line in frame.lines() {
+            if let Some(rest) = line.strip_prefix("event:") {
+                event_type = Some(rest.trim().to_string());
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                data_lines.push(rest.trim_start().to_string());
+            }
+        }
+        if event_type.as_deref() != Some("client_event") || data_lines.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&data_lines.join("\n")) else {
+            continue;
+        };
+        if let Some(payload) = event.get("payload").cloned() {
+            out.push(payload);
+        }
+    }
+    out
+}
+
+fn spawn_remote_ccr_background_reader(
+    mut stream: impl futures_util::Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>>
+        + Unpin
+        + Send
+        + 'static,
+    mut buffer: String,
+) {
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let Ok(chunk) = chunk else {
+                break;
+            };
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            for payload in parse_sse_payloads(&mut buffer) {
+                let _ = handle_remote_sdk_non_user_line(&payload);
+            }
+        }
+    });
+}
+
+async fn read_remote_ccr_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
+    use futures_util::StreamExt;
+
+    install_remote_stream_json_poster(sdk_url)?;
+    spawn_remote_stdin_environment_updater();
+
+    let sse_url = ccr_v2_sse_url(sdk_url)?;
+    let Some(token) = session_ingress_auth_token() else {
+        anyhow::bail!("missing CLAUDE_CODE_SESSION_ACCESS_TOKEN for CCR v2 remote session");
+    };
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&sse_url)
+        .bearer_auth(token)
+        .header("accept", "text/event-stream")
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .with_context(|| format!("connecting remote CCR v2 SSE URL {sse_url}"))?;
+    if !response.status().is_success() {
+        anyhow::bail!("remote CCR v2 SSE failed: {}", response.status());
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut seed = StreamJsonStdinSeed::default();
+    let mut buffer = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("reading remote CCR v2 SSE message")?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        for payload in parse_sse_payloads(&mut buffer) {
+            if handle_remote_sdk_seed_line(payload, &mut seed)? {
+                spawn_remote_ccr_background_reader(stream, buffer);
+                return Ok(seed);
+            }
+        }
+    }
+    Ok(seed)
+}
+
 async fn read_remote_sdk_seed(sdk_url: &str) -> Result<StreamJsonStdinSeed> {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    if claude_core::errors_util::is_env_truthy("CLAUDE_CODE_USE_CCR_V2") {
+        return read_remote_ccr_seed(sdk_url).await;
+    }
 
     install_remote_stream_json_poster(sdk_url)?;
     spawn_remote_stdin_environment_updater();
@@ -7983,6 +8181,14 @@ mod remote_control_tests {
             )
             .unwrap(),
             "http://127.0.0.1:8787/v1/session_ingress/session/session-123/events?debug=1"
+        );
+    }
+
+    #[test]
+    fn remote_ccr_sse_url_matches_ts_transport_utils() {
+        assert_eq!(
+            ccr_v2_sse_url("https://api.example.com/v1/code/sessions/session-123").unwrap(),
+            "https://api.example.com/v1/code/sessions/session-123/worker/events/stream"
         );
     }
 
