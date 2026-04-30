@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1247,6 +1247,9 @@ pub enum SubCommand {
         /// Resume a specific remote-control session by ID
         #[arg(long = "session-id", hide = true)]
         session_id: Option<String>,
+        /// Resume the last remote-control session in this directory
+        #[arg(long = "continue", short = 'c', hide = true)]
+        continue_session: bool,
         /// Pre-create a session in the current directory
         #[arg(long = "create-session-in-dir")]
         create_session_in_dir: bool,
@@ -5337,6 +5340,7 @@ fn validate_remote_control_bridge_options(
     spawn: Option<&str>,
     capacity: Option<&str>,
     session_id: Option<&str>,
+    continue_session: bool,
     create_session_override: bool,
 ) -> Result<(Option<&'static str>, Option<u32>), String> {
     let spawn = normalize_remote_control_spawn(spawn)?;
@@ -5347,11 +5351,16 @@ fn validate_remote_control_bridge_options(
                 .to_string(),
         );
     }
-    if session_id.is_some() && (spawn.is_some() || capacity.is_some() || create_session_override) {
+    if (session_id.is_some() || continue_session)
+        && (spawn.is_some() || capacity.is_some() || create_session_override)
+    {
         return Err(
             "--session-id and --continue cannot be used with --spawn, --capacity, or --create-session-in-dir."
                 .to_string(),
         );
+    }
+    if session_id.is_some() && continue_session {
+        return Err("--session-id and --continue cannot be used together.".to_string());
     }
     Ok((spawn, capacity))
 }
@@ -5371,6 +5380,7 @@ fn validate_remote_control_fast_path_args(args: &[String]) -> Result<(), String>
     let mut spawn: Option<String> = None;
     let mut capacity: Option<String> = None;
     let mut session_id: Option<String> = None;
+    let mut continue_session = false;
     let mut create_session_override = false;
 
     let mut i = 0;
@@ -5418,6 +5428,8 @@ fn validate_remote_control_fast_path_args(args: &[String]) -> Result<(), String>
                 return Err("--session-id requires a value".to_string());
             }
             session_id = Some(value.to_string());
+        } else if arg == "--continue" || arg == "-c" {
+            continue_session = true;
         } else if arg == "--spawn" || arg.starts_with("--spawn=") {
             if spawn.is_some() {
                 return Err("--spawn may only be specified once".to_string());
@@ -5462,6 +5474,7 @@ fn validate_remote_control_fast_path_args(args: &[String]) -> Result<(), String>
         spawn.as_deref(),
         capacity.as_deref(),
         session_id.as_deref(),
+        continue_session,
         create_session_override,
     )
     .map(|_| ())
@@ -5512,6 +5525,109 @@ fn remote_control_title(
         })
 }
 
+const BRIDGE_POINTER_TTL_MS: u128 = 4 * 60 * 60 * 1000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgePointer {
+    session_id: String,
+    environment_id: String,
+    source: String,
+}
+
+fn claude_config_home_dir() -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+        .unwrap_or_else(|| PathBuf::from(".claude"))
+}
+
+fn bridge_pointer_path(dir: &std::path::Path) -> PathBuf {
+    claude_config_home_dir()
+        .join("projects")
+        .join(claude_core::path_utils::sanitize_path(
+            &dir.display().to_string(),
+        ))
+        .join("bridge-pointer.json")
+}
+
+fn write_bridge_pointer(dir: &std::path::Path, pointer: &BridgePointer) {
+    let path = bridge_pointer_path(dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string(pointer) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+fn clear_bridge_pointer(dir: &std::path::Path) {
+    let _ = std::fs::remove_file(bridge_pointer_path(dir));
+}
+
+fn read_bridge_pointer(dir: &std::path::Path) -> Option<(BridgePointer, u128)> {
+    let path = bridge_pointer_path(dir);
+    let metadata = std::fs::metadata(&path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let age_ms = std::time::SystemTime::now()
+        .duration_since(modified)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let pointer = serde_json::from_str::<BridgePointer>(&raw).ok()?;
+    if pointer.session_id.is_empty() || pointer.environment_id.is_empty() {
+        clear_bridge_pointer(dir);
+        return None;
+    }
+    if age_ms > BRIDGE_POINTER_TTL_MS {
+        clear_bridge_pointer(dir);
+        return None;
+    }
+    Some((pointer, age_ms))
+}
+
+fn remote_control_worktree_paths(dir: &std::path::Path) -> Vec<PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["worktree", "list", "--porcelain"])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn read_bridge_pointer_across_worktrees(dir: &std::path::Path) -> Option<(BridgePointer, PathBuf)> {
+    if let Some((pointer, _)) = read_bridge_pointer(dir) {
+        return Some((pointer, dir.to_path_buf()));
+    }
+    let worktrees = remote_control_worktree_paths(dir);
+    if worktrees.len() <= 1 || worktrees.len() > 50 {
+        return None;
+    }
+    let mut freshest: Option<(BridgePointer, PathBuf, u128)> = None;
+    for worktree in worktrees {
+        if worktree == dir {
+            continue;
+        }
+        let Some((pointer, age_ms)) = read_bridge_pointer(&worktree) else {
+            continue;
+        };
+        if freshest.as_ref().is_none_or(|(_, _, age)| age_ms < *age) {
+            freshest = Some((pointer, worktree, age_ms));
+        }
+    }
+    freshest.map(|(pointer, dir, _)| (pointer, dir))
+}
+
 struct RemoteControlCommandOptions<'a> {
     name: Option<&'a String>,
     remote_control_session_name_prefix: Option<&'a String>,
@@ -5524,6 +5640,7 @@ struct RemoteControlCommandOptions<'a> {
     spawn: Option<&'a String>,
     capacity: Option<&'a String>,
     session_id: Option<&'a String>,
+    continue_session: bool,
     _create_session_in_dir: bool,
     no_create_session_in_dir: bool,
 }
@@ -5770,6 +5887,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
         options.spawn.map(String::as_str),
         options.capacity.map(String::as_str),
         options.session_id.map(String::as_str),
+        options.continue_session,
         options._create_session_in_dir,
     ) {
         Ok(validated) => validated,
@@ -5784,6 +5902,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
         _ => claude_core::bridge::api::SpawnMode::SameDir,
     };
     let max_sessions = if options.session_id.is_some()
+        || options.continue_session
         || matches!(
             spawn_mode,
             claude_core::bridge::api::SpawnMode::SingleSession
@@ -5823,6 +5942,17 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
     );
 
     let cwd = std::env::current_dir()?;
+    let mut resume_pointer_dir: Option<PathBuf> = None;
+    let resume_session_id = if options.continue_session {
+        let Some((pointer, pointer_dir)) = read_bridge_pointer_across_worktrees(&cwd) else {
+            eprintln!("Error: No resumable Remote Control session found for this directory.");
+            std::process::exit(1);
+        };
+        resume_pointer_dir = Some(pointer_dir);
+        Some(pointer.session_id)
+    } else {
+        options.session_id.cloned()
+    };
     let hostname = remote_control_hostname();
     let branch = remote_control_git_branch();
     let git_repo_url = remote_control_git_remote();
@@ -5839,20 +5969,26 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
         .session_timeout
         .and_then(|value| value.parse::<u64>().ok())
         .map(|seconds| seconds.saturating_mul(1000));
-    let pre_create_session = options.session_id.is_none() && !options.no_create_session_in_dir;
+    let pre_create_session = resume_session_id.is_none() && !options.no_create_session_in_dir;
     let mut reuse_environment_id = None;
-    if let Some(resume_session_id) = options.session_id {
+    if let Some(resume_session_id) = resume_session_id.as_deref() {
         let session = api
             .get_bridge_session(resume_session_id, &organization_uuid)
             .await
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         let Some(session) = session else {
+            if let Some(dir) = resume_pointer_dir.as_deref() {
+                clear_bridge_pointer(dir);
+            }
             eprintln!(
                 "Error: Session {resume_session_id} not found. It may have been archived or expired, or your login may have lapsed (run `claude /login`)."
             );
             std::process::exit(1);
         };
         let Some(environment_id) = session.environment_id.filter(|value| !value.is_empty()) else {
+            if let Some(dir) = resume_pointer_dir.as_deref() {
+                clear_bridge_pointer(dir);
+            }
             eprintln!(
                 "Error: Session {resume_session_id} has no environment_id. It may never have been attached to a bridge."
             );
@@ -5886,7 +6022,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     let mut session_id = None;
-    if let Some(resume_session_id) = options.session_id {
+    if let Some(resume_session_id) = resume_session_id.as_deref() {
         if reuse_environment_id.as_deref() != Some(registered_environment_id.as_str()) {
             eprintln!(
                 "Warning: Could not resume session {resume_session_id} - its environment has expired. Creating a fresh session instead."
@@ -5908,7 +6044,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             let infra_id =
                 claude_core::bridge::session_id_compat::to_infra_session_id(resume_session_id);
             let mut candidates = vec![resume_session_id.to_string()];
-            if infra_id != resume_session_id.as_str() {
+            if infra_id != resume_session_id {
                 candidates.push(infra_id);
             }
             let mut reconnected = false;
@@ -5948,6 +6084,21 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             })
             .await
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    }
+    if matches!(
+        config.spawn_mode,
+        claude_core::bridge::api::SpawnMode::SingleSession
+    ) {
+        if let Some(session_id) = session_id.as_deref() {
+            write_bridge_pointer(
+                &cwd,
+                &BridgePointer {
+                    session_id: session_id.to_string(),
+                    environment_id: registered_environment_id.clone(),
+                    source: "standalone".to_string(),
+                },
+            );
+        }
     }
 
     println!("Remote Control is active.");
@@ -6216,6 +6367,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             claude_core::bridge::session_id_compat::to_compat_session_id(&session_id, true);
         let _ = api.archive_session(&compat_id).await;
     }
+    clear_bridge_pointer(&cwd);
     let _ = api.deregister_environment(&registered_environment_id).await;
     Ok(())
 }
@@ -6424,6 +6576,7 @@ async fn main() -> Result<()> {
             spawn,
             capacity,
             session_id,
+            continue_session,
             create_session_in_dir,
             no_create_session_in_dir,
         }) => {
@@ -6439,6 +6592,7 @@ async fn main() -> Result<()> {
                 spawn: spawn.as_ref(),
                 capacity: capacity.as_ref(),
                 session_id: session_id.as_ref(),
+                continue_session: *continue_session,
                 _create_session_in_dir: *create_session_in_dir,
                 no_create_session_in_dir: *no_create_session_in_dir,
             })
@@ -8559,6 +8713,7 @@ mod remote_control_tests {
                 spawn,
                 capacity,
                 session_id,
+                continue_session,
                 create_session_in_dir,
                 no_create_session_in_dir,
             }) => {
@@ -8576,6 +8731,7 @@ mod remote_control_tests {
                 assert_eq!(spawn.as_deref(), Some("same-dir"));
                 assert_eq!(capacity.as_deref(), Some("2"));
                 assert_eq!(session_id, None);
+                assert!(!continue_session);
                 assert!(!create_session_in_dir);
                 assert!(no_create_session_in_dir);
             }
@@ -8636,35 +8792,45 @@ mod remote_control_tests {
     #[test]
     fn remote_control_bridge_option_validation_matches_ts() {
         assert_eq!(
-            validate_remote_control_bridge_options(Some("session"), None, None, false).unwrap(),
+            validate_remote_control_bridge_options(Some("session"), None, None, false, false)
+                .unwrap(),
             (Some("single-session"), None)
         );
         assert_eq!(
-            validate_remote_control_bridge_options(Some("same-dir"), Some("2"), None, false)
+            validate_remote_control_bridge_options(Some("same-dir"), Some("2"), None, false, false)
                 .unwrap(),
             (Some("same-dir"), Some(2))
         );
         assert_eq!(
-            validate_remote_control_bridge_options(Some("worktree"), Some("32"), None, false)
-                .unwrap(),
+            validate_remote_control_bridge_options(
+                Some("worktree"),
+                Some("32"),
+                None,
+                false,
+                false
+            )
+            .unwrap(),
             (Some("worktree"), Some(32))
         );
 
         assert_eq!(
-            validate_remote_control_bridge_options(Some("bad"), None, None, false).unwrap_err(),
+            validate_remote_control_bridge_options(Some("bad"), None, None, false, false)
+                .unwrap_err(),
             "--spawn requires one of: session, same-dir, worktree (got: bad)"
         );
         assert_eq!(
-            validate_remote_control_bridge_options(None, Some("0"), None, false).unwrap_err(),
+            validate_remote_control_bridge_options(None, Some("0"), None, false, false)
+                .unwrap_err(),
             "--capacity requires a positive integer (got: 0)"
         );
         assert_eq!(
-            validate_remote_control_bridge_options(Some("session"), Some("2"), None, false)
+            validate_remote_control_bridge_options(Some("session"), Some("2"), None, false, false)
                 .unwrap_err(),
             "--capacity cannot be used with --spawn=session (single-session mode has fixed capacity 1)."
         );
         assert_eq!(
-            validate_remote_control_bridge_options(None, None, Some("session_abc"), false).unwrap(),
+            validate_remote_control_bridge_options(None, None, Some("session_abc"), false, false)
+                .unwrap(),
             (None, None)
         );
         assert_eq!(
@@ -8672,10 +8838,20 @@ mod remote_control_tests {
                 Some("same-dir"),
                 None,
                 Some("session_abc"),
+                false,
                 false
             )
             .unwrap_err(),
             "--session-id and --continue cannot be used with --spawn, --capacity, or --create-session-in-dir."
+        );
+        assert_eq!(
+            validate_remote_control_bridge_options(None, None, None, true, false).unwrap(),
+            (None, None)
+        );
+        assert_eq!(
+            validate_remote_control_bridge_options(None, None, Some("session_abc"), true, false)
+                .unwrap_err(),
+            "--session-id and --continue cannot be used together."
         );
     }
 
