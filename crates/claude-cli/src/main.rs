@@ -7972,7 +7972,6 @@ async fn main() -> Result<()> {
         None => {}
     }
 
-    let mut direct_connect_config = None;
     if let Some(parsed) = pending_direct_connect {
         let session = claude_core::bridge::direct_connect::create_direct_connect_session(
             &reqwest::Client::new(),
@@ -7986,8 +7985,10 @@ async fn main() -> Result<()> {
         if let Some(work_dir) = session.work_dir.as_deref() {
             std::env::set_current_dir(work_dir)?;
         }
-        direct_connect_config = Some(session.config);
-        prompt_arg = None;
+        let mut app = claude_tui::app::App::new()?;
+        app.set_direct_connect_config(session.config);
+        app.run_direct_connect_only().await?;
+        return Ok(());
     }
 
     // Resolve authentication (reads keychain, refreshes OAuth tokens)
@@ -10064,9 +10065,6 @@ async fn main() -> Result<()> {
     let mut app = claude_tui::app::App::new()?;
     app.set_model_name(&model_display);
     app.set_skills(skills);
-    if let Some(config) = direct_connect_config {
-        app.set_direct_connect_config(config);
-    }
     app.run_with_engine(
         query_engine,
         tools,

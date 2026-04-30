@@ -460,6 +460,37 @@ impl App {
         self.direct_connect_config = Some(config);
     }
 
+    async fn connect_direct_transport(&mut self, tx: &mpsc::Sender<AppEvent>) {
+        if let Some(config) = self.direct_connect_config.clone() {
+            let (inbound_tx, mut inbound_rx) = mpsc::channel::<DirectConnectInbound>(128);
+            match DirectConnectWebSocket::connect(&config, inbound_tx).await {
+                Ok(ws) => {
+                    self.direct_connect_ws = Some(ws);
+                    let tx_direct = tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(inbound) = inbound_rx.recv().await {
+                            if tx_direct
+                                .send(AppEvent::DirectConnectInbound(inbound))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    let _ = tx
+                        .send(AppEvent::DirectConnectError(format!(
+                            "Failed to connect to server at {}: {err}",
+                            config.ws_url
+                        )))
+                        .await;
+                }
+            }
+        }
+    }
+
     /// Build command picker entries from the command registry and discovered skills.
     fn build_picker_entries(&self) -> Vec<CommandPickerEntry> {
         let mut entries: Vec<CommandPickerEntry> = self
@@ -792,6 +823,221 @@ impl App {
         Ok(())
     }
 
+    /// Run the TUI with only the TS direct-connect remote transport.
+    ///
+    /// This mirrors TS `useDirectConnect`: the local process renders UI and
+    /// local slash-command actions, while normal prompts are sent to the
+    /// remote server over StructuredIO instead of constructing a local
+    /// QueryEngine or requiring local API auth.
+    pub async fn run_direct_connect_only(&mut self) -> Result<()> {
+        terminal::enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+
+        let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
+        self.connect_direct_transport(&tx).await;
+
+        let tx_input = tx.clone();
+        tokio::spawn(async move {
+            loop {
+                if event::poll(Duration::from_millis(16)).unwrap_or(false) {
+                    if let Ok(evt) = event::read() {
+                        let app_evt = match evt {
+                            CrosstermEvent::Key(k)
+                                if k.kind == crossterm::event::KeyEventKind::Press =>
+                            {
+                                Some(AppEvent::Key(k))
+                            }
+                            CrosstermEvent::Key(_) => None,
+                            CrosstermEvent::Resize(w, h) => Some(AppEvent::Resize(w, h)),
+                            CrosstermEvent::Mouse(m) => Some(AppEvent::Mouse(m)),
+                            _ => None,
+                        };
+                        if let Some(e) = app_evt {
+                            if tx_input.send(e).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let tx_tick = tx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(16));
+            loop {
+                interval.tick().await;
+                if tx_tick.send(AppEvent::Tick).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let tx_spinner = tx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(50));
+            loop {
+                interval.tick().await;
+                if tx_spinner.send(AppEvent::SpinnerTick).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        self.push_welcome_header();
+
+        while !self.should_quit {
+            let Some(event) = rx.recv().await else {
+                break;
+            };
+            match event {
+                AppEvent::Tick => self.render()?,
+                AppEvent::SpinnerTick => self.spinner.advance(),
+                AppEvent::Resize(_, _) => self.render()?,
+                AppEvent::Mouse(m) => self.handle_mouse(m),
+                AppEvent::Quit => self.should_quit = true,
+                AppEvent::DirectConnectInbound(inbound) => {
+                    self.handle_direct_connect_inbound(inbound);
+                    if !self.engine_busy {
+                        self.spinner.queued_count = 0;
+                        if let Some(queued) = self.pop_queued_message() {
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx2.send(AppEvent::SubmitPrompt(queued)).await;
+                            });
+                        }
+                    }
+                }
+                AppEvent::DirectConnectError(message) => {
+                    self.spinner.stop();
+                    self.spinner.queued_count = 0;
+                    self.engine_busy = false;
+                    self.message_list.push(MessageEntry::System {
+                        text: format!("Error: {message}"),
+                    });
+                }
+                AppEvent::PermissionResponse(response) => {
+                    self.permission_dialog = None;
+                    if let Some((request_id, _input)) =
+                        self.direct_connect_pending_permission.take()
+                    {
+                        if let Some(ws) = self.direct_connect_ws.clone() {
+                            let behavior = if matches!(response.as_str(), "allow" | "always") {
+                                "allow"
+                            } else {
+                                "deny"
+                            };
+                            let message = (behavior == "deny").then_some("User denied permission");
+                            tokio::spawn(async move {
+                                let _ = ws
+                                    .respond_to_permission_request(
+                                        &request_id,
+                                        behavior,
+                                        None,
+                                        message,
+                                    )
+                                    .await;
+                            });
+                            if behavior == "allow" {
+                                self.engine_busy = true;
+                                self.spinner.start(SpinnerMode::Requesting);
+                            }
+                        }
+                    }
+                }
+                AppEvent::SubmitPrompt(text) => {
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    if self.engine_busy {
+                        self.enqueue_message(text);
+                        continue;
+                    }
+                    if text.starts_with('/') {
+                        match self.try_execute_command(&text) {
+                            Some(CommandAction::Display(output)) => {
+                                self.message_list
+                                    .push(MessageEntry::System { text: output });
+                                continue;
+                            }
+                            Some(CommandAction::Prompt(prompt_text)) => {
+                                self.send_direct_prompt(text, prompt_text, &tx);
+                                continue;
+                            }
+                            None => {}
+                        }
+                    }
+                    self.send_direct_prompt(text.clone(), text, &tx);
+                }
+                AppEvent::Key(k) => {
+                    if self.permission_dialog.is_some() {
+                        match k.code {
+                            KeyCode::Down | KeyCode::Right => {
+                                if let Some(ref mut dialog) = self.permission_dialog {
+                                    dialog.next_button();
+                                }
+                            }
+                            KeyCode::Up | KeyCode::Left => {
+                                if let Some(ref mut dialog) = self.permission_dialog {
+                                    dialog.prev_button();
+                                }
+                            }
+                            KeyCode::Esc => {
+                                let _ = tx
+                                    .send(AppEvent::PermissionResponse("deny".to_string()))
+                                    .await;
+                            }
+                            KeyCode::Enter => {
+                                let response = self
+                                    .permission_dialog
+                                    .as_ref()
+                                    .map(|d| d.selected().to_string())
+                                    .unwrap_or_else(|| "deny".to_string());
+                                let _ = tx.send(AppEvent::PermissionResponse(response)).await;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    match (k.modifiers, k.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c'))
+                        | (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                            self.should_quit = true;
+                        }
+                        (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
+                            self.message_list.toggle_thinking();
+                        }
+                        (KeyModifiers::NONE, KeyCode::Esc) if self.engine_busy => {
+                            if let Some(ws) = self.direct_connect_ws.clone() {
+                                tokio::spawn(async move {
+                                    let _ =
+                                        ws.send_interrupt(&uuid::Uuid::new_v4().to_string()).await;
+                                });
+                            }
+                            self.engine_busy = false;
+                            self.spinner.stop();
+                            self.spinner.queued_count = 0;
+                            self.message_list.push(MessageEntry::System {
+                                text: "[Request interrupted by user]".to_string(),
+                            });
+                        }
+                        _ => match self.prompt.handle_key(k) {
+                            InputAction::Submit(text) => {
+                                let _ = tx.send(AppEvent::SubmitPrompt(text)).await;
+                            }
+                            InputAction::None => {}
+                        },
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        terminal::disable_raw_mode()?;
+        execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
+        Ok(())
+    }
+
     /// Run the TUI wired to the QueryEngine.
     pub async fn run_with_engine(
         &mut self,
@@ -805,34 +1051,7 @@ impl App {
         execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
-        if let Some(config) = self.direct_connect_config.clone() {
-            let (inbound_tx, mut inbound_rx) = mpsc::channel::<DirectConnectInbound>(128);
-            match DirectConnectWebSocket::connect(&config, inbound_tx).await {
-                Ok(ws) => {
-                    self.direct_connect_ws = Some(ws);
-                    let tx_direct = tx.clone();
-                    tokio::spawn(async move {
-                        while let Some(inbound) = inbound_rx.recv().await {
-                            if tx_direct
-                                .send(AppEvent::DirectConnectInbound(inbound))
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    });
-                }
-                Err(err) => {
-                    let _ = tx
-                        .send(AppEvent::DirectConnectError(format!(
-                            "Failed to connect to server at {}: {err}",
-                            config.ws_url
-                        )))
-                        .await;
-                }
-            }
-        }
+        self.connect_direct_transport(&tx).await;
 
         // Channel-based engine: the engine lives in its own task and receives
         // commands via `engine_tx`.  Sends are non-blocking so the event loop
@@ -1705,19 +1924,8 @@ impl App {
                     }
 
                     if let Some(ws) = self.direct_connect_ws.clone() {
-                        self.message_list
-                            .push(MessageEntry::User { text: text.clone() });
-                        self.engine_busy = true;
-                        self.spinner.start(SpinnerMode::Requesting);
-                        let tx_direct = tx.clone();
-                        tokio::spawn(async move {
-                            if let Err(err) = ws.send_message(serde_json::json!(text.trim())).await
-                            {
-                                let _ = tx_direct
-                                    .send(AppEvent::DirectConnectError(err.to_string()))
-                                    .await;
-                            }
-                        });
+                        drop(ws);
+                        self.send_direct_prompt(text.clone(), text, &tx);
                         continue;
                     }
 
@@ -2745,6 +2953,32 @@ impl App {
                 }
             }
         }
+    }
+
+    fn send_direct_prompt(
+        &mut self,
+        display_text: String,
+        remote_text: String,
+        tx: &mpsc::Sender<AppEvent>,
+    ) {
+        let Some(ws) = self.direct_connect_ws.clone() else {
+            self.message_list.push(MessageEntry::System {
+                text: "Direct-connect transport is not connected.".to_string(),
+            });
+            return;
+        };
+        self.message_list
+            .push(MessageEntry::User { text: display_text });
+        self.engine_busy = true;
+        self.spinner.start(SpinnerMode::Requesting);
+        let tx_direct = tx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = ws.send_message(serde_json::json!(remote_text.trim())).await {
+                let _ = tx_direct
+                    .send(AppEvent::DirectConnectError(err.to_string()))
+                    .await;
+            }
+        });
     }
 
     fn handle_key_standalone(&mut self, key: KeyEvent) {

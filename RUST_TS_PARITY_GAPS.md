@@ -500,14 +500,15 @@ Improved:
   interrupt, and error responses.
 - Rust now wires the TS `cc://` direct-connect entry flow into CLI parsing:
   interactive `cc://...` arguments are stripped before normal parsing and used
-  to create a direct-connect session, while print-mode `cc://... -p` is
-  rewritten to the hidden internal `open` subcommand like TS. The TUI can now
-  hold a direct-connect config, open the WebSocket, route normal prompt submits
-  to the remote StructuredIO user-message path, render remote assistant/result
-  messages, suppress duplicate `system/init` frames, forward Escape as a remote
-  interrupt, and surface remote `can_use_tool` requests through the existing
-  permission dialog. The hidden `open` subcommand also supports the headless
-  direct-connect path for text/json/stream-json output.
+  to create a direct-connect session before local auth/setup, while print-mode
+  `cc://... -p` is rewritten to the hidden internal `open` subcommand like TS.
+  The TUI can now run a direct-connect-only remote loop, hold the WebSocket,
+  route normal prompt submits to the remote StructuredIO user-message path,
+  render remote assistant/result messages, suppress duplicate `system/init`
+  frames, forward Escape as a remote interrupt, and surface remote
+  `can_use_tool` requests through the existing permission dialog. The hidden
+  `open` subcommand also supports the headless direct-connect path for
+  text/json/stream-json output.
 - Rust now has a general bridge environments API client matching
   `src/bridge/bridgeApi.ts` for registration, polling, ack, stop, deregister,
   archive, reconnect, heartbeat, and permission response events, including the
@@ -626,9 +627,9 @@ Missing or partial:
 - Bridge UI depth beyond the basic TUI transport surface.
 - Direct WebSocket session manager integration still needs deeper parity for
   attachments, local-jsx slash-command discrimination, full SDK-message to TUI
-  conversion, and no-local-auth interactive startup. The core CLI rewrite,
-  session creation, WebSocket send/receive, permission, interrupt, and headless
-  `open` paths are now wired.
+  conversion, and richer local command UI handling. The core CLI rewrite,
+  no-local-auth interactive startup, session creation, WebSocket send/receive,
+  permission, interrupt, and headless `open` paths are now wired.
 - Upstream relay/proxy.
 - Proxy global HTTP-agent configuration, keepalive disable-on-reset behavior,
   mTLS helpers, AWS client proxy config, Anthropic unix-socket tunneling, and
