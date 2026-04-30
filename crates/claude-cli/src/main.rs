@@ -329,6 +329,7 @@ enum RemotePostConfig {
     },
     CcrV2 {
         events_url: String,
+        worker_url: String,
         worker_epoch: u64,
     },
 }
@@ -341,6 +342,7 @@ fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
             .unwrap_or(0);
         Ok(RemotePostConfig::CcrV2 {
             events_url: format!("{}/worker/events", sdk_url.trim_end_matches('/')),
+            worker_url: format!("{}/worker", sdk_url.trim_end_matches('/')),
             worker_epoch,
         })
     } else {
@@ -366,6 +368,7 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                     let Some(value) = maybe_value else {
                         break;
                     };
+                    report_remote_stream_json_state(&client, &config, &value).await;
                     buffer.push(value);
                     if buffer.len() >= 500 {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
@@ -383,6 +386,63 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         }
     });
     Ok(())
+}
+
+fn ccr_worker_state_for_event(event: &Value) -> Option<Value> {
+    match event.get("type").and_then(|value| value.as_str()) {
+        Some("user") | Some("control_response") => {
+            Some(serde_json::json!({"worker_status": "running"}))
+        }
+        Some("result") => Some(serde_json::json!({"worker_status": "idle"})),
+        Some("control_request")
+            if event
+                .get("request")
+                .and_then(|request| request.get("subtype"))
+                .and_then(|value| value.as_str())
+                == Some("can_use_tool") =>
+        {
+            let request = event.get("request").unwrap_or(&Value::Null);
+            Some(serde_json::json!({
+                "worker_status": "requires_action",
+                "requires_action_details": {
+                    "tool_name": request.get("tool_name").and_then(|value| value.as_str()).unwrap_or_default(),
+                    "action_description": request.get("decision_reason").and_then(|value| value.as_str()).unwrap_or_default(),
+                    "request_id": event.get("request_id").and_then(|value| value.as_str()).unwrap_or_default(),
+                },
+            }))
+        }
+        _ => None,
+    }
+}
+
+async fn report_remote_stream_json_state(
+    client: &reqwest::Client,
+    config: &RemotePostConfig,
+    event: &Value,
+) {
+    let RemotePostConfig::CcrV2 {
+        worker_url,
+        worker_epoch,
+        ..
+    } = config
+    else {
+        return;
+    };
+    let Some(mut body) = ccr_worker_state_for_event(event) else {
+        return;
+    };
+    let Some(token) = session_ingress_auth_token() else {
+        return;
+    };
+    body["worker_epoch"] = serde_json::json!(worker_epoch);
+    let _ = client
+        .put(worker_url)
+        .bearer_auth(token)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
 }
 
 async fn post_remote_stream_json_batch(
@@ -406,6 +466,7 @@ async fn post_remote_stream_json_batch(
             RemotePostConfig::CcrV2 {
                 events_url,
                 worker_epoch,
+                ..
             } => {
                 let wrapped = events
                     .iter()
@@ -8567,6 +8628,44 @@ mod remote_control_tests {
         assert_eq!(
             ccr_v2_sse_url("https://api.example.com/v1/code/sessions/session-123").unwrap(),
             "https://api.example.com/v1/code/sessions/session-123/worker/events/stream"
+        );
+    }
+
+    #[test]
+    fn remote_ccr_worker_state_matches_ts_event_transitions() {
+        assert_eq!(
+            ccr_worker_state_for_event(&serde_json::json!({
+                "type": "user",
+            }))
+            .unwrap()["worker_status"],
+            "running"
+        );
+        assert_eq!(
+            ccr_worker_state_for_event(&serde_json::json!({
+                "type": "result",
+            }))
+            .unwrap()["worker_status"],
+            "idle"
+        );
+        assert_eq!(
+            ccr_worker_state_for_event(&serde_json::json!({
+                "type": "control_request",
+                "request_id": "req-1",
+                "request": {
+                    "subtype": "can_use_tool",
+                    "tool_name": "Bash",
+                    "decision_reason": "Bash needs permission"
+                }
+            }))
+            .unwrap(),
+            serde_json::json!({
+                "worker_status": "requires_action",
+                "requires_action_details": {
+                    "tool_name": "Bash",
+                    "action_description": "Bash needs permission",
+                    "request_id": "req-1",
+                },
+            })
         );
     }
 
