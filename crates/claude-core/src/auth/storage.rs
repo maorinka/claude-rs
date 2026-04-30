@@ -74,33 +74,33 @@ pub struct OAuthStoredTokens {
 }
 
 /// Top-level secure storage structure, matching the TS `SecureStorageData`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SecureStorageData {
     #[serde(skip_serializing_if = "Option::is_none")]
     claude_ai_oauth: Option<OAuthStoredTokens>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trusted_device_token: Option<String>,
 }
 
 /// Load OAuth tokens from the macOS Keychain (same location as real Claude Code).
 /// Falls back to ~/.claude/.credentials.json on non-macOS.
 pub async fn load_tokens() -> Result<Option<OAuthStoredTokens>> {
-    // Try macOS Keychain first
-    if cfg!(target_os = "macos") {
-        if let Some(tokens) = load_from_keychain().await? {
-            return Ok(Some(tokens));
-        }
-    }
-
-    // Fallback to file
-    load_from_file().await
+    Ok(load_secure_storage_data()
+        .await?
+        .and_then(|data| data.claude_ai_oauth))
 }
 
-/// Read from macOS Keychain using `security find-generic-password`.
-/// This reads the exact same entry that the real Claude Code writes.
-///
-/// Matches the TS `macOsKeychainStorage.read()` and `doReadAsync()` in
-/// `macOsKeychainStorage.ts`.
-async fn load_from_keychain() -> Result<Option<OAuthStoredTokens>> {
+async fn load_secure_storage_data() -> Result<Option<SecureStorageData>> {
+    if cfg!(target_os = "macos") {
+        if let Some(data) = load_data_from_keychain().await? {
+            return Ok(Some(data));
+        }
+    }
+    load_data_from_file().await
+}
+
+async fn load_data_from_keychain() -> Result<Option<SecureStorageData>> {
     let username = get_username();
     let service = keychain_service_name();
 
@@ -139,19 +139,18 @@ async fn load_from_keychain() -> Result<Option<OAuthStoredTokens>> {
 
     let data: SecureStorageData =
         serde_json::from_str(&json_str).context("Failed to parse keychain JSON")?;
-
-    Ok(data.claude_ai_oauth)
+    Ok(Some(data))
 }
 
 /// Fallback: read from ~/.claude/.credentials.json
-async fn load_from_file() -> Result<Option<OAuthStoredTokens>> {
+async fn load_data_from_file() -> Result<Option<SecureStorageData>> {
     let path = credentials_path()?;
     if !path.exists() {
         return Ok(None);
     }
     let content = tokio::fs::read_to_string(&path).await?;
     let data: SecureStorageData = serde_json::from_str(&content)?;
-    Ok(data.claude_ai_oauth)
+    Ok(Some(data))
 }
 
 /// Store tokens.
@@ -162,9 +161,8 @@ async fn load_from_file() -> Result<Option<OAuthStoredTokens>> {
 ///
 /// On non-macOS, writes to ~/.claude/.credentials.json only.
 pub async fn store_tokens(tokens: &OAuthStoredTokens) -> Result<()> {
-    let data = SecureStorageData {
-        claude_ai_oauth: Some(tokens.clone()),
-    };
+    let mut data = load_secure_storage_data().await?.unwrap_or_default();
+    data.claude_ai_oauth = Some(tokens.clone());
 
     // Always write to the credentials file (used for cross-process staleness
     // detection via mtime, matching TS `invalidateOAuthCacheIfDiskChanged`)
@@ -182,6 +180,49 @@ pub async fn store_tokens(tokens: &OAuthStoredTokens) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+pub async fn load_trusted_device_token() -> Result<Option<String>> {
+    Ok(load_secure_storage_data()
+        .await?
+        .and_then(|data| data.trusted_device_token)
+        .filter(|token| !token.trim().is_empty()))
+}
+
+pub async fn store_trusted_device_token(token: &str) -> Result<()> {
+    let mut data = load_secure_storage_data().await?.unwrap_or_default();
+    data.trusted_device_token = Some(token.to_string());
+    let json = serde_json::to_string(&data)?;
+    let path = credentials_path()?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, &json).await?;
+    if cfg!(target_os = "macos") {
+        if let Err(e) = store_to_keychain(&json).await {
+            tracing::warn!("Failed to store trusted device token in keychain: {}", e);
+        }
+    }
+    Ok(())
+}
+
+pub async fn clear_trusted_device_token() -> Result<()> {
+    let Some(mut data) = load_secure_storage_data().await? else {
+        return Ok(());
+    };
+    data.trusted_device_token = None;
+    let json = serde_json::to_string(&data)?;
+    let path = credentials_path()?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, &json).await?;
+    if cfg!(target_os = "macos") {
+        if let Err(e) = store_to_keychain(&json).await {
+            tracing::warn!("Failed to clear trusted device token in keychain: {}", e);
+        }
+    }
     Ok(())
 }
 
@@ -386,6 +427,7 @@ mod tests {
 
         let data = SecureStorageData {
             claude_ai_oauth: Some(tokens),
+            trusted_device_token: None,
         };
 
         let json = serde_json::to_string(&data).unwrap();

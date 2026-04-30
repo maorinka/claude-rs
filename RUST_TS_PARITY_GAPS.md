@@ -514,6 +514,14 @@ Improved:
   archive, reconnect, heartbeat, and permission response events, including the
   TS bridge beta/version headers, trusted-device header slot, safe path-ID
   validation, 409 archive idempotency, and TS-style fatal error mapping.
+- Rust now has the TS trusted-device token source from
+  `src/bridge/trustedDevice.ts`: the `tengu_sessions_elevated_auth_enforcement`
+  GrowthBook gate controls whether the header is sent, the
+  `CLAUDE_TRUSTED_DEVICE_TOKEN` env var takes precedence, secure storage stores
+  and preserves `trustedDeviceToken` alongside `claudeAiOauth`, cache clearing
+  exists for auth mutations, logout clears the stored token, and standalone
+  remote-control wires the resolved token into `BridgeApiClient` so
+  `X-Trusted-Device-Token` is sent through the existing header slot.
 - Rust now has the org-scoped bridge Sessions API surface from
   `src/bridge/createSession.ts`: create/fetch/archive/title-update session
   calls, `ccr-byoc-2025-07-29` headers, organization UUID header, remote-control
@@ -625,7 +633,8 @@ Missing or partial:
   `can_use_tool` requests/responses, and the parent-side callback event shapes
   are now available as shared helpers. Remaining depth is wiring those helpers
   into the hosted parent bridge runtime plus cancellation/delivery lifecycle.
-- Trusted-device flow.
+- Trusted-device enrollment after fresh `/login` is still missing; token
+  storage/header usage and logout clearing are wired.
 - Full work secret lifecycle and token-refresh scheduling in REPL/v2 bridge
   paths.
 - Capacity wake runtime integration in REPL/v2 bridge paths.

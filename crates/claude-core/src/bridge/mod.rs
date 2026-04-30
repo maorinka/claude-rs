@@ -9,5 +9,6 @@ pub mod poll_config;
 pub mod protocol;
 pub mod server;
 pub mod session_id_compat;
+pub mod trusted_device;
 pub mod types;
 pub mod work_secret;

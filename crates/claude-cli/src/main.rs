@@ -7071,6 +7071,9 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
         oauth.base_api_url.clone(),
         Some(tokens.access_token.clone()),
         env!("CARGO_PKG_VERSION"),
+    )
+    .with_trusted_device_token(
+        claude_core::bridge::trusted_device::get_trusted_device_token().await,
     );
 
     let cwd = std::env::current_dir()?;
@@ -7871,6 +7874,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Some(SubCommand::Logout) => {
+            claude_core::bridge::trusted_device::clear_trusted_device_token().await;
             // Delete tokens from secure storage (keychain + file)
             claude_core::auth::storage::delete_tokens().await.ok();
             claude_core::auth::storage::delete_managed_api_key()
