@@ -1,6 +1,7 @@
 pub mod api;
 pub mod direct_connect;
 pub mod jwt_utils;
+pub mod messaging;
 pub mod protocol;
 pub mod server;
 pub mod session_id_compat;

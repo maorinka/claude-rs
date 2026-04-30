@@ -511,6 +511,12 @@ Improved:
   behavior.
 - Rust now includes CCR session-ID tag helpers (`cse_*` ⇄ `session_*`) and the
   CCR v2 `registerWorker` call next to the existing work-secret URL helpers.
+- Rust now has a shared bridge messaging module matching the pure
+  `src/bridge/bridgeMessaging.ts` behavior: ingress classification,
+  camelCase request-id normalization, control-response/request routing before
+  generic SDK messages, bounded UUID echo/redelivery dedup, server
+  control-response shaping for initialize/model/thinking/permission/interrupt
+  requests, outbound-only errors, and archival result-message construction.
 - `claude remote-control` now consumes those bridge clients directly: it builds
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
@@ -568,7 +574,7 @@ Improved:
   plus `setMainLoopModelOverride`.
 
 Missing or partial:
-- Full bridge messaging.
+- Bridge messaging runtime integration into parent REPL transports.
 - `initReplBridge` / `replBridge` behavior.
 - `remoteBridgeCore` parity.
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
