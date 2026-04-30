@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -141,6 +142,14 @@ pub struct Cli {
     /// Use a specific session ID
     #[arg(long = "session-id")]
     pub session_id: Option<String>,
+
+    /// Session SDK URL for Remote Control / Session-Ingress child sessions
+    #[arg(long = "sdk-url", hide = true)]
+    pub sdk_url: Option<String>,
+
+    /// Write debug logs to file
+    #[arg(long = "debug-file", hide = true)]
+    pub debug_file: Option<PathBuf>,
 
     /// Disable session persistence (accepted for TS CLI parity; non-interactive Rust mode does not persist sessions)
     #[arg(long = "no-session-persistence")]
@@ -4778,6 +4787,243 @@ struct RemoteControlCommandOptions<'a> {
     no_create_session_in_dir: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteSessionDoneStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+struct RemoteSessionHandle {
+    session_id: String,
+    pid: Option<u32>,
+    stdin: Option<tokio::process::ChildStdin>,
+    done: tokio::task::JoinHandle<RemoteSessionDoneStatus>,
+    last_stderr: Arc<tokio::sync::Mutex<Vec<String>>>,
+}
+
+struct RemoteSessionSpawnOptions<'a> {
+    session_id: &'a str,
+    sdk_url: &'a str,
+    access_token: &'a str,
+    use_ccr_v2: bool,
+    worker_epoch: Option<u64>,
+    dir: &'a std::path::Path,
+    verbose: bool,
+    sandbox: bool,
+    debug_file: Option<&'a str>,
+    permission_mode: Option<&'a str>,
+}
+
+fn safe_filename_id(id: &str) -> String {
+    id.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn debug_file_for_session(base: Option<&str>, session_id: &str, verbose: bool) -> Option<String> {
+    let safe_id = safe_filename_id(session_id);
+    if let Some(base) = base.filter(|value| !value.is_empty()) {
+        if let Some((stem, ext)) = base.rsplit_once('.') {
+            if !stem.is_empty() && !ext.contains(std::path::MAIN_SEPARATOR) {
+                return Some(format!("{stem}-{safe_id}.{ext}"));
+            }
+        }
+        return Some(format!("{base}-{safe_id}"));
+    }
+    if verbose || std::env::var("USER_TYPE").ok().as_deref() == Some("ant") {
+        return Some(
+            std::env::temp_dir()
+                .join("claude")
+                .join(format!("bridge-session-{safe_id}.log"))
+                .display()
+                .to_string(),
+        );
+    }
+    None
+}
+
+fn child_stream_json_line_kind(line: &str) -> Option<&'static str> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    match value.get("type").and_then(|v| v.as_str()) {
+        Some("assistant") => Some("assistant"),
+        Some("result") => Some("result"),
+        Some("error") => Some("error"),
+        Some("control_request") => Some("control_request"),
+        Some("system") => Some("system"),
+        _ => None,
+    }
+}
+
+async fn spawn_remote_session(
+    options: RemoteSessionSpawnOptions<'_>,
+) -> Result<RemoteSessionHandle> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let exe = std::env::current_exe()?;
+    let debug_file =
+        debug_file_for_session(options.debug_file, options.session_id, options.verbose);
+    let mut command = tokio::process::Command::new(exe);
+    command
+        .arg("--print")
+        .arg("--sdk-url")
+        .arg(options.sdk_url)
+        .arg("--session-id")
+        .arg(options.session_id)
+        .arg("--input-format")
+        .arg("stream-json")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--replay-user-messages");
+    if options.verbose {
+        command.arg("--verbose");
+    }
+    if let Some(debug_file) = debug_file.as_deref() {
+        command.arg("--debug-file").arg(debug_file);
+    }
+    if let Some(permission_mode) = options.permission_mode {
+        command.arg("--permission-mode").arg(permission_mode);
+    }
+
+    command
+        .current_dir(options.dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+        .env("CLAUDE_CODE_ENVIRONMENT_KIND", "bridge")
+        .env("CLAUDE_CODE_SESSION_ACCESS_TOKEN", options.access_token)
+        .env("CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2", "1");
+    if options.sandbox {
+        command.env("CLAUDE_CODE_FORCE_SANDBOX", "1");
+    }
+    if options.use_ccr_v2 {
+        command.env("CLAUDE_CODE_USE_CCR_V2", "1");
+        if let Some(epoch) = options.worker_epoch {
+            command.env("CLAUDE_CODE_WORKER_EPOCH", epoch.to_string());
+        }
+    }
+
+    let mut child = command.spawn()?;
+    let pid = child.id();
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let session_id = options.session_id.to_string();
+    let last_stderr = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+    if let Some(stdout) = stdout {
+        let sid = session_id.clone();
+        let verbose = options.verbose;
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if verbose {
+                    eprintln!("{line}");
+                }
+                if let Some(kind) = child_stream_json_line_kind(&line) {
+                    eprintln!("Remote session {sid}: {kind}");
+                }
+            }
+        });
+    }
+
+    if let Some(stderr) = stderr {
+        let last = last_stderr.clone();
+        let verbose = options.verbose;
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if verbose {
+                    eprintln!("{line}");
+                }
+                let mut last = last.lock().await;
+                if last.len() >= 10 {
+                    last.remove(0);
+                }
+                last.push(line);
+            }
+        });
+    }
+
+    let done = tokio::spawn(async move {
+        let Ok(status) = child.wait().await else {
+            return RemoteSessionDoneStatus::Failed;
+        };
+        if status.success() {
+            return RemoteSessionDoneStatus::Completed;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if matches!(status.signal(), Some(15) | Some(2)) {
+                return RemoteSessionDoneStatus::Interrupted;
+            }
+        }
+        RemoteSessionDoneStatus::Failed
+    });
+
+    Ok(RemoteSessionHandle {
+        session_id,
+        pid,
+        stdin,
+        done,
+        last_stderr,
+    })
+}
+
+async fn terminate_remote_session(handle: &RemoteSessionHandle, force: bool) {
+    if let Some(pid) = handle.pid {
+        let signal = if force { "-KILL" } else { "-TERM" };
+        let _ = tokio::process::Command::new("kill")
+            .arg(signal)
+            .arg(pid.to_string())
+            .status()
+            .await;
+    }
+}
+
+async fn update_remote_session_token(handle: &mut RemoteSessionHandle, token: &str) {
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(stdin) = handle.stdin.as_mut() {
+        let payload = serde_json::json!({
+            "type": "update_environment_variables",
+            "variables": {"CLAUDE_CODE_SESSION_ACCESS_TOKEN": token},
+        });
+        let _ = stdin.write_all(payload.to_string().as_bytes()).await;
+        let _ = stdin.write_all(b"\n").await;
+        let _ = stdin.flush().await;
+    }
+}
+
+async fn stop_work_with_retry(
+    api: &claude_core::bridge::api::BridgeApiClient,
+    environment_id: &str,
+    work_id: &str,
+    force: bool,
+) {
+    for attempt in 0..3 {
+        match api.stop_work(environment_id, work_id, force).await {
+            Ok(()) => return,
+            Err(err) if attempt < 2 => {
+                eprintln!("Failed to stop remote work {work_id}, retrying: {err}");
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+            }
+            Err(err) => {
+                eprintln!("Failed to stop remote work {work_id}: {err}");
+            }
+        }
+    }
+}
+
 async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) -> Result<()> {
     let (spawn_mode_raw, capacity) = match validate_remote_control_bridge_options(
         options.spawn.map(String::as_str),
@@ -4826,7 +5072,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let http = claude_core::proxy::build_proxy_client_from_env()?;
     let api = claude_core::bridge::api::BridgeApiClient::new(
-        http,
+        http.clone(),
         oauth.base_api_url.clone(),
         Some(tokens.access_token.clone()),
         env!("CARGO_PKG_VERSION"),
@@ -4909,35 +5155,257 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
     }
     println!("Press Ctrl-C to stop.");
 
+    let mut active_sessions: HashMap<String, RemoteSessionHandle> = HashMap::new();
+    let mut session_work_ids: HashMap<String, String> = HashMap::new();
+    let mut session_tokens: HashMap<String, String> = HashMap::new();
+    let mut known_sessions: Vec<String> = session_id.clone().into_iter().collect();
+    let mut shutdown = Box::pin(tokio::signal::ctrl_c());
+
     loop {
-        match api
-            .poll_for_work(&registered_environment_id, &environment_secret, None)
-            .await
-        {
-            Ok(Some(work)) => {
-                println!(
-                    "Received remote work: {} {} ({})",
-                    work.data.kind, work.data.id, work.id
-                );
-                if work.data.kind == "healthcheck" {
-                    let _ = api
-                        .acknowledge_work(&registered_environment_id, &work.id, &work.secret)
-                        .await;
-                } else {
-                    eprintln!(
-                        "Remote session work was received, but session runner integration is still pending."
+        let finished = active_sessions
+            .iter()
+            .filter_map(|(session_id, handle)| {
+                handle.done.is_finished().then_some(session_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for finished_id in finished {
+            if let Some(handle) = active_sessions.remove(&finished_id) {
+                let work_id = session_work_ids.remove(&finished_id);
+                session_tokens.remove(&finished_id);
+                let stderr = handle.last_stderr.clone();
+                let status = handle.done.await.unwrap_or(RemoteSessionDoneStatus::Failed);
+                match status {
+                    RemoteSessionDoneStatus::Completed => {
+                        println!("Remote session {} completed.", handle.session_id);
+                    }
+                    RemoteSessionDoneStatus::Interrupted => {
+                        println!("Remote session {} interrupted.", handle.session_id);
+                    }
+                    RemoteSessionDoneStatus::Failed => {
+                        let stderr = stderr.lock().await.join("\n");
+                        eprintln!(
+                            "Remote session {} failed{}",
+                            handle.session_id,
+                            if stderr.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {stderr}")
+                            }
+                        );
+                    }
+                }
+                if status != RemoteSessionDoneStatus::Interrupted {
+                    if let Some(work_id) = work_id {
+                        stop_work_with_retry(&api, &registered_environment_id, &work_id, false)
+                            .await;
+                    }
+                    let compat_id = claude_core::bridge::session_id_compat::to_compat_session_id(
+                        &finished_id,
+                        true,
                     );
+                    let _ = api.archive_session(&compat_id).await;
                 }
             }
-            Ok(None) => {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+
+        let poll = api.poll_for_work(&registered_environment_id, &environment_secret, None);
+        tokio::select! {
+            _ = &mut shutdown => {
+                println!("Remote Control shutting down.");
+                break;
             }
-            Err(err) => {
-                eprintln!("Remote Control poll failed: {err}");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            result = poll => {
+                match result {
+                    Ok(Some(work)) => {
+                        let secret = match claude_core::bridge::work_secret::decode_work_secret(&work.secret) {
+                            Ok(secret) => secret,
+                            Err(err) => {
+                                eprintln!("Failed to decode remote work secret for {}: {err}", work.id);
+                                stop_work_with_retry(&api, &registered_environment_id, &work.id, false).await;
+                                continue;
+                            }
+                        };
+
+                        let ack = async {
+                            let _ = api
+                                .acknowledge_work(
+                                    &registered_environment_id,
+                                    &work.id,
+                                    &secret.session_ingress_token,
+                                )
+                                .await;
+                        };
+
+                        match work.data.kind.as_str() {
+                            "healthcheck" => {
+                                ack.await;
+                                if options.verbose {
+                                    println!("Healthcheck received.");
+                                }
+                            }
+                            "session" => {
+                                let remote_session_id = work.data.id.clone();
+                                if let Err(err) = claude_core::bridge::api::validate_bridge_id(
+                                    &remote_session_id,
+                                    "session_id",
+                                ) {
+                                    ack.await;
+                                    eprintln!("Invalid remote session id {remote_session_id}: {err}");
+                                    continue;
+                                }
+
+                                if let Some(existing) = active_sessions.get_mut(&remote_session_id) {
+                                    update_remote_session_token(existing, &secret.session_ingress_token).await;
+                                    session_tokens.insert(remote_session_id.clone(), secret.session_ingress_token.clone());
+                                    session_work_ids.insert(remote_session_id.clone(), work.id.clone());
+                                    ack.await;
+                                    continue;
+                                }
+
+                                if active_sessions.len() >= config.max_sessions as usize {
+                                    if options.verbose {
+                                        eprintln!(
+                                            "Remote Control at capacity ({}/{}), leaving work {} pending.",
+                                            active_sessions.len(),
+                                            config.max_sessions,
+                                            work.id
+                                        );
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    continue;
+                                }
+
+                                ack.await;
+
+                                let use_ccr_v2 = secret
+                                    .extra
+                                    .get("use_code_sessions")
+                                    .and_then(|value| value.as_bool())
+                                    .unwrap_or(false)
+                                    || claude_core::errors_util::is_env_truthy("CLAUDE_BRIDGE_USE_CCR_V2");
+                                let mut worker_epoch = None;
+                                let sdk_url = if use_ccr_v2 {
+                                    let url = claude_core::bridge::work_secret::build_ccr_v2_sdk_url(
+                                        &config.api_base_url,
+                                        &remote_session_id,
+                                    );
+                                    match claude_core::bridge::work_secret::register_worker(
+                                        &http,
+                                        &url,
+                                        &secret.session_ingress_token,
+                                    )
+                                    .await
+                                    {
+                                        Ok(epoch) => {
+                                            worker_epoch = Some(epoch);
+                                            url
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "Failed to register remote worker for {remote_session_id}: {err}"
+                                            );
+                                            stop_work_with_retry(
+                                                &api,
+                                                &registered_environment_id,
+                                                &work.id,
+                                                false,
+                                            )
+                                            .await;
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    claude_core::bridge::work_secret::build_sdk_url(
+                                        &config.session_ingress_url,
+                                        &remote_session_id,
+                                    )
+                                };
+
+                                match spawn_remote_session(RemoteSessionSpawnOptions {
+                                    session_id: &remote_session_id,
+                                    sdk_url: &sdk_url,
+                                    access_token: &secret.session_ingress_token,
+                                    use_ccr_v2,
+                                    worker_epoch,
+                                    dir: &cwd,
+                                    verbose: options.verbose,
+                                    sandbox: config.sandbox,
+                                    debug_file: config.debug_file.as_deref(),
+                                    permission_mode: options.permission_mode.map(String::as_str),
+                                })
+                                .await
+                                {
+                                    Ok(handle) => {
+                                        println!("Remote session {remote_session_id} attached.");
+                                        if !known_sessions.iter().any(|id| id == &remote_session_id) {
+                                            known_sessions.push(remote_session_id.clone());
+                                        }
+                                        session_work_ids.insert(remote_session_id.clone(), work.id.clone());
+                                        session_tokens.insert(remote_session_id.clone(), secret.session_ingress_token);
+                                        active_sessions.insert(remote_session_id, handle);
+                                    }
+                                    Err(err) => {
+                                        eprintln!("Failed to spawn remote session {remote_session_id}: {err}");
+                                        stop_work_with_retry(
+                                            &api,
+                                            &registered_environment_id,
+                                            &work.id,
+                                            false,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                            other => {
+                                ack.await;
+                                if options.verbose {
+                                    eprintln!("Ignoring unknown remote work type: {other}");
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        if !active_sessions.is_empty() {
+                            for (session_id, work_id) in session_work_ids.clone() {
+                                if let Some(token) = session_tokens.get(&session_id) {
+                                    let _ = api
+                                        .heartbeat_work(
+                                            &registered_environment_id,
+                                            &work_id,
+                                            token,
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                    Err(err) => {
+                        eprintln!("Remote Control poll failed: {err}");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                }
             }
         }
     }
+
+    for (_, handle) in active_sessions.iter() {
+        terminate_remote_session(handle, false).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    for (_, handle) in active_sessions.iter() {
+        terminate_remote_session(handle, true).await;
+    }
+    for (_, work_id) in session_work_ids {
+        stop_work_with_retry(&api, &registered_environment_id, &work_id, true).await;
+    }
+    for session_id in known_sessions {
+        let compat_id =
+            claude_core::bridge::session_id_compat::to_compat_session_id(&session_id, true);
+        let _ = api.archive_session(&compat_id).await;
+    }
+    let _ = api.deregister_environment(&registered_environment_id).await;
+    Ok(())
 }
 
 fn maybe_handle_remote_control_fast_path_args() {
@@ -7130,6 +7598,56 @@ mod remote_control_tests {
             validate_remote_control_bridge_options(Some("session"), Some("2")).unwrap_err(),
             "--capacity cannot be used with --spawn=session (single-session mode has fixed capacity 1)."
         );
+    }
+
+    #[test]
+    fn remote_session_child_flags_are_accepted_like_ts_runner() {
+        let cli = Cli::parse_from([
+            "claude-rs",
+            "--print",
+            "--sdk-url",
+            "wss://api.example.com/v1/session_ingress/ws/session_abc",
+            "--session-id",
+            "session_abc",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--replay-user-messages",
+            "--debug-file",
+            "/tmp/bridge-session.log",
+            "--permission-mode",
+            "default",
+        ]);
+
+        assert!(cli.print);
+        assert_eq!(
+            cli.sdk_url.as_deref(),
+            Some("wss://api.example.com/v1/session_ingress/ws/session_abc")
+        );
+        assert_eq!(cli.session_id.as_deref(), Some("session_abc"));
+        assert_eq!(cli.input_format, InputFormat::StreamJson);
+        assert_eq!(cli.output_format, OutputFormat::StreamJson);
+        assert!(cli.replay_user_messages);
+        assert_eq!(
+            cli.debug_file.as_deref(),
+            Some(std::path::Path::new("/tmp/bridge-session.log"))
+        );
+        assert_eq!(cli.permission_mode.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn remote_session_filename_and_debug_path_match_ts_shape() {
+        assert_eq!(safe_filename_id("session/../abc:123"), "session____abc_123");
+        assert_eq!(
+            debug_file_for_session(Some("/tmp/bridge.log"), "session/abc", false).as_deref(),
+            Some("/tmp/bridge-session_abc.log")
+        );
+        assert_eq!(
+            debug_file_for_session(Some("/tmp/bridge"), "session/abc", false).as_deref(),
+            Some("/tmp/bridge-session_abc")
+        );
+        assert!(debug_file_for_session(None, "session/abc", false).is_none());
     }
 
     #[test]

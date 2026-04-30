@@ -515,13 +515,20 @@ Improved:
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
   registers the environment, optionally pre-creates the initial session, prints
-  the compat session URL, polls for bridge work, and acknowledges healthchecks.
+  the compat session URL, polls for bridge work, decodes work secrets,
+  acknowledges healthchecks, launches TS-shaped child sessions with `--sdk-url`
+  / stream-json flags and Session-Ingress environment variables, updates
+  running child tokens on redelivery, heartbeats active work, stops work on
+  failure/shutdown, archives known sessions, and deregisters the environment.
 
 Missing or partial:
 - Full bridge messaging.
 - `initReplBridge` / `replBridge` behavior.
 - `remoteBridgeCore` parity.
-- Session runner integration.
+- Child-side Session-Ingress/CCR transport. The parent now passes the same
+  `--sdk-url` and environment variables TS does, but Rust print mode still
+  needs the TS `HybridTransport`/`SSETransport` equivalent to consume remote
+  user messages and POST stream-json events through Session-Ingress.
 - Bridge permission callbacks.
 - Trusted-device flow.
 - Full work secret lifecycle and token-refresh scheduling.
@@ -1142,12 +1149,13 @@ Missing or partial:
   bridge flag validation, TS-shaped spawn/capacity defaults, sandbox/debug/
   timeout option mapping, OS hostname/current-branch/remote collection,
   environment registration, initial session creation, remote session URL
-  printing, bridge work polling, and healthcheck ack are now wired to the
-  general bridge API/session clients. Still missing: entitlement/policy checks,
-  session-id/continue reconnect, session-ingress WebSocket forwarding, inbound
-  web/mobile prompt queueing, permission callback forwarding, session runner
-  spawn/stop/archive lifecycle, trusted-device flow, and connected/disconnect
-  TUI state.
+  printing, bridge work polling, healthcheck ack, session work-secret decode,
+  TS-shaped child process launch, token update forwarding, heartbeat, stopWork,
+  archive, and deregister are now wired to the general bridge API/session
+  clients. Still missing: entitlement/policy checks, session-id/continue
+  reconnect, child-side Session-Ingress/CCR transport, inbound web/mobile prompt
+  queueing, permission callback forwarding, trusted-device flow, and
+  connected/disconnect TUI state.
 - Remote managed settings.
 - Settings sync.
 - Policy limits.
