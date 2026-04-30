@@ -299,6 +299,25 @@ impl QueryEngine {
         }
     }
 
+    /// Add a user message with TS `string | ContentBlockParam[]` content.
+    pub fn add_user_content(&mut self, content: &serde_json::Value) {
+        let normalized_content = match content {
+            serde_json::Value::String(text) => {
+                serde_json::json!([{ "type": "text", "text": text }])
+            }
+            serde_json::Value::Array(_) => content.clone(),
+            _ => serde_json::json!([]),
+        };
+        let message = serde_json::json!({
+            "role": "user",
+            "content": normalized_content,
+        });
+        self.messages.push(message);
+        if self.user_context_blocks.is_empty() {
+            self.persist_unpersisted_messages();
+        }
+    }
+
     /// Add a tool result message
     pub fn add_tool_result(&mut self, tool_use_id: &str, content: &str, is_error: bool) {
         self.add_tool_result_with_error_field(tool_use_id, content, is_error, is_error);

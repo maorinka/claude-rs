@@ -233,6 +233,7 @@ pub enum InputFormat {
 #[derive(Default)]
 struct StreamJsonStdinSeed {
     prompt: Option<String>,
+    prompt_content: Option<Value>,
     prompt_delivery_event_id: Option<String>,
     system_prompt: Option<String>,
     append_system_prompt: Option<String>,
@@ -243,7 +244,7 @@ struct StreamJsonStdinSeed {
 
 #[derive(Clone, Debug)]
 struct RemotePrompt {
-    text: String,
+    content: Value,
     delivery_event_id: Option<String>,
 }
 
@@ -364,6 +365,30 @@ fn sdk_content_to_prompt(content: &serde_json::Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+async fn remote_prompt_from_sdk_message(
+    value: &Value,
+    delivery_event_id: Option<String>,
+) -> Option<RemotePrompt> {
+    let fields = claude_core::bridge::inbound_messages::extract_inbound_message_fields(value)?;
+    let session_id = value
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|session_id| !session_id.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| claude_core::api::client::get_session_id().clone());
+    let content = match claude_core::bridge::inbound_attachments::InboundAttachmentResolver::from_runtime_config(session_id).await {
+        Ok(resolver) => resolver.resolve_and_prepend(value, fields.content).await,
+        Err(err) => {
+            tracing::debug!(error = %err, "failed to build inbound attachment resolver");
+            fields.content
+        }
+    };
+    Some(RemotePrompt {
+        content,
+        delivery_event_id,
+    })
 }
 
 fn parse_stream_json_stdin(stdin: &str) -> Result<StreamJsonStdinSeed> {
@@ -1639,15 +1664,8 @@ fn spawn_remote_sdk_background_reader(
                 };
                 match value.get("type").and_then(|value| value.as_str()) {
                     Some("user") => {
-                        if let Some(content) = value
-                            .get("message")
-                            .and_then(|message| message.get("content"))
-                            .and_then(sdk_content_to_prompt)
-                        {
-                            let _ = tx.send(RemoteSdkInbound::User(RemotePrompt {
-                                text: content,
-                                delivery_event_id: None,
-                            }));
+                        if let Some(prompt) = remote_prompt_from_sdk_message(&value, None).await {
+                            let _ = tx.send(RemoteSdkInbound::User(prompt));
                         }
                     }
                     Some("control_response") => {
@@ -1692,12 +1710,16 @@ fn ccr_v2_sse_url(sdk_url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-fn handle_remote_sdk_seed_line(value: Value, seed: &mut StreamJsonStdinSeed) -> Result<bool> {
+async fn handle_remote_sdk_seed_line(value: Value, seed: &mut StreamJsonStdinSeed) -> Result<bool> {
     match value.get("type").and_then(|value| value.as_str()) {
         Some("user") => {
-            let parsed = parse_stream_json_stdin(&(value.to_string() + "\n"))?;
-            seed.prompt = parsed.prompt;
-            Ok(true)
+            if let Some(prompt) = remote_prompt_from_sdk_message(&value, None).await {
+                seed.prompt = sdk_content_to_prompt(&prompt.content);
+                seed.prompt_content = Some(prompt.content);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
         Some("control_request") => {
             let subtype = value
@@ -1800,15 +1822,10 @@ fn spawn_remote_ccr_background_reader(
                 };
                 match payload.get("type").and_then(|value| value.as_str()) {
                     Some("user") => {
-                        if let Some(content) = payload
-                            .get("message")
-                            .and_then(|message| message.get("content"))
-                            .and_then(sdk_content_to_prompt)
+                        if let Some(prompt) =
+                            remote_prompt_from_sdk_message(&payload, event.event_id.clone()).await
                         {
-                            let _ = tx.send(RemoteSdkInbound::User(RemotePrompt {
-                                text: content,
-                                delivery_event_id: event.event_id.clone(),
-                            }));
+                            let _ = tx.send(RemoteSdkInbound::User(prompt));
                         }
                     }
                     Some("control_response") => {
@@ -1864,7 +1881,7 @@ async fn read_remote_ccr_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
             let Some(payload) = event.payload else {
                 continue;
             };
-            if handle_remote_sdk_seed_line(payload, &mut seed)? {
+            if handle_remote_sdk_seed_line(payload, &mut seed).await? {
                 seed.prompt_delivery_event_id = event.event_id.clone();
                 spawn_remote_ccr_background_reader(stream, buffer, tx);
                 return Ok(RemoteSdkSeed { seed, rx });
@@ -1927,7 +1944,7 @@ async fn read_remote_sdk_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
             }
             let value: Value = serde_json::from_str(&line)
                 .map_err(|err| anyhow::anyhow!("Error parsing remote stream-json input: {err}"))?;
-            if handle_remote_sdk_seed_line(value, &mut seed)? {
+            if handle_remote_sdk_seed_line(value, &mut seed).await? {
                 spawn_remote_sdk_background_reader(read, buffered, tx);
                 return Ok(RemoteSdkSeed { seed, rx });
             }
@@ -7769,6 +7786,7 @@ async fn main() -> Result<()> {
         }
     }
     let mut prompt_arg = cli.prompt.clone();
+    let mut prompt_content: Option<Value> = None;
     let mut prompt_delivery_event_id: Option<String> = None;
     let mut initial_remote_control_requests = Vec::new();
     let mut restored_remote_worker_metadata: Option<Value> = None;
@@ -7780,6 +7798,7 @@ async fn main() -> Result<()> {
             remote_sdk_rx = Some(remote.rx);
             if prompt_arg.is_none() {
                 prompt_arg = seed.prompt;
+                prompt_content = seed.prompt_content;
                 prompt_delivery_event_id = seed.prompt_delivery_event_id;
             }
             initial_remote_control_requests = seed.control_requests;
@@ -8880,7 +8899,9 @@ async fn main() -> Result<()> {
         let mut active_model_display = model_display.clone();
 
         let mut pending_remote_prompt = RemotePrompt {
-            text: prompt,
+            content: prompt_content
+                .take()
+                .unwrap_or_else(|| serde_json::json!(prompt)),
             delivery_event_id: prompt_delivery_event_id.take(),
         };
         let mut add_session_start_message = true;
@@ -8903,10 +8924,12 @@ async fn main() -> Result<()> {
                 report_remote_ccr_delivery(event_id, "processing");
             }
             let current_delivery_event_id = current_remote_prompt.delivery_event_id.clone();
-            let prompt = current_remote_prompt.text;
+            let prompt_content = current_remote_prompt.content;
+            let prompt = sdk_content_to_prompt(&prompt_content).unwrap_or_default();
 
             // Check if prompt is a skill invocation (e.g. "/commit fix typo")
             let mut effective_prompt = prompt.clone();
+            let mut effective_content = prompt_content.clone();
             for skill in &skills {
                 if let Some(args) = claude_core::plugins::skill::match_skill(&prompt, skill) {
                     let mut content = skill.content.clone();
@@ -8914,6 +8937,7 @@ async fn main() -> Result<()> {
                         content.push_str(&format!("\n\nArguments: {}", args));
                     }
                     effective_prompt = content;
+                    effective_content = serde_json::json!(effective_prompt);
                     break;
                 }
             }
@@ -9026,7 +9050,7 @@ async fn main() -> Result<()> {
                 }
                 add_session_start_message = false;
             }
-            query_engine.add_user_message(&effective_prompt);
+            query_engine.add_user_content(&effective_content);
 
             // Run the agentic loop: prompt -> run_turn -> ToolUse* -> Done
             let mut final_text = String::new();

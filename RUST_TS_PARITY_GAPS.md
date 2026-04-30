@@ -550,6 +550,15 @@ Improved:
   history/live write ordering, deactivate-vs-drop semantics, TS default
   intervals, optional defaulted fields, 0-or-≥100 at-capacity validation, and
   liveness fallback to defaults for malformed configs.
+- Rust now has the shared inbound bridge message/attachment helpers from
+  `src/bridge/inboundMessages.ts` and `src/bridge/inboundAttachments.ts`:
+  user SDK message extraction, UUID preservation, malformed base64 image
+  `mediaType`/missing-`media_type` normalization via magic-byte detection,
+  `file_attachments` schema extraction, filename sanitization, upload-path
+  construction under `~/.claude/uploads/{sessionId}`, OAuth-backed attachment
+  download, quoted `@"/path"` prepending to the last text block, and runtime
+  use in remote child Session-Ingress / CCR v2 inbound user-message paths while
+  preserving content-block arrays into the query engine.
 - Rust now has the shared bridge capacity-wake primitive from
   `capacityWake.ts`: at-capacity sleeps can resolve either because the outer
   loop was cancelled or because capacity changed, without waiting for the full
@@ -640,7 +649,9 @@ Missing or partial:
 - Capacity wake runtime integration in REPL/v2 bridge paths.
 - Flush gate runtime integration.
 - Poll config runtime integration in REPL/v2 bridge paths.
-- Inbound attachments/messages.
+- Inbound attachment/message helpers are wired in the remote child
+  Session-Ingress / CCR v2 user-message paths. Remaining work is wiring the
+  same helpers into hosted parent REPL/direct-connect runtime paths.
 - Bridge UI depth beyond the basic TUI transport surface.
 - Direct WebSocket session manager integration still needs deeper parity for
   attachments, local-jsx slash-command discrimination, full SDK-message to TUI

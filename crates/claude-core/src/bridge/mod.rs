@@ -2,6 +2,8 @@ pub mod api;
 pub mod capacity_wake;
 pub mod direct_connect;
 pub mod flush_gate;
+pub mod inbound_attachments;
+pub mod inbound_messages;
 pub mod jwt_utils;
 pub mod messaging;
 pub mod permission_callbacks;
