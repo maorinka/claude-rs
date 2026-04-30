@@ -7013,6 +7013,8 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
     let mut active_sessions: HashMap<String, RemoteSessionHandle> = HashMap::new();
     let mut session_work_ids: HashMap<String, String> = HashMap::new();
     let mut session_tokens: HashMap<String, String> = HashMap::new();
+    let mut completed_work_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let mut known_sessions: Vec<String> = session_id.clone().into_iter().collect();
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_signal = shutdown.clone();
@@ -7057,6 +7059,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                 }
                 if status != RemoteSessionDoneStatus::Interrupted {
                     if let Some(work_id) = work_id {
+                        completed_work_ids.insert(work_id.clone());
                         stop_work_with_retry(&api, &registered_environment_id, &work_id, false)
                             .await;
                     }
@@ -7083,10 +7086,54 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
             result = poll => {
                 match result {
                     Ok(Some(work)) => {
+                        if completed_work_ids.contains(&work.id) {
+                            if options.verbose {
+                                eprintln!("Skipping already-completed remote work {}.", work.id);
+                            }
+                            if active_sessions.len() >= config.max_sessions as usize {
+                                let at_capacity_ms =
+                                    poll_config.multisession_poll_interval_ms_at_capacity;
+                                if poll_config.non_exclusive_heartbeat_interval_ms > 0 {
+                                    for (session_id, work_id) in session_work_ids.clone() {
+                                        if let Some(token) = session_tokens.get(&session_id) {
+                                            let _ = api
+                                                .heartbeat_work(
+                                                    &registered_environment_id,
+                                                    &work_id,
+                                                    token,
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                    let _ = sleep_for_remote_capacity(
+                                        &capacity_wake,
+                                        std::time::Duration::from_millis(
+                                            poll_config.non_exclusive_heartbeat_interval_ms,
+                                        ),
+                                    )
+                                    .await;
+                                } else if at_capacity_ms > 0 {
+                                    let _ = sleep_for_remote_capacity(
+                                        &capacity_wake,
+                                        std::time::Duration::from_millis(at_capacity_ms),
+                                    )
+                                    .await;
+                                }
+                            } else {
+                                let _ = sleep_until_shutdown(
+                                    &shutdown,
+                                    std::time::Duration::from_secs(1),
+                                )
+                                .await;
+                            }
+                            continue;
+                        }
+
                         let secret = match claude_core::bridge::work_secret::decode_work_secret(&work.secret) {
                             Ok(secret) => secret,
                             Err(err) => {
                                 eprintln!("Failed to decode remote work secret for {}: {err}", work.id);
+                                completed_work_ids.insert(work.id.clone());
                                 stop_work_with_retry(&api, &registered_environment_id, &work.id, false).await;
                                 continue;
                             }
@@ -7198,6 +7245,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                                             eprintln!(
                                                 "Failed to register remote worker for {remote_session_id}: {err}"
                                             );
+                                            completed_work_ids.insert(work.id.clone());
                                             stop_work_with_retry(
                                                 &api,
                                                 &registered_environment_id,
@@ -7241,6 +7289,7 @@ async fn run_remote_control_command(options: RemoteControlCommandOptions<'_>) ->
                                     }
                                     Err(err) => {
                                         eprintln!("Failed to spawn remote session {remote_session_id}: {err}");
+                                        completed_work_ids.insert(work.id.clone());
                                         stop_work_with_retry(
                                             &api,
                                             &registered_environment_id,

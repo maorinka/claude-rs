@@ -531,7 +531,9 @@ Improved:
   `reclaim_older_than_ms` into `/work/poll`, uses the multi-session
   not-at-capacity/partial/at-capacity intervals instead of fixed sleeps, sends
   at-capacity heartbeats on the non-exclusive heartbeat interval, and wakes
-  at-capacity sleeps when a child session exits.
+  at-capacity sleeps when a child session exits. It also tracks completed work
+  IDs like TS `bridgeMain.ts`, so stale server redeliveries during reclaim lag
+  do not spawn duplicate child sessions.
 - `claude remote-control` now consumes those bridge clients directly: it builds
   the TS-shaped runtime config from the current directory, branch, origin
   remote, OS hostname, spawn/capacity flags, sandbox/debug/timeout flags, then
