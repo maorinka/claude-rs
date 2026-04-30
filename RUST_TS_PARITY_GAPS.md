@@ -676,7 +676,7 @@ Needs work:
 Rust has a real MCP client/manager, but TS still has broader behavior.
 
 Missing or partial:
-- In-process transport.
+- In-process transport runtime wiring for Chrome/computer-use MCP servers.
 - OAuth/XAA IdP command parity.
 - Official registry integration.
 - Elicitation dialog/UI integration.
@@ -697,6 +697,10 @@ Improved:
   custom/IDE auth headers, bidirectional JSON-RPC dispatch, auth-failure
   classification, lifecycle close handling, and request/notification send paths
   are implemented and covered by the MCP/WebSocket test filters.
+- Rust now has the TS `InProcessTransport` linked-pair primitive:
+  async same-process delivery, no-op `start`, peer-close propagation, idempotent
+  close, and `"Transport is closed"` send errors. It still needs runtime
+  integration with the specific in-process MCP servers TS runs this way.
 - MCP auto-mode classifier input encoding now follows the TS
   `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
   keys and JavaScript `String(value)` coercion for arrays and nested objects.

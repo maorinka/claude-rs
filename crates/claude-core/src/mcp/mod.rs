@@ -5,6 +5,7 @@ pub mod datetime_parser;
 pub mod elicitation_validation;
 pub mod errors;
 pub mod helpers;
+pub mod in_process_transport;
 pub mod instructions_delta;
 pub mod lifecycle;
 pub mod manager;
