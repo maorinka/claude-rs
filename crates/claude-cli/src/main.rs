@@ -2562,7 +2562,25 @@ async fn handle_mcp_xaa_command(command: &McpXaaCommand) -> Result<()> {
                 return Ok(());
             }
 
-            anyhow::bail!("IdP login failed: browser OIDC login is not implemented yet");
+            println!("Opening browser for IdP login at {}…", idp.issuer);
+            let secret = claude_core::mcp::xaa_idp::get_idp_client_secret(&idp.issuer).await?;
+            let on_authorization_url = |url: &str| {
+                println!("If the browser did not open, visit:\n  {url}");
+            };
+            claude_core::mcp::xaa_idp::acquire_idp_id_token(
+                claude_core::mcp::xaa_idp::IdpLoginOptions {
+                    idp_issuer: &idp.issuer,
+                    idp_client_id: &idp.client_id,
+                    idp_client_secret: secret.as_deref(),
+                    callback_port: idp.callback_port,
+                    on_authorization_url: Some(&on_authorization_url),
+                    skip_browser_open: false,
+                },
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("IdP login failed: {err}"))?;
+            println!("Logged in. MCP servers with --xaa will now authenticate silently.");
+            Ok(())
         }
         McpXaaCommand::Show => {
             let Some(idp) = load_xaa_idp_user_setting()? else {
