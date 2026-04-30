@@ -328,6 +328,7 @@ enum RemotePostConfig {
         post_url: String,
     },
     CcrV2 {
+        session_url: String,
         events_url: String,
         worker_url: String,
         worker_epoch: u64,
@@ -340,9 +341,11 @@ fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(0);
+        let session_url = sdk_url.trim_end_matches('/').to_string();
         Ok(RemotePostConfig::CcrV2 {
-            events_url: format!("{}/worker/events", sdk_url.trim_end_matches('/')),
-            worker_url: format!("{}/worker", sdk_url.trim_end_matches('/')),
+            events_url: format!("{session_url}/worker/events"),
+            worker_url: format!("{session_url}/worker"),
+            session_url,
             worker_epoch,
         })
     } else {
@@ -361,6 +364,9 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         let mut buffer: Vec<Value> = Vec::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let heartbeat_delay = std::time::Duration::from_secs(20);
+        let heartbeat = tokio::time::sleep(heartbeat_delay);
+        tokio::pin!(heartbeat);
 
         loop {
             tokio::select! {
@@ -379,6 +385,10 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
                     }
                 }
+                _ = &mut heartbeat => {
+                    post_remote_ccr_heartbeat(&client, &config).await;
+                    heartbeat.as_mut().reset(tokio::time::Instant::now() + heartbeat_delay);
+                }
             }
         }
         if !buffer.is_empty() {
@@ -386,6 +396,48 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         }
     });
     Ok(())
+}
+
+fn ccr_heartbeat_url(config: &RemotePostConfig) -> Option<String> {
+    let RemotePostConfig::CcrV2 { session_url, .. } = config else {
+        return None;
+    };
+    Some(format!("{session_url}/worker/heartbeat"))
+}
+
+async fn post_remote_ccr_heartbeat(client: &reqwest::Client, config: &RemotePostConfig) {
+    let RemotePostConfig::CcrV2 {
+        session_url,
+        worker_epoch,
+        ..
+    } = config
+    else {
+        return;
+    };
+    let Some(token) = session_ingress_auth_token() else {
+        return;
+    };
+    let Some(url) = ccr_heartbeat_url(config) else {
+        return;
+    };
+    let Some(session_id) = session_url
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let _ = client
+        .post(url)
+        .bearer_auth(token)
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "session_id": session_id,
+            "worker_epoch": worker_epoch,
+        }))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
 }
 
 fn ccr_worker_state_for_event(event: &Value) -> Option<Value> {
@@ -8928,6 +8980,21 @@ mod remote_control_tests {
         assert_eq!(
             ccr_v2_sse_url("https://api.example.com/v1/code/sessions/session-123").unwrap(),
             "https://api.example.com/v1/code/sessions/session-123/worker/events/stream"
+        );
+    }
+
+    #[test]
+    fn remote_ccr_heartbeat_url_matches_ts_transport() {
+        let config = RemotePostConfig::CcrV2 {
+            session_url: "https://api.example.com/v1/code/sessions/session-123".to_string(),
+            events_url: "https://api.example.com/v1/code/sessions/session-123/worker/events"
+                .to_string(),
+            worker_url: "https://api.example.com/v1/code/sessions/session-123/worker".to_string(),
+            worker_epoch: 7,
+        };
+        assert_eq!(
+            ccr_heartbeat_url(&config).unwrap(),
+            "https://api.example.com/v1/code/sessions/session-123/worker/heartbeat"
         );
     }
 

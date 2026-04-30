@@ -536,7 +536,8 @@ Improved:
   preserve EnterWorktree/ExitWorktree cwd side effects, and keep user messages
   that arrive during a permission wait queued for later turns. The CCR v2 child
   transport also reports worker state transitions (`running`, `requires_action`,
-  `idle`) from the same event classes TS uses.
+  `idle`) from the same event classes TS uses and sends periodic
+  `/worker/heartbeat` requests with the session id and worker epoch.
 
 Missing or partial:
 - Full bridge messaging.
@@ -544,9 +545,9 @@ Missing or partial:
 - `remoteBridgeCore` parity.
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
   `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
-  needs the full TS `CCRClient` lifecycle depth: heartbeat, external metadata
-  reporting, delivery acknowledgements, internal-event persistence/restore, and
-  text-delta coalescing.
+  needs the full TS `CCRClient` lifecycle depth: external metadata reporting,
+  delivery acknowledgements, internal-event persistence/restore, and text-delta
+  coalescing.
 - Bridge permission callbacks are partially wired for remote child
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
   through the hosted bridge permission API and cancellation/delivery lifecycle.
@@ -1179,7 +1180,8 @@ Missing or partial:
   `--session-id` reconnect via `getBridgeSession` + environment reuse +
   `/bridge/reconnect`, and `--continue` bridge-pointer lookup/write/clear for
   single-session standalone remote control, are now wired to the general bridge
-  API/session clients. Still missing:
+  API/session clients. CCR v2 child sessions now also send `/worker/heartbeat`.
+  Still missing:
   entitlement/policy checks, full CCR v2 lifecycle reporting, parent-side
   hosted permission callback forwarding, trusted-device flow, and
   connected/disconnect TUI state.
