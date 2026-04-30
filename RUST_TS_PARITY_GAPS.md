@@ -519,7 +519,9 @@ Improved:
   GrowthBook gate controls whether the header is sent, the
   `CLAUDE_TRUSTED_DEVICE_TOKEN` env var takes precedence, secure storage stores
   and preserves `trustedDeviceToken` alongside `claudeAiOauth`, cache clearing
-  exists for auth mutations, logout clears the stored token, and standalone
+  exists for auth mutations, logout clears the stored token, fresh Claude.ai
+  `/login` clears any stale previous-account token and enrolls the device with
+  the same gated `/api/auth/trusted_devices` flow, and standalone
   remote-control wires the resolved token into `BridgeApiClient` so
   `X-Trusted-Device-Token` is sent through the existing header slot.
 - Rust now has the org-scoped bridge Sessions API surface from
@@ -633,8 +635,6 @@ Missing or partial:
   `can_use_tool` requests/responses, and the parent-side callback event shapes
   are now available as shared helpers. Remaining depth is wiring those helpers
   into the hosted parent bridge runtime plus cancellation/delivery lifecycle.
-- Trusted-device enrollment after fresh `/login` is still missing; token
-  storage/header usage and logout clearing are wired.
 - Full work secret lifecycle and token-refresh scheduling in REPL/v2 bridge
   paths.
 - Capacity wake runtime integration in REPL/v2 bridge paths.

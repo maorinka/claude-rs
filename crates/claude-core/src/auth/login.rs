@@ -546,6 +546,10 @@ async fn install_oauth_tokens(
         && tokens.expires_at.is_some()
     {
         store_tokens(tokens).await?;
+        // Match TS post-login trusted-device flow: clear any stale device token
+        // from a previous account, then enroll this fresh login session.
+        crate::bridge::trusted_device::clear_trusted_device_token().await;
+        crate::bridge::trusted_device::enroll_trusted_device(&tokens.access_token).await;
     }
 
     // 4. Fetch and store user roles (non-critical, log errors)

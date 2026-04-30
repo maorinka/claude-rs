@@ -52,6 +52,110 @@ pub async fn clear_trusted_device_token() {
     clear_trusted_device_token_cache();
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct TrustedDeviceEnrollResponse {
+    device_token: Option<String>,
+    device_id: Option<String>,
+}
+
+pub async fn enroll_trusted_device(access_token: &str) {
+    if !crate::growthbook::get_feature_value_cached_may_be_stale_bool(TRUSTED_DEVICE_GATE, false) {
+        tracing::debug!(
+            gate = TRUSTED_DEVICE_GATE,
+            "trusted-device enrollment skipped because gate is off"
+        );
+        return;
+    }
+    if std::env::var("CLAUDE_TRUSTED_DEVICE_TOKEN")
+        .ok()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        tracing::debug!(
+            "trusted-device enrollment skipped because CLAUDE_TRUSTED_DEVICE_TOKEN is set"
+        );
+        return;
+    }
+    if access_token.trim().is_empty() {
+        tracing::debug!("trusted-device enrollment skipped because OAuth token is missing");
+        return;
+    }
+    if crate::privacy_level::is_essential_traffic_only() {
+        tracing::debug!("trusted-device enrollment skipped in essential-traffic-only mode");
+        return;
+    }
+
+    let Ok(oauth) = crate::constants::oauth::get_oauth_config() else {
+        tracing::debug!("trusted-device enrollment skipped because OAuth config is unavailable");
+        return;
+    };
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| "unknown-host".to_string());
+    let display_name = format!("Claude Code on {hostname} · {}", std::env::consts::OS);
+    let client = match crate::proxy::build_proxy_client_from_env() {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::debug!(error = %err, "trusted-device enrollment skipped: client build failed");
+            return;
+        }
+    };
+    let url = format!(
+        "{}/api/auth/trusted_devices",
+        oauth.base_api_url.trim_end_matches('/')
+    );
+    let response = match client
+        .post(url)
+        .bearer_auth(access_token)
+        .header("content-type", "application/json")
+        .json(&serde_json::json!({ "display_name": display_name }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::debug!(error = %err, "trusted-device enrollment request failed");
+            return;
+        }
+    };
+    let status = response.status();
+    if status.as_u16() != 200 && status.as_u16() != 201 {
+        let body = response.text().await.unwrap_or_default();
+        tracing::debug!(
+            status = status.as_u16(),
+            body = %body.chars().take(200).collect::<String>(),
+            "trusted-device enrollment failed"
+        );
+        return;
+    }
+    let payload = match response.json::<TrustedDeviceEnrollResponse>().await {
+        Ok(payload) => payload,
+        Err(err) => {
+            tracing::debug!(error = %err, "trusted-device enrollment response parse failed");
+            return;
+        }
+    };
+    let Some(token) = payload
+        .device_token
+        .filter(|token| !token.trim().is_empty())
+    else {
+        tracing::debug!("trusted-device enrollment response missing device_token");
+        return;
+    };
+    match crate::auth::storage::store_trusted_device_token(&token).await {
+        Ok(()) => {
+            clear_trusted_device_token_cache();
+            tracing::debug!(
+                device_id = payload.device_id.as_deref().unwrap_or("unknown"),
+                "trusted-device enrolled"
+            );
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "trusted-device token persist failed");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +182,19 @@ mod tests {
         std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "td_env");
         clear_trusted_device_token_cache();
         assert_eq!(get_trusted_device_token().await.as_deref(), Some("td_env"));
+        std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN");
+        std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_FEATURES");
+    }
+
+    #[tokio::test]
+    async fn enrollment_skips_when_env_token_present() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(
+            "CLAUDE_CODE_GROWTHBOOK_FEATURES",
+            r#"{"tengu_sessions_elevated_auth_enforcement":true}"#,
+        );
+        std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "td_env");
+        enroll_trusted_device("oauth-token").await;
         std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN");
         std::env::remove_var("CLAUDE_CODE_GROWTHBOOK_FEATURES");
     }
