@@ -29,8 +29,8 @@ pub struct InboundAttachmentResolver {
 
 impl InboundAttachmentResolver {
     pub async fn from_runtime_config(session_id: impl Into<String>) -> Result<Self> {
-        let access_token = bridge_access_token().await;
-        let base_url = bridge_base_url()?;
+        let access_token = crate::bridge::config::get_bridge_access_token().await;
+        let base_url = crate::bridge::config::get_bridge_base_url()?;
         let config_home = crate::config::paths::claude_dir()?;
         Ok(Self::new(access_token, base_url, config_home, session_id))
     }
@@ -162,33 +162,6 @@ impl InboundAttachmentResolver {
         );
         Some(out_path)
     }
-}
-
-async fn bridge_access_token() -> Option<String> {
-    if crate::user_type::is_ant() {
-        if let Ok(token) = std::env::var("CLAUDE_BRIDGE_OAUTH_TOKEN") {
-            if !token.trim().is_empty() {
-                return Some(token);
-            }
-        }
-    }
-    crate::auth::storage::load_tokens()
-        .await
-        .ok()
-        .flatten()
-        .map(|tokens| tokens.access_token)
-        .filter(|token| !token.trim().is_empty())
-}
-
-fn bridge_base_url() -> Result<String> {
-    if crate::user_type::is_ant() {
-        if let Ok(base_url) = std::env::var("CLAUDE_BRIDGE_BASE_URL") {
-            if !base_url.trim().is_empty() {
-                return Ok(base_url);
-            }
-        }
-    }
-    Ok(crate::constants::oauth::get_oauth_config()?.base_api_url)
 }
 
 pub fn extract_inbound_attachments(msg: &Value) -> Vec<InboundAttachment> {

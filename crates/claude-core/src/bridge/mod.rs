@@ -1,5 +1,6 @@
 pub mod api;
 pub mod capacity_wake;
+pub mod config;
 pub mod direct_connect;
 pub mod flush_gate;
 pub mod inbound_attachments;

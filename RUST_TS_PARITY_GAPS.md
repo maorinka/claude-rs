@@ -563,6 +563,10 @@ Improved:
   `capacityWake.ts`: at-capacity sleeps can resolve either because the outer
   loop was cancelled or because capacity changed, without waiting for the full
   poll interval.
+- Rust now has the shared bridge auth/base-URL resolution from
+  `src/bridge/bridgeConfig.ts`: ant-only `CLAUDE_BRIDGE_OAUTH_TOKEN` and
+  `CLAUDE_BRIDGE_BASE_URL` overrides are centralized, while normal callers fall
+  through to stored Claude.ai OAuth tokens and the OAuth base API URL.
 - The standalone `claude remote-control` poll loop now consumes the same
   `getPollIntervalConfig()` feature value path as TS `bridgeMain.ts`, passes
   `reclaim_older_than_ms` into `/work/poll`, uses the multi-session
