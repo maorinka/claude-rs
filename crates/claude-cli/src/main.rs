@@ -990,6 +990,19 @@ async fn read_remote_ccr_internal_events(
     Ok(Some(events))
 }
 
+fn group_ccr_subagent_internal_events(
+    events: Vec<CcrInternalEvent>,
+) -> HashMap<String, Vec<Value>> {
+    let mut by_agent: HashMap<String, Vec<Value>> = HashMap::new();
+    for event in events {
+        let Some(agent_id) = event.agent_id.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        by_agent.entry(agent_id).or_default().push(event.payload);
+    }
+    by_agent
+}
+
 async fn hydrate_remote_ccr_internal_events(sdk_url: &str, session_id: &str) -> Result<bool> {
     let Some(events) = read_remote_ccr_internal_events(sdk_url, false).await? else {
         return Ok(false);
@@ -1000,6 +1013,12 @@ async fn hydrate_remote_ccr_internal_events(sdk_url: &str, session_id: &str) -> 
         .collect::<Vec<_>>();
     let storage = claude_core::session::storage::SessionStorage::new(session_id)?;
     storage.replace_transcript(&entries)?;
+    if let Some(subagent_events) = read_remote_ccr_internal_events(sdk_url, true).await? {
+        for (agent_id, agent_entries) in group_ccr_subagent_internal_events(subagent_events) {
+            let storage = claude_core::session::storage::SessionStorage::new(&agent_id)?;
+            storage.replace_transcript(&agent_entries)?;
+        }
+    }
     Ok(!entries.is_empty())
 }
 
@@ -9900,6 +9919,41 @@ mod remote_control_tests {
             )
             .unwrap(),
             "https://api.example.com/v1/code/sessions/session-123/worker/internal-events?subagents=true&cursor=cursor-1"
+        );
+    }
+
+    #[test]
+    fn remote_ccr_subagent_internal_events_group_by_agent_id() {
+        let grouped = group_ccr_subagent_internal_events(vec![
+            CcrInternalEvent {
+                agent_id: Some("agent-1".to_string()),
+                payload: serde_json::json!({"uuid": "1"}),
+            },
+            CcrInternalEvent {
+                agent_id: None,
+                payload: serde_json::json!({"uuid": "ignored"}),
+            },
+            CcrInternalEvent {
+                agent_id: Some("agent-2".to_string()),
+                payload: serde_json::json!({"uuid": "2"}),
+            },
+            CcrInternalEvent {
+                agent_id: Some("agent-1".to_string()),
+                payload: serde_json::json!({"uuid": "3"}),
+            },
+        ]);
+
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(
+            grouped.get("agent-1").unwrap(),
+            &vec![
+                serde_json::json!({"uuid": "1"}),
+                serde_json::json!({"uuid": "3"}),
+            ]
+        );
+        assert_eq!(
+            grouped.get("agent-2").unwrap(),
+            &vec![serde_json::json!({"uuid": "2"})]
         );
     }
 

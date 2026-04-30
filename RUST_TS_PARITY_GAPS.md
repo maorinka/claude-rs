@@ -560,6 +560,9 @@ Improved:
   active model/permission context for later turns, emits TS-shaped
   `control_response` messages, and reports CCR `external_metadata.model`,
   `permission_mode`, and `is_ultraplan_mode` through the worker metadata path.
+  CCR v2 resume also reads `subagents=true` internal events, groups them by
+  `agent_id`, and restores each agent transcript with the same event-sourced
+  mechanism TS uses.
 
 Missing or partial:
 - Full bridge messaging.
@@ -567,8 +570,8 @@ Missing or partial:
 - `remoteBridgeCore` parity.
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
   `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
-  needs the remaining TS `CCRClient` depth around subagent internal-event restore
-  and the parent/hosted bridge lifecycle.
+  needs the remaining TS `CCRClient` depth around the parent/hosted bridge
+  lifecycle.
 - Bridge permission callbacks are partially wired for remote child
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
   through the hosted bridge permission API and cancellation/delivery lifecycle.
