@@ -11,6 +11,8 @@ use tokio::sync::RwLock;
 static REMOTE_STREAM_JSON_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<Value>> = OnceLock::new();
 static REMOTE_CCR_DELIVERY_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<CcrDeliveryUpdate>> =
     OnceLock::new();
+static REMOTE_CCR_WORKER_PATCH_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<Value>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CcrDeliveryUpdate {
@@ -235,6 +237,7 @@ struct StreamJsonStdinSeed {
     system_prompt: Option<String>,
     append_system_prompt: Option<String>,
     json_schema: Option<String>,
+    control_requests: Vec<Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -246,6 +249,7 @@ struct RemotePrompt {
 enum RemoteSdkInbound {
     User(RemotePrompt),
     ControlResponse(Value),
+    ControlRequest(Value),
     EndSession,
 }
 
@@ -311,6 +315,11 @@ fn parse_stream_json_stdin(stdin: &str) -> Result<StreamJsonStdinSeed> {
                     if let Some(json_schema) = request.get("jsonSchema") {
                         seed.json_schema = Some(serde_json::to_string(json_schema)?);
                     }
+                } else if matches!(
+                    request.get("subtype").and_then(|v| v.as_str()),
+                    Some("set_model" | "set_permission_mode")
+                ) {
+                    seed.control_requests.push(message);
                 }
             }
             Some("keep_alive") | Some("update_environment_variables") => {}
@@ -542,8 +551,10 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         tokio::sync::mpsc::unbounded_channel::<CcrDeliveryUpdate>();
     let (internal_tx, mut internal_rx) =
         tokio::sync::mpsc::unbounded_channel::<InternalTranscriptEvent>();
+    let (worker_patch_tx, mut worker_patch_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
     let _ = REMOTE_STREAM_JSON_TX.set(tx);
     let _ = REMOTE_CCR_DELIVERY_TX.set(delivery_tx);
+    let _ = REMOTE_CCR_WORKER_PATCH_TX.set(worker_patch_tx);
     if matches!(config, RemotePostConfig::CcrV2 { .. }) {
         claude_core::session::storage::set_internal_event_sender(internal_tx);
     }
@@ -614,6 +625,12 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                         post_remote_ccr_internal_event_batch(&client, &config, &mut internal_buffer).await;
                     }
                 }
+                maybe_patch = worker_patch_rx.recv() => {
+                    let Some(patch) = maybe_patch else {
+                        continue;
+                    };
+                    report_remote_ccr_worker_patch(&client, &config, patch).await;
+                }
                 _ = interval.tick() => {
                     if remote_post_config_is_ccr_v2(&config) {
                         flush_remote_stream_event_buffer(
@@ -668,6 +685,42 @@ fn report_remote_ccr_delivery(event_id: &str, status: &'static str) {
             status,
         });
     }
+}
+
+fn to_external_permission_mode(
+    mode: &claude_core::permissions::types::PermissionMode,
+) -> &'static str {
+    match mode {
+        claude_core::permissions::types::PermissionMode::Default => "default",
+        claude_core::permissions::types::PermissionMode::AcceptEdits => "acceptEdits",
+        claude_core::permissions::types::PermissionMode::Auto => "default",
+        claude_core::permissions::types::PermissionMode::Plan => "plan",
+        claude_core::permissions::types::PermissionMode::BypassPermissions => "bypassPermissions",
+        claude_core::permissions::types::PermissionMode::DontAsk => "dontAsk",
+        claude_core::permissions::types::PermissionMode::Bubble => "default",
+    }
+}
+
+fn report_remote_ccr_worker_patch_value(patch: Value) {
+    if let Some(tx) = REMOTE_CCR_WORKER_PATCH_TX.get() {
+        let _ = tx.send(patch);
+    }
+}
+
+fn report_remote_ccr_metadata(metadata: Value) {
+    report_remote_ccr_worker_patch_value(serde_json::json!({
+        "external_metadata": metadata,
+    }));
+}
+
+fn report_remote_ccr_permission_mode_metadata(
+    mode: &claude_core::permissions::types::PermissionMode,
+    is_ultraplan_mode: Option<bool>,
+) {
+    report_remote_ccr_metadata(serde_json::json!({
+        "permission_mode": to_external_permission_mode(mode),
+        "is_ultraplan_mode": is_ultraplan_mode,
+    }));
 }
 
 fn ccr_heartbeat_url(config: &RemotePostConfig) -> Option<String> {
@@ -1166,6 +1219,17 @@ fn remote_control_response_success(request_id: &str, response: Value) -> Value {
     })
 }
 
+fn remote_control_response_error(request_id: &str, error: impl Into<String>) -> Value {
+    serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "error",
+            "request_id": request_id,
+            "error": error.into(),
+        },
+    })
+}
+
 fn remote_permission_request(
     request_id: &str,
     tool_name: &str,
@@ -1200,11 +1264,13 @@ async fn wait_remote_permission_response(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteSdkInbound>,
     request_id: &str,
     queued_prompts: &mut std::collections::VecDeque<RemotePrompt>,
+    queued_control_requests: &mut std::collections::VecDeque<Value>,
 ) -> Option<Value> {
     while let Some(inbound) = rx.recv().await {
         match inbound {
             RemoteSdkInbound::User(prompt) => queued_prompts.push_back(prompt),
             RemoteSdkInbound::EndSession => return None,
+            RemoteSdkInbound::ControlRequest(value) => queued_control_requests.push_back(value),
             RemoteSdkInbound::ControlResponse(value) => {
                 let matches_request = value
                     .get("response")
@@ -1267,6 +1333,102 @@ fn parse_remote_permission_response(
     }
 }
 
+async fn apply_remote_control_request(
+    value: Value,
+    query_engine: &mut claude_core::query::engine::QueryEngine,
+    perm_ctx: &mut claude_core::permissions::types::ToolPermissionContext,
+    active_model: &mut String,
+    active_model_display: &mut String,
+) -> Result<()> {
+    let request_id = value
+        .get("request_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let request = value.get("request").unwrap_or(&Value::Null);
+    match request.get("subtype").and_then(|value| value.as_str()) {
+        Some("set_model") => {
+            let requested_model = request
+                .get("model")
+                .and_then(|value| value.as_str())
+                .unwrap_or("default");
+            let resolved_model = if requested_model == "default" {
+                default_main_loop_model_setting().await
+            } else {
+                requested_model.to_string()
+            };
+            *active_model = normalize_model_name(&resolved_model);
+            *active_model_display = active_model.clone();
+            query_engine.set_model(active_model.clone());
+            report_remote_ccr_metadata(serde_json::json!({ "model": active_model }));
+            query_engine.add_user_message(
+                "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>",
+            );
+            query_engine.add_user_message(&format!(
+                "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>{requested_model}</command-args>"
+            ));
+            query_engine.add_user_message(&format!(
+                "<local-command-stdout>Set model to {}</local-command-stdout>",
+                active_model_display
+            ));
+            if !request_id.is_empty() {
+                emit_stream_json(remote_control_response_success(
+                    &request_id,
+                    serde_json::json!({}),
+                ));
+            }
+        }
+        Some("set_permission_mode") => {
+            let requested_mode = request
+                .get("mode")
+                .and_then(|value| value.as_str())
+                .unwrap_or("default");
+            let next_mode =
+                claude_core::permissions::types::PermissionMode::from_string(requested_mode);
+            if next_mode == claude_core::permissions::types::PermissionMode::BypassPermissions
+                && !perm_ctx.is_bypass_permissions_mode_available
+            {
+                if !request_id.is_empty() {
+                    emit_stream_json(remote_control_response_error(
+                        &request_id,
+                        "Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions",
+                    ));
+                }
+                return Ok(());
+            }
+            if next_mode == claude_core::permissions::types::PermissionMode::Auto
+                && perm_ctx.is_auto_mode_available == Some(false)
+            {
+                if !request_id.is_empty() {
+                    emit_stream_json(remote_control_response_error(
+                        &request_id,
+                        "Cannot set permission mode to auto",
+                    ));
+                }
+                return Ok(());
+            }
+            let previous_mode = perm_ctx.mode.clone();
+            let mut next_ctx = claude_core::permissions::transition_permission_mode(
+                &previous_mode,
+                &next_mode,
+                perm_ctx.clone(),
+            );
+            next_ctx.mode = next_mode.clone();
+            *perm_ctx = next_ctx;
+            let is_ultraplan_mode = request.get("ultraplan").and_then(|value| value.as_bool());
+            report_remote_ccr_permission_mode_metadata(&next_mode, is_ultraplan_mode);
+            if !request_id.is_empty() {
+                emit_stream_json(remote_control_response_success(
+                    &request_id,
+                    serde_json::json!({ "mode": requested_mode }),
+                ));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn handle_remote_sdk_non_user_line(
     value: &Value,
     tx: Option<&tokio::sync::mpsc::UnboundedSender<RemoteSdkInbound>>,
@@ -1301,6 +1463,9 @@ fn handle_remote_sdk_non_user_line(
                 }
                 Ok(None)
             } else {
+                if let Some(tx) = tx {
+                    let _ = tx.send(RemoteSdkInbound::ControlRequest(value.clone()));
+                }
                 Ok(None)
             }
         }
@@ -1390,6 +1555,29 @@ fn handle_remote_sdk_seed_line(value: Value, seed: &mut StreamJsonStdinSeed) -> 
             let parsed = parse_stream_json_stdin(&(value.to_string() + "\n"))?;
             seed.prompt = parsed.prompt;
             Ok(true)
+        }
+        Some("control_request") => {
+            let subtype = value
+                .get("request")
+                .and_then(|request| request.get("subtype"))
+                .and_then(|value| value.as_str());
+            if matches!(subtype, Some("set_model" | "set_permission_mode")) {
+                seed.control_requests.push(value);
+                Ok(false)
+            } else {
+                if let Some(parsed) = handle_remote_sdk_non_user_line(&value, None)? {
+                    if parsed.system_prompt.is_some() {
+                        seed.system_prompt = parsed.system_prompt;
+                    }
+                    if parsed.append_system_prompt.is_some() {
+                        seed.append_system_prompt = parsed.append_system_prompt;
+                    }
+                    if parsed.json_schema.is_some() {
+                        seed.json_schema = parsed.json_schema;
+                    }
+                }
+                Ok(false)
+            }
         }
         _ => {
             if let Some(parsed) = handle_remote_sdk_non_user_line(&value, None)? {
@@ -1592,26 +1780,9 @@ async fn read_remote_sdk_seed(sdk_url: &str) -> Result<RemoteSdkSeed> {
             }
             let value: Value = serde_json::from_str(&line)
                 .map_err(|err| anyhow::anyhow!("Error parsing remote stream-json input: {err}"))?;
-            match value.get("type").and_then(|value| value.as_str()) {
-                Some("user") => {
-                    let parsed = parse_stream_json_stdin(&(line + "\n"))?;
-                    seed.prompt = parsed.prompt;
-                    spawn_remote_sdk_background_reader(read, buffered, tx);
-                    return Ok(RemoteSdkSeed { seed, rx });
-                }
-                _ => {
-                    if let Some(parsed) = handle_remote_sdk_non_user_line(&value, None)? {
-                        if parsed.system_prompt.is_some() {
-                            seed.system_prompt = parsed.system_prompt;
-                        }
-                        if parsed.append_system_prompt.is_some() {
-                            seed.append_system_prompt = parsed.append_system_prompt;
-                        }
-                        if parsed.json_schema.is_some() {
-                            seed.json_schema = parsed.json_schema;
-                        }
-                    }
-                }
+            if handle_remote_sdk_seed_line(value, &mut seed)? {
+                spawn_remote_sdk_background_reader(read, buffered, tx);
+                return Ok(RemoteSdkSeed { seed, rx });
             }
         }
     }
@@ -7069,6 +7240,7 @@ async fn main() -> Result<()> {
     }
     let mut prompt_arg = cli.prompt.clone();
     let mut prompt_delivery_event_id: Option<String> = None;
+    let mut initial_remote_control_requests = Vec::new();
     let mut remote_sdk_rx = None;
     if cli.print && prompt_arg.is_none() {
         if let Some(sdk_url) = cli.sdk_url.clone() {
@@ -7079,6 +7251,7 @@ async fn main() -> Result<()> {
                 prompt_arg = seed.prompt;
                 prompt_delivery_event_id = seed.prompt_delivery_event_id;
             }
+            initial_remote_control_requests = seed.control_requests;
             if seed.system_prompt.is_some() {
                 cli.system_prompt = seed.system_prompt;
                 cli.system_prompt_file = None;
@@ -7106,6 +7279,7 @@ async fn main() -> Result<()> {
                     if prompt_arg.is_none() {
                         prompt_arg = seed.prompt;
                     }
+                    initial_remote_control_requests = seed.control_requests;
                     if seed.system_prompt.is_some() {
                         cli.system_prompt = seed.system_prompt;
                         cli.system_prompt_file = None;
@@ -8120,6 +8294,8 @@ async fn main() -> Result<()> {
             claude_tools::registry::ReadFileState::new(),
         ));
         let mut perm_ctx = initial_permission_context.clone();
+        let mut active_model = model.clone();
+        let mut active_model_display = model_display.clone();
 
         let mut pending_remote_prompt = RemotePrompt {
             text: prompt,
@@ -8127,7 +8303,19 @@ async fn main() -> Result<()> {
         };
         let mut add_session_start_message = true;
         let mut queued_remote_prompts = std::collections::VecDeque::new();
+        let mut queued_remote_control_requests =
+            std::collections::VecDeque::from(initial_remote_control_requests);
         loop {
+            while let Some(control_request) = queued_remote_control_requests.pop_front() {
+                apply_remote_control_request(
+                    control_request,
+                    &mut query_engine,
+                    &mut perm_ctx,
+                    &mut active_model,
+                    &mut active_model_display,
+                )
+                .await?;
+            }
             let current_remote_prompt = pending_remote_prompt;
             if let Some(event_id) = current_remote_prompt.delivery_event_id.as_deref() {
                 report_remote_ccr_delivery(event_id, "processing");
@@ -8152,7 +8340,7 @@ async fn main() -> Result<()> {
                 .run_hooks(
                     &claude_core::hooks::types::HookEvent::UserPromptSubmit,
                     serde_json::json!({ "prompt": effective_prompt.clone() }),
-                    Some(permission_mode_hook_name(&permission_mode)),
+                    Some(permission_mode_hook_name(&perm_ctx.mode)),
                     None,
                     None,
                     None,
@@ -8239,8 +8427,8 @@ async fn main() -> Result<()> {
                     session_id: &api_session_id,
                     tool_names: stream_json_tool_names.clone(),
                     mcp_servers,
-                    model_display: &model_display,
-                    permission_mode: &permission_mode,
+                    model_display: &active_model_display,
+                    permission_mode: &perm_ctx.mode,
                     registered_skills: &registered_skills,
                     discovered_skills: &discovered_skills,
                     stream_skill_names: &stream_skill_names,
@@ -8325,7 +8513,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 if let Some(max_budget_usd) = cli.max_budget_usd {
-                    if total_cost_for_usage(&model, total_usage.as_ref()) >= max_budget_usd {
+                    if total_cost_for_usage(&active_model, total_usage.as_ref()) >= max_budget_usd {
                         break PrintTerminalOutcome::MaxBudgetUsd { max_budget_usd };
                     }
                 }
@@ -8374,7 +8562,7 @@ async fn main() -> Result<()> {
                                 emit_stream_json(stream_json_assistant_tool_use_event(
                                     tool_info,
                                     &session_id,
-                                    &model,
+                                    &active_model,
                                     latest_usage.as_ref(),
                                 ));
                             }
@@ -8386,7 +8574,7 @@ async fn main() -> Result<()> {
                                     &tool_info.name,
                                     &tool_info.id,
                                     &tool_input,
-                                    Some(permission_mode_hook_name(&permission_mode)),
+                                    Some(permission_mode_hook_name(&perm_ctx.mode)),
                                     None,
                                     None,
                                 )
@@ -8514,6 +8702,7 @@ async fn main() -> Result<()> {
                                             rx,
                                             &request_id,
                                             &mut queued_remote_prompts,
+                                            &mut queued_remote_control_requests,
                                         )
                                         .await
                                         .map(|value| parse_remote_permission_response(&value))
@@ -8548,11 +8737,11 @@ async fn main() -> Result<()> {
                                                         let ctx = ToolUseContext::new(
                                                             cwd.clone(),
                                                             read_file_state.clone(),
-                                                            permission_mode.clone(),
+                                                            perm_ctx.mode.clone(),
                                                             perm_ctx.clone(),
                                                             std::sync::Arc::new({
                                                                 let mut options =
-                                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&active_model);
                                                                 options.session_id =
                                                                     Some(api_session_id.clone());
                                                                 options
@@ -8678,8 +8867,8 @@ async fn main() -> Result<()> {
                                             &tool_input,
                                             &cwd,
                                             read_file_state.clone(),
-                                            permission_mode.clone(),
-                                            &model,
+                                            perm_ctx.mode.clone(),
+                                            &active_model,
                                             cancel.clone(),
                                         )
                                         .await
@@ -8717,11 +8906,11 @@ async fn main() -> Result<()> {
                                                         let ctx = ToolUseContext::new(
                                                         cwd.clone(),
                                                         read_file_state.clone(),
-                                                        permission_mode.clone(),
+                                                        perm_ctx.mode.clone(),
                                                         perm_ctx.clone(),
                                                         std::sync::Arc::new({
                                                             let mut options =
-                                                                claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                                claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&active_model);
                                                             options.session_id =
                                                                 Some(api_session_id.clone());
                                                             options
@@ -8872,11 +9061,11 @@ async fn main() -> Result<()> {
                                             let ctx = ToolUseContext::new(
                                                 cwd.clone(),
                                                 read_file_state.clone(),
-                                                permission_mode.clone(),
+                                                perm_ctx.mode.clone(),
                                                 perm_ctx.clone(),
                                                 std::sync::Arc::new({
                                                     let mut options =
-                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&model);
+                                                    claude_core::tool_use_context_options::ToolUseContextOptions::minimal(&active_model);
                                                     options.session_id =
                                                         Some(api_session_id.clone());
                                                     options
@@ -8977,7 +9166,7 @@ async fn main() -> Result<()> {
                                         &tool_input,
                                         &result_text,
                                         None,
-                                        Some(permission_mode_hook_name(&permission_mode)),
+                                        Some(permission_mode_hook_name(&perm_ctx.mode)),
                                         None,
                                         None,
                                     )
@@ -8998,7 +9187,7 @@ async fn main() -> Result<()> {
                                         &tool_info.id,
                                         &tool_input,
                                         &result_json,
-                                        Some(permission_mode_hook_name(&permission_mode)),
+                                        Some(permission_mode_hook_name(&perm_ctx.mode)),
                                         None,
                                         None,
                                     )
@@ -9270,6 +9459,17 @@ async fn main() -> Result<()> {
                         break;
                     }
                     Some(RemoteSdkInbound::ControlResponse(_)) => {
+                        continue;
+                    }
+                    Some(RemoteSdkInbound::ControlRequest(control_request)) => {
+                        apply_remote_control_request(
+                            control_request,
+                            &mut query_engine,
+                            &mut perm_ctx,
+                            &mut active_model,
+                            &mut active_model_display,
+                        )
+                        .await?;
                         continue;
                     }
                     Some(RemoteSdkInbound::EndSession) | None => {
@@ -9846,6 +10046,73 @@ mod remote_control_tests {
             .unwrap()["external_metadata"],
             serde_json::json!({"pending_action": null})
         );
+    }
+
+    #[test]
+    fn remote_external_permission_mode_matches_ts_config() {
+        use claude_core::permissions::types::PermissionMode;
+
+        assert_eq!(
+            to_external_permission_mode(&PermissionMode::Default),
+            "default"
+        );
+        assert_eq!(
+            to_external_permission_mode(&PermissionMode::AcceptEdits),
+            "acceptEdits"
+        );
+        assert_eq!(
+            to_external_permission_mode(&PermissionMode::Auto),
+            "default"
+        );
+        assert_eq!(to_external_permission_mode(&PermissionMode::Plan), "plan");
+        assert_eq!(
+            to_external_permission_mode(&PermissionMode::BypassPermissions),
+            "bypassPermissions"
+        );
+        assert_eq!(
+            to_external_permission_mode(&PermissionMode::DontAsk),
+            "dontAsk"
+        );
+        assert_eq!(
+            to_external_permission_mode(&PermissionMode::Bubble),
+            "default"
+        );
+    }
+
+    #[test]
+    fn stream_json_seed_preserves_runtime_control_requests() {
+        let seed = parse_stream_json_stdin(
+            r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"set_model","model":"sonnet"}}"#,
+        )
+        .unwrap();
+        assert_eq!(seed.control_requests.len(), 1);
+        assert_eq!(
+            seed.control_requests[0]["request"]["subtype"],
+            serde_json::json!("set_model")
+        );
+    }
+
+    #[test]
+    fn remote_control_request_routes_to_main_loop_queue() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_remote_sdk_non_user_line(
+            &serde_json::json!({
+                "type": "control_request",
+                "request_id": "req-1",
+                "request": {"subtype": "set_permission_mode", "mode": "plan"}
+            }),
+            Some(&tx),
+        )
+        .unwrap();
+        match rx.try_recv().unwrap() {
+            RemoteSdkInbound::ControlRequest(value) => {
+                assert_eq!(
+                    value["request"]["subtype"],
+                    serde_json::json!("set_permission_mode")
+                );
+            }
+            _ => panic!("expected control request"),
+        }
     }
 
     #[test]
