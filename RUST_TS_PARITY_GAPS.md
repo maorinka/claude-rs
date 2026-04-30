@@ -676,7 +676,6 @@ Needs work:
 Rust has a real MCP client/manager, but TS still has broader behavior.
 
 Missing or partial:
-- WebSocket transport.
 - In-process transport.
 - OAuth/XAA IdP command parity.
 - Official registry integration.
@@ -693,6 +692,11 @@ Needs work:
 - Wire MCP auth, elicitation, reconnect, and UI flows.
 
 Improved:
+- Rust already has a real MCP WebSocket transport for `ws` / `ws-ide`:
+  config round-trips, manager routing, `Sec-WebSocket-Protocol: mcp`,
+  custom/IDE auth headers, bidirectional JSON-RPC dispatch, auth-failure
+  classification, lifecycle close handling, and request/notification send paths
+  are implemented and covered by the MCP/WebSocket test filters.
 - MCP auto-mode classifier input encoding now follows the TS
   `mcpToolInputToAutoClassifierInput` mechanism, including insertion-order
   keys and JavaScript `String(value)` coercion for arrays and nested objects.
