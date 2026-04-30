@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+use claude_core::session::storage::InternalTranscriptEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -346,6 +347,7 @@ enum RemotePostConfig {
         session_url: String,
         events_url: String,
         delivery_url: String,
+        internal_events_url: String,
         worker_url: String,
         worker_epoch: u64,
     },
@@ -361,6 +363,7 @@ fn remote_post_config_for_sdk_url(sdk_url: &str) -> Result<RemotePostConfig> {
         Ok(RemotePostConfig::CcrV2 {
             events_url: format!("{session_url}/worker/events"),
             delivery_url: format!("{session_url}/worker/events/delivery"),
+            internal_events_url: format!("{session_url}/worker/internal-events"),
             worker_url: format!("{session_url}/worker"),
             session_url,
             worker_epoch,
@@ -377,8 +380,13 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
     let (delivery_tx, mut delivery_rx) =
         tokio::sync::mpsc::unbounded_channel::<CcrDeliveryUpdate>();
+    let (internal_tx, mut internal_rx) =
+        tokio::sync::mpsc::unbounded_channel::<InternalTranscriptEvent>();
     let _ = REMOTE_STREAM_JSON_TX.set(tx);
     let _ = REMOTE_CCR_DELIVERY_TX.set(delivery_tx);
+    if matches!(config, RemotePostConfig::CcrV2 { .. }) {
+        claude_core::session::storage::set_internal_event_sender(internal_tx);
+    }
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         report_remote_ccr_worker_patch(
@@ -395,6 +403,7 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         .await;
         let mut buffer: Vec<Value> = Vec::new();
         let mut delivery_buffer: Vec<CcrDeliveryUpdate> = Vec::new();
+        let mut internal_buffer: Vec<InternalTranscriptEvent> = Vec::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let heartbeat_delay = std::time::Duration::from_secs(20);
@@ -422,12 +431,24 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
                         post_remote_ccr_delivery_batch(&client, &config, &mut delivery_buffer).await;
                     }
                 }
+                maybe_internal = internal_rx.recv() => {
+                    let Some(event) = maybe_internal else {
+                        continue;
+                    };
+                    internal_buffer.push(event);
+                    if internal_buffer.len() >= 100 {
+                        post_remote_ccr_internal_event_batch(&client, &config, &mut internal_buffer).await;
+                    }
+                }
                 _ = interval.tick() => {
                     if !buffer.is_empty() {
                         post_remote_stream_json_batch(&client, &config, &mut buffer).await;
                     }
                     if !delivery_buffer.is_empty() {
                         post_remote_ccr_delivery_batch(&client, &config, &mut delivery_buffer).await;
+                    }
+                    if !internal_buffer.is_empty() {
+                        post_remote_ccr_internal_event_batch(&client, &config, &mut internal_buffer).await;
                     }
                 }
                 _ = &mut heartbeat => {
@@ -441,6 +462,9 @@ fn install_remote_stream_json_poster(sdk_url: &str) -> Result<()> {
         }
         if !delivery_buffer.is_empty() {
             post_remote_ccr_delivery_batch(&client, &config, &mut delivery_buffer).await;
+        }
+        if !internal_buffer.is_empty() {
+            post_remote_ccr_internal_event_batch(&client, &config, &mut internal_buffer).await;
         }
     });
     Ok(())
@@ -512,6 +536,27 @@ fn ccr_delivery_body(worker_epoch: u64, updates: &[CcrDeliveryUpdate]) -> serde_
     })
 }
 
+fn ccr_internal_events_body(
+    worker_epoch: u64,
+    events: &[InternalTranscriptEvent],
+) -> serde_json::Value {
+    serde_json::json!({
+        "worker_epoch": worker_epoch,
+        "events": events.iter().map(|event| {
+            let mut wrapped = serde_json::json!({
+                "payload": event.payload.clone(),
+            });
+            if event.is_compaction {
+                wrapped["is_compaction"] = serde_json::json!(true);
+            }
+            if let Some(agent_id) = &event.agent_id {
+                wrapped["agent_id"] = serde_json::json!(agent_id);
+            }
+            wrapped
+        }).collect::<Vec<_>>(),
+    })
+}
+
 async fn post_remote_ccr_delivery_batch(
     client: &reqwest::Client,
     config: &RemotePostConfig,
@@ -537,6 +582,56 @@ async fn post_remote_ccr_delivery_batch(
         attempt += 1;
         let response = client
             .post(delivery_url)
+            .bearer_auth(&token)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await;
+        match response {
+            Ok(resp) if resp.status().is_success() => break,
+            Ok(resp)
+                if resp.status().is_client_error()
+                    && resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                break;
+            }
+            _ if attempt >= 5 => break,
+            _ => {
+                let delay_ms = 500u64
+                    .saturating_mul(2u64.saturating_pow(attempt - 1))
+                    .min(8_000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+        }
+    }
+}
+
+async fn post_remote_ccr_internal_event_batch(
+    client: &reqwest::Client,
+    config: &RemotePostConfig,
+    buffer: &mut Vec<InternalTranscriptEvent>,
+) {
+    let RemotePostConfig::CcrV2 {
+        internal_events_url,
+        worker_epoch,
+        ..
+    } = config
+    else {
+        buffer.clear();
+        return;
+    };
+    let Some(token) = session_ingress_auth_token() else {
+        buffer.clear();
+        return;
+    };
+    let events = std::mem::take(buffer);
+    let body = ccr_internal_events_body(*worker_epoch, &events);
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        let response = client
+            .post(internal_events_url)
             .bearer_auth(&token)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
@@ -9201,6 +9296,9 @@ mod remote_control_tests {
             delivery_url:
                 "https://api.example.com/v1/code/sessions/session-123/worker/events/delivery"
                     .to_string(),
+            internal_events_url:
+                "https://api.example.com/v1/code/sessions/session-123/worker/internal-events"
+                    .to_string(),
             worker_url: "https://api.example.com/v1/code/sessions/session-123/worker".to_string(),
             worker_epoch: 7,
         };
@@ -9229,6 +9327,53 @@ mod remote_control_tests {
                 "updates": [
                     {"event_id": "event-1", "status": "received"},
                     {"event_id": "event-2", "status": "processed"},
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn remote_ccr_internal_events_body_matches_ts_transport() {
+        let events = vec![
+            InternalTranscriptEvent {
+                payload: serde_json::json!({
+                    "type": "user",
+                    "message": {"content": "hi"},
+                    "uuid": "uuid-1",
+                }),
+                is_compaction: false,
+                agent_id: None,
+            },
+            InternalTranscriptEvent {
+                payload: serde_json::json!({
+                    "type": "compact_boundary",
+                    "uuid": "uuid-2",
+                }),
+                is_compaction: true,
+                agent_id: Some("agent-1".to_string()),
+            },
+        ];
+
+        assert_eq!(
+            ccr_internal_events_body(7, &events),
+            serde_json::json!({
+                "worker_epoch": 7,
+                "events": [
+                    {
+                        "payload": {
+                            "type": "user",
+                            "message": {"content": "hi"},
+                            "uuid": "uuid-1",
+                        },
+                    },
+                    {
+                        "payload": {
+                            "type": "compact_boundary",
+                            "uuid": "uuid-2",
+                        },
+                        "is_compaction": true,
+                        "agent_id": "agent-1",
+                    },
                 ],
             })
         );

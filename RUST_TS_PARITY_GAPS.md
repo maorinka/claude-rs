@@ -544,7 +544,10 @@ Improved:
   and completion report `processing`/`processed`. Worker init now clears stale
   CCR `external_metadata.pending_action`/`task_summary`, and permission-blocked
   state patches mirror `pending_action` metadata from the same control-request
-  details TS uses.
+  details TS uses. CCR v2 transcript writes now also use the shared
+  `SessionStorage` path to enqueue TS-shaped worker internal events to
+  `/worker/internal-events`, preserving the original transcript payload type,
+  adding a `uuid` when missing, and carrying generic compaction/agent metadata.
 
 Missing or partial:
 - Full bridge messaging.
@@ -553,8 +556,8 @@ Missing or partial:
 - Full CCR v2 client lifecycle depth. Rust now has the basic child
   `SSETransport`/event-write shape for `CLAUDE_CODE_USE_CCR_V2`, but still
   needs the full TS `CCRClient` lifecycle depth: model/permission-mode metadata
-  updates from every AppState mutation path, internal-event persistence/restore,
-  and text-delta coalescing.
+  updates from every AppState mutation path, internal-event restore, and
+  text-delta coalescing.
 - Bridge permission callbacks are partially wired for remote child
   `can_use_tool` requests/responses. Remaining depth is parent-side forwarding
   through the hosted bridge permission API and cancellation/delivery lifecycle.

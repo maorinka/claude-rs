@@ -1,5 +1,58 @@
 use anyhow::Result;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+static INTERNAL_EVENT_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<InternalTranscriptEvent>> =
+    OnceLock::new();
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InternalTranscriptEvent {
+    pub payload: serde_json::Value,
+    pub is_compaction: bool,
+    pub agent_id: Option<String>,
+}
+
+pub fn set_internal_event_sender(
+    sender: tokio::sync::mpsc::UnboundedSender<InternalTranscriptEvent>,
+) {
+    let _ = INTERNAL_EVENT_TX.set(sender);
+}
+
+pub fn internal_event_from_transcript_line(line: &str) -> Option<InternalTranscriptEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut payload = serde_json::from_str::<serde_json::Value>(trimmed).ok()?;
+    if !payload.is_object() {
+        return None;
+    }
+    if payload
+        .get("uuid")
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        payload["uuid"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    }
+    let is_compaction = payload
+        .get("type")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| value == "compact_boundary")
+        || payload
+            .get("subtype")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value == "compact_boundary");
+    let agent_id = payload
+        .get("agentId")
+        .or_else(|| payload.get("agent_id"))
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+    Some(InternalTranscriptEvent {
+        payload,
+        is_compaction,
+        agent_id,
+    })
+}
 
 pub struct SessionStorage {
     pub session_dir: PathBuf,
@@ -25,6 +78,12 @@ impl SessionStorage {
             .append(true)
             .open(&path)?;
         writeln!(file, "{}", line)?;
+        if let (Some(sender), Some(event)) = (
+            INTERNAL_EVENT_TX.get(),
+            internal_event_from_transcript_line(line),
+        ) {
+            let _ = sender.send(event);
+        }
         Ok(())
     }
 
@@ -140,5 +199,35 @@ mod tests {
         // Verify content is preserved
         let first_text = messages[0]["content"][0]["text"].as_str().unwrap();
         assert_eq!(first_text, "what is 2+2?");
+    }
+
+    #[test]
+    fn internal_event_from_transcript_line_preserves_payload_type() {
+        let event = internal_event_from_transcript_line(
+            r#"{"type":"assistant","message":{"content":"hi"},"agentId":"agent-1"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(event.payload["type"], "assistant");
+        assert_eq!(event.agent_id.as_deref(), Some("agent-1"));
+        assert!(!event.is_compaction);
+        assert!(event.payload["uuid"].as_str().is_some());
+    }
+
+    #[test]
+    fn internal_event_from_transcript_line_marks_compaction() {
+        let event =
+            internal_event_from_transcript_line(r#"{"type":"compact_boundary","uuid":"u1"}"#)
+                .unwrap();
+
+        assert_eq!(event.payload["uuid"], "u1");
+        assert!(event.is_compaction);
+    }
+
+    #[test]
+    fn internal_event_from_transcript_line_skips_invalid_entries() {
+        assert!(internal_event_from_transcript_line("").is_none());
+        assert!(internal_event_from_transcript_line("not json").is_none());
+        assert!(internal_event_from_transcript_line(r#""string""#).is_none());
     }
 }
